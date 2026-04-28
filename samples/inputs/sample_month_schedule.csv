@@ -1,0 +1,137 @@
+name,date,type,fix,start_time,duration_minutes,importance,tags
+Sleep,1,sleep,fixed,00:00,420,10,#sleep #health
+Breakfast,1,food,flexible,Any,30,5,#food #morning
+Dinner,1,food,flexible,Any,45,6,#food #dinner
+University Lecture,1,study,fixed,09:30,80,10,#school #lecture
+Lecture Review,1,study,flexible,Any,90,8,#school #review
+Sleep,2,sleep,fixed,00:00,420,10,#sleep #health
+Breakfast,2,food,flexible,Any,30,5,#food #morning
+Dinner,2,food,flexible,Any,45,6,#food #dinner
+Work Shift,2,work,fixed,13:00,300,10,#work
+Gym,2,exercise,flexible,Any,60,7,#fitness #health
+Sleep,3,sleep,fixed,00:00,420,10,#sleep #health
+Breakfast,3,food,flexible,Any,30,5,#food #morning
+Dinner,3,food,flexible,Any,45,6,#food #dinner
+University Lecture,3,study,fixed,09:30,80,10,#school #lecture
+Lecture Review,3,study,flexible,Any,90,8,#school #review
+Sleep,4,sleep,fixed,00:00,420,10,#sleep #health
+Breakfast,4,food,flexible,Any,30,5,#food #morning
+Dinner,4,food,flexible,Any,45,6,#food #dinner
+Work Shift,4,work,fixed,13:00,300,10,#work
+Sleep,5,sleep,fixed,00:00,420,10,#sleep #health
+Breakfast,5,food,flexible,Any,30,5,#food #morning
+Dinner,5,food,flexible,Any,45,6,#food #dinner
+Gym,5,exercise,flexible,Any,60,7,#fitness #health
+Weekly Project Session,5,study,flexible,Any,180,9,#project #optimizer #coding
+Sleep,6,sleep,fixed,00:30,480,10,#sleep #health
+Breakfast,6,food,flexible,Any,30,5,#food #morning
+Dinner,6,food,flexible,Any,45,6,#food #dinner
+Entertainment Block,6,entertainment,flexible,Any,120,4,#relax #weekend
+Sleep,7,sleep,fixed,00:30,480,10,#sleep #health
+Breakfast,7,food,flexible,Any,30,5,#food #morning
+Dinner,7,food,flexible,Any,45,6,#food #dinner
+Weekly Planning,7,event,flexible,Any,45,7,#planning
+Sleep,8,sleep,fixed,00:00,420,10,#sleep #health
+Breakfast,8,food,flexible,Any,30,5,#food #morning
+Dinner,8,food,flexible,Any,45,6,#food #dinner
+University Lecture,8,study,fixed,09:30,80,10,#school #lecture
+Lecture Review,8,study,flexible,Any,90,8,#school #review
+Sleep,9,sleep,fixed,00:00,420,10,#sleep #health
+Breakfast,9,food,flexible,Any,30,5,#food #morning
+Dinner,9,food,flexible,Any,45,6,#food #dinner
+Work Shift,9,work,fixed,13:00,300,10,#work
+Gym,9,exercise,flexible,Any,60,7,#fitness #health
+Sleep,10,sleep,fixed,00:00,420,10,#sleep #health
+Breakfast,10,food,flexible,Any,30,5,#food #morning
+Dinner,10,food,flexible,Any,45,6,#food #dinner
+Friend Meetup,10,event,fixed,18:00,120,6,#social
+Sleep,11,sleep,fixed,00:00,420,10,#sleep #health
+Breakfast,11,food,flexible,Any,30,5,#food #morning
+Dinner,11,food,flexible,Any,45,6,#food #dinner
+Work Shift,11,work,fixed,13:00,300,10,#work
+Sleep,12,sleep,fixed,00:00,420,10,#sleep #health
+Breakfast,12,food,flexible,Any,30,5,#food #morning
+Dinner,12,food,flexible,Any,45,6,#food #dinner
+Weekly Project Session,12,study,flexible,Any,180,9,#project #optimizer #coding
+Sleep,13,sleep,fixed,00:30,480,10,#sleep #health
+Breakfast,13,food,flexible,Any,30,5,#food #morning
+Dinner,13,food,flexible,Any,45,6,#food #dinner
+Entertainment Block,13,entertainment,flexible,Any,120,4,#relax #weekend
+Sleep,14,sleep,fixed,00:30,480,10,#sleep #health
+Breakfast,14,food,flexible,Any,30,5,#food #morning
+Dinner,14,food,flexible,Any,45,6,#food #dinner
+Weekly Planning,14,event,flexible,Any,45,7,#planning
+Sleep,15,sleep,fixed,00:00,420,10,#sleep #health
+Breakfast,15,food,flexible,Any,30,5,#food #morning
+Dinner,15,food,flexible,Any,45,6,#food #dinner
+University Lecture,15,study,fixed,09:30,80,10,#school #lecture
+Lecture Review,15,study,flexible,Any,90,8,#school #review
+Assignment Deadline Prep,15,study,flexible,Any,180,10,#assignment #deadline
+Sleep,16,sleep,fixed,00:00,420,10,#sleep #health
+Breakfast,16,food,flexible,Any,30,5,#food #morning
+Dinner,16,food,flexible,Any,45,6,#food #dinner
+Work Shift,16,work,fixed,13:00,300,10,#work
+Gym,16,exercise,flexible,Any,60,7,#fitness #health
+Sleep,17,sleep,fixed,00:00,420,10,#sleep #health
+Breakfast,17,food,flexible,Any,30,5,#food #morning
+Dinner,17,food,flexible,Any,45,6,#food #dinner
+University Lecture,17,study,fixed,09:30,80,10,#school #lecture
+Lecture Review,17,study,flexible,Any,90,8,#school #review
+Sleep,18,sleep,fixed,00:00,420,10,#sleep #health
+Breakfast,18,food,flexible,Any,30,5,#food #morning
+Dinner,18,food,flexible,Any,45,6,#food #dinner
+Work Shift,18,work,fixed,13:00,300,10,#work
+Sleep,19,sleep,fixed,00:00,420,10,#sleep #health
+Breakfast,19,food,flexible,Any,30,5,#food #morning
+Dinner,19,food,flexible,Any,45,6,#food #dinner
+Gym,19,exercise,flexible,Any,60,7,#fitness #health
+Weekly Project Session,19,study,flexible,Any,180,9,#project #optimizer #coding
+Sleep,20,sleep,fixed,00:30,480,10,#sleep #health
+Breakfast,20,food,flexible,Any,30,5,#food #morning
+Dinner,20,food,flexible,Any,45,6,#food #dinner
+Entertainment Block,20,entertainment,flexible,Any,120,4,#relax #weekend
+Sleep,21,sleep,fixed,00:30,480,10,#sleep #health
+Breakfast,21,food,flexible,Any,30,5,#food #morning
+Dinner,21,food,flexible,Any,45,6,#food #dinner
+Weekly Planning,21,event,flexible,Any,45,7,#planning
+Sleep,22,sleep,fixed,00:00,420,10,#sleep #health
+Breakfast,22,food,flexible,Any,30,5,#food #morning
+Dinner,22,food,flexible,Any,45,6,#food #dinner
+University Lecture,22,study,fixed,09:30,80,10,#school #lecture
+Lecture Review,22,study,flexible,Any,90,8,#school #review
+Sleep,23,sleep,fixed,00:00,420,10,#sleep #health
+Breakfast,23,food,flexible,Any,30,5,#food #morning
+Dinner,23,food,flexible,Any,45,6,#food #dinner
+Work Shift,23,work,fixed,13:00,300,10,#work
+Gym,23,exercise,flexible,Any,60,7,#fitness #health
+Sleep,24,sleep,fixed,00:00,420,10,#sleep #health
+Breakfast,24,food,flexible,Any,30,5,#food #morning
+Dinner,24,food,flexible,Any,45,6,#food #dinner
+Friend Meetup,24,event,fixed,18:00,120,6,#social
+Sleep,25,sleep,fixed,00:00,420,10,#sleep #health
+Breakfast,25,food,flexible,Any,30,5,#food #morning
+Dinner,25,food,flexible,Any,45,6,#food #dinner
+Work Shift,25,work,fixed,13:00,300,10,#work
+Sleep,26,sleep,fixed,00:00,420,10,#sleep #health
+Breakfast,26,food,flexible,Any,30,5,#food #morning
+Dinner,26,food,flexible,Any,45,6,#food #dinner
+Weekly Project Session,26,study,flexible,Any,180,9,#project #optimizer #coding
+Sleep,27,sleep,fixed,00:30,480,10,#sleep #health
+Breakfast,27,food,flexible,Any,30,5,#food #morning
+Dinner,27,food,flexible,Any,45,6,#food #dinner
+Entertainment Block,27,entertainment,flexible,Any,120,4,#relax #weekend
+Sleep,28,sleep,fixed,00:30,480,10,#sleep #health
+Breakfast,28,food,flexible,Any,30,5,#food #morning
+Dinner,28,food,flexible,Any,45,6,#food #dinner
+Weekly Planning,28,event,flexible,Any,45,7,#planning
+Sleep,29,sleep,fixed,00:00,420,10,#sleep #health
+Breakfast,29,food,flexible,Any,30,5,#food #morning
+Dinner,29,food,flexible,Any,45,6,#food #dinner
+University Lecture,29,study,fixed,09:30,80,10,#school #lecture
+Lecture Review,29,study,flexible,Any,90,8,#school #review
+Sleep,30,sleep,fixed,00:00,420,10,#sleep #health
+Breakfast,30,food,flexible,Any,30,5,#food #morning
+Dinner,30,food,flexible,Any,45,6,#food #dinner
+Work Shift,30,work,fixed,13:00,300,10,#work
+Gym,30,exercise,flexible,Any,60,7,#fitness #health
+Assignment Deadline Prep,30,study,flexible,Any,180,10,#assignment #deadline

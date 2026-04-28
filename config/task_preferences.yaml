@@ -1,0 +1,64 @@
+task_types:
+
+  study:
+    preferred_start: "08:00"
+    preferred_end: "18:00"
+    default_bonus: 3
+
+  sleep:
+    preferred_start: "22:30"
+    preferred_end: "07:00"
+    default_bonus: 5
+
+  food:
+    preferred_start: "11:30"
+    preferred_end: "20:00"
+    default_bonus: 4
+
+  exercise:
+    preferred_start: "06:00"
+    preferred_end: "21:00"
+    default_bonus: 3
+
+  work:
+    preferred_start: "09:00"
+    preferred_end: "17:00"
+    default_bonus: 5
+
+  event:
+    preferred_start: "Any"
+    preferred_end: "Any"
+    default_bonus: 2
+
+  entertainment:
+    preferred_start: "18:00"
+    preferred_end: "23:30"
+    default_bonus: 2
+
+# Tag relationships for reward bonuses
+
+tag_relations:
+
+  "#math":
+    related:
+      - "#lecture"
+      - "#exam"
+
+  "#fitness":
+    related:
+      - "#health"
+      - "#gym"
+
+  "#food":
+    related:
+      - "#mealprep"
+
+# Optional penalties by task type
+
+penalties:
+
+  study:
+    fragmentation_penalty: 3
+
+  sleep:
+    fragmentation_penalty: 10
