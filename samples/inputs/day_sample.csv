@@ -1,0 +1,13 @@
+name,date,category,tag,fixed,duration,priority,start_time,end_time
+Sleep,1,sleep,rest,true,480,10,0,480
+Breakfast,1,food,meal,true,30,8,480,510
+Commute,1,other,travel,true,30,7,510,540
+Work Shift,1,work,job,true,240,10,780,1020
+Lunch,1,food,meal,true,60,8,720,780
+Dinner,1,food,meal,true,45,8,1080,1125
+
+Study Math,1,study,math,false,120,9,540,720
+Study Programming,1,study,coding,false,120,9,600,840
+Exercise,1,exercise,gym,false,60,6,1020,1200
+Entertainment,1,entertainment,games,false,90,4,1140,1320
+Read Book,1,other,reading,false,60,5,900,1080

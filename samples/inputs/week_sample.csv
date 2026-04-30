@@ -1,0 +1,62 @@
+name,date,category,tag,fixed,duration,priority,start_time,end_time
+Sleep,1,sleep,rest,true,480,10,0,480
+Breakfast,1,food,meal,true,30,8,480,510
+Work Shift,1,work,job,true,240,10,780,1020
+Lunch,1,food,meal,true,60,8,720,780
+Dinner,1,food,meal,true,45,8,1080,1125
+Study Math,1,study,math,false,120,9,540,720
+Exercise,1,exercise,gym,false,60,6,1020,1200
+Entertainment,1,entertainment,games,false,90,4,1140,1320
+
+Sleep,2,sleep,rest,true,480,10,0,480
+Breakfast,2,food,meal,true,30,8,480,510
+Class Lecture,2,event,lecture,true,90,10,540,630
+Lunch,2,food,meal,true,60,8,720,780
+Dinner,2,food,meal,true,45,8,1080,1125
+Study CS,2,study,coding,false,120,9,600,840
+Exercise,2,exercise,run,false,45,6,1020,1200
+Entertainment,2,entertainment,watch,false,90,4,1140,1320
+
+Sleep,3,sleep,rest,true,480,10,0,480
+Breakfast,3,food,meal,true,30,8,480,510
+Work Shift,3,work,job,true,300,10,780,1080
+Lunch,3,food,meal,true,60,8,720,780
+Dinner,3,food,meal,true,45,8,1080,1125
+Study Algorithms,3,study,algorithms,false,120,9,540,720
+Exercise,3,exercise,gym,false,60,6,1080,1260
+Read Book,3,other,reading,false,60,5,900,1080
+
+Sleep,4,sleep,rest,true,480,10,0,480
+Breakfast,4,food,meal,true,30,8,480,510
+Project Meeting,4,event,meeting,true,60,9,840,900
+Lunch,4,food,meal,true,60,8,720,780
+Dinner,4,food,meal,true,45,8,1080,1125
+Study Stats,4,study,stats,false,120,8,540,720
+Exercise,4,exercise,sport,false,60,6,1020,1200
+Entertainment,4,entertainment,movie,false,120,4,1140,1320
+
+Sleep,5,sleep,rest,true,480,10,0,480
+Breakfast,5,food,meal,true,30,8,480,510
+Work Shift,5,work,job,true,240,10,780,1020
+Lunch,5,food,meal,true,60,8,720,780
+Dinner,5,food,meal,true,45,8,1080,1125
+Study Project,5,study,project,false,180,9,600,900
+Exercise,5,exercise,gym,false,60,6,1020,1200
+Entertainment,5,entertainment,games,false,90,4,1140,1320
+
+Sleep,6,sleep,rest,true,540,10,0,540
+Brunch,6,food,meal,true,45,8,660,705
+Family Event,6,event,family,true,120,7,840,960
+Dinner,6,food,meal,true,60,8,1080,1140
+Study Review,6,study,review,false,180,8,540,780
+Exercise,6,exercise,sport,false,90,6,900,1080
+Entertainment,6,entertainment,movie,false,120,5,1140,1320
+
+Sleep,7,sleep,rest,true,540,10,0,540
+Brunch,7,food,meal,true,45,8,660,705
+Lunch,7,food,meal,true,60,8,780,840
+Dinner,7,food,meal,true,60,8,1080,1140
+Study Planning,7,study,planning,false,90,7,540,720
+Exercise,7,exercise,light,false,60,5,900,1080
+Entertainment,7,entertainment,chill,false,120,5,1080,1320
+Family Time,7,other,family,false,120,6,840,1080

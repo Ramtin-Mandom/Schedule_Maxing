@@ -1,5 +1,5 @@
 import csv
-from models import (
+from app.models import (
     TimeWindow,
     Task,
     FixedBlock,
@@ -50,6 +50,7 @@ def load_schedule_from_csv(file_path: str) -> ScheduleInput:
         fixed = is_fixed(row["fixed"])
 
         if fixed:
+            # actual fixed time
             fixed_block = FixedBlock(
                 name=row["name"],
                 category=row["category"],
@@ -58,10 +59,15 @@ def load_schedule_from_csv(file_path: str) -> ScheduleInput:
                     row["end_time"],
                 ),
             )
-
             schedules[date].fixed_blocks.append(fixed_block)
 
         else:
+            # preferred time window (NOT actual placement)
+            preferred_window = build_time_window(
+                row["start_time"],
+                row["end_time"],
+            )
+
             task = Task(
                 name=row["name"],
                 date=date,
@@ -70,10 +76,7 @@ def load_schedule_from_csv(file_path: str) -> ScheduleInput:
                 fixed=False,
                 duration=int(row["duration"]),
                 priority=int(row["priority"]),
-                preference_time=build_time_window(
-                    row["start_time"],
-                    row["end_time"],
-                ),
+                preference_time=preferred_window,
             )
 
             schedules[date].tasks.append(task)

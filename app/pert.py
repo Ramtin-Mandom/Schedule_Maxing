@@ -1,5 +1,5 @@
 from collections import defaultdict, deque
-from models import Task, ScheduledTask
+from app.models import Task, ScheduledTask
 
 
 def build_dependency_graph(tasks: list[Task]) -> dict[str, list[str]]:
@@ -10,6 +10,7 @@ def build_dependency_graph(tasks: list[Task]) -> dict[str, list[str]]:
     Example:
     Task B depends on Task A
     graph["A"] = ["B"]
+    Runtime: O(n + e)
     """
     graph: dict[str, list[str]] = defaultdict(list)
 
@@ -27,6 +28,7 @@ def has_cycle(tasks: list[Task]) -> bool:
     """
     Returns True if dependencies contain a cycle.
     A cycle means the schedule is impossible.
+    Runtime: O(n + e)
     """
     graph = build_dependency_graph(tasks)
     visited = set()
@@ -60,6 +62,7 @@ def get_topological_order(tasks: list[Task]) -> list[str]:
 
     Example:
     Read Chapter -> Do Assignment -> Review
+    Runtime: O(n + e)
     """
     graph = build_dependency_graph(tasks)
     in_degree = {task.name: 0 for task in tasks}
@@ -98,6 +101,7 @@ def get_topological_order(tasks: list[Task]) -> list[str]:
 def validate_dependencies_exist(tasks: list[Task]) -> bool:
     """
     Checks that every dependency name actually exists as a task.
+    Runtime: O(n + e)
     """
     task_names = {task.name for task in tasks}
 
@@ -118,6 +122,7 @@ def respects_dependency_order(
 
     If B depends on A:
     A must end before B starts.
+    Runtime: O(n + e)
     """
     scheduled_lookup = {
         task.name: task
@@ -156,6 +161,7 @@ def validate_pert_constraints(
     1. All dependencies exist
     2. No dependency cycles exist
     3. Scheduled task order respects dependencies
+    Runtime: O(n + e)
     """
     if not validate_dependencies_exist(tasks):
         return False
