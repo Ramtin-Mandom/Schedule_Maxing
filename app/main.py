@@ -1,3 +1,4 @@
+import csv
 from pathlib import Path
 
 from app.data_processor import load_schedule_from_csv
@@ -15,6 +16,19 @@ def minutes_to_time(minutes: int) -> str:
         display_hour = 12
 
     return f"{display_hour}:{minute:02d} {suffix}"
+
+
+def minutes_to_24_hour_time(minutes: int) -> str:
+    """
+    Converts minutes from the start of the day into 24-hour time.
+
+    Example:
+        870 -> "14:30"
+    """
+    hour = minutes // 60
+    minute = minutes % 60
+
+    return f"{hour:02d}:{minute:02d}"
 
 
 def print_day_schedule(date: int, day_output) -> None:
@@ -63,11 +77,52 @@ def print_day_schedule(date: int, day_output) -> None:
     print()
 
 
+def export_day_schedule_to_csv(day_output, output_path: Path) -> None:
+    """
+    Exports the final schedule into 30-minute time blocks.
+
+    The CSV contains two columns:
+        time, task
+
+    If a task lasts 3 hours, it appears in 6 rows.
+    If no task is active during a block, the task value is "-".
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    scheduled_tasks = sorted(
+        day_output.scheduled_tasks,
+        key=lambda task: task.time_window.start_time,
+    )
+
+    with output_path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.writer(file)
+        writer.writerow(["time", "task"])
+
+        for block_start in range(0, 24 * 60, 30):
+            task_name = "-"
+
+            for task in scheduled_tasks:
+                task_start = task.time_window.start_time
+                task_end = task.time_window.end_time
+
+                if task_start <= block_start < task_end:
+                    task_name = task.name
+                    break
+
+            writer.writerow([
+                minutes_to_24_hour_time(block_start),
+                task_name,
+            ])
+
+    print(f"Schedule CSV exported to: {output_path}")
+
+
 def main() -> None:
     # app/ → go up one level to project root
     base_dir = Path(__file__).resolve().parent.parent
 
     csv_path = base_dir / "samples" / "inputs" / "day_sample.csv"
+    output_path = base_dir / "samples" / "outputs" / "day_sample.csv"
 
     if not csv_path.exists():
         raise FileNotFoundError(f"CSV file not found: {csv_path}")
@@ -81,6 +136,7 @@ def main() -> None:
         )
 
         print_day_schedule(date, full_schedule)
+        export_day_schedule_to_csv(full_schedule, output_path)
 
 
 if __name__ == "__main__":

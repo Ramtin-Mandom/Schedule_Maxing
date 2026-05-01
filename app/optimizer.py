@@ -7,6 +7,7 @@ from copy import deepcopy
 from app.models import Task, ScheduledTask, TimeWindow, DaySchedule, DayScheduleOutput
 from app.reward import score_day_schedule
 from app.constraints import is_valid_task_placement
+from app.pert import validate_pert_constraints, get_topological_order
 from config.settings import (
     TIME_SLOT_MINUTES,
     INITIAL_TEMPERATURE,
@@ -18,12 +19,6 @@ from config.settings import (
 
 
 def create_scheduled_task(task: Task, start_time: int) -> ScheduledTask:
-    """
-    Converts a Task into a ScheduledTask placed at a specific time.
-
-    Runtime:
-        O(1)
-    """
     return ScheduledTask(
         name=task.name,
         category=task.category,
@@ -36,22 +31,44 @@ def create_scheduled_task(task: Task, start_time: int) -> ScheduledTask:
     )
 
 
+def sort_tasks_by_dependency_order(tasks: list[Task]) -> list[Task]:
+    """
+    Sorts tasks so dependencies come before dependent tasks.
+
+    If tasks have the same dependency level, higher priority tasks
+    are preferred earlier.
+    """
+    dependency_order = get_topological_order(tasks)
+
+    task_lookup = {
+        task.name: task
+        for task in tasks
+    }
+
+    ordered_tasks = [
+        task_lookup[task_name]
+        for task_name in dependency_order
+        if task_name in task_lookup
+    ]
+
+    return sorted(
+        ordered_tasks,
+        key=lambda task: (
+            dependency_order.index(task.name),
+            -task.priority,
+        ),
+    )
+
+
 def generate_initial_schedule(day_schedule: DaySchedule) -> list[ScheduledTask]:
     """
-    Creates a simple valid starting schedule using greedy placement.
+    Creates a valid starting schedule using dependency order.
 
-    Runtime:
-        O(n * s)
-        n = number of tasks
-        s = number of possible time slots
+    Dependencies are scheduled before tasks that depend on them.
     """
     scheduled_tasks: list[ScheduledTask] = []
 
-    sorted_tasks = sorted(
-        day_schedule.tasks,
-        key=lambda task: task.priority,
-        reverse=True,
-    )
+    sorted_tasks = sort_tasks_by_dependency_order(day_schedule.tasks)
 
     for task in sorted_tasks:
         for start_time in range(
@@ -60,18 +77,27 @@ def generate_initial_schedule(day_schedule: DaySchedule) -> list[ScheduledTask]:
             TIME_SLOT_MINUTES,
         ):
             end_time = start_time + task.duration
-
             candidate = create_scheduled_task(task, start_time)
 
-            if is_valid_task_placement(
+            temp_schedule = scheduled_tasks + [candidate]
+
+            if not is_valid_task_placement(
                 task=task,
                 start_time=start_time,
                 end_time=end_time,
                 day_schedule=day_schedule,
                 scheduled_tasks=scheduled_tasks,
             ):
-                scheduled_tasks.append(candidate)
-                break
+                continue
+
+            if not validate_pert_constraints(
+                tasks=day_schedule.tasks,
+                scheduled_tasks=temp_schedule,
+            ):
+                continue
+
+            scheduled_tasks.append(candidate)
+            break
 
     return scheduled_tasks
 
@@ -85,9 +111,7 @@ def generate_neighbor(
     Creates a neighboring schedule by moving one random task
     to another valid time slot.
 
-    Runtime:
-        O(s)
-        s = number of possible time slots
+    The neighbor must also respect dependency order.
     """
     if not current_schedule:
         return current_schedule
@@ -121,17 +145,24 @@ def generate_neighbor(
     for new_start_time in possible_start_times:
         new_end_time = new_start_time + original_task.duration
 
-        if is_valid_task_placement(
+        if not is_valid_task_placement(
             task=original_task,
             start_time=new_start_time,
             end_time=new_end_time,
             day_schedule=day_schedule,
             scheduled_tasks=other_scheduled_tasks,
         ):
-            task_to_move.time_window = TimeWindow(
-                start_time=new_start_time,
-                end_time=new_end_time,
-            )
+            continue
+
+        task_to_move.time_window = TimeWindow(
+            start_time=new_start_time,
+            end_time=new_end_time,
+        )
+
+        if validate_pert_constraints(
+            tasks=original_tasks,
+            scheduled_tasks=neighbor,
+        ):
             return neighbor
 
     return current_schedule
@@ -142,15 +173,6 @@ def should_accept_neighbor(
     neighbor_score: float,
     temperature: float,
 ) -> bool:
-    """
-    Decides whether to accept the neighboring schedule.
-
-    Better schedules are always accepted.
-    Worse schedules are sometimes accepted based on temperature.
-
-    Runtime:
-        O(1)
-    """
     if neighbor_score > current_score:
         return True
 
@@ -168,15 +190,12 @@ def optimize_day_schedule(
     day_schedule: DaySchedule,
 ) -> DayScheduleOutput:
     """
-    Optimizes one day's schedule using simulated annealing.
-
-    Runtime:
-        O(i * (neighbor_cost + scoring_cost))
-        i = number of iterations
-
-        Approx:
-        O(i * (s + n^2))
+    Optimizes one day's schedule using simulated annealing,
+    while enforcing PERT dependency constraints.
     """
+    if not validate_pert_constraints(day_schedule.tasks):
+        raise ValueError("Invalid task dependencies. Check for missing dependencies or cycles.")
+
     current_schedule = generate_initial_schedule(day_schedule)
     current_score = score_day_schedule(day_schedule.tasks, current_schedule)
 
@@ -198,6 +217,14 @@ def optimize_day_schedule(
             original_tasks=day_schedule.tasks,
             day_schedule=day_schedule,
         )
+
+        if not validate_pert_constraints(
+            tasks=day_schedule.tasks,
+            scheduled_tasks=neighbor_schedule,
+        ):
+            no_improvement_count += 1
+            temperature *= COOLING_RATE
+            continue
 
         neighbor_score = score_day_schedule(
             day_schedule.tasks,
@@ -237,13 +264,8 @@ def optimize_day_schedule(
         unscheduled_tasks=unscheduled_tasks,
     )
 
-def fixed_block_to_scheduled_task(fixed_block) -> ScheduledTask:
-    """
-    Converts a FixedBlock into a ScheduledTask.
 
-    Runtime:
-        O(1)
-    """
+def fixed_block_to_scheduled_task(fixed_block) -> ScheduledTask:
     return ScheduledTask(
         name=fixed_block.name,
         category=fixed_block.category,

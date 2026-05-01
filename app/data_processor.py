@@ -67,6 +67,14 @@ def load_schedule_from_csv(file_path: str) -> ScheduleInput:
                 row["start_time"],
                 row["end_time"],
             )
+            dependencies_raw = row.get("dependencies", "").strip()
+
+            dependencies = (
+                dependencies_raw.split("-")
+                if dependencies_raw
+                else []
+            )
+
 
             task = Task(
                 name=row["name"],
@@ -77,6 +85,7 @@ def load_schedule_from_csv(file_path: str) -> ScheduleInput:
                 duration=int(row["duration"]),
                 priority=int(row["priority"]),
                 preference_time=preferred_window,
+                dependencies=dependencies,
             )
 
             schedules[date].tasks.append(task)

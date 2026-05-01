@@ -1,13 +1,17 @@
-name,date,category,tag,fixed,duration,priority,start_time,end_time
-Sleep,1,sleep,rest,true,480,10,0,480
-Breakfast,1,food,meal,true,30,8,480,510
-Commute,1,other,travel,true,30,7,510,540
-Work Shift,1,work,job,true,240,10,780,1020
-Lunch,1,food,meal,true,60,8,720,780
-Dinner,1,food,meal,true,45,8,1080,1125
+date,name,category,tag,fixed,start_time,end_time,duration,priority,dependencies
+1,Sleep,sleep,fixed,true,0,480,480,0,
+1,Breakfast,food,fixed,true,480,510,30,0,
+1,Commute,other,fixed,true,510,540,30,0,
 
-Study Math,1,study,math,false,120,9,540,720
-Study Programming,1,study,coding,false,120,9,600,840
-Exercise,1,exercise,gym,false,60,6,1020,1200
-Entertainment,1,entertainment,games,false,90,4,1140,1320
-Read Book,1,other,reading,false,60,5,900,1080
+1,Study Math,study,math,false,540,720,120,9,
+1,Fill Gas,errand,car,false,600,900,30,5,
+1,Go to Lecture,study,math,false,600,900,60,8,Study Math
+1,Lunch,food,fixed,true,720,780,60,0,
+
+1,Do Assignment,study,math,false,780,1020,120,10,Study Math-Go to Lecture
+1,Gym,health,fitness,false,900,1200,60,6,
+1,Review Notes,study,math,false,900,1200,60,7,Go to Lecture
+
+1,Dinner,food,fixed,true,1080,1140,60,0,
+1,Relax,leisure,rest,false,1140,1320,60,3,
+1,Exam,study,math,false,1200,1320,60,10,Do Assignment-Review Notes-Fill Gas
