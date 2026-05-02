@@ -7,9 +7,10 @@ from app.models import (
     ScheduleInput,
 )
 
-
-DEFAULT_DAY_START = 480   # 8:00 AM
-DEFAULT_DAY_END = 1320    # 10:00 PM
+from config.settings import (
+    DEFAULT_DAY_START,  
+    DEFAULT_DAY_END,   
+)
 
 
 def read_csv_rows(file_path: str) -> list[dict]:

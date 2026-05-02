@@ -2,16 +2,18 @@ date,name,category,tag,fixed,start_time,end_time,duration,priority,dependencies
 1,Sleep,sleep,fixed,true,0,480,480,0,
 1,Breakfast,food,fixed,true,480,510,30,0,
 1,Commute,other,fixed,true,510,540,30,0,
+1,Lunch,food,fixed,true,720,780,60,0,
+1,Dinner,food,fixed,true,1080,1140,60,0,
 
 1,Study Math,study,math,false,540,720,120,9,
-1,Fill Gas,errand,car,false,600,900,30,5,
-1,Go to Lecture,study,math,false,600,900,60,8,Study Math
-1,Lunch,food,fixed,true,720,780,60,0,
+1,Go to Lecture,study,math,false,780,900,120,8,Study Math
+1,Do Assignment,study,math,false,900,1080,180,10,Study Math-Go to Lecture
+1,Review Notes,study,math,false,900,1080,120,7,Go to Lecture
+1,Exam Prep,study,math,false,1140,1320,180,10,Do Assignment-Review Notes
 
-1,Do Assignment,study,math,false,780,1020,120,10,Study Math-Go to Lecture
-1,Gym,health,fitness,false,900,1200,60,6,
-1,Review Notes,study,math,false,900,1200,60,7,Go to Lecture
-
-1,Dinner,food,fixed,true,1080,1140,60,0,
-1,Relax,leisure,rest,false,1140,1320,60,3,
-1,Exam,study,math,false,1200,1320,60,10,Do Assignment-Review Notes-Fill Gas
+1,Fill Gas,errand,car,false,540,720,30,5,
+1,Grocery Shopping,errand,food,false,780,1080,120,6,
+1,Gym,health,fitness,false,900,1080,120,6,
+1,Relax,leisure,rest,false,1140,1320,120,3,
+1,Watch Movie,leisure,rest,false,1140,1320,180,4,
+1,Final Review,study,math,false,1200,1320,120,9,Exam Prep

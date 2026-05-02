@@ -39,13 +39,16 @@ class ScheduledTask(BaseModel):
     tag: str
     time_window: TimeWindow
     score: float
+class UnscheduledTask(BaseModel):
+    name: str 
+    reason: str
 
 
 class DayScheduleOutput(BaseModel):
     date: int
     total_score: float
     scheduled_tasks: list[ScheduledTask]
-    unscheduled_tasks: list[Task]
+    unscheduled_tasks: list[UnscheduledTask]
 
 
 class ScheduleOutput(BaseModel):

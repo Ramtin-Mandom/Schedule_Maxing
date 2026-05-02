@@ -68,12 +68,8 @@ def print_day_schedule(date: int, day_output) -> None:
 
         for task in day_output.unscheduled_tasks:
             print(f"- {task.name}")
-            print(f"  Duration: {task.duration} minutes")
-            print(f"  Priority: {task.priority}")
-            print(f"  Category: {task.category}")
-            print(f"  Tag: {task.tag}")
+            print(f"  reason: {task.reason}")
             print("-" * 60)
-
     print()
 
 
