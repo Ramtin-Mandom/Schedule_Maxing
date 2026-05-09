@@ -334,6 +334,8 @@ For flexible tasks, `start_time` and `end_time` represent the preferred time win
 
 ---
 
+Allowed categories: study, work, exercise, errand, food, entertainment, other
+
 ## How the Optimizer Works
 
 The current optimizer is a greedy reward-based scheduler.

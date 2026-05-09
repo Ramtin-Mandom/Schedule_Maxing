@@ -1,62 +1,71 @@
-name,date,category,tag,fixed,duration,priority,start_time,end_time
-Sleep,1,sleep,rest,true,480,10,0,480
-Breakfast,1,food,meal,true,30,8,480,510
-Work Shift,1,work,job,true,240,10,780,1020
-Lunch,1,food,meal,true,60,8,720,780
-Dinner,1,food,meal,true,45,8,1080,1125
-Study Math,1,study,math,false,120,9,540,720
-Exercise,1,exercise,gym,false,60,6,1020,1200
-Entertainment,1,entertainment,games,false,90,4,1140,1320
-
-Sleep,2,sleep,rest,true,480,10,0,480
-Breakfast,2,food,meal,true,30,8,480,510
-Class Lecture,2,event,lecture,true,90,10,540,630
-Lunch,2,food,meal,true,60,8,720,780
-Dinner,2,food,meal,true,45,8,1080,1125
-Study CS,2,study,coding,false,120,9,600,840
-Exercise,2,exercise,run,false,45,6,1020,1200
-Entertainment,2,entertainment,watch,false,90,4,1140,1320
-
-Sleep,3,sleep,rest,true,480,10,0,480
-Breakfast,3,food,meal,true,30,8,480,510
-Work Shift,3,work,job,true,300,10,780,1080
-Lunch,3,food,meal,true,60,8,720,780
-Dinner,3,food,meal,true,45,8,1080,1125
-Study Algorithms,3,study,algorithms,false,120,9,540,720
-Exercise,3,exercise,gym,false,60,6,1080,1260
-Read Book,3,other,reading,false,60,5,900,1080
-
-Sleep,4,sleep,rest,true,480,10,0,480
-Breakfast,4,food,meal,true,30,8,480,510
-Project Meeting,4,event,meeting,true,60,9,840,900
-Lunch,4,food,meal,true,60,8,720,780
-Dinner,4,food,meal,true,45,8,1080,1125
-Study Stats,4,study,stats,false,120,8,540,720
-Exercise,4,exercise,sport,false,60,6,1020,1200
-Entertainment,4,entertainment,movie,false,120,4,1140,1320
-
-Sleep,5,sleep,rest,true,480,10,0,480
-Breakfast,5,food,meal,true,30,8,480,510
-Work Shift,5,work,job,true,240,10,780,1020
-Lunch,5,food,meal,true,60,8,720,780
-Dinner,5,food,meal,true,45,8,1080,1125
-Study Project,5,study,project,false,180,9,600,900
-Exercise,5,exercise,gym,false,60,6,1020,1200
-Entertainment,5,entertainment,games,false,90,4,1140,1320
-
-Sleep,6,sleep,rest,true,540,10,0,540
-Brunch,6,food,meal,true,45,8,660,705
-Family Event,6,event,family,true,120,7,840,960
-Dinner,6,food,meal,true,60,8,1080,1140
-Study Review,6,study,review,false,180,8,540,780
-Exercise,6,exercise,sport,false,90,6,900,1080
-Entertainment,6,entertainment,movie,false,120,5,1140,1320
-
-Sleep,7,sleep,rest,true,540,10,0,540
-Brunch,7,food,meal,true,45,8,660,705
-Lunch,7,food,meal,true,60,8,780,840
-Dinner,7,food,meal,true,60,8,1080,1140
-Study Planning,7,study,planning,false,90,7,540,720
-Exercise,7,exercise,light,false,60,5,900,1080
-Entertainment,7,entertainment,chill,false,120,5,1080,1320
-Family Time,7,other,family,false,120,6,840,1080
+date,name,category,tag,fixed,start_time,end_time,duration,priority,dependencies
+1,Sleep,other,fixed,true,0,480,480,0,
+1,Breakfast,food,fixed,true,480,510,30,0,
+1,Commute,other,fixed,true,510,540,30,0,
+1,Lunch,food,fixed,true,720,780,60,0,
+1,Dinner,food,fixed,true,1080,1140,60,0,
+1,Study Algorithms,study,algorithms,false,540,720,120,9,
+1,Work Shift,work,part_time,false,780,1020,180,8,
+1,Gym,exercise,fitness,false,1020,1140,90,6,
+1,Grocery Shopping,errand,groceries,false,1140,1260,60,5,
+1,Watch Show,entertainment,relax,false,1260,1380,90,3,
+2,Sleep,other,fixed,true,0,480,480,0,
+2,Breakfast,food,fixed,true,480,510,30,0,
+2,Lecture Block,study,fixed,true,540,660,120,0,
+2,Lunch,food,fixed,true,720,780,60,0,
+2,Dinner,food,fixed,true,1080,1140,60,0,
+2,Review Lecture Notes,study,review,false,660,780,90,8,Lecture Block
+2,Finish Lab,study,lab,false,780,1020,150,10,Review Lecture Notes
+2,Email Manager,work,admin,false,900,1020,30,6,
+2,Laundry,errand,home,false,1020,1140,60,5,
+2,Walk Outside,exercise,walking,false,1140,1260,60,4,
+3,Sleep,other,fixed,true,0,480,480,0,
+3,Breakfast,food,fixed,true,480,510,30,0,
+3,Lunch,food,fixed,true,720,780,60,0,
+3,Work Meeting,work,fixed,true,840,900,60,0,
+3,Dinner,food,fixed,true,1080,1140,60,0,
+3,Study Databases,study,databases,false,540,720,120,9,
+3,Database Assignment,study,databases,false,900,1080,150,10,Study Databases
+3,Pick Up Package,errand,package,false,780,840,30,4,
+3,Part Time Work,work,part_time,false,900,1080,120,7,Work Meeting
+3,Basketball,exercise,sport,false,1140,1260,90,5,
+4,Sleep,other,fixed,true,0,480,480,0,
+4,Breakfast,food,fixed,true,480,510,30,0,
+4,Lunch,food,fixed,true,720,780,60,0,
+4,Dinner,food,fixed,true,1080,1140,60,0,
+4,Prepare Presentation,study,presentation,false,540,720,120,9,
+4,Group Project Work,study,project,false,780,1020,180,9,Prepare Presentation
+4,Work Shift,work,part_time,false,900,1140,180,8,
+4,Clean Room,errand,home,false,1140,1260,60,4,
+4,Stretching,exercise,mobility,false,1260,1320,30,3,
+4,Video Games,entertainment,relax,false,1260,1380,90,3,
+5,Sleep,other,fixed,true,0,480,480,0,
+5,Breakfast,food,fixed,true,480,510,30,0,
+5,Lunch,food,fixed,true,720,780,60,0,
+5,Dinner,food,fixed,true,1080,1140,60,0,
+5,Weekly Review,study,review,false,540,660,90,8,
+5,Finish Homework,study,homework,false,660,900,150,10,Weekly Review
+5,Job Application,work,career,false,900,1020,90,8,
+5,Buy Supplies,errand,shopping,false,1020,1140,60,5,
+5,Run,exercise,cardio,false,1140,1260,60,5,
+5,Movie Night,entertainment,movie,false,1200,1380,120,4,
+6,Sleep,other,fixed,true,0,540,540,0,
+6,Breakfast,food,fixed,true,540,600,60,0,
+6,Lunch,food,fixed,true,780,840,60,0,
+6,Dinner,food,fixed,true,1080,1140,60,0,
+6,Deep Study Session,study,deep_work,false,600,780,150,9,
+6,Project Coding,study,project,false,840,1080,180,10,Deep Study Session
+6,Gym,exercise,fitness,false,1140,1260,90,6,
+6,Meal Prep,food,cooking,false,1260,1380,90,5,Grocery Shopping
+6,Call Family,other,family,false,960,1080,60,4,
+6,Games With Friends,entertainment,social,false,1200,1380,120,4,
+7,Sleep,other,fixed,true,0,540,540,0,
+7,Breakfast,food,fixed,true,540,600,60,0,
+7,Lunch,food,fixed,true,780,840,60,0,
+7,Dinner,food,fixed,true,1080,1140,60,0,
+7,Plan Next Week,other,planning,false,600,720,60,7,
+7,Study Review,study,review,false,720,900,120,8,Plan Next Week
+7,Clean Backpack,errand,school,false,900,960,30,4,
+7,Bike Ride,exercise,cycling,false,960,1080,90,5,
+7,Prepare Work Tasks,work,planning,false,1140,1260,90,7,Plan Next Week
+7,Relax Time,entertainment,rest,false,1260,1380,120,3,
