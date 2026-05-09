@@ -1,193 +1,467 @@
-from app.models import Task, ScheduledTask, TimeWindow
-from config.settings import (
-    WEIGHT_PRIORITY,
-    WEIGHT_PREFERENCE_TIME,
-    WEIGHT_TAG_RELATION,
-    WEIGHT_SPACING,
-    WEIGHT_NO_BREAK_PENALTY,
-    PREFERENCE_TIME_DISTANCE_SCALE,
-    TAG_RELATION_MAX_GAP,
-    MIN_GOOD_BREAK,
-    MAX_GOOD_BREAK,
-    BACK_TO_BACK_GAP,
-)
+"""
+reward.py
+
+Reward/scoring logic for the schedule optimizer.
+
+This file now reads task preference values from `task_prefrence.yaml`
+or `task_preference.yaml`.
+
+Supported file locations:
+    - task_prefrence.yaml
+    - task_prefrence.yml
+    - task_preference.yaml
+    - task_preference.yml
+    - config/task_prefrence.yaml
+    - config/task_preference.yaml
+
+Why this design:
+    - Hard constraints still belong in optimizer/constraints.
+    - This file only decides how good a valid placement is.
+    - If the YAML file is missing, the optimizer still works using safe defaults.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Mapping
 
 
-def get_window_center(time_window: TimeWindow) -> float:
+# -----------------------------
+# Reward configuration model
+# -----------------------------
+
+
+@dataclass(frozen=True)
+class RewardSettings:
     """
-    Computes the midpoint of a given time window.
-    Args: time_window (TimeWindow): The time interval.
-    Returns: float: The center time of the interval.
-    Runtime: O(1)
+    Runtime reward settings loaded from YAML.
+
+    The default values are intentionally conservative so the app still works
+    even if the YAML file is missing or incomplete.
     """
-    return (time_window.start_time + time_window.end_time) / 2
+
+    weight_importance: float = 5.0
+    weight_time_bonus: float = 3.0
+    weight_tag_relation: float = 2.0
+    weight_fragmentation_penalty: float = -4.0
+    weight_category_bonus: float = 1.0
+
+    max_time_distance_minutes: int = 240
+    same_tag_window_minutes: int = 120
+    min_gap_between_tasks_minutes: int = 30
+
+    category_weights: dict[str, float] = field(default_factory=dict)
+    task_weights: dict[str, float] = field(default_factory=dict)
+
+    # Example:
+    # task_time_windows:
+    #   Study Math:
+    #     start_time: 540
+    #     end_time: 660
+    task_time_windows: dict[str, dict[str, int]] = field(default_factory=dict)
+
+    # Example:
+    # category_time_windows:
+    #   study:
+    #     start_time: 540
+    #     end_time: 720
+    category_time_windows: dict[str, dict[str, int]] = field(default_factory=dict)
+
+    # Example:
+    # tag_relations:
+    #   math:
+    #     - exam
+    #     - homework
+    tag_relations: dict[str, list[str]] = field(default_factory=dict)
 
 
-def score_priority(task: Task) -> float:
+# -----------------------------
+# YAML loading
+# -----------------------------
+
+
+def load_reward_settings(config_path: str | Path | None = None) -> RewardSettings:
     """
-    Computes score contribution based on task priority.
-    Args:task (Task): The original task.
-    Returns: float: Priority-based score.
-    Runtime: O(1)
+    Load reward settings from YAML.
+
+    If `config_path` is provided, that path is used directly.
+    Otherwise, common project locations are searched.
+
+    Missing YAML values are okay. Defaults are used for anything not specified.
     """
-    return task.priority * WEIGHT_PRIORITY
+
+    path = _resolve_config_path(config_path)
+
+    if path is None:
+        return RewardSettings()
+
+    try:
+        import yaml
+    except ImportError as exc:
+        raise ImportError(
+            "PyYAML is required to read task_prefrence.yaml. "
+            "Install it with: pip install PyYAML"
+        ) from exc
+
+    with path.open("r", encoding="utf-8") as file:
+        raw_data = yaml.safe_load(file) or {}
+
+    if not isinstance(raw_data, dict):
+        raise ValueError(f"{path.name} must contain a YAML dictionary at the top level.")
+
+    return _settings_from_dict(raw_data)
 
 
-def score_preference_time(task: Task, scheduled_task: ScheduledTask) -> float:
-    """
-    Scores how close a scheduled task is to its preferred time window.
-    Args:task (Task): Original task containing preference_time.
-        scheduled_task (ScheduledTask): Task after scheduling.
-    Returns: float: Higher score for closer alignment to preferred time.
-    Runtime: O(1)
-    """
-    preferred_center = get_window_center(task.preference_time)
-    scheduled_center = get_window_center(scheduled_task.time_window)
+def _resolve_config_path(config_path: str | Path | None) -> Path | None:
+    if config_path is not None:
+        path = Path(config_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Reward config file not found: {path}")
+        return path
 
-    distance = abs(preferred_center - scheduled_center)
+    candidate_names = [
+        "task_prefrence.yaml",      # keeping your current spelling
+        "task_prefrence.yml",
+        "task_preference.yaml",     # also support the correct spelling
+        "task_preference.yml",
+    ]
 
-    return max(
-        0,
-        WEIGHT_PREFERENCE_TIME * (1 - distance / PREFERENCE_TIME_DISTANCE_SCALE)
+    search_roots = [Path.cwd(), Path.cwd() / "config"]
+
+    current = Path.cwd()
+    for parent in [current, *current.parents]:
+        search_roots.append(parent)
+        search_roots.append(parent / "config")
+
+    for root in search_roots:
+        for name in candidate_names:
+            candidate = root / name
+            if candidate.exists():
+                return candidate
+
+    return None
+
+
+def _settings_from_dict(data: Mapping[str, Any]) -> RewardSettings:
+    weights = _as_dict(data.get("weights"))
+    preference = _as_dict(data.get("preference"))
+
+    return RewardSettings(
+        weight_importance=float(weights.get("importance", 5.0)),
+        weight_time_bonus=float(weights.get("time_bonus", 3.0)),
+        weight_tag_relation=float(weights.get("tag_relation", 2.0)),
+        weight_fragmentation_penalty=float(weights.get("fragmentation_penalty", -4.0)),
+        weight_category_bonus=float(weights.get("category_bonus", 1.0)),
+
+        max_time_distance_minutes=int(preference.get("max_time_distance_minutes", 240)),
+        same_tag_window_minutes=int(preference.get("same_tag_window_minutes", 120)),
+        min_gap_between_tasks_minutes=int(preference.get("min_gap_between_tasks_minutes", 30)),
+
+        category_weights=_float_dict(data.get("category_weights")),
+        task_weights=_float_dict(data.get("task_weights")),
+        task_time_windows=_window_dict(data.get("task_time_windows")),
+        category_time_windows=_window_dict(data.get("category_time_windows")),
+        tag_relations=_list_dict(data.get("tag_relations")),
     )
 
 
-def score_tag_relation(
-    scheduled_task: ScheduledTask,
-    all_scheduled_tasks: list[ScheduledTask],
+# -----------------------------
+# Main reward functions
+# -----------------------------
+
+
+def calculate_task_score(
+    task: Any,
+    start_time: int,
+    previous_task: Any | None = None,
+    next_task: Any | None = None,
+    settings: RewardSettings | None = None,
+    config_path: str | Path | None = None,
 ) -> float:
     """
-    Rewards tasks placed near other tasks with the same tag.
-    Example: Study task placed near lecture of same subject.
-    Args: scheduled_task (ScheduledTask): Current task being evaluated.
-        all_scheduled_tasks (list): All tasks in the schedule.
-    Returns: float: Tag-based proximity score.
-    Runtime: O(n) where n = number of scheduled tasks
-    """
-    score = 0
+    Score one valid placement of a task.
 
-    for other in all_scheduled_tasks:
-        if other.name == scheduled_task.name:
+    This function assumes the optimizer has already checked hard constraints:
+    overlap, duration, day bounds, fixed blocks, and dependencies.
+
+    The reward combines:
+        1. priority / importance
+        2. closeness to preferred time
+        3. YAML category/task multipliers
+        4. bonus for related tasks near each other
+        5. small penalty for awkward tiny gaps
+    """
+
+    settings = settings or load_reward_settings(config_path)
+
+    duration = int(_get(task, "duration", 0))
+    end_time = start_time + duration
+
+    if _get(task, "fixed", False):
+        return 0.0
+
+    priority_score = _priority_score(task, settings)
+    time_score = _time_preference_score(task, start_time, end_time, settings)
+    relation_score = _relation_score(task, previous_task, next_task, start_time, end_time, settings)
+    fragmentation_score = _fragmentation_score(previous_task, next_task, start_time, end_time, settings)
+
+    total = priority_score + time_score + relation_score + fragmentation_score
+    return round(total, 2)
+
+
+def calculate_schedule_score(
+    scheduled_tasks: list[Any],
+    settings: RewardSettings | None = None,
+    config_path: str | Path | None = None,
+) -> float:
+    """
+    Recompute the total score of a full schedule.
+
+    Useful after the optimizer creates the final schedule.
+    """
+
+    settings = settings or load_reward_settings(config_path)
+
+    total = 0.0
+    tasks = sorted(
+        scheduled_tasks,
+        key=lambda scheduled: _get(_get(scheduled, "time_window"), "start_time", 0),
+    )
+
+    for index, scheduled in enumerate(tasks):
+        task_start = _get(_get(scheduled, "time_window"), "start_time", 0)
+        previous_task = tasks[index - 1] if index > 0 else None
+        next_task = tasks[index + 1] if index + 1 < len(tasks) else None
+
+        # If this is already a ScheduledTask, it may not have priority/duration.
+        # In that case keep its existing score.
+        if not hasattr(scheduled, "priority") and not hasattr(scheduled, "duration"):
+            total += float(_get(scheduled, "score", 0.0))
             continue
 
-        if other.tag == scheduled_task.tag:
-            time_gap = abs(
-                scheduled_task.time_window.start_time
-                - other.time_window.end_time
-            )
+        total += calculate_task_score(
+            scheduled,
+            task_start,
+            previous_task=previous_task,
+            next_task=next_task,
+            settings=settings,
+        )
 
-            if time_gap <= TAG_RELATION_MAX_GAP:
-                score += WEIGHT_TAG_RELATION
+    return round(total, 2)
+
+
+# Backward-compatible aliases in case your older code used these names.
+score_task = calculate_task_score
+score_schedule = calculate_schedule_score
+
+
+# -----------------------------
+# Reward components
+# -----------------------------
+
+
+def _priority_score(task: Any, settings: RewardSettings) -> float:
+    priority = float(_get(task, "priority", 1))
+    category = str(_get(task, "category", "")).lower()
+    task_name = str(_get(task, "name", ""))
+
+    category_multiplier = settings.category_weights.get(category, 1.0)
+    task_multiplier = settings.task_weights.get(task_name, 1.0)
+
+    return priority * settings.weight_importance * category_multiplier * task_multiplier
+
+
+def _time_preference_score(
+    task: Any,
+    start_time: int,
+    end_time: int,
+    settings: RewardSettings,
+) -> float:
+    preferred_window = _preferred_window_for_task(task, settings)
+
+    if preferred_window is None:
+        return 0.0
+
+    preferred_start = int(preferred_window["start_time"])
+    preferred_end = int(preferred_window["end_time"])
+
+    scheduled_center = (start_time + end_time) / 2
+    preferred_center = (preferred_start + preferred_end) / 2
+
+    # Full bonus if the scheduled task is fully inside its preferred window.
+    if preferred_start <= start_time and end_time <= preferred_end:
+        return settings.weight_time_bonus
+
+    distance = abs(scheduled_center - preferred_center)
+    decay = max(0.0, 1.0 - (distance / settings.max_time_distance_minutes))
+
+    return settings.weight_time_bonus * decay
+
+
+def _preferred_window_for_task(task: Any, settings: RewardSettings) -> dict[str, int] | None:
+    task_name = str(_get(task, "name", ""))
+    category = str(_get(task, "category", "")).lower()
+
+    if task_name in settings.task_time_windows:
+        return settings.task_time_windows[task_name]
+
+    if category in settings.category_time_windows:
+        return settings.category_time_windows[category]
+
+    preference_time = _get(task, "preference_time", None)
+    if preference_time is not None:
+        start_time = _get(preference_time, "start_time", None)
+        end_time = _get(preference_time, "end_time", None)
+        if start_time is not None and end_time is not None:
+            return {"start_time": int(start_time), "end_time": int(end_time)}
+
+    return None
+
+
+def _relation_score(
+    task: Any,
+    previous_task: Any | None,
+    next_task: Any | None,
+    start_time: int,
+    end_time: int,
+    settings: RewardSettings,
+) -> float:
+    score = 0.0
+
+    for neighbor in [previous_task, next_task]:
+        if neighbor is None:
+            continue
+
+        neighbor_window = _get(neighbor, "time_window", None)
+        if neighbor_window is None:
+            continue
+
+        neighbor_start = int(_get(neighbor_window, "start_time", 0))
+        neighbor_end = int(_get(neighbor_window, "end_time", 0))
+
+        gap = max(neighbor_start - end_time, start_time - neighbor_end, 0)
+
+        if gap > settings.same_tag_window_minutes:
+            continue
+
+        if _same_or_related_tag(task, neighbor, settings):
+            score += settings.weight_tag_relation
+        elif str(_get(task, "category", "")).lower() == str(_get(neighbor, "category", "")).lower():
+            score += settings.weight_tag_relation * 0.5
 
     return score
 
 
-def score_spacing(all_scheduled_tasks: list[ScheduledTask]) -> float:
-    """
-    Rewards good spacing between tasks and penalizes poor scheduling.
-    Good spacing: Breaks between tasks (within configured range)
-    Bad spacing: Tasks scheduled back-to-back (no gap)
-    Args: all_scheduled_tasks (list): Scheduled tasks for the day.
-    Returns: float: Total spacing score.
-    Runtime: O(n log n) due to sorting
-    """
-    if len(all_scheduled_tasks) <= 1:
-        return 0
-
-    sorted_tasks = sorted(
-        all_scheduled_tasks,
-        key=lambda task: task.time_window.start_time,
-    )
-
-    score = 0
-
-    for i in range(len(sorted_tasks) - 1):
-        current_task = sorted_tasks[i]
-        next_task = sorted_tasks[i + 1]
-
-        gap = (
-            next_task.time_window.start_time
-            - current_task.time_window.end_time
-        )
-
-        if MIN_GOOD_BREAK <= gap <= MAX_GOOD_BREAK:
-            score += WEIGHT_SPACING
-
-        elif gap == BACK_TO_BACK_GAP:
-            score += WEIGHT_NO_BREAK_PENALTY
-
-    return score
-
-
-def score_single_task(
-    task: Task,
-    scheduled_task: ScheduledTask,
-    all_scheduled_tasks: list[ScheduledTask],
+def _fragmentation_score(
+    previous_task: Any | None,
+    next_task: Any | None,
+    start_time: int,
+    end_time: int,
+    settings: RewardSettings,
 ) -> float:
     """
-    Computes total score contribution for a single task.
-    Combines:
-        - Priority score
-        - Preference time score
-        - Tag relation score
-    Args:
-        task (Task): Original task.
-        scheduled_task (ScheduledTask): Scheduled version.
-        all_scheduled_tasks (list): All tasks for context scoring.
-    Returns: float: Total score for this task.
-    Runtime: O(n)
+    Penalize tiny unusable gaps.
+
+    Example:
+        A 10-minute empty space between tasks is usually not useful if the app
+        schedules in 30-minute blocks, so the score should discourage it.
     """
-    total = 0
 
-    total += score_priority(task)
-    total += score_preference_time(task, scheduled_task)
-    total += score_tag_relation(scheduled_task, all_scheduled_tasks)
+    penalty = 0.0
 
-    return total
-
-
-def score_day_schedule(
-    original_tasks: list[Task],
-    scheduled_tasks: list[ScheduledTask],
-) -> float:
-    """
-    Computes total score for a full day schedule.
-    Steps:
-        1. Match scheduled tasks to original tasks
-        2. Score each task individually
-        3. Add spacing score
-    Args:
-        original_tasks (list[Task]): Input task definitions.
-        scheduled_tasks (list[ScheduledTask]): Scheduled result.
-    Returns:
-        float: Total score of the schedule.
-    Runtime:
-        O(m + n^2)
-        m = number of original tasks
-        n = number of scheduled tasks
-    """
-    total_score = 0
-
-    task_lookup = {
-        task.name: task
-        for task in original_tasks
-    }
-
-    for scheduled_task in scheduled_tasks:
-        original_task = task_lookup.get(scheduled_task.name)
-
-        if original_task is None:
+    for neighbor in [previous_task, next_task]:
+        if neighbor is None:
             continue
 
-        task_score = score_single_task(
-            original_task,
-            scheduled_task,
-            scheduled_tasks,
-        )
+        neighbor_window = _get(neighbor, "time_window", None)
+        if neighbor_window is None:
+            continue
 
-        scheduled_task.score = task_score
-        total_score += task_score
+        neighbor_start = int(_get(neighbor_window, "start_time", 0))
+        neighbor_end = int(_get(neighbor_window, "end_time", 0))
 
-    total_score += score_spacing(scheduled_tasks)
+        gap = max(neighbor_start - end_time, start_time - neighbor_end, 0)
 
-    return total_score
+        if 0 < gap < settings.min_gap_between_tasks_minutes:
+            penalty += settings.weight_fragmentation_penalty
+
+    return penalty
+
+
+def _same_or_related_tag(task: Any, neighbor: Any, settings: RewardSettings) -> bool:
+    task_tag = str(_get(task, "tag", "")).lower()
+    neighbor_tag = str(_get(neighbor, "tag", "")).lower()
+
+    if not task_tag or not neighbor_tag:
+        return False
+
+    if task_tag == neighbor_tag:
+        return True
+
+    related_to_task = [tag.lower() for tag in settings.tag_relations.get(task_tag, [])]
+    related_to_neighbor = [tag.lower() for tag in settings.tag_relations.get(neighbor_tag, [])]
+
+    return neighbor_tag in related_to_task or task_tag in related_to_neighbor
+
+
+# -----------------------------
+# Small parsing helpers
+# -----------------------------
+
+
+def _get(obj: Any, key: str, default: Any = None) -> Any:
+    if obj is None:
+        return default
+
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+
+    return getattr(obj, key, default)
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _float_dict(value: Any) -> dict[str, float]:
+    if not isinstance(value, dict):
+        return {}
+
+    return {str(key): float(val) for key, val in value.items()}
+
+
+def _window_dict(value: Any) -> dict[str, dict[str, int]]:
+    if not isinstance(value, dict):
+        return {}
+
+    result: dict[str, dict[str, int]] = {}
+
+    for name, window in value.items():
+        if not isinstance(window, dict):
+            continue
+
+        if "start_time" not in window or "end_time" not in window:
+            continue
+
+        result[str(name)] = {
+            "start_time": int(window["start_time"]),
+            "end_time": int(window["end_time"]),
+        }
+
+    return result
+
+
+def _list_dict(value: Any) -> dict[str, list[str]]:
+    if not isinstance(value, dict):
+        return {}
+
+    result: dict[str, list[str]] = {}
+
+    for key, values in value.items():
+        if isinstance(values, list):
+            result[str(key).lower()] = [str(item).lower() for item in values]
+        else:
+            result[str(key).lower()] = [str(values).lower()]
+
+    return result

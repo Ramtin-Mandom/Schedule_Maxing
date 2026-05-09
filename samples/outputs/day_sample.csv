@@ -21,29 +21,29 @@ time,task
 09:30,Study Math
 10:00,Study Math
 10:30,Study Math
-11:00,-
-11:30,Fill Gas
+11:00,Fill Gas
+11:30,-
 12:00,Lunch
 12:30,Lunch
-13:00,Grocery Shopping
-13:30,Grocery Shopping
-14:00,Grocery Shopping
-14:30,Grocery Shopping
-15:00,-
-15:30,-
-16:00,Gym
-16:30,Gym
-17:00,Gym
-17:30,Gym
+13:00,Do Assignment
+13:30,Do Assignment
+14:00,Do Assignment
+14:30,Do Assignment
+15:00,Do Assignment
+15:30,Do Assignment
+16:00,Go to Lecture
+16:30,Go to Lecture
+17:00,Go to Lecture
+17:30,Go to Lecture
 18:00,Dinner
 18:30,Dinner
-19:00,Relax
-19:30,Relax
-20:00,Relax
-20:30,Relax
-21:00,Watch Movie
-21:30,Watch Movie
-22:00,Watch Movie
-22:30,Watch Movie
-23:00,Watch Movie
-23:30,Watch Movie
+19:00,Exam Prep
+19:30,Exam Prep
+20:00,Exam Prep
+20:30,Exam Prep
+21:00,Exam Prep
+21:30,Exam Prep
+22:00,Final Review
+22:30,Final Review
+23:00,Final Review
+23:30,Final Review

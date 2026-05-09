@@ -1,64 +1,67 @@
-task_types:
+# task_prefrence.yaml
+# Keep this file in your project root or in config/task_prefrence.yaml.
+# Note: this file keeps your spelling: "prefrence".
+# reward.py also supports the corrected spelling: task_preference.yaml.
 
+weights:
+  importance: 5
+  time_bonus: 3
+  tag_relation: 2
+  fragmentation_penalty: -4
+  category_bonus: 1
+
+preference:
+  max_time_distance_minutes: 240
+  same_tag_window_minutes: 120
+  min_gap_between_tasks_minutes: 30
+
+# Multiplies the priority reward by category.
+# Example: study tasks become more valuable than entertainment tasks.
+category_weights:
+  study: 1.25
+  work: 1.20
+  exercise: 1.10
+  errand: 1.00
+  food: 0.90
+  entertainment: 0.70
+  other: 1.00
+
+# Optional exact task multipliers.
+# Use task names exactly as they appear in your CSV/input.
+task_weights:
+  Study Math: 1.30
+  Math Review: 1.20
+  Fill Gas: 0.95
+
+# Optional preferred windows for exact task names.
+# Times are minutes from midnight.
+task_time_windows:
+  Study Math:
+    start_time: 540   # 09:00
+    end_time: 720     # 12:00
+  Math Review:
+    start_time: 780   # 13:00
+    end_time: 960     # 16:00
+
+# Optional fallback windows by category.
+category_time_windows:
   study:
-    preferred_start: "08:00"
-    preferred_end: "18:00"
-    default_bonus: 3
-
-  sleep:
-    preferred_start: "22:30"
-    preferred_end: "07:00"
-    default_bonus: 5
-
-  food:
-    preferred_start: "11:30"
-    preferred_end: "20:00"
-    default_bonus: 4
-
+    start_time: 540   # 09:00
+    end_time: 1020    # 17:00
   exercise:
-    preferred_start: "06:00"
-    preferred_end: "21:00"
-    default_bonus: 3
+    start_time: 1020  # 17:00
+    end_time: 1260    # 21:00
+  food:
+    start_time: 720   # 12:00
+    end_time: 840     # 14:00
 
-  work:
-    preferred_start: "09:00"
-    preferred_end: "17:00"
-    default_bonus: 5
-
-  event:
-    preferred_start: "Any"
-    preferred_end: "Any"
-    default_bonus: 2
-
-  entertainment:
-    preferred_start: "18:00"
-    preferred_end: "23:30"
-    default_bonus: 2
-
-# Tag relationships for reward bonuses
-
+# Tags that should be rewarded when placed near each other.
 tag_relations:
-
-  "#math":
-    related:
-      - "#lecture"
-      - "#exam"
-
-  "#fitness":
-    related:
-      - "#health"
-      - "#gym"
-
-  "#food":
-    related:
-      - "#mealprep"
-
-# Optional penalties by task type
-
-penalties:
-
-  study:
-    fragmentation_penalty: 3
-
-  sleep:
-    fragmentation_penalty: 10
+  math:
+    - exam
+    - homework
+    - review
+  car:
+    - errand
+  health:
+    - exercise

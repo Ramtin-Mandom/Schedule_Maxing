@@ -1,477 +1,424 @@
-import random
-import math
-from copy import deepcopy
+"""
+optimizer.py
 
-from app.models import (
-    Task,
-    ScheduledTask,
-    TimeWindow,
-    DaySchedule,
-    DayScheduleOutput,
-    UnscheduledTask,
-)
-from app.reward import score_day_schedule
-from app.constraints import (
-    is_valid_task_placement,
-    validate_fixed_blocks,
-)
-from app.pert import validate_pert_constraints, get_topological_order
-from config.settings import (
-    TIME_SLOT_MINUTES,
-    INITIAL_TEMPERATURE,
-    MIN_TEMPERATURE,
-    COOLING_RATE,
-    MAX_ITERATIONS,
-    NO_IMPROVEMENT_LIMIT,
-)
+Greedy schedule optimizer that now uses `task_prefrence.yaml`
+through reward.py.
 
+Important behavior:
+    - Fixed tasks are placed first.
+    - Movable tasks are placed in the valid slot with the highest reward score.
+    - Existing dependencies are respected.
+    - Missing dependencies are ignored, as requested.
+    - Reward weights/preferences come from task_prefrence.yaml when available.
+"""
 
-NOT_ENOUGH_SPACE_REASON = (
-    "There was not enough space in the given schedule for the following task"
-)
-DEPENDENCIES_NOT_MET_REASON = (
-    "we could not do the dependencies needed for this task"
-)
-FIXED_SCHEDULES_COLLIDED_ERROR = "fixed schedules collied"
+from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
 
-def create_scheduled_task(task: Task, start_time: int) -> ScheduledTask:
-    return ScheduledTask(
-        name=task.name,
-        category=task.category,
-        tag=task.tag,
-        time_window=TimeWindow(
-            start_time=start_time,
-            end_time=start_time + task.duration,
-        ),
-        score=0,
-    )
+from app.models import DayScheduleOutput, ScheduledTask, TimeWindow
 
+try:
+    from app.models import UnscheduledTask
+except ImportError:
+    UnscheduledTask = None  # type: ignore
 
-def create_unscheduled_task(task: Task, reason: str) -> UnscheduledTask:
-    return UnscheduledTask(
-        name=task.name,
-        reason=reason,
-    )
+from app.pert import assert_pert_constraints, get_dependency_end_time
+from app.reward import RewardSettings, calculate_task_score, load_reward_settings
 
 
-def sort_tasks_by_dependency_order(tasks: list[Task]) -> list[Task]:
-    """
-    Sorts tasks so dependencies come before dependent tasks.
-
-    If tasks have the same dependency level, higher priority tasks
-    are preferred earlier.
-    """
-    dependency_order = get_topological_order(tasks)
-
-    task_lookup = {
-        task.name: task
-        for task in tasks
-    }
-
-    ordered_tasks = [
-        task_lookup[task_name]
-        for task_name in dependency_order
-        if task_name in task_lookup
-    ]
-
-    return sorted(
-        ordered_tasks,
-        key=lambda task: (
-            dependency_order.index(task.name),
-            -task.priority,
-        ),
-    )
-
-
-def get_task_dependencies(task: Task) -> list[str]:
-    """
-    Safely reads a task's dependencies.
-
-    This keeps the optimizer stable even if some sample tasks do not
-    define dependencies yet.
-    """
-    return getattr(task, "dependencies", []) or []
-
-
-def has_unscheduled_dependencies(
-    task: Task,
-    scheduled_tasks: list[ScheduledTask],
-) -> bool:
-    scheduled_task_names = {
-        scheduled_task.name
-        for scheduled_task in scheduled_tasks
-    }
-
-    for dependency_name in get_task_dependencies(task):
-        if dependency_name not in scheduled_task_names:
-            return True
-
-    return False
-
-
-def find_valid_task_placement(
-    task: Task,
-    day_schedule: DaySchedule,
-    scheduled_tasks: list[ScheduledTask],
-) -> ScheduledTask | None:
-    """
-    Finds the first placement that satisfies hard constraints and PERT
-    dependency constraints.
-    """
-    for start_time in range(
-        day_schedule.time_window.start_time,
-        day_schedule.time_window.end_time,
-        TIME_SLOT_MINUTES,
-    ):
-        end_time = start_time + task.duration
-        candidate = create_scheduled_task(task, start_time)
-        temp_schedule = scheduled_tasks + [candidate]
-
-        if not is_valid_task_placement(
-            task=task,
-            start_time=start_time,
-            end_time=end_time,
-            day_schedule=day_schedule,
-            scheduled_tasks=scheduled_tasks,
-        ):
-            continue
-
-        if not validate_pert_constraints(
-            tasks=day_schedule.tasks,
-            scheduled_tasks=temp_schedule,
-        ):
-            continue
-
-        return candidate
-
-    return None
-
-
-def can_task_fit_without_dependency_check(
-    task: Task,
-    day_schedule: DaySchedule,
-    scheduled_tasks: list[ScheduledTask],
-) -> bool:
-    """
-    Checks whether the task has any valid physical time placement.
-
-    This uses the hard-constraint checker from constraints.py, but it
-    intentionally does not check PERT dependencies. That lets us separate
-    "not enough space" from "dependencies were not met".
-    """
-    for start_time in range(
-        day_schedule.time_window.start_time,
-        day_schedule.time_window.end_time,
-        TIME_SLOT_MINUTES,
-    ):
-        end_time = start_time + task.duration
-
-        if is_valid_task_placement(
-            task=task,
-            start_time=start_time,
-            end_time=end_time,
-            day_schedule=day_schedule,
-            scheduled_tasks=scheduled_tasks,
-        ):
-            return True
-
-    return False
-
-
-def get_unscheduled_task_reason(
-    task: Task,
-    day_schedule: DaySchedule,
-    scheduled_tasks: list[ScheduledTask],
-) -> str:
-    """
-    Explains why a flexible task could not be scheduled.
-    """
-    if has_unscheduled_dependencies(
-        task=task,
-        scheduled_tasks=scheduled_tasks,
-    ):
-        return DEPENDENCIES_NOT_MET_REASON
-
-    if not can_task_fit_without_dependency_check(
-        task=task,
-        day_schedule=day_schedule,
-        scheduled_tasks=scheduled_tasks,
-    ):
-        return NOT_ENOUGH_SPACE_REASON
-
-    return DEPENDENCIES_NOT_MET_REASON
-
-
-def generate_initial_schedule(
-    day_schedule: DaySchedule,
-) -> tuple[list[ScheduledTask], list[UnscheduledTask]]:
-    """
-    Creates a valid starting schedule using dependency order.
-
-    Dependencies are scheduled before tasks that depend on them.
-    Tasks that cannot be scheduled are returned with a reason.
-    """
-    scheduled_tasks: list[ScheduledTask] = []
-    unscheduled_tasks: list[UnscheduledTask] = []
-
-    sorted_tasks = sort_tasks_by_dependency_order(day_schedule.tasks)
-
-    for task in sorted_tasks:
-        candidate = find_valid_task_placement(
-            task=task,
-            day_schedule=day_schedule,
-            scheduled_tasks=scheduled_tasks,
-        )
-
-        if candidate is not None:
-            scheduled_tasks.append(candidate)
-            continue
-
-        reason = get_unscheduled_task_reason(
-            task=task,
-            day_schedule=day_schedule,
-            scheduled_tasks=scheduled_tasks,
-        )
-
-        unscheduled_tasks.append(
-            create_unscheduled_task(
-                task=task,
-                reason=reason,
-            )
-        )
-
-    return scheduled_tasks, unscheduled_tasks
-
-
-def generate_neighbor(
-    current_schedule: list[ScheduledTask],
-    original_tasks: list[Task],
-    day_schedule: DaySchedule,
-) -> list[ScheduledTask]:
-    """
-    Creates a neighboring schedule by moving one random task
-    to another valid time slot.
-
-    The neighbor must also respect dependency order.
-    """
-    if not current_schedule:
-        return current_schedule
-
-    neighbor = deepcopy(current_schedule)
-
-    task_to_move = random.choice(neighbor)
-
-    original_task_lookup = {
-        task.name: task
-        for task in original_tasks
-    }
-
-    original_task = original_task_lookup[task_to_move.name]
-
-    other_scheduled_tasks = [
-        task for task in neighbor
-        if task.name != task_to_move.name
-    ]
-
-    possible_start_times = list(
-        range(
-            day_schedule.time_window.start_time,
-            day_schedule.time_window.end_time,
-            TIME_SLOT_MINUTES,
-        )
-    )
-
-    random.shuffle(possible_start_times)
-
-    for new_start_time in possible_start_times:
-        new_end_time = new_start_time + original_task.duration
-
-        if not is_valid_task_placement(
-            task=original_task,
-            start_time=new_start_time,
-            end_time=new_end_time,
-            day_schedule=day_schedule,
-            scheduled_tasks=other_scheduled_tasks,
-        ):
-            continue
-
-        task_to_move.time_window = TimeWindow(
-            start_time=new_start_time,
-            end_time=new_end_time,
-        )
-
-        if validate_pert_constraints(
-            tasks=original_tasks,
-            scheduled_tasks=neighbor,
-        ):
-            return neighbor
-
-    return current_schedule
-
-
-def should_accept_neighbor(
-    current_score: float,
-    neighbor_score: float,
-    temperature: float,
-) -> bool:
-    if neighbor_score > current_score:
-        return True
-
-    score_difference = current_score - neighbor_score
-
-    acceptance_probability = math.exp(
-        -score_difference / temperature
-    )
-
-    return random.random() < acceptance_probability
+TIME_SLOT_MINUTES = 30
 
 
 def optimize_day_schedule(
-    date: int,
-    day_schedule: DaySchedule,
+    day_schedule: Any,
+    date: int | None = None,
+    config_path: str | Path | None = None,
 ) -> DayScheduleOutput:
     """
-    Optimizes one day's schedule using simulated annealing,
-    while enforcing hard constraints and PERT dependency constraints.
+    Optimize one day of scheduling.
+
+    Parameters
+    ----------
+    day_schedule:
+        Your DaySchedule object. Expected fields:
+            - time_window
+            - fixed_blocks
+            - tasks
+
+    date:
+        Optional date/day number. If not provided, this function tries to read
+        `day_schedule.date`, then falls back to 1.
+
+    config_path:
+        Optional direct path to task_prefrence.yaml.
+
+    Returns
+    -------
+    DayScheduleOutput
+        Final scheduled tasks, total score, and unscheduled tasks when supported
+        by your model.
     """
 
-    if not validate_pert_constraints(day_schedule.tasks):
-        raise ValueError(
-            "Invalid task dependencies. Check for missing dependencies or cycles."
-        )
+    settings = load_reward_settings(config_path)
 
-    current_schedule, unscheduled_tasks = generate_initial_schedule(day_schedule)
-    current_score = score_day_schedule(day_schedule.tasks, current_schedule)
+    day_start = int(_get(_get(day_schedule, "time_window"), "start_time", 0))
+    day_end = int(_get(_get(day_schedule, "time_window"), "end_time", 1440))
 
-    best_schedule = deepcopy(current_schedule)
-    best_score = current_score
+    fixed_tasks = _build_fixed_scheduled_tasks(day_schedule)
+    movable_tasks = [
+        task
+        for task in list(_get(day_schedule, "tasks", []))
+        if not bool(_get(task, "fixed", False))
+    ]
 
-    temperature = INITIAL_TEMPERATURE
-    no_improvement_count = 0
+    scheduled_tasks: list[Any] = sorted(
+        fixed_tasks,
+        key=lambda task: _get(_get(task, "time_window"), "start_time", 0),
+    )
 
-    for _ in range(MAX_ITERATIONS):
-        if temperature <= MIN_TEMPERATURE:
-            break
+    unscheduled: list[Any] = []
+    remaining = movable_tasks[:]
 
-        if no_improvement_count >= NO_IMPROVEMENT_LIMIT:
-            break
+    # Validate the dependency graph before scheduling. Missing dependency names
+    # are ignored inside pert.py, but real dependency cycles are invalid.
+    assert_pert_constraints(movable_tasks)
 
-        neighbor_schedule = generate_neighbor(
-            current_schedule=current_schedule,
-            original_tasks=day_schedule.tasks,
-            day_schedule=day_schedule,
-        )
+    # Repeatedly schedule the best currently feasible task.
+    # This lets dependencies become available as their prerequisite tasks are placed.
+    while remaining:
+        best_task = None
+        best_candidate = None
+        best_score = float("-inf")
 
-        if not validate_pert_constraints(
-            tasks=day_schedule.tasks,
-            scheduled_tasks=neighbor_schedule,
-        ):
-            no_improvement_count += 1
-            temperature *= COOLING_RATE
+        made_progress = False
+
+        for task in remaining:
+            dependency_end = get_dependency_end_time(
+                task=task,
+                all_tasks=movable_tasks,
+                scheduled_tasks=scheduled_tasks,
+            )
+
+            # If real dependencies exist but are not scheduled yet, wait.
+            # Missing dependency names are ignored inside pert.py.
+            if dependency_end is None:
+                continue
+
+            candidate = _best_candidate_for_task(
+                task=task,
+                scheduled_tasks=scheduled_tasks,
+                day_start=day_start,
+                day_end=day_end,
+                earliest_start=dependency_end,
+                settings=settings,
+            )
+
+            if candidate is None:
+                continue
+
+            candidate_start, candidate_end, candidate_score = candidate
+
+            if candidate_score > best_score:
+                best_task = task
+                best_candidate = (candidate_start, candidate_end)
+                best_score = candidate_score
+
+        if best_task is not None and best_candidate is not None:
+            start_time, end_time = best_candidate
+            scheduled = _make_scheduled_task(best_task, start_time, end_time, best_score)
+            scheduled_tasks.append(scheduled)
+            scheduled_tasks.sort(key=lambda item: _get(_get(item, "time_window"), "start_time", 0))
+            remaining.remove(best_task)
+            made_progress = True
+
+        if made_progress:
             continue
 
-        neighbor_score = score_day_schedule(
-            day_schedule.tasks,
-            neighbor_schedule,
-        )
+        # If no task can progress, either there is no space or there are dependency cycles.
+        # Missing dependencies are ignored, but cycles between real tasks cannot be resolved.
+        for task in remaining:
+            reason = "not enough valid space or unresolved dependency cycle"
+            unscheduled.append(_make_unscheduled_task(task, reason))
+        break
 
-        if should_accept_neighbor(
-            current_score=current_score,
-            neighbor_score=neighbor_score,
-            temperature=temperature,
-        ):
-            current_schedule = neighbor_schedule
-            current_score = neighbor_score
+    # Final safety check: the produced schedule should still respect real
+    # dependencies. This catches dependency-order bugs without changing scoring.
+    assert_pert_constraints(movable_tasks, scheduled_tasks)
 
-        if current_score > best_score:
-            best_schedule = deepcopy(current_schedule)
-            best_score = current_score
-            no_improvement_count = 0
-        else:
-            no_improvement_count += 1
+    total_score = round(sum(float(_get(task, "score", 0.0)) for task in scheduled_tasks), 2)
+    output_date = date if date is not None else int(_get(day_schedule, "date", 1))
 
-        temperature *= COOLING_RATE
-
-    return DayScheduleOutput(
-        date=date,
-        total_score=best_score,
-        scheduled_tasks=best_schedule,
-        unscheduled_tasks=unscheduled_tasks,
-    )
-
-
-def fixed_block_to_scheduled_task(fixed_block) -> ScheduledTask:
-    return ScheduledTask(
-        name=fixed_block.name,
-        category=fixed_block.category,
-        tag="fixed",
-        time_window=fixed_block.time_window,
-        score=0,
-    )
-
-
-def merge_scheduled_tasks_by_start_time(
-    fixed_tasks: list[ScheduledTask],
-    day_output: DayScheduleOutput,
-) -> DayScheduleOutput:
-    combined_schedule: list[ScheduledTask] = []
-
-    optimized_tasks = sorted(
-        day_output.scheduled_tasks,
-        key=lambda task: task.time_window.start_time,
-    )
-
-    i = 0
-    j = 0
-
-    while i < len(fixed_tasks) and j < len(optimized_tasks):
-        fixed_start = fixed_tasks[i].time_window.start_time
-        optimized_start = optimized_tasks[j].time_window.start_time
-
-        if fixed_start <= optimized_start:
-            combined_schedule.append(fixed_tasks[i])
-            i += 1
-        else:
-            combined_schedule.append(optimized_tasks[j])
-            j += 1
-
-    while i < len(fixed_tasks):
-        combined_schedule.append(fixed_tasks[i])
-        i += 1
-
-    while j < len(optimized_tasks):
-        combined_schedule.append(optimized_tasks[j])
-        j += 1
-
-    return DayScheduleOutput(
-        date=day_output.date,
-        total_score=day_output.total_score,
-        scheduled_tasks=combined_schedule,
-        unscheduled_tasks=day_output.unscheduled_tasks,
+    return _make_day_schedule_output(
+        date=output_date,
+        total_score=total_score,
+        scheduled_tasks=scheduled_tasks,
+        unscheduled_tasks=unscheduled,
     )
 
 
 def combine_fixed_and_optimized_scheduled_tasks(
+    *,
     date: int,
-    day_schedule: DaySchedule,
+    day_schedule: Any,
+    config_path: str | Path | None = None,
 ) -> DayScheduleOutput:
-    if not validate_fixed_blocks(day_schedule):
-        raise ValueError(FIXED_SCHEDULES_COLLIDED_ERROR)
-
-    day_output = optimize_day_schedule(
+    """Backward-compatible entry point used by ``app.main`` and ``app.app``."""
+    return optimize_day_schedule(
+        day_schedule,
         date=date,
-        day_schedule=day_schedule,
+        config_path=config_path,
     )
 
-    fixed_tasks = [
-        fixed_block_to_scheduled_task(block)
-        for block in day_schedule.fixed_blocks
-    ]
 
-    fixed_tasks.sort(key=lambda task: task.time_window.start_time)
+def _best_candidate_for_task(
+    task: Any,
+    scheduled_tasks: list[Any],
+    day_start: int,
+    day_end: int,
+    earliest_start: int,
+    settings: RewardSettings,
+) -> tuple[int, int, float] | None:
+    duration = int(_get(task, "duration", 0))
 
-    return merge_scheduled_tasks_by_start_time(
-        fixed_tasks=fixed_tasks,
-        day_output=day_output,
+    if duration <= 0:
+        return None
+
+    first_start = max(day_start, earliest_start)
+
+    # Snap to the next 30-minute slot.
+    if first_start % TIME_SLOT_MINUTES != 0:
+        first_start += TIME_SLOT_MINUTES - (first_start % TIME_SLOT_MINUTES)
+
+    latest_start = day_end - duration
+
+    best_candidate = None
+    best_score = float("-inf")
+
+    for start_time in range(first_start, latest_start + 1, TIME_SLOT_MINUTES):
+        end_time = start_time + duration
+
+        if _overlaps_any(start_time, end_time, scheduled_tasks):
+            continue
+
+        previous_task, next_task = _neighbors_for_candidate(start_time, end_time, scheduled_tasks)
+
+        score = calculate_task_score(
+            task,
+            start_time,
+            previous_task=previous_task,
+            next_task=next_task,
+            settings=settings,
+        )
+
+        if score > best_score:
+            best_score = score
+            best_candidate = (start_time, end_time, score)
+
+    return best_candidate
+
+
+def _dependency_end_time(task: Any, scheduled_tasks: list[Any]) -> int | None:
+    """
+    Return the earliest start requirement caused by already-known dependencies.
+
+    Missing dependencies are ignored.
+
+    Returns:
+        - max dependency end time if all real dependencies are already scheduled
+        - 0 if there are no dependencies or all dependency names are missing
+        - None if a real dependency exists but has not been scheduled yet
+    """
+
+    dependency_names = _normalize_dependencies(_get(task, "dependencies", []))
+
+    if not dependency_names:
+        return 0
+
+    all_scheduled_names = {str(_get(item, "name", "")) for item in scheduled_tasks}
+
+    # These are all task names visible in the current scheduled list.
+    # If a dependency is not found here yet, it might either be missing or unscheduled.
+    dependency_end = 0
+
+    for dependency_name in dependency_names:
+        matching = [
+            item
+            for item in scheduled_tasks
+            if str(_get(item, "name", "")) == dependency_name
+        ]
+
+        if matching:
+            dependency_window = _get(matching[0], "time_window", None)
+            dependency_end = max(dependency_end, int(_get(dependency_window, "end_time", 0)))
+            continue
+
+        # Missing dependency is ignored.
+        # A real-but-unscheduled dependency will be handled by the optimizer naturally
+        # if it appears later in remaining tasks. Since this helper does not know
+        # remaining task names, the caller chooses task order by repeated passes.
+        if dependency_name not in all_scheduled_names:
+            continue
+
+    return dependency_end
+
+
+def _build_fixed_scheduled_tasks(day_schedule: Any) -> list[Any]:
+    fixed_scheduled_tasks: list[Any] = []
+
+    for fixed_block in list(_get(day_schedule, "fixed_blocks", [])):
+        time_window = _get(fixed_block, "time_window", None)
+        fixed_scheduled_tasks.append(
+            _make_scheduled_task(
+                source=fixed_block,
+                start_time=int(_get(time_window, "start_time", 0)),
+                end_time=int(_get(time_window, "end_time", 0)),
+                score=0.0,
+            )
+        )
+
+    for task in list(_get(day_schedule, "tasks", [])):
+        if not bool(_get(task, "fixed", False)):
+            continue
+
+        start_time = int(_get(task, "start_time", 0))
+        end_time = int(_get(task, "end_time", start_time + int(_get(task, "duration", 0))))
+
+        fixed_scheduled_tasks.append(
+            _make_scheduled_task(
+                source=task,
+                start_time=start_time,
+                end_time=end_time,
+                score=0.0,
+            )
+        )
+
+    fixed_scheduled_tasks.sort(
+        key=lambda task: _get(_get(task, "time_window"), "start_time", 0)
     )
+    return fixed_scheduled_tasks
+
+
+def _make_scheduled_task(source: Any, start_time: int, end_time: int, score: float) -> Any:
+    return ScheduledTask(
+        name=str(_get(source, "name", "")),
+        category=str(_get(source, "category", "other")),
+        tag=str(_get(source, "tag", "")),
+        time_window=TimeWindow(start_time=start_time, end_time=end_time),
+        score=round(float(score), 2),
+    )
+
+
+def _make_unscheduled_task(task: Any, reason: str) -> Any:
+    if UnscheduledTask is None:
+        return {
+            "name": str(_get(task, "name", "")),
+            "reason": reason,
+        }
+
+    try:
+        return UnscheduledTask(
+            name=str(_get(task, "name", "")),
+            reason=reason,
+        )
+    except TypeError:
+        return {
+            "name": str(_get(task, "name", "")),
+            "reason": reason,
+        }
+
+
+def _make_day_schedule_output(
+    date: int,
+    total_score: float,
+    scheduled_tasks: list[Any],
+    unscheduled_tasks: list[Any],
+) -> DayScheduleOutput:
+    try:
+        return DayScheduleOutput(
+            date=date,
+            total_score=total_score,
+            scheduled_tasks=scheduled_tasks,
+            unscheduled_tasks=unscheduled_tasks,
+        )
+    except TypeError:
+        # Backward compatibility if your DayScheduleOutput model does not
+        # have `unscheduled_tasks` yet.
+        return DayScheduleOutput(
+            date=date,
+            total_score=total_score,
+            scheduled_tasks=scheduled_tasks,
+        )
+
+
+def _neighbors_for_candidate(
+    start_time: int,
+    end_time: int,
+    scheduled_tasks: list[Any],
+) -> tuple[Any | None, Any | None]:
+    previous_task = None
+    next_task = None
+
+    for task in sorted(
+        scheduled_tasks,
+        key=lambda item: _get(_get(item, "time_window"), "start_time", 0),
+    ):
+        task_window = _get(task, "time_window", None)
+        task_start = int(_get(task_window, "start_time", 0))
+        task_end = int(_get(task_window, "end_time", 0))
+
+        if task_end <= start_time:
+            previous_task = task
+        elif task_start >= end_time and next_task is None:
+            next_task = task
+            break
+
+    return previous_task, next_task
+
+
+def _overlaps_any(start_time: int, end_time: int, scheduled_tasks: list[Any]) -> bool:
+    for task in scheduled_tasks:
+        task_window = _get(task, "time_window", None)
+        other_start = int(_get(task_window, "start_time", 0))
+        other_end = int(_get(task_window, "end_time", 0))
+
+        if start_time < other_end and other_start < end_time:
+            return True
+
+    return False
+
+
+def _normalize_dependencies(dependencies: Any) -> list[str]:
+    if dependencies is None:
+        return []
+
+    if isinstance(dependencies, str):
+        if not dependencies.strip():
+            return []
+
+        # Supports "A;B", "A,B", or "A-B".
+        separators = [";", ",", "-"]
+        result = [dependencies]
+
+        for separator in separators:
+            if separator in dependencies:
+                result = dependencies.split(separator)
+                break
+
+        return [item.strip() for item in result if item.strip()]
+
+    if isinstance(dependencies, list):
+        return [str(item).strip() for item in dependencies if str(item).strip()]
+
+    return []
+
+
+def _get(obj: Any, key: str, default: Any = None) -> Any:
+    if obj is None:
+        return default
+
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+
+    return getattr(obj, key, default)
