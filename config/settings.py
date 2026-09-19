@@ -1,5 +1,8 @@
 # config/settings.py
 
+import os
+from pathlib import Path
+
 # -------------------------
 # Time Model
 # -------------------------
@@ -73,3 +76,19 @@ ALLOW_SWAP_TASKS = True
 ALLOW_SHIFT_TASK = True
 
 SHIFT_AMOUNT_MINUTES = 30
+
+
+# -------------------------
+# Local Data Storage
+# -------------------------
+
+# Directory for local runtime data (e.g. the execution-tracking SQLite database).
+# Override with the SCHEDULE_MAXING_DATA_DIR environment variable if needed.
+DATA_DIR = Path(
+    os.environ.get(
+        "SCHEDULE_MAXING_DATA_DIR",
+        Path(__file__).resolve().parent.parent / "data",
+    )
+)
+
+EXECUTION_DB_FILENAME = "executions.db"

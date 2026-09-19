@@ -54,6 +54,16 @@ from config.settings import (
     TIME_SLOT_MINUTES,
 )
 
+from app.execution.db import get_connection
+from app.execution.repository import ExecutionRepository
+from app.execution.service import ExecutionService
+from app.productivity.reporting import ProductivityService
+from app.ui.duration_suggestion import DurationSuggestionWidget, SuggestionContext
+from app.ui.execution_controller import ExecutionController
+from app.ui.execution_panel import ExecutableTask, ExecutionPanel
+from app.ui.productivity_controller import ProductivityController
+from app.ui.productivity_page import ProductivityPage
+
 
 # -----------------------------------------------------------------------------
 # Constants / Theme
@@ -274,12 +284,14 @@ class TaskForm(Card):
         mode_name: str,
         number_of_days: int,
         on_add_task: Callable[[dict[str, str]], None],
+        productivity_controller: ProductivityController | None = None,
     ) -> None:
         super().__init__(parent)
 
         self.mode_name = mode_name
         self.number_of_days = number_of_days
         self.on_add_task = on_add_task
+        self.productivity_controller = productivity_controller
 
         self.name_var = tk.StringVar()
         self.day_var = tk.StringVar(value="1")
@@ -359,6 +371,18 @@ class TaskForm(Card):
             "1-10",
         )
         row += 1
+
+        if self.productivity_controller is not None:
+            self.duration_suggestion = DurationSuggestionWidget(
+                form_body,
+                self.productivity_controller,
+                get_context=self._duration_suggestion_context,
+                apply_duration=self._apply_suggested_duration,
+            )
+            self.duration_suggestion.grid(row=row, column=0, sticky="ew", pady=(0, 6))
+            row += 1
+        else:
+            self.duration_suggestion = None
 
         self.dependencies_entry = self._add_entry(
             form_body,
@@ -535,6 +559,40 @@ class TaskForm(Card):
         self.priority_var.set("")
         self.dependencies_var.set("")
         self._sync_fixed_fields()
+        if self.duration_suggestion is not None:
+            self.duration_suggestion.reset()
+
+    def _duration_suggestion_context(self) -> SuggestionContext | None:
+        """
+        Read the form's current category/start-time/duration fields for a
+        duration suggestion request. Returns None (and the widget shows a
+        hint) if the fields aren't filled in well enough yet -- this never
+        triggers automatically, only when the user clicks "Suggest duration".
+        """
+        category = self.category_var.get().strip()
+        if not category:
+            return None
+
+        try:
+            planned_start = int(self.start_var.get().strip())
+        except ValueError:
+            return None
+
+        try:
+            original_estimate_minutes = float(self.duration_var.get().strip())
+        except ValueError:
+            original_estimate_minutes = 0.0
+
+        return SuggestionContext(
+            category=category,
+            planned_start=planned_start,
+            original_estimate_minutes=original_estimate_minutes,
+        )
+
+    def _apply_suggested_duration(self, minutes: int) -> None:
+        # Explicit, user-initiated fill (the widget only calls this from its own
+        # "Use suggestion" button) -- the duration field remains a normal, editable entry.
+        self.duration_var.set(str(minutes))
 
 
 # -----------------------------------------------------------------------------
@@ -931,11 +989,20 @@ class ScheduleCanvas(Card):
 class SchedulePage(ctk.CTkFrame):
     """Reusable page for day, week, and month scheduling."""
 
-    def __init__(self, parent: tk.Widget, mode_name: str, number_of_days: int) -> None:
+    def __init__(
+        self,
+        parent: tk.Widget,
+        mode_name: str,
+        number_of_days: int,
+        execution_controller: ExecutionController | None = None,
+        productivity_controller: ProductivityController | None = None,
+    ) -> None:
         super().__init__(parent, fg_color=APP_BG)
         self.mode_name = mode_name
         self.number_of_days = number_of_days
         self.state = ScheduleState(number_of_days)
+        self.execution_controller = execution_controller
+        self.productivity_controller = productivity_controller
 
         self.columnconfigure(0, weight=0, minsize=360)
         self.columnconfigure(1, weight=1)
@@ -989,6 +1056,7 @@ class SchedulePage(ctk.CTkFrame):
             mode_name=self.mode_name,
             number_of_days=self.number_of_days,
             on_add_task=self.add_task,
+            productivity_controller=self.productivity_controller,
         )
         self.form.grid(row=0, column=0, sticky="ew", pady=(0, 14))
 
@@ -1069,6 +1137,14 @@ class SchedulePage(ctk.CTkFrame):
         self.unscheduled_panel = UnscheduledPanel(unscheduled_tab)
         self.added_tasks_panel.grid(row=0, column=0, sticky="nsew")
         self.unscheduled_panel.grid(row=0, column=0, sticky="nsew")
+
+        self.execution_panel = None
+        if self.execution_controller is not None:
+            execute_tab = self.right_tabs.add("Execute")
+            execute_tab.columnconfigure(0, weight=1)
+            execute_tab.rowconfigure(0, weight=1)
+            self.execution_panel = ExecutionPanel(execute_tab, self.execution_controller)
+            self.execution_panel.grid(row=0, column=0, sticky="nsew")
 
     # ----------------------------- User actions -----------------------------
 
@@ -1157,6 +1233,8 @@ class SchedulePage(ctk.CTkFrame):
 
         self.state.outputs = {}
         self.unscheduled_panel.clear()
+        if self.execution_panel is not None:
+            self.execution_panel.set_scheduled_tasks([])
         self.refresh_all()
 
     def make_schedule(self) -> None:
@@ -1180,13 +1258,48 @@ class SchedulePage(ctk.CTkFrame):
         self._refresh_unscheduled_results(outputs)
         self._refresh_stats()
 
+        if self.execution_panel is not None:
+            self.execution_panel.set_scheduled_tasks(self._build_executable_tasks(outputs))
+
         if not outputs:
             messagebox.showinfo("No Tasks", "There are no tasks to schedule yet.")
+
+    def _build_executable_tasks(self, outputs: dict[int, DayScheduleOutput]) -> list[ExecutableTask]:
+        """
+        Flatten this page's optimizer output into the flexible (non-fixed)
+        scheduled tasks the Execute tab can track. Fixed blocks (sleep,
+        meals, ...) are intentionally excluded -- they have no priority and
+        are not really "executed" in the same sense as a flexible task.
+        """
+        executable: list[ExecutableTask] = []
+
+        for day, output in outputs.items():
+            priority_by_name = {task.name: task.priority for task in self.state.days[day].tasks}
+
+            for scheduled_task in output.scheduled_tasks:
+                if scheduled_task.name not in priority_by_name:
+                    continue  # a fixed block, not a flexible task
+
+                executable.append(
+                    ExecutableTask(
+                        day=day,
+                        task_name=scheduled_task.name,
+                        category=scheduled_task.category,
+                        tag=scheduled_task.tag,
+                        planned_start=scheduled_task.time_window.start_time,
+                        planned_end=scheduled_task.time_window.end_time,
+                        priority=priority_by_name[scheduled_task.name],
+                    )
+                )
+
+        return executable
 
     def reset(self) -> None:
         self.state.reset()
         self.form.clear_fields()
         self.unscheduled_panel.clear()
+        if self.execution_panel is not None:
+            self.execution_panel.set_scheduled_tasks([])
         self.refresh_all()
 
     # ----------------------------- Refresh logic -----------------------------
@@ -1494,9 +1607,46 @@ class ScheduleOptimizerApp(ctk.CTk):
         self.minsize(1240, 760)
         self.configure(fg_color=APP_BG)
 
+        self._db_connection = None
+        self._init_execution_tracking()
+
         self._configure_treeview_style()
         self._build_shell()
         self.show_page("day")
+
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _init_execution_tracking(self) -> None:
+        """
+        Open the local execution-tracking database and build the shared
+        controllers, once, for the whole app. Failure here (e.g. the data
+        directory is not writable) must not crash the scheduler -- it falls
+        back to running with execution tracking and the Productivity page
+        disabled, and tells the user why.
+        """
+        self.execution_controller: ExecutionController | None = None
+        self.productivity_controller: ProductivityController | None = None
+
+        try:
+            self._db_connection = get_connection()
+            repository = ExecutionRepository(self._db_connection)
+            self.execution_controller = ExecutionController(ExecutionService(repository))
+            self.productivity_controller = ProductivityController(
+                ProductivityService(repository), self.execution_controller
+            )
+        except Exception as error:  # noqa: BLE001 - must never crash the scheduler UI
+            self._db_connection = None
+            messagebox.showwarning(
+                "Execution Tracking Unavailable",
+                "Could not open the local execution-tracking database, so task "
+                "execution tracking and the Productivity page are disabled for "
+                f"this session. The scheduler itself is unaffected.\n\nDetails: {error}",
+            )
+
+    def _on_close(self) -> None:
+        if self._db_connection is not None:
+            self._db_connection.close()
+        self.destroy()
 
     def _configure_treeview_style(self) -> None:
         style = ttk.Style(self)
@@ -1556,6 +1706,8 @@ class ScheduleOptimizerApp(ctk.CTk):
             ("month", "Month Schedule"),
             ("reward", "Reward Config"),
         ]
+        if self.productivity_controller is not None:
+            nav_items.append(("productivity", "Productivity"))
 
         for row, (page_name, label) in enumerate(nav_items, start=2):
             button = ctk.CTkButton(
@@ -1573,8 +1725,9 @@ class ScheduleOptimizerApp(ctk.CTk):
             button.grid(row=row, column=0, sticky="ew", padx=16, pady=5)
             self.nav_buttons[page_name] = button
 
+        spacer_row = 2 + len(nav_items)
         footer = ctk.CTkFrame(self.sidebar, fg_color="#111C31", corner_radius=18)
-        footer.grid(row=7, column=0, sticky="sew", padx=16, pady=(0, 20))
+        footer.grid(row=spacer_row + 1, column=0, sticky="sew", padx=16, pady=(0, 20))
         ctk.CTkLabel(
             footer,
             text="Tip",
@@ -1590,7 +1743,7 @@ class ScheduleOptimizerApp(ctk.CTk):
             wraplength=170,
             justify="left",
         ).pack(anchor="w", padx=14, pady=(0, 14))
-        self.sidebar.grid_rowconfigure(6, weight=1)
+        self.sidebar.grid_rowconfigure(spacer_row, weight=1)
 
         self.page_container = ctk.CTkFrame(self, fg_color=APP_BG, corner_radius=0)
         self.page_container.grid(row=0, column=1, sticky="nsew")
@@ -1598,11 +1751,19 @@ class ScheduleOptimizerApp(ctk.CTk):
         self.page_container.grid_columnconfigure(0, weight=1)
 
         self.pages: dict[str, ctk.CTkFrame] = {
-            "day": SchedulePage(self.page_container, "day", 1),
-            "week": SchedulePage(self.page_container, "week", 7),
-            "month": SchedulePage(self.page_container, "month", 30),
+            "day": SchedulePage(
+                self.page_container, "day", 1, self.execution_controller, self.productivity_controller
+            ),
+            "week": SchedulePage(
+                self.page_container, "week", 7, self.execution_controller, self.productivity_controller
+            ),
+            "month": SchedulePage(
+                self.page_container, "month", 30, self.execution_controller, self.productivity_controller
+            ),
             "reward": RewardConfigPage(self.page_container),
         }
+        if self.productivity_controller is not None:
+            self.pages["productivity"] = ProductivityPage(self.page_container, self.productivity_controller)
 
         for page in self.pages.values():
             page.grid(row=0, column=0, sticky="nsew")

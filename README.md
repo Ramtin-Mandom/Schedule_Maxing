@@ -30,6 +30,9 @@ The project also includes a dependency system inspired by PERT-style precedence 
 - Upload CSV input schedules.
 - Display schedules visually in a desktop UI.
 - Track unscheduled tasks and show why they could not be placed.
+- Record actual task execution locally (start/pause/resume/complete/skip) with optional focus/energy/interruption feedback.
+- View personal productivity insights (completion rates, duration accuracy, best-supported times of day) with an evidence/sample-count label on every figure.
+- Get a historical duration suggestion (with its evidence and reasoning) when entering a new task, without ever overwriting your own entry automatically.
 
 ---
 
@@ -39,27 +42,33 @@ The project also includes a dependency system inspired by PERT-style precedence 
 .
 ├── .venv/
 ├── app/
-│   ├── __pycache__/
 │   ├── app.py
 │   ├── constraints.py
 │   ├── data_processor.py
+│   ├── execution/            # local SQLite execution-tracking domain (models, db, repository, service)
 │   ├── main.py
 │   ├── models.py
 │   ├── optimizer.py
 │   ├── pert.py
-│   └── reward.py
+│   ├── productivity/         # analytics built on execution history (stats, predictions, insights, reporting)
+│   ├── reward.py
+│   └── ui/                   # desktop-UI controllers and widgets that wire execution/productivity into app.py
 ├── config/
-│   ├── __pycache__/
 │   ├── settings.py
 │   └── task_preferences.yaml
+├── data/                     # local runtime SQLite database (gitignored; created on first run)
 ├── samples/
 │   ├── inputs/
 │   │   ├── day_sample.csv
-│   │   ├── sample_month_schedule.csv
+│   │   ├── month_sample.csv
 │   │   └── week_sample.csv
 │   └── outputs/
 │       └── day_sample.csv
 ├── tests/
+│   ├── execution/
+│   ├── productivity/
+│   ├── ui/
+│   └── test_main_time_formatting.py
 ├── .editorconfig
 ├── .env
 ├── .gitattributes
@@ -68,7 +77,7 @@ The project also includes a dependency system inspired by PERT-style precedence 
 └── requirements.txt
 ```
 
-> Note: The `tests/` folder exists, but test files have not been added yet. Adding unit tests for constraints, PERT dependency behavior, reward scoring, CSV loading, and optimizer outputs would be a strong next step.
+> `tests/` contains an automated suite (`python -m pytest`) covering the optimizer's supporting modules, execution tracking, productivity analytics, and the UI-facing controllers.
 
 ---
 
@@ -230,7 +239,25 @@ The UI supports:
 - Unscheduled task display.
 - Runtime reward configuration page.
 
-The UI uses `customtkinter`, so that dependency must be installed before running the app.
+The UI uses `customtkinter`, so that dependency must be installed before running the app. It also wires in the Execute tab and Productivity page (see below) via `app/ui/`, but contains none of their persistence or analytics logic itself.
+
+---
+
+### `app/execution/`
+
+The local task-execution domain, used by both the desktop UI and the CLI report tool: `models.py` (execution/session/status models), `db.py` (SQLite connection + idempotent schema migrations), `repository.py` (the only module with raw, parameterized SQL), `service.py` (the state machine — start/pause/resume/complete/skip, duplicate prevention, active-duration and start-delay calculations), and `exporters.py` (CSV/JSON export of raw execution history). See [Task Execution Tracking & Productivity Insights](#task-execution-tracking--productivity-insights-local-only) for usage and storage location.
+
+---
+
+### `app/productivity/`
+
+Turns execution history into statistics and predictions: `data_prep.py` (flattens executions into analysis-ready records), `stats.py`/`segments.py` (aggregate statistics and groupings, each carrying its own sample count and evidence label), `prediction.py` (the duration estimator and its documented fallback hierarchy), `insights.py` (structured, template-generated observations), `trends.py` (recent-vs-baseline comparison), `reporting.py` (the `ProductivityService` boundary and report/dashboard bundles), `exporters.py`, and `report_cli.py` (`python -m app.productivity.report_cli`).
+
+---
+
+### `app/ui/`
+
+Desktop-UI-facing controllers and widgets that connect `app/app.py` to `app/execution/` and `app/productivity/`, keeping persistence and analytics logic out of UI callbacks: `execution_controller.py`/`productivity_controller.py` (the only things UI widgets call into), `background.py` (runs database calls off the UI thread), `execution_panel.py`/`feedback_dialog.py`/`duration_suggestion.py`/`productivity_page.py`/`productivity_charts.py` (the actual widgets).
 
 ---
 
@@ -432,7 +459,18 @@ From the project root:
 python -m app.app
 ```
 
-This opens the CustomTkinter schedule optimizer interface.
+This opens the CustomTkinter schedule optimizer interface. Once you run **Make Schedule**, an **Execute** tab appears next to Added Tasks/Unscheduled where you can Start/Pause/Resume/Complete/Skip each flexible task, and a **Productivity** item appears in the sidebar (see [Task Execution Tracking & Productivity Insights](#task-execution-tracking--productivity-insights-local-only) below). If the local execution database cannot be opened, the scheduler still runs normally and a warning explains that tracking is disabled for that session.
+
+---
+
+### 5. Run the productivity report from the command line (optional)
+
+```bash
+python -m app.productivity.report_cli
+python -m app.productivity.report_cli --period week --format json --output report.json
+```
+
+Prints (or exports) the same productivity analysis the desktop Productivity page shows, from whatever local execution history exists. See `python -m app.productivity.report_cli --help` for all options.
 
 ---
 
@@ -491,13 +529,81 @@ Display result in UI or export to CSV
 
 ---
 
+## Task Execution Tracking & Productivity Insights (Local Only)
+
+Beyond planning a schedule, the app can optionally track what actually happened when you work a task, and turn that history into productivity insights. This is entirely local: no server, no cloud storage, no telemetry, no accounts.
+
+### Where your data is stored
+
+Execution history lives in a single local SQLite file at:
+
+```text
+<project root>/data/executions.db
+```
+
+Override the location with the `SCHEDULE_MAXING_DATA_DIR` environment variable if you want it elsewhere. The `data/` directory (and any `*.db`/`*.db-journal`/`*.db-wal`/`*.db-shm` file) is listed in `.gitignore`, so it is never committed. The database and its schema are created automatically the first time the app or the productivity CLI runs; nothing needs to be set up by hand.
+
+### Recording execution (desktop UI)
+
+After running **Make Schedule** on the Day/Week/Month page, open the **Execute** tab (next to Added Tasks/Unscheduled) to:
+
+1. Pick a scheduled flexible task from the dropdown (fixed blocks like sleep/meals are not tracked as executions).
+2. Use whichever actions are enabled for its current state:
+   - **Start** (scheduled → in progress)
+   - **Pause** (in progress → paused)
+   - **Resume** (paused → in progress)
+   - **Complete** (in progress or paused → completed)
+   - **Skip** (scheduled, in progress, or paused → skipped)
+3. Watch the live **active time** counter — it only counts time while the task is in progress; time spent paused is excluded.
+4. On Complete or Skip, optionally record a focus rating (1–5), energy rating (1–5), interruption count, and a short note. Every field is optional.
+
+Re-selecting the same task after re-running **Make Schedule**, reloading a CSV, or reopening the app reuses its existing execution record instead of creating a duplicate, as long as the task's name, category, tag, and scheduled time are unchanged.
+
+### The Productivity page
+
+A **Productivity** item appears in the sidebar once the local database is available. It shows, for the selected filters:
+
+- Completed and skipped task counts, completion rate, productive active time, median start delay, and duration-estimate error (mean absolute error between planned and actual duration).
+- **Planned vs. actual duration by category** and **completion rate by time bucket**, as simple bar charts drawn directly with Tkinter (no external plotting library).
+- The **best-supported time bucket per category** — the time of day with the most completed, duration-bearing history for that category.
+- A **recent trend** comparing the last 7 days against your current filter selection.
+- **Insights** — short, data-derived sentences such as "Study tasks completed in the morning have a completion rate of 82% across 17 observations," never hardcoded text and never from an AI model.
+
+Filters: a time window (all time / last 7 / 30 / 90 days), category, tag, day of week, and time bucket (Night/Morning/Afternoon/Evening — see `app/productivity/buckets.py` for the exact boundaries).
+
+**Every statistic on this page is paired with its evidence** — an observation count and an evidence label (`insufficient` / `low` / `moderate` / `high`). A segment with too little history is shown honestly (e.g. "Not enough history to recommend a time for errand") rather than presented as a confident conclusion.
+
+### Duration suggestions when adding a task
+
+In the task-entry form, once you've filled in a category and start time, click **Suggest duration from history** to see a historical prediction alongside your own entered duration, with the evidence behind it (e.g. "Based on 12 completed study tasks in the morning" or "Not enough history yet — using your original estimate"). The suggestion is never applied automatically — click **Use suggestion** to fill it into the (still freely editable) duration field yourself.
+
+### Exporting and resetting your data
+
+On the Productivity page's **Data** section:
+
+- **Export history (CSV)** / **Export history (JSON)** save your complete raw execution history (including your own notes) to a file you choose.
+- **Reset local history...** permanently deletes all locally stored execution data. This is destructive, requires an explicit confirmation dialog, and is kept in its own section, separate from normal navigation.
+
+### Privacy
+
+- All execution and productivity data stays on your device, in the single SQLite file described above.
+- Nothing here is sent to a server, cloud service, or third party.
+- Application error messages and logs never include your notes or other personal feedback content — only the export you explicitly request does.
+
+### Screenshots
+
+This README does not embed screenshots of the desktop UI. To add your own: run `python -m app.app`, open the Execute tab and the Productivity page, and use your OS's screenshot tool (Windows: `Win+Shift+S`; macOS: `Cmd+Shift+4`), then reference the saved image(s) here with standard Markdown image syntax, e.g. `![Productivity page](docs/screenshots/productivity.png)`.
+
+---
+
 ## Current Limitations
 
 - The optimizer is greedy and does not guarantee the global best schedule.
 - Once a task is placed, the optimizer does not move it again.
-- The project has a `tests/` folder, but test files have not been added yet.
 - Some settings related to simulated annealing are present but not fully used by the current optimizer.
 - Error messages for unscheduled tasks are currently general and could become more specific in the future.
+- Execution tracking identifies a task by its planned snapshot (name, category, tag, and scheduled time), not a separate stable ID: two genuinely distinct tasks that happen to share an identical snapshot will be treated as the same execution.
+- Day-of-week and "recent" productivity statistics are anchored to when an execution *record* was created (a real timestamp), not a real calendar date for the *plan* itself, since this app's schedule uses abstract day numbers (Day 1, Day 2, ...) rather than calendar dates.
 
 ---
 
@@ -505,7 +611,6 @@ Display result in UI or export to CSV
 
 Possible next steps:
 
-- Add unit tests for every major module.
 - Add more detailed unscheduled-task reasons.
 - Add a true simulated annealing optimizer as an alternative to the greedy optimizer.
 - Add schedule comparison metrics.
@@ -513,9 +618,11 @@ Possible next steps:
 - Add better warnings for ignored missing dependencies.
 - Add drag-and-drop task editing in the UI.
 - Add persistent saving/loading of UI-created schedules.
+- Feed productivity-derived duration predictions back into the optimizer as an opt-in input (currently the suggestion is shown but never applied automatically).
+- Add a real calendar-date mapping for the abstract day-index schedule model, which would make day-of-week productivity statistics exact rather than an approximation.
 
 ---
 
 ## Project Status
 
-The project currently has a working scheduling pipeline, CSV input/output, reward-based optimization, PERT-style dependency handling, and a desktop UI. The next major improvement should be adding tests to make sure future changes do not break the optimizer, dependency logic, or CSV processing.
+The project has a working scheduling pipeline, CSV input/output, reward-based optimization, PERT-style dependency handling, a desktop UI, local SQLite task-execution tracking, and personal productivity analytics (completion rates, duration accuracy, evidence-labeled insights, and historical duration suggestions) — all covered by an automated test suite (`python -m pytest`). The next major improvement should be extending duration predictions into an opt-in optimizer input, and adding a real calendar-date model for more precise day-of-week analytics.

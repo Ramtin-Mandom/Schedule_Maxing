@@ -9,8 +9,12 @@ def minutes_to_time(minutes: int) -> str:
     hour = minutes // 60
     minute = minutes % 60
 
-    suffix = "AM" if hour < 12 else "PM"
-    display_hour = hour % 12
+    # Use hour-of-day (mod 24) for the AM/PM calculation so an end time of
+    # 1440 (24:00, i.e. midnight) displays as "12:00 AM" instead of "12:00 PM".
+    hour_of_day = hour % 24
+
+    suffix = "AM" if hour_of_day < 12 else "PM"
+    display_hour = hour_of_day % 12
 
     if display_hour == 0:
         display_hour = 12

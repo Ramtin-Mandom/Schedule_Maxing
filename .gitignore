@@ -22,3 +22,10 @@ Thumbs.db
 
 # Generated outputs
 exports/
+
+# Local execution-tracking database (runtime data, not a fixture)
+/data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
