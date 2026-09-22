@@ -38,6 +38,10 @@ _STATUS_LABELS = {
     ExecutionStatus.PAUSED: "Paused",
     ExecutionStatus.COMPLETED: "Completed",
     ExecutionStatus.SKIPPED: "Skipped",
+    # No Cancel control is wired into this panel yet (see Task 6), but a
+    # cancelled execution can still exist (e.g. created via the canonical
+    # API elsewhere) and must render, not KeyError, if ever displayed here.
+    ExecutionStatus.CANCELLED: "Cancelled",
 }
 
 _ACTION_LABELS = {

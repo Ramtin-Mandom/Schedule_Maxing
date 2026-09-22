@@ -1,0 +1,378 @@
+{
+  "environment": {
+    "python_version": "3.10.11 (tags/v3.10.11:7d4cc5a, Apr  5 2023, 00:38:17) [MSC v.1929 64 bit (AMD64)]",
+    "platform": "Windows-10-10.0.19045-SP0",
+    "processor": "AMD64 Family 25 Model 33 Stepping 2, AuthenticAMD"
+  },
+  "method": {
+    "engine": "app.optimizer.generate_day_schedule (event search vs its own exhaustive reference)",
+    "anchor_date": "2026-01-05",
+    "timezone": "UTC",
+    "warmups": 3,
+    "repeats": 15,
+    "timer": "time.perf_counter",
+    "note": "adhd_friendly is compared against its own mode-eligible exhaustive reference (1-minute for short tasks, quarter-hour lattice for longer ones), not against unrestricted one-minute scheduling."
+  },
+  "comparisons": [
+    {
+      "workload": "valid_single_day_basic",
+      "mode": "precise_greedy",
+      "reference_kind": "exhaustive_one_minute",
+      "task_count": 3,
+      "fixed_block_count": 4,
+      "exhaustive_time": {
+        "median_ms": 19.3389,
+        "min_ms": 18.6581,
+        "max_ms": 23.5061,
+        "stdev_ms": 1.3854,
+        "samples": 15
+      },
+      "event_time": {
+        "median_ms": 3.3442,
+        "min_ms": 3.2366,
+        "max_ms": 3.7332,
+        "stdev_ms": 0.1322,
+        "samples": 15
+      },
+      "exhaustive_evaluations": 3288,
+      "event_evaluations": 459,
+      "speedup": 5.783,
+      "evaluation_reduction": 7.163,
+      "total_score": 89.0,
+      "scheduled_count": 3,
+      "unscheduled_count": 0,
+      "semantic_match": true,
+      "mandatory_error": null
+    },
+    {
+      "workload": "valid_single_day_basic",
+      "mode": "adhd_friendly",
+      "reference_kind": "exhaustive_lattice_eligible",
+      "task_count": 3,
+      "fixed_block_count": 4,
+      "exhaustive_time": {
+        "median_ms": 1.5174,
+        "min_ms": 1.507,
+        "max_ms": 1.7153,
+        "stdev_ms": 0.0628,
+        "samples": 15
+      },
+      "event_time": {
+        "median_ms": 1.5645,
+        "min_ms": 1.5371,
+        "max_ms": 1.7165,
+        "stdev_ms": 0.0498,
+        "samples": 15
+      },
+      "exhaustive_evaluations": 236,
+      "event_evaluations": 236,
+      "speedup": 0.97,
+      "evaluation_reduction": 1.0,
+      "total_score": 89.0,
+      "scheduled_count": 3,
+      "unscheduled_count": 0,
+      "semantic_match": true,
+      "mandatory_error": null
+    },
+    {
+      "workload": "dependency_chain_linear",
+      "mode": "precise_greedy",
+      "reference_kind": "exhaustive_one_minute",
+      "task_count": 4,
+      "fixed_block_count": 2,
+      "exhaustive_time": {
+        "median_ms": 12.3822,
+        "min_ms": 12.1781,
+        "max_ms": 12.8355,
+        "stdev_ms": 0.174,
+        "samples": 15
+      },
+      "event_time": {
+        "median_ms": 1.0603,
+        "min_ms": 1.0366,
+        "max_ms": 1.2909,
+        "stdev_ms": 0.0713,
+        "samples": 15
+      },
+      "exhaustive_evaluations": 2854,
+      "event_evaluations": 174,
+      "speedup": 11.678,
+      "evaluation_reduction": 16.402,
+      "total_score": 178.0,
+      "scheduled_count": 4,
+      "unscheduled_count": 0,
+      "semantic_match": true,
+      "mandatory_error": null
+    },
+    {
+      "workload": "dependency_chain_linear",
+      "mode": "adhd_friendly",
+      "reference_kind": "exhaustive_lattice_eligible",
+      "task_count": 4,
+      "fixed_block_count": 2,
+      "exhaustive_time": {
+        "median_ms": 0.9901,
+        "min_ms": 0.9728,
+        "max_ms": 1.2773,
+        "stdev_ms": 0.0968,
+        "samples": 15
+      },
+      "event_time": {
+        "median_ms": 1.0048,
+        "min_ms": 0.9883,
+        "max_ms": 1.165,
+        "stdev_ms": 0.0527,
+        "samples": 15
+      },
+      "exhaustive_evaluations": 194,
+      "event_evaluations": 194,
+      "speedup": 0.985,
+      "evaluation_reduction": 1.0,
+      "total_score": 178.0,
+      "scheduled_count": 4,
+      "unscheduled_count": 0,
+      "semantic_match": true,
+      "mandatory_error": null
+    },
+    {
+      "workload": "synthetic_medium_day",
+      "mode": "precise_greedy",
+      "reference_kind": "exhaustive_one_minute",
+      "task_count": 15,
+      "fixed_block_count": 4,
+      "exhaustive_time": {
+        "median_ms": 145.7473,
+        "min_ms": 140.7313,
+        "max_ms": 174.4985,
+        "stdev_ms": 8.3284,
+        "samples": 15
+      },
+      "event_time": {
+        "median_ms": 33.9775,
+        "min_ms": 33.5143,
+        "max_ms": 35.8073,
+        "stdev_ms": 0.6197,
+        "samples": 15
+      },
+      "exhaustive_evaluations": 24441,
+      "event_evaluations": 4448,
+      "speedup": 4.29,
+      "evaluation_reduction": 5.495,
+      "total_score": 352.88,
+      "scheduled_count": 12,
+      "unscheduled_count": 3,
+      "semantic_match": true,
+      "mandatory_error": null
+    },
+    {
+      "workload": "synthetic_medium_day",
+      "mode": "adhd_friendly",
+      "reference_kind": "exhaustive_lattice_eligible",
+      "task_count": 15,
+      "fixed_block_count": 4,
+      "exhaustive_time": {
+        "median_ms": 62.2288,
+        "min_ms": 61.0981,
+        "max_ms": 70.0532,
+        "stdev_ms": 2.5427,
+        "samples": 15
+      },
+      "event_time": {
+        "median_ms": 21.3614,
+        "min_ms": 21.0303,
+        "max_ms": 23.1093,
+        "stdev_ms": 0.6103,
+        "samples": 15
+      },
+      "exhaustive_evaluations": 10525,
+      "event_evaluations": 2862,
+      "speedup": 2.913,
+      "evaluation_reduction": 3.677,
+      "total_score": 352.88,
+      "scheduled_count": 12,
+      "unscheduled_count": 3,
+      "semantic_match": true,
+      "mandatory_error": null
+    },
+    {
+      "workload": "synthetic_larger_day",
+      "mode": "precise_greedy",
+      "reference_kind": "exhaustive_one_minute",
+      "task_count": 40,
+      "fixed_block_count": 4,
+      "exhaustive_time": {
+        "median_ms": 545.499,
+        "min_ms": 529.4273,
+        "max_ms": 574.0333,
+        "stdev_ms": 11.7547,
+        "samples": 15
+      },
+      "event_time": {
+        "median_ms": 96.1712,
+        "min_ms": 91.9928,
+        "max_ms": 109.2258,
+        "stdev_ms": 5.2177,
+        "samples": 15
+      },
+      "exhaustive_evaluations": 100312,
+      "event_evaluations": 12717,
+      "speedup": 5.672,
+      "evaluation_reduction": 7.888,
+      "total_score": 539.81,
+      "scheduled_count": 13,
+      "unscheduled_count": 27,
+      "semantic_match": true,
+      "mandatory_error": null
+    },
+    {
+      "workload": "synthetic_larger_day",
+      "mode": "adhd_friendly",
+      "reference_kind": "exhaustive_lattice_eligible",
+      "task_count": 40,
+      "fixed_block_count": 4,
+      "exhaustive_time": {
+        "median_ms": 213.449,
+        "min_ms": 209.7639,
+        "max_ms": 228.8452,
+        "stdev_ms": 5.977,
+        "samples": 15
+      },
+      "event_time": {
+        "median_ms": 61.9839,
+        "min_ms": 60.6326,
+        "max_ms": 74.2979,
+        "stdev_ms": 3.9547,
+        "samples": 15
+      },
+      "exhaustive_evaluations": 38628,
+      "event_evaluations": 9003,
+      "speedup": 3.444,
+      "evaluation_reduction": 4.291,
+      "total_score": 539.81,
+      "scheduled_count": 13,
+      "unscheduled_count": 27,
+      "semantic_match": true,
+      "mandatory_error": null
+    },
+    {
+      "workload": "non_midnight_tagged_adhd",
+      "mode": "precise_greedy",
+      "reference_kind": "exhaustive_one_minute",
+      "task_count": 20,
+      "fixed_block_count": 4,
+      "exhaustive_time": {
+        "median_ms": 384.8261,
+        "min_ms": 372.6718,
+        "max_ms": 403.7553,
+        "stdev_ms": 9.8656,
+        "samples": 15
+      },
+      "event_time": {
+        "median_ms": 126.7581,
+        "min_ms": 124.4807,
+        "max_ms": 137.1947,
+        "stdev_ms": 3.1759,
+        "samples": 15
+      },
+      "exhaustive_evaluations": 61978,
+      "event_evaluations": 15708,
+      "speedup": 3.036,
+      "evaluation_reduction": 3.946,
+      "total_score": 487.42,
+      "scheduled_count": 15,
+      "unscheduled_count": 5,
+      "semantic_match": true,
+      "mandatory_error": null
+    },
+    {
+      "workload": "non_midnight_tagged_adhd",
+      "mode": "adhd_friendly",
+      "reference_kind": "exhaustive_lattice_eligible",
+      "task_count": 20,
+      "fixed_block_count": 4,
+      "exhaustive_time": {
+        "median_ms": 269.5438,
+        "min_ms": 265.9725,
+        "max_ms": 287.4155,
+        "stdev_ms": 5.3889,
+        "samples": 15
+      },
+      "event_time": {
+        "median_ms": 136.5455,
+        "min_ms": 121.2663,
+        "max_ms": 211.5907,
+        "stdev_ms": 21.8688,
+        "samples": 15
+      },
+      "exhaustive_evaluations": 40774,
+      "event_evaluations": 14280,
+      "speedup": 1.974,
+      "evaluation_reduction": 2.855,
+      "total_score": 492.06,
+      "scheduled_count": 16,
+      "unscheduled_count": 4,
+      "semantic_match": true,
+      "mandatory_error": null
+    },
+    {
+      "workload": "large_fragmented_day",
+      "mode": "precise_greedy",
+      "reference_kind": "exhaustive_one_minute",
+      "task_count": 60,
+      "fixed_block_count": 12,
+      "exhaustive_time": {
+        "median_ms": 2492.3906,
+        "min_ms": 2420.9534,
+        "max_ms": 2833.4326,
+        "stdev_ms": 134.4745,
+        "samples": 15
+      },
+      "event_time": {
+        "median_ms": 1104.1107,
+        "min_ms": 1085.8243,
+        "max_ms": 1127.8432,
+        "stdev_ms": 10.2444,
+        "samples": 15
+      },
+      "exhaustive_evaluations": 383603,
+      "event_evaluations": 127240,
+      "speedup": 2.257,
+      "evaluation_reduction": 3.015,
+      "total_score": 1273.39,
+      "scheduled_count": 34,
+      "unscheduled_count": 26,
+      "semantic_match": true,
+      "mandatory_error": null
+    },
+    {
+      "workload": "large_fragmented_day",
+      "mode": "adhd_friendly",
+      "reference_kind": "exhaustive_lattice_eligible",
+      "task_count": 60,
+      "fixed_block_count": 12,
+      "exhaustive_time": {
+        "median_ms": 2164.8183,
+        "min_ms": 2115.3674,
+        "max_ms": 2469.453,
+        "stdev_ms": 81.9362,
+        "samples": 15
+      },
+      "event_time": {
+        "median_ms": 1123.7881,
+        "min_ms": 1098.7196,
+        "max_ms": 1166.7718,
+        "stdev_ms": 19.9601,
+        "samples": 15
+      },
+      "exhaustive_evaluations": 321196,
+      "event_evaluations": 122091,
+      "speedup": 1.926,
+      "evaluation_reduction": 2.631,
+      "total_score": 1272.24,
+      "scheduled_count": 35,
+      "unscheduled_count": 25,
+      "semantic_match": true,
+      "mandatory_error": null
+    }
+  ]
+}

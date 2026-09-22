@@ -21,6 +21,23 @@ Time handling:
       recorded in — UTC by default) at which the first work session actually
       began, minus planned_start. This is an approximation by design,
       documented here and on compute_start_delay_minutes below.
+    - Canonical executions (created via create_canonical_execution /
+      get_or_create_canonical_execution) carry a real aware
+      canonical_planned_start instant, so their start delay is instead the
+      exact elapsed time between canonical_planned_start and
+      actual_first_start_at (see complete() below) -- no time-of-day
+      approximation is needed for them.
+
+Legacy vs. canonical creation:
+    create_execution/get_or_create_execution (unchanged) remain the
+    supported creation path for legacy, name/day-index-snapshot executions,
+    used by the still-legacy desktop UI until Task 6's UI migration.
+    create_canonical_execution/get_or_create_canonical_execution are the new
+    identity-aware creation path, taking an app.planning.models.Task (and
+    optionally the ScheduledTask placement it came from) instead of loose
+    keyword snapshot fields. Both paths produce ordinary TaskExecution rows
+    that share the same status machine, work sessions, and metrics
+    computation below.
 """
 
 from __future__ import annotations
@@ -36,6 +53,9 @@ from app.execution.errors import InvalidFeedbackError, InvalidTransitionError
 from app.execution.models import ExecutionStatus, TaskExecution, WorkSession
 from app.execution.repository import ExecutionRepository
 from app.models import ScheduledTask
+from app.planning.models import ScheduledTask as CanonicalScheduledTask
+from app.planning.models import Task as CanonicalTask
+from app.planning.time import elapsed_minutes
 
 Clock = Callable[[], datetime]
 
@@ -43,7 +63,10 @@ Clock = Callable[[], datetime]
 # status alone: `start` and `resume` both land on IN_PROGRESS but from
 # different, non-overlapping source statuses, so the source set has to be
 # tracked per action, not just "is this target reachable from the current
-# status". This is the single place all five transition rules are defined.
+# status". This is the single place all six transition rules are defined.
+# completed, skipped, and cancelled are all terminal -- no action is listed
+# as reachable from any of them, so _transition below always rejects
+# attempts to leave a terminal status.
 _TRANSITIONS: dict[str, tuple[frozenset[ExecutionStatus], ExecutionStatus]] = {
     "start": (frozenset({ExecutionStatus.SCHEDULED}), ExecutionStatus.IN_PROGRESS),
     "pause": (frozenset({ExecutionStatus.IN_PROGRESS}), ExecutionStatus.PAUSED),
@@ -55,6 +78,10 @@ _TRANSITIONS: dict[str, tuple[frozenset[ExecutionStatus], ExecutionStatus]] = {
     "skip": (
         frozenset({ExecutionStatus.SCHEDULED, ExecutionStatus.IN_PROGRESS, ExecutionStatus.PAUSED}),
         ExecutionStatus.SKIPPED,
+    ),
+    "cancel": (
+        frozenset({ExecutionStatus.SCHEDULED, ExecutionStatus.IN_PROGRESS, ExecutionStatus.PAUSED}),
+        ExecutionStatus.CANCELLED,
     ),
 }
 
@@ -223,13 +250,134 @@ class ExecutionService:
         )
 
     # ------------------------------------------------------------------
+    # Canonical creation (Task 2 / Schedule Maxing v2 identity migration)
+    # ------------------------------------------------------------------
+
+    def create_canonical_execution(
+        self,
+        task: CanonicalTask,
+        scheduled_task: CanonicalScheduledTask | None = None,
+        *,
+        user_id: uuid.UUID | None = None,
+    ) -> TaskExecution:
+        """
+        Create a new execution from a canonical Task (app.planning.models.Task)
+        and, optionally, the ScheduledTask placement it came from.
+
+        Always inserts a new row -- it never looks for an existing execution
+        to reuse. Task-only executions (scheduled_task=None) are
+        intentionally never deduplicated by task_id alone, since the same
+        task may legitimately be attempted more than once without a
+        placement; use get_or_create_canonical_execution when a placement
+        *is* available and "re-selecting the same placement reuses its
+        execution" is the desired behavior.
+
+        task_name/category/tag/priority/planned_duration are still
+        populated here as a historical snapshot of the Task's *current*
+        values at creation time -- see the module and
+        app/execution/models.py docstrings for why that snapshot exists
+        alongside task_id.
+        """
+        return self._repository.create_execution(
+            self._build_canonical_execution(task, scheduled_task, user_id=user_id)
+        )
+
+    def get_or_create_canonical_execution(
+        self,
+        task: CanonicalTask,
+        scheduled_task: CanonicalScheduledTask,
+        *,
+        user_id: uuid.UUID | None = None,
+    ) -> TaskExecution:
+        """
+        Return the existing execution for this exact placement
+        (scheduled_task.id), or create one.
+
+        A repeated request for the same placement always reuses its
+        execution and never overwrites its original planned snapshot. A
+        *different* placement -- even one for the same task_id, e.g. after
+        the task was moved to a new time -- gets its own new execution,
+        since scheduled_task.id differs; the old execution's planned
+        snapshot is left untouched. Two distinct tasks that happen to share
+        identical labels/times remain distinct, since they always have
+        distinct scheduled_task ids.
+        """
+        candidate = self._build_canonical_execution(task, scheduled_task, user_id=user_id)
+        return self._repository.get_or_create_by_scheduled_task_id(candidate)
+
+    def _build_canonical_execution(
+        self,
+        task: CanonicalTask,
+        scheduled_task: CanonicalScheduledTask | None,
+        *,
+        user_id: uuid.UUID | None,
+    ) -> TaskExecution:
+        now = self._clock()
+        now_iso = now.isoformat()
+        tag = task.tags[0] if task.tags else ""
+
+        if scheduled_task is not None:
+            planned_duration_minutes = round(
+                (scheduled_task.planned_end - scheduled_task.planned_start).total_seconds() / 60
+            )
+            canonical_kwargs = dict(
+                scheduled_task_id=scheduled_task.id,
+                canonical_planned_date=scheduled_task.planned_date,
+                canonical_timezone=scheduled_task.timezone,
+                canonical_planned_start=scheduled_task.planned_start,
+                canonical_planned_end=scheduled_task.planned_end,
+            )
+        else:
+            planned_duration_minutes = task.estimated_duration_minutes
+            canonical_kwargs = dict(
+                scheduled_task_id=None,
+                canonical_planned_date=None,
+                canonical_timezone=None,
+                canonical_planned_start=None,
+                canonical_planned_end=None,
+            )
+
+        return TaskExecution(
+            id=str(uuid.uuid4()),
+            task_name=task.name,
+            category=task.category,
+            tag=tag,
+            planned_date=None,
+            planned_start=None,
+            planned_end=None,
+            planned_duration=planned_duration_minutes,
+            priority=task.priority,
+            status=ExecutionStatus.SCHEDULED,
+            created_at=now_iso,
+            updated_at=now_iso,
+            task_id=task.id,
+            user_id=user_id,
+            **canonical_kwargs,
+        )
+
+    # ------------------------------------------------------------------
     # State transitions
     # ------------------------------------------------------------------
 
     def start(self, execution_id: str) -> TaskExecution:
-        """scheduled -> in_progress. Opens a new work session."""
+        """
+        scheduled -> in_progress. Opens a new work session.
+
+        Also records actual_first_start_at the first time an execution is
+        started (left unchanged by a later resume, and populated for legacy
+        rows too, not just canonical ones -- "when did work actually
+        begin" is meaningful regardless of which creation path produced the
+        row).
+        """
         execution = self._transition(execution_id, "start")
         self._repository.create_session(execution_id, self._now_iso())
+
+        if execution.actual_first_start_at is None:
+            execution = execution.model_copy(
+                update={"actual_first_start_at": self._clock(), "updated_at": self._now_iso()}
+            )
+            execution = self._repository.update_execution(execution)
+
         return execution
 
     def pause(self, execution_id: str) -> TaskExecution:
@@ -249,7 +397,15 @@ class ExecutionService:
         (in_progress | paused) -> completed.
 
         Closes any open work session, then computes actual_active_duration_minutes,
-        duration_variance_minutes, and start_delay_minutes from all sessions.
+        duration_variance_minutes, and start_delay_minutes from all sessions,
+        and records actual_final_end_at.
+
+        start_delay_minutes: for a canonical execution (canonical_planned_start
+        and actual_first_start_at both set), this is the exact elapsed time
+        between those two aware UTC instants -- no approximation needed. For
+        a legacy execution (no real planned instant), this falls back to the
+        original time-of-day comparison via compute_start_delay_minutes,
+        exactly as before.
         """
         execution = self._transition(execution_id, "complete")
         self._close_open_session(execution_id)
@@ -257,23 +413,55 @@ class ExecutionService:
         sessions = self._repository.list_sessions(execution_id)
         active_duration = compute_active_duration_minutes(sessions)
         variance = round(active_duration - execution.planned_duration, 2)
-        start_delay = compute_start_delay_minutes(sessions[0].started_at, execution.planned_start) if sessions else None
+
+        if execution.canonical_planned_start is not None and execution.actual_first_start_at is not None:
+            start_delay = round(
+                elapsed_minutes(execution.canonical_planned_start, execution.actual_first_start_at), 2
+            )
+        elif execution.planned_start is not None and sessions:
+            # Legacy fallback: only meaningful when a real legacy
+            # minutes-from-midnight planned_start exists. A canonical
+            # task-only execution (no placement, so no
+            # canonical_planned_start) has neither -- treating a missing
+            # planned_start as midnight (0) would fabricate a delay against
+            # a planned time that was never set, so start_delay stays None.
+            start_delay = compute_start_delay_minutes(sessions[0].started_at, execution.planned_start)
+        else:
+            start_delay = None
 
         execution = execution.model_copy(
             update={
                 "actual_active_duration_minutes": active_duration,
                 "duration_variance_minutes": variance,
                 "start_delay_minutes": start_delay,
+                "actual_final_end_at": self._clock(),
                 "updated_at": self._now_iso(),
             }
         )
         return self._repository.update_execution(execution)
 
     def skip(self, execution_id: str) -> TaskExecution:
-        """(scheduled | in_progress | paused) -> skipped. Closes any open session; no metrics are computed."""
+        """(scheduled | in_progress | paused) -> skipped. Closes any open session; no completion metrics are computed."""
         execution = self._transition(execution_id, "skip")
         self._close_open_session(execution_id)
-        return execution
+        execution = execution.model_copy(
+            update={"actual_final_end_at": self._clock(), "updated_at": self._now_iso()}
+        )
+        return self._repository.update_execution(execution)
+
+    def cancel(self, execution_id: str) -> TaskExecution:
+        """
+        (scheduled | in_progress | paused) -> cancelled. Closes any open
+        session; no completion metrics are computed, mirroring skip().
+        cancelled is terminal: no action is allowed out of it, same as
+        completed/skipped (see _TRANSITIONS).
+        """
+        execution = self._transition(execution_id, "cancel")
+        self._close_open_session(execution_id)
+        execution = execution.model_copy(
+            update={"actual_final_end_at": self._clock(), "updated_at": self._now_iso()}
+        )
+        return self._repository.update_execution(execution)
 
     # ------------------------------------------------------------------
     # Feedback

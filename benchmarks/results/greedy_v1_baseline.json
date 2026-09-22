@@ -1,0 +1,105 @@
+{
+  "environment": {
+    "python_version": "3.10.11 (tags/v3.10.11:7d4cc5a, Apr  5 2023, 00:38:17) [MSC v.1929 64 bit (AMD64)]",
+    "platform": "Windows-10-10.0.19045-SP0",
+    "processor": "AMD64 Family 25 Model 33 Stepping 2, AuthenticAMD"
+  },
+  "method": {
+    "optimizer": "Greedy Optimizer v1 (app.optimizer.optimize_day_schedule)",
+    "time_slot_minutes": 30,
+    "warmups": 3,
+    "repeats": 15,
+    "timer": "time.perf_counter",
+    "config_path": null
+  },
+  "fixtures": [
+    {
+      "fixture": "valid_single_day_basic",
+      "fixed_block_count": 4,
+      "flexible_task_count": 3,
+      "scheduled_count": 7,
+      "unscheduled_count": 0,
+      "total_score": 89.0,
+      "import_time": {
+        "median_ms": 0.1705,
+        "min_ms": 0.1575,
+        "max_ms": 0.2073,
+        "stdev_ms": 0.0155,
+        "samples": 15
+      },
+      "optimize_time": {
+        "median_ms": 3.8268,
+        "min_ms": 3.6325,
+        "max_ms": 4.1091,
+        "stdev_ms": 0.1392,
+        "samples": 15
+      }
+    },
+    {
+      "fixture": "dependency_chain_linear",
+      "fixed_block_count": 2,
+      "flexible_task_count": 4,
+      "scheduled_count": 6,
+      "unscheduled_count": 0,
+      "total_score": 178.0,
+      "import_time": {
+        "median_ms": 0.1587,
+        "min_ms": 0.1459,
+        "max_ms": 0.2424,
+        "stdev_ms": 0.0224,
+        "samples": 15
+      },
+      "optimize_time": {
+        "median_ms": 3.0053,
+        "min_ms": 2.8055,
+        "max_ms": 3.2169,
+        "stdev_ms": 0.1316,
+        "samples": 15
+      }
+    },
+    {
+      "fixture": "synthetic_medium_day",
+      "fixed_block_count": 4,
+      "flexible_task_count": 15,
+      "scheduled_count": 16,
+      "unscheduled_count": 3,
+      "total_score": 341.18,
+      "import_time": {
+        "median_ms": 0.2873,
+        "min_ms": 0.2509,
+        "max_ms": 0.3914,
+        "stdev_ms": 0.0377,
+        "samples": 15
+      },
+      "optimize_time": {
+        "median_ms": 31.5305,
+        "min_ms": 30.6831,
+        "max_ms": 33.1705,
+        "stdev_ms": 0.709,
+        "samples": 15
+      }
+    },
+    {
+      "fixture": "synthetic_larger_day",
+      "fixed_block_count": 4,
+      "flexible_task_count": 40,
+      "scheduled_count": 14,
+      "unscheduled_count": 30,
+      "total_score": 463.63,
+      "import_time": {
+        "median_ms": 0.4456,
+        "min_ms": 0.4098,
+        "max_ms": 0.6071,
+        "stdev_ms": 0.0599,
+        "samples": 15
+      },
+      "optimize_time": {
+        "median_ms": 84.0762,
+        "min_ms": 82.3489,
+        "max_ms": 88.3323,
+        "stdev_ms": 1.6517,
+        "samples": 15
+      }
+    }
+  ]
+}
