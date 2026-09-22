@@ -29,3 +29,10 @@ exports/
 *.db-journal
 *.db-wal
 *.db-shm
+
+# SQLite databases and their transient side files, wherever they are created
+*.sqlite
+*.sqlite3
+*-journal
+*-wal
+*-shm

@@ -9,6 +9,20 @@ from __future__ import annotations
 import pytest
 
 from app.models import DaySchedule, FixedBlock, ScheduledTask, Task, TimeWindow
+from config import settings
+
+
+@pytest.fixture(autouse=True)
+def _isolate_default_data_location(tmp_path_factory, monkeypatch):
+    """
+    Safety net: any code path that opens the *default* database location
+    (no explicit path) during tests gets a throwaway directory instead of the
+    real per-user data folder or the checkout's legacy data/ folder.
+    """
+    isolated = tmp_path_factory.mktemp("default_data_dir")
+    monkeypatch.setattr(settings, "DATA_DIR", isolated / "data")
+    monkeypatch.setattr(settings, "LEGACY_DATA_DIR", isolated / "legacy_repo_data")
+    monkeypatch.setattr(settings, "DATA_DIR_OVERRIDDEN", False)
 
 
 @pytest.fixture

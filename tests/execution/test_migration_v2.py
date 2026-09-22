@@ -7,7 +7,9 @@ index -- without losing any existing row, session, or foreign key.
 Every database here is built directly against a raw sqlite3 connection
 (bypassing app.execution.db entirely) to construct a genuine pre-migration
 v1 database, then handed to app.execution.db.get_connection/initialize_schema
-to exercise the real migration path.
+to exercise the real migration path. Tests about v2's own semantics stop the
+migration at v2 (initialize_schema(target_version=2)); v3's link triggers
+and the v2 -> v3 upgrade are covered in test_migration_v3.py.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from app.execution.db import get_connection, initialize_schema
+from app.execution.db import LATEST_SCHEMA_VERSION, get_connection, initialize_schema
 from app.execution.repository import ExecutionRepository
 
 _V1_EXECUTIONS_SQL = """
@@ -103,13 +105,33 @@ def _build_v1_database(db_path: Path, *, extra_rows: list[dict] | None = None) -
     conn.close()
 
 
+def _open_at_v2(db_path: Path) -> sqlite3.Connection:
+    """Migrate a v1 database to exactly v2 (not further) and return the connection."""
+    conn = sqlite3.connect(str(db_path), isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    initialize_schema(conn, target_version=2)
+    return conn
+
+
 def test_upgrade_v1_database_reaches_version_2(tmp_path: Path) -> None:
+    db_path = tmp_path / "executions.db"
+    _build_v1_database(db_path)
+
+    conn = _open_at_v2(db_path)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    finally:
+        conn.close()
+
+
+def test_upgrade_v1_database_through_get_connection_reaches_latest(tmp_path: Path) -> None:
     db_path = tmp_path / "executions.db"
     _build_v1_database(db_path)
 
     conn = get_connection(db_path)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST_SCHEMA_VERSION
     finally:
         conn.close()
 
@@ -234,7 +256,9 @@ def test_planned_date_start_end_are_now_nullable(tmp_path: Path) -> None:
     db_path = tmp_path / "executions.db"
     _build_v1_database(db_path)
 
-    conn = get_connection(db_path)
+    # At v2 a task_id is plain historical identity (v3 additionally requires
+    # a newly inserted link to reference a persisted task).
+    conn = _open_at_v2(db_path)
     try:
         # Would raise against the old NOT NULL constraints.
         conn.execute(
@@ -256,7 +280,7 @@ def test_scheduled_task_id_uniqueness_enforced_by_partial_index(tmp_path: Path) 
     db_path = tmp_path / "executions.db"
     _build_v1_database(db_path)
 
-    conn = get_connection(db_path)
+    conn = _open_at_v2(db_path)
     try:
         insert_sql = (
             "INSERT INTO executions (id, task_name, category, tag, planned_duration, priority, "
@@ -306,20 +330,20 @@ def test_reopening_and_upgrading_twice_is_idempotent(tmp_path: Path) -> None:
 
     conn2 = get_connection(db_path)
     try:
-        assert conn2.execute("PRAGMA user_version").fetchone()[0] == version_after_double_init == 2
+        assert conn2.execute("PRAGMA user_version").fetchone()[0] == version_after_double_init == LATEST_SCHEMA_VERSION
         assert conn2.execute("SELECT COUNT(*) FROM executions").fetchone()[0] == count_after_double_init == 2
     finally:
         conn2.close()
 
 
-def test_upgrading_an_already_v2_database_is_a_no_op(tmp_path: Path) -> None:
+def test_upgrading_an_already_current_database_is_a_no_op(tmp_path: Path) -> None:
     db_path = tmp_path / "executions.db"
-    # get_connection on a brand-new path creates a fresh, already-v2 database.
+    # get_connection on a brand-new path creates a fresh, already-current database.
     conn = get_connection(db_path)
     try:
         version_before = conn.execute("PRAGMA user_version").fetchone()[0]
         initialize_schema(conn)
         version_after = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version_before == version_after == 2
+        assert version_before == version_after == LATEST_SCHEMA_VERSION
     finally:
         conn.close()

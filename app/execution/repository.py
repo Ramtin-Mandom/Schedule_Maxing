@@ -11,14 +11,29 @@ does not decide whether an operation makes sense (e.g. whether a status
 transition is legal) — that belongs to app/execution/service.py. It does
 enforce that the row it was asked to affect actually exists, by raising
 ExecutionNotFoundError rather than silently doing nothing.
+
+Transactions: every write goes through app.execution.db.transaction(), and
+every read holds the connection's shared lock (app.execution.db.locked()).
+Called on its own, a write method is its own atomic transaction; called
+from inside ExecutionRepository.transaction() (as ExecutionService does for
+each logical mutation), it joins the caller's transaction as a SAVEPOINT
+and never commits it early. The lock is the connection's, not this
+repository's, so every repository sharing one connection (including
+app.planning.repository.PlanningRepository) is serialized together.
+
+Link violations raised by the database's v3 triggers (see app/execution/
+db.py, "Execution <-> planning links") are translated into
+ExecutionLinkError.
 """
 
 from __future__ import annotations
 
 import sqlite3
-import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 
-from app.execution.errors import ExecutionError, ExecutionNotFoundError
+from app.execution.db import EXECUTION_LINK_VIOLATION, TransactionState, locked, transaction, transaction_state_for
+from app.execution.errors import ExecutionError, ExecutionLinkError, ExecutionNotFoundError
 from app.execution.models import ExecutionStatus, TaskExecution, WorkSession
 
 _EXECUTION_COLUMNS = (
@@ -62,9 +77,21 @@ class ExecutionRepository:
         # The desktop UI shares one connection between the Tk main thread and
         # background worker threads (app.ui.background.run_in_background).
         # sqlite3 connections aren't safe under unsynchronized concurrent
-        # access, so every method below takes this lock before touching
-        # self._connection.
-        self._lock = threading.Lock()
+        # access, so every method below holds the connection's shared lock
+        # (see app.execution.db) while touching self._connection. A plain
+        # sqlite3.Connection (not from get_connection) gets a private state.
+        self._state = transaction_state_for(connection) or TransactionState()
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """One atomic unit of work spanning any number of this repository's calls."""
+        with transaction(self._connection, self._state):
+            yield
+
+    @contextmanager
+    def _read(self) -> Iterator[sqlite3.Connection]:
+        with locked(self._connection, self._state):
+            yield self._connection
 
     # ------------------------------------------------------------------
     # Executions
@@ -76,7 +103,7 @@ class ExecutionRepository:
         placeholders = ", ".join("?" for _ in _EXECUTION_COLUMNS)
         columns = ", ".join(_EXECUTION_COLUMNS)
 
-        with self._lock, self._connection:
+        with self.transaction(), _translate_link_errors():
             self._connection.execute(
                 f"INSERT INTO executions ({columns}) VALUES ({placeholders})",
                 values,
@@ -110,7 +137,7 @@ class ExecutionRepository:
 
         scheduled_task_id = str(execution.scheduled_task_id)
 
-        with self._lock:
+        with self.transaction():
             existing = self._connection.execute(
                 "SELECT * FROM executions WHERE scheduled_task_id = ?",
                 (scheduled_task_id,),
@@ -122,20 +149,20 @@ class ExecutionRepository:
             placeholders = ", ".join("?" for _ in _EXECUTION_COLUMNS)
             columns = ", ".join(_EXECUTION_COLUMNS)
 
-            with self._connection:
-                try:
+            try:
+                with _translate_link_errors():
                     self._connection.execute(
                         f"INSERT INTO executions ({columns}) VALUES ({placeholders})",
                         values,
                     )
-                except sqlite3.IntegrityError:
-                    row = self._connection.execute(
-                        "SELECT * FROM executions WHERE scheduled_task_id = ?",
-                        (scheduled_task_id,),
-                    ).fetchone()
-                    if row is not None:
-                        return _row_to_execution(row)
-                    raise
+            except sqlite3.IntegrityError:
+                row = self._connection.execute(
+                    "SELECT * FROM executions WHERE scheduled_task_id = ?",
+                    (scheduled_task_id,),
+                ).fetchone()
+                if row is not None:
+                    return _row_to_execution(row)
+                raise
 
         return execution
 
@@ -154,7 +181,7 @@ class ExecutionRepository:
         ]
         values.append(execution.id)
 
-        with self._lock, self._connection:
+        with self.transaction(), _translate_link_errors():
             cursor = self._connection.execute(
                 f"UPDATE executions SET {assignments} WHERE id = ?",
                 values,
@@ -166,7 +193,7 @@ class ExecutionRepository:
 
     def get_execution(self, execution_id: str) -> TaskExecution:
         """Raises ExecutionNotFoundError if no such execution exists."""
-        with self._lock:
+        with self._read():
             row = self._connection.execute(
                 "SELECT * FROM executions WHERE id = ?",
                 (execution_id,),
@@ -177,9 +204,18 @@ class ExecutionRepository:
 
         return _row_to_execution(row)
 
+    def find_by_scheduled_task_id(self, scheduled_task_id: str) -> TaskExecution | None:
+        """The execution recorded for a placement id, if any (lookup only, never creates)."""
+        with self._read():
+            row = self._connection.execute(
+                "SELECT * FROM executions WHERE scheduled_task_id = ?",
+                (scheduled_task_id,),
+            ).fetchone()
+        return _row_to_execution(row) if row is not None else None
+
     def list_executions(self, status: ExecutionStatus | None = None) -> list[TaskExecution]:
         """Return all executions, optionally filtered by status, oldest first."""
-        with self._lock:
+        with self._read():
             if status is None:
                 rows = self._connection.execute(
                     "SELECT * FROM executions ORDER BY created_at"
@@ -202,7 +238,7 @@ class ExecutionRepository:
         ExecutionService.reset_all_history) are expected to gate it behind
         a user confirmation; this method itself performs no confirmation.
         """
-        with self._lock, self._connection:
+        with self.transaction():
             cursor = self._connection.execute("DELETE FROM executions")
             return cursor.rowcount
 
@@ -211,7 +247,7 @@ class ExecutionRepository:
     # ------------------------------------------------------------------
 
     def create_session(self, execution_id: str, started_at: str) -> WorkSession:
-        with self._lock, self._connection:
+        with self.transaction():
             cursor = self._connection.execute(
                 "INSERT INTO work_sessions (execution_id, started_at) VALUES (?, ?)",
                 (execution_id, started_at),
@@ -224,16 +260,15 @@ class ExecutionRepository:
 
         Raises ExecutionError if the session does not exist or is already closed.
         """
-        with self._lock:
-            with self._connection:
-                cursor = self._connection.execute(
-                    "UPDATE work_sessions SET ended_at = ? WHERE id = ? AND ended_at IS NULL",
-                    (ended_at, session_id),
+        with self.transaction():
+            cursor = self._connection.execute(
+                "UPDATE work_sessions SET ended_at = ? WHERE id = ? AND ended_at IS NULL",
+                (ended_at, session_id),
+            )
+            if cursor.rowcount == 0:
+                raise ExecutionError(
+                    f"No open work session with id={session_id!r} to close."
                 )
-                if cursor.rowcount == 0:
-                    raise ExecutionError(
-                        f"No open work session with id={session_id!r} to close."
-                    )
 
             row = self._connection.execute(
                 "SELECT * FROM work_sessions WHERE id = ?",
@@ -243,7 +278,7 @@ class ExecutionRepository:
 
     def get_open_session(self, execution_id: str) -> WorkSession | None:
         """Return the currently-open session for this execution, if any."""
-        with self._lock:
+        with self._read():
             row = self._connection.execute(
                 "SELECT * FROM work_sessions WHERE execution_id = ? AND ended_at IS NULL "
                 "ORDER BY started_at DESC LIMIT 1",
@@ -253,12 +288,41 @@ class ExecutionRepository:
 
     def list_sessions(self, execution_id: str) -> list[WorkSession]:
         """Return all sessions for an execution, in chronological order."""
-        with self._lock:
+        with self._read():
             rows = self._connection.execute(
                 "SELECT * FROM work_sessions WHERE execution_id = ? ORDER BY started_at",
                 (execution_id,),
             ).fetchall()
         return [_row_to_session(row) for row in rows]
+
+
+    def list_executions_with_unresolved_links(self) -> list[TaskExecution]:
+        """
+        Executions whose historical task_id/scheduled_task_id no longer (or
+        never did) resolve to a persisted task/placement -- pre-v3 rows whose
+        parents were never persisted, and rows whose task/placement was later
+        deleted or replaced. Their snapshots remain the record of what was
+        planned; nothing is fabricated for them.
+        """
+        with self._read():
+            rows = self._connection.execute(
+                "SELECT e.* FROM executions AS e "
+                "WHERE (e.task_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tasks AS t WHERE t.id = e.task_id)) "
+                "OR (e.scheduled_task_id IS NOT NULL "
+                "AND NOT EXISTS (SELECT 1 FROM scheduled_tasks AS s WHERE s.id = e.scheduled_task_id)) "
+                "ORDER BY e.created_at, e.id"
+            ).fetchall()
+        return [_row_to_execution(row) for row in rows]
+
+
+@contextmanager
+def _translate_link_errors() -> Iterator[None]:
+    try:
+        yield
+    except sqlite3.IntegrityError as error:
+        if EXECUTION_LINK_VIOLATION in str(error):
+            raise ExecutionLinkError(str(error)) from error
+        raise
 
 
 def _execution_to_row(execution: TaskExecution) -> tuple:

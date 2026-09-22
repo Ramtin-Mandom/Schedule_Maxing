@@ -229,3 +229,19 @@ def _reject_if_ambiguous_or_nonexistent(naive: datetime, tz: ZoneInfo) -> None:
 def _roundtrips_to(aware: datetime, tz: ZoneInfo, wall: tuple[int, int]) -> bool:
     roundtrip = aware.astimezone(timezone.utc).astimezone(tz)
     return (roundtrip.hour, roundtrip.minute) == wall
+
+
+def local_minutes(instant: datetime, day: date, tz_name: str) -> int:
+    """Minutes from local midnight of `day` (in `tz_name`) to `instant`, clamped to 0..1440 -- for display/export."""
+    tz = ZoneInfo(tz_name)
+    midnight = datetime.combine(day, time(0), tzinfo=tz)
+    minutes = round((instant.astimezone(tz) - midnight).total_seconds() / 60)
+    return max(0, min(MINUTES_PER_DAY, minutes))
+
+
+def minutes_to_hhmm(minutes: int) -> str:
+    """0..1440 minutes as "HH:MM" (1440 is "24:00", the following midnight)."""
+    minutes = max(0, min(MINUTES_PER_DAY, minutes))
+    if minutes == MINUTES_PER_DAY:
+        return "24:00"
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"

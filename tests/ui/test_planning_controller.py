@@ -1,25 +1,51 @@
 """Tests for app/ui/planning_controller.py: the shared, Tk-free state
 boundary for Day/Week/Month planning. No display access is required --
-this exercises the controller's own state management directly.
+this exercises the controller's own state management directly, backed by a
+PlanningService on a temporary database file (never the real data dir).
 """
 
 from __future__ import annotations
 
-from datetime import date
+import threading
+import uuid
+from datetime import date, datetime, timezone
+from pathlib import Path
 
 import pytest
 
-from app.planning.models import Task
+from app.execution.db import get_connection
+from app.execution.repository import ExecutionRepository
+from app.execution.service import ExecutionService
+from app.planning.application import PlanningService
+from app.planning.models import FixedBlock, Task
 from app.planning.preferences import PreferenceOverrides, RewardPreferencesOverride
+from app.planning.repository import PlanningRepository
 from app.planning.service import DayResultStatus
 from app.ui.planning_controller import PlanningController
 
 
-@pytest.fixture
-def controller(tmp_path) -> PlanningController:
+def open_controller(db_path: Path, project_root: Path) -> tuple[PlanningController, object]:
+    connection = get_connection(db_path)
     # An empty project_root (no config/ directory) so tests are isolated
     # from this repo's real config/task_preference.yaml.
-    return PlanningController(timezone="UTC", project_root=str(tmp_path))
+    controller = PlanningController(
+        service=PlanningService(PlanningRepository(connection)), timezone="UTC", project_root=str(project_root)
+    )
+    return controller, connection
+
+
+@pytest.fixture
+def db_path(tmp_path) -> Path:
+    return tmp_path / "planning.db"
+
+
+@pytest.fixture
+def controller(db_path, tmp_path):
+    controller, connection = open_controller(db_path, tmp_path)
+    try:
+        yield controller
+    finally:
+        connection.close()
 
 
 def make_task(name="Task", *, duration=60, priority=5, category="study") -> Task:
@@ -219,3 +245,213 @@ def test_allocate_week_does_not_generate_any_day(controller: PlanningController,
     assert result.ok
     for day in [date(2024, 6, 3 + offset) for offset in range(7)]:
         assert controller.day_state(day).value.status == DayResultStatus.ALLOCATED
+
+
+# -----------------------------------------------------------------------------
+# Persistence delegation (Milestone 2)
+# -----------------------------------------------------------------------------
+
+
+def _generated_week(controller: PlanningController, task: Task):
+    controller.add_or_update_task(task)
+    allocation = controller.allocate_week(date(2024, 6, 3)).value
+    assigned_date = allocation.assignments[task.id]
+    result = controller.generate_day(assigned_date)
+    assert result.ok, result.error
+    return assigned_date, result.value
+
+
+def test_default_controller_still_works_on_a_private_in_memory_store(tmp_path) -> None:
+    controller = PlanningController(timezone="UTC", project_root=str(tmp_path))
+    try:
+        task = make_task()
+        assert controller.add_or_update_task(task).ok
+        assert [t.id for t in controller.list_tasks().value] == [task.id]
+    finally:
+        controller.close()
+
+
+def test_controller_state_is_persisted_and_survives_reopen(db_path, tmp_path) -> None:
+    first, connection = open_controller(db_path, tmp_path)
+    task = make_task(duration=60)
+    assigned_date, output = _generated_week(first, task)
+    block = FixedBlock(
+        label="Gym", planned_date=date(2024, 6, 9), timezone="UTC",
+        planned_start=datetime(2024, 6, 9, 18, tzinfo=timezone.utc), planned_end=datetime(2024, 6, 9, 19, tzinfo=timezone.utc),
+    )
+    first.set_fixed_blocks(date(2024, 6, 9), [block])
+    connection.close()
+
+    second, connection = open_controller(db_path, tmp_path)
+    try:
+        assert second.get_task(task.id).value == task
+        assert second.get_fixed_blocks(date(2024, 6, 9)).value == [block]
+        assert second.get_placements(assigned_date).value == output.placements
+        # Render state is not persisted: a reopened controller has no allocation.
+        assert second.current_allocation().value is None
+    finally:
+        connection.close()
+
+
+def test_regenerating_after_reopen_reuses_stored_placement_ids(db_path, tmp_path) -> None:
+    first, connection = open_controller(db_path, tmp_path)
+    task = make_task(duration=60)
+    assigned_date, output = _generated_week(first, task)
+    execution = ExecutionService(ExecutionRepository(connection)).get_or_create_canonical_execution(
+        task, output.placements[0]
+    )
+    connection.close()
+
+    second, connection = open_controller(db_path, tmp_path)
+    try:
+        second.allocate_week(date(2024, 6, 3))
+        regenerated = second.generate_day(assigned_date).value
+        assert [p.id for p in regenerated.placements] == [p.id for p in output.placements]
+        again = ExecutionService(ExecutionRepository(connection)).get_or_create_canonical_execution(
+            task, regenerated.placements[0]
+        )
+        assert again.id == execution.id
+    finally:
+        connection.close()
+
+
+def test_failed_task_write_changes_nothing_and_invalidates_nothing(controller: PlanningController) -> None:
+    task = make_task(duration=60)
+    assigned_date, _ = _generated_week(controller, task)
+
+    result = controller.add_or_update_task(Task(
+        name="Broken", category="study", estimated_duration_minutes=30, priority=5, dependency_ids=[uuid.uuid4()],
+    ))
+
+    assert not result.ok
+    assert "not persisted" in result.error
+    assert [t.id for t in controller.list_tasks().value] == [task.id]
+    assert controller.day_state(assigned_date).value.status == DayResultStatus.GENERATED
+    assert controller.current_allocation().value is not None
+
+
+def test_failed_placement_save_leaves_day_state_and_stored_placements_unchanged(
+    controller: PlanningController, monkeypatch
+) -> None:
+    task = make_task(duration=60)
+    assigned_date, output = _generated_week(controller, task)
+    controller.add_or_update_task(make_task("Another", duration=30))  # -> STALE
+    controller.allocate_week(date(2024, 6, 3))
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("database is locked (injected)")
+
+    monkeypatch.setattr(controller._service, "replace_placements", fail)
+    result = controller.generate_day(assigned_date)
+
+    assert not result.ok
+    assert "injected" in result.error
+    state = controller.day_state(assigned_date).value
+    assert state.status == DayResultStatus.STALE
+    assert state.result == output
+    monkeypatch.undo()
+    assert controller.get_placements(assigned_date).value == output.placements
+
+
+def test_returned_models_are_snapshots(controller: PlanningController) -> None:
+    task = make_task("Original")
+    saved = controller.add_or_update_task(task).value
+
+    saved.name = "mutated"
+    controller.get_task(task.id).value.priority = 10
+    controller.list_tasks().value[0].tags.append("mutated")
+    task.name = "mutated input"
+
+    stored = controller.get_task(task.id).value
+    assert (stored.name, stored.priority, stored.tags) == ("Original", 5, [])
+
+
+def test_deleting_a_task_others_depend_on_is_a_structured_failure(controller: PlanningController) -> None:
+    dependency = make_task("Dependency")
+    dependent = Task(name="Dependent", category="study", estimated_duration_minutes=30, priority=5,
+                     dependency_ids=[dependency.id])
+    assert controller.add_or_update_tasks([dependent, dependency]).ok
+
+    result = controller.remove_task(dependency.id)
+
+    assert not result.ok
+    assert "depend" in result.error
+    assert controller.get_task(dependency.id).value is not None
+
+
+def test_allocation_only_considers_tasks_eligible_for_the_range(controller: PlanningController) -> None:
+    this_week = make_task("This week")
+    next_week = Task(name="Next week", category="study", estimated_duration_minutes=60, priority=5,
+                     required=True, required_date=date(2024, 6, 12))
+    controller.add_or_update_tasks([this_week, next_week])
+
+    allocation = controller.allocate_week(date(2024, 6, 3)).value
+
+    assert this_week.id in allocation.assignments
+    assert all(entry.task_id != next_week.id for entry in allocation.unallocated)
+    assert controller.allocate_week(date(2024, 6, 10)).value.assignments[next_week.id] == date(2024, 6, 12)
+
+
+def test_controller_can_be_used_from_background_threads(controller: PlanningController) -> None:
+    errors: list[str] = []
+
+    def worker(index: int) -> None:
+        for attempt in range(5):
+            result = controller.add_or_update_task(make_task(f"T{index}-{attempt}"))
+            if not result.ok:
+                errors.append(result.error)
+            controller.list_tasks()
+
+    threads = [threading.Thread(target=worker, args=(index,)) for index in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert errors == []
+    assert len(controller.list_tasks().value) == 20
+
+
+# -----------------------------------------------------------------------------
+# Range scheduling and restart (Milestone 2 desktop wiring)
+# -----------------------------------------------------------------------------
+
+
+def test_failed_schedule_range_adopts_nothing(controller: PlanningController, monkeypatch) -> None:
+    from app.planning.application import RangeScope
+
+    task = make_task(duration=60)
+    controller.add_or_update_task(task)
+    first = controller.schedule_range(date(2024, 6, 3), date(2024, 6, 9), scope=RangeScope.ELIGIBLE)
+    assert first.ok, first.error
+    allocation_id = controller.current_allocation().value.id
+    assigned = first.value.allocation.assignments[task.id]
+    saved = controller.get_placements(assigned).value
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("injected")
+
+    monkeypatch.setattr(controller._service, "replace_placements", fail)
+    result = controller.schedule_range(date(2024, 6, 3), date(2024, 6, 9), scope=RangeScope.ELIGIBLE)
+
+    assert not result.ok
+    assert controller.current_allocation().value.id == allocation_id
+    assert controller.day_state(assigned).value.status == DayResultStatus.GENERATED
+    monkeypatch.undo()
+    assert controller.get_placements(assigned).value == saved
+
+
+def test_saved_placements_without_session_state_are_reported_stale(db_path, tmp_path) -> None:
+    first, connection = open_controller(db_path, tmp_path)
+    task = make_task(duration=60)
+    assigned_date, output = _generated_week(first, task)
+    connection.close()
+
+    second, connection = open_controller(db_path, tmp_path)
+    try:
+        state = second.day_state(assigned_date).value
+        assert state.status == DayResultStatus.STALE
+        assert state.result.placements == output.placements
+        assert second.day_state(date(2024, 6, 20)).value.status == DayResultStatus.ALLOCATED
+    finally:
+        connection.close()

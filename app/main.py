@@ -1,27 +1,42 @@
 """
 app/main.py
 
-CLI entry point. Task 6 / Schedule Maxing v2 makes this a thin canonical
-service consumer: it imports a legacy CSV into canonical models (an
-explicit anchor date and timezone -- never inferred from today), allocates
-every imported task across the CSV's date range, generates exactly one
-explicitly selected date via the Day Scheduler, prints it, and exports it
-two ways: the existing half-hour-block CSV (kept byte-for-byte compatible,
-clearly labeled as legacy/lossy) and a new exact-interval JSON export (the
-canonical DayScheduleOutput itself, losslessly serialized, so a 3-minute
-task or a 10:13 boundary is never rounded away).
+CLI entry point (Milestone 2): a thin consumer of the persistence-backed
+planning service. Like the desktop app it reads and writes the application
+SQLite database -- by default the per-user data location (see
+config.settings; SCHEDULE_MAXING_DATA_DIR overrides it), or the file given
+with --db-path -- and never imports anything implicitly.
 
-`python -m app.main` with no arguments preserves the original demo: it
-loads samples/inputs/valid_single_day_basic.csv (a single day), under a
-documented fixed sample anchor date (SAMPLE_ANCHOR_DATE below) and UTC,
-schedules it in precise_greedy mode, prints the result, and writes both
-export files to samples/outputs/. Every other combination requires
-explicit --anchor-date/--timezone: this module never silently treats an
-imported legacy day index as "today".
+    python -m app.main [--db-path FILE]
+        Summarize what is stored. Nothing is imported or changed.
 
-Multi-day CSV input is allocated across its full date range, then only the
-explicitly selected date (--select-date, or the CSV's single date when
-there is only one) is generated in detail -- never every date automatically.
+    python -m app.main [--db-path FILE] --select-date YYYY-MM-DD [--start-date D --end-date D]
+        Allocate the stored tasks planned in [start, end] (default: just the
+        selected date), generate exactly the selected date with the Day
+        Scheduler, save its placements (reusing unchanged placement ids),
+        print it, and optionally export it.
+
+    python -m app.main --import-csv FILE --anchor-date YYYY-MM-DD [--import-mode append|replace] ...
+        Import a legacy CSV through the transactional importer
+        (app/planning/csv_import.py: the whole file is validated first, then
+        written in one transaction), then schedule the selected date (default:
+        the file's first date) over the file's date range. --csv is kept as
+        an alias of --import-csv. The anchor date is always explicit.
+
+    python -m app.main --demo
+        The explicit sample: imports samples/inputs/valid_single_day_basic.csv
+        at a fixed anchor date into a temporary in-memory database (or into
+        --db-path if one is given) and schedules it. Plain startup never adds
+        sample data.
+
+Exports: --legacy-csv-out writes the original `time,task` 30-minute-block
+CSV (byte-for-byte compatible, lossy: shorter or off-grid intervals and ids
+cannot be represented); --exact-json-out writes the generated
+DayScheduleOutput losslessly; --export-planning-csv writes the stored
+planning CSV (app/planning/csv_export.py: tasks, fixed blocks, and exact
+placement intervals with ids) for the scheduled range -- or everything,
+when nothing is scheduled. For --demo and CSV imports, the first two
+default to samples/outputs/<csv stem>.* as before.
 """
 
 from __future__ import annotations
@@ -31,22 +46,18 @@ import csv
 from datetime import date as date_
 from pathlib import Path
 
-from app.data_processor import read_csv_rows
-from app.optimizer import MandatoryTaskSchedulingError, _to_offset
-from app.planning.allocation import allocate_tasks
-from app.planning.compat import import_legacy_csv_rows
-from app.planning.preferences import (
-    OptimizerMode,
-    PreferenceOverrides,
-    day_preferences_overrides_from_reward_settings,
-    resolve_day_preferences,
-)
-from app.planning.service import generate_selected_day
-from app.reward import load_reward_settings
+from app.execution.db import get_connection, resolve_db_path
+from app.optimizer import _to_offset
+from app.planning.application import PlanningService, RangeScope
+from app.planning.csv_import import CsvImportError, ImportMode, parse_legacy_csv_file
+from app.planning.preferences import OptimizerMode, PreferenceOverrides
+from app.planning.repository import PlanningRepository
+from app.ui.planning_controller import PlanningController
+from config import settings
 
-#: The documented fixed anchor used only for the zero-argument demo run.
-#: Any real legacy import must pass --anchor-date explicitly; this constant
-#: exists so the demo is reproducible, not as a hidden default for general use.
+#: The documented fixed anchor used only by the explicit --demo run. Any real
+#: legacy import must pass --anchor-date explicitly; this constant exists so
+#: the demo is reproducible, not as a hidden default for general use.
 SAMPLE_ANCHOR_DATE = date_(2026, 1, 5)
 SAMPLE_TIMEZONE = "UTC"
 
@@ -256,141 +267,208 @@ def _to_legacy_export_view(canonical_output, day_start_utc):
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--csv", type=Path, default=None, help="Legacy schedule CSV to import (default: the sample fixture).")
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument(
+        "--db-path", type=Path, default=None,
+        help="Application database file (default: the per-user data location; --demo alone uses a temporary "
+        "in-memory database).",
+    )
+    parser.add_argument(
+        "--demo", action="store_true",
+        help="Explicitly import and schedule the sample fixture (never done implicitly).",
+    )
+    parser.add_argument(
+        "--import-csv", "--csv", dest="import_csv", type=Path, default=None,
+        help="Legacy schedule CSV to import (validated completely, written in one transaction).",
+    )
+    parser.add_argument(
+        "--import-mode", choices=[mode.value for mode in ImportMode], default=ImportMode.APPEND.value,
+        help="append: add the file's rows (default). replace: first clear the dates the file covers.",
+    )
     parser.add_argument(
         "--anchor-date", type=str, default=None,
-        help="Explicit anchor date (YYYY-MM-DD) for legacy day-index -> real-date conversion. "
-        "Required for any --csv other than the sample fixture.",
+        help="Explicit date (YYYY-MM-DD) of legacy day 1. Required with --import-csv.",
     )
-    parser.add_argument("--timezone", type=str, default=None, help="IANA timezone for the imported schedule (default: UTC).")
+    parser.add_argument(
+        "--timezone", type=str, default=None,
+        help=f"IANA timezone for imported/scheduled days (default: {settings.DEFAULT_TIMEZONE}).",
+    )
     parser.add_argument(
         "--mode", type=str, choices=[mode.value for mode in OptimizerMode], default=OptimizerMode.PRECISE_GREEDY.value,
         help="Day Scheduler candidate mode (default: precise_greedy).",
     )
     parser.add_argument(
         "--select-date", type=str, default=None,
-        help="Explicit date (YYYY-MM-DD) to generate in detail. Defaults to the CSV's only date when there is "
-        "exactly one, otherwise the earliest date (a multi-day CSV is always allocated across its full range "
-        "first, but only this one date is ever generated in detail).",
+        help="The one date (YYYY-MM-DD) to generate in detail. Defaults to an import's first date; without an "
+        "import and without this option nothing is scheduled.",
     )
+    parser.add_argument("--start-date", type=str, default=None, help="Allocation range start (default: see above).")
+    parser.add_argument("--end-date", type=str, default=None, help="Allocation range end (default: see above).")
     parser.add_argument("--legacy-csv-out", type=Path, default=None, help="Legacy 30-minute-block CSV export path.")
     parser.add_argument("--exact-json-out", type=Path, default=None, help="Exact-interval canonical JSON export path.")
+    parser.add_argument(
+        "--export-planning-csv", type=Path, default=None,
+        help="Write the stored planning CSV (tasks, fixed blocks, exact placements with ids).",
+    )
     return parser.parse_args(argv)
+
+
+def _date_arg(value: str | None, option: str) -> date_ | None:
+    if value is None:
+        return None
+    try:
+        return date_.fromisoformat(value)
+    except ValueError as error:
+        raise ValueError(f"{option} must be YYYY-MM-DD, got {value!r}") from error
+
+
+def _print_stored_summary(service: PlanningService) -> None:
+    tasks = service.list_tasks()
+    blocks = service.list_fixed_blocks()
+    placements = service.list_placements()
+    print(f"Stored: {len(tasks)} task(s), {len(blocks)} fixed block(s), {len(placements)} scheduled placement(s).")
+    scheduled_dates = sorted({placement.planned_date for placement in placements})
+    if scheduled_dates:
+        print(f"Scheduled dates: {scheduled_dates[0]} .. {scheduled_dates[-1]} ({len(scheduled_dates)} date(s)).")
+    print("Nothing was scheduled. Pass --select-date YYYY-MM-DD to generate and save one date.")
 
 
 def main(argv: list[str] | None = None) -> None:
     base_dir = Path(__file__).resolve().parent.parent
     args = _parse_args(argv)
 
-    using_sample_default = args.csv is None
-    csv_path = args.csv or (base_dir / "samples" / "inputs" / "valid_single_day_basic.csv")
-
-    if not csv_path.exists():
+    if args.demo and args.import_csv is not None:
+        raise ValueError("use either --demo or --import-csv, not both")
+    csv_path = base_dir / "samples" / "inputs" / "valid_single_day_basic.csv" if args.demo else args.import_csv
+    if csv_path is not None and not csv_path.exists():
         raise FileNotFoundError(f"CSV file not found: {csv_path}")
 
     if args.anchor_date is not None:
-        anchor_date = date_.fromisoformat(args.anchor_date)
-    elif using_sample_default:
+        anchor_date = _date_arg(args.anchor_date, "--anchor-date")
+    elif args.demo:
         anchor_date = SAMPLE_ANCHOR_DATE
-    else:
+    elif csv_path is not None:
         raise ValueError(
-            "--anchor-date is required when importing a CSV other than the built-in sample fixture -- "
-            "this module never infers a calendar date for a legacy day index from today's date."
+            "--anchor-date is required when importing a CSV -- this program never infers a calendar date "
+            "for a legacy day index from today's date."
         )
-
-    tz_name = args.timezone or SAMPLE_TIMEZONE
-    mode = OptimizerMode(args.mode)
-
-    print(f"Importing {csv_path} with anchor_date={anchor_date} timezone={tz_name!r} (day 1 == {anchor_date}).")
-    print(
-        "Note: an ID-less legacy CSV receives fresh UUIDs on every import -- re-running this import does not "
-        "preserve identity across runs. Use --exact-json-out from a prior run and a canonical JSON loader for "
-        "identity-preserving round trips."
-    )
-
-    rows = read_csv_rows(str(csv_path))
-    imported = import_legacy_csv_rows(rows, anchor_date=anchor_date, tz_name=tz_name)
-
-    for day_index, result in sorted(imported.items()):
-        for diagnostic in result.diagnostics:
-            print(f"  [import diagnostic] day {day_index}: {diagnostic.message}")
-
-    if not imported:
-        print("No schedule days found in the input CSV.")
-        return
-
-    reward_yaml_layer = day_preferences_overrides_from_reward_settings(load_reward_settings())
-
-    tasks_registry = None
-    fixed_blocks_by_date: dict[date_, list] = {}
-    preferences_by_date = {}
-    all_task_ids: list = []
-
-    for day_index, result in imported.items():
-        day_schedule = result.day_schedule
-        if tasks_registry is None:
-            tasks_registry = day_schedule.tasks
-        else:
-            tasks_registry.tasks.update(day_schedule.tasks.tasks)
-
-        fixed_blocks_by_date[day_schedule.date] = day_schedule.fixed_blocks
-        preferences_by_date[day_schedule.date] = resolve_day_preferences(
-            date=day_schedule.date, timezone=tz_name,
-            yaml_overrides=reward_yaml_layer,
-            date_overrides=PreferenceOverrides(optimizer_mode=mode),
-        )
-        all_task_ids.extend(day_schedule.task_ids)
-
-    all_dates = sorted(preferences_by_date.keys())
-
-    allocation = allocate_tasks(
-        start_date=all_dates[0], end_date=all_dates[-1], tasks=tasks_registry, task_ids=all_task_ids,
-        preferences_by_date=preferences_by_date, fixed_blocks_by_date=fixed_blocks_by_date,
-    )
-    if allocation.unallocated:
-        print(f"Allocation left {len(allocation.unallocated)} task(s) unallocated across [{all_dates[0]}, {all_dates[-1]}]:")
-        for entry in allocation.unallocated:
-            task = tasks_registry.get(entry.task_id)
-            print(f"  - {task.name if task else entry.task_id} [{entry.reason_code.value}]: {entry.explanation}")
-
-    if args.select_date is not None:
-        select_date = date_.fromisoformat(args.select_date)
     else:
-        select_date = all_dates[0]
-        if len(all_dates) > 1:
-            print(
-                f"Multiple dates imported ({len(all_dates)}); generating only {select_date} "
-                "(pass --select-date to choose another)."
-            )
+        anchor_date = None
 
+    tz_name = args.timezone or (SAMPLE_TIMEZONE if args.demo else settings.DEFAULT_TIMEZONE)
+    mode = OptimizerMode(args.mode)
+    select_date = _date_arg(args.select_date, "--select-date")
+    start_date = _date_arg(args.start_date, "--start-date")
+    end_date = _date_arg(args.end_date, "--end-date")
+    db_path = args.db_path if args.db_path is not None else (":memory:" if args.demo else None)
+
+    connection = get_connection(db_path)
     try:
-        canonical_output, _state = generate_selected_day(
-            allocation, select_date, tasks_registry, preferences_by_date, fixed_blocks_by_date,
+        service = PlanningService(PlanningRepository(connection))
+        controller = PlanningController(service=service, timezone=tz_name)
+        controller.set_user_overrides(PreferenceOverrides(optimizer_mode=mode))
+        print(f"Database: {resolve_db_path(db_path)}")
+
+        imported = None
+        if csv_path is not None:
+            imported = _import(controller, csv_path, anchor_date, tz_name, ImportMode(args.import_mode))
+
+        if select_date is None and imported is not None:
+            select_date = imported.start_date
+            if imported.end_date > imported.start_date:
+                print(
+                    f"The file covers {imported.start_date} .. {imported.end_date}; generating only {select_date} "
+                    "(pass --select-date to choose another)."
+                )
+
+        if select_date is None:
+            _print_stored_summary(service)
+            if args.export_planning_csv is not None:
+                _export_planning(controller, args.export_planning_csv, None, None)
+            return
+
+        start_date = start_date or (imported.start_date if imported is not None else select_date)
+        end_date = end_date or (imported.end_date if imported is not None else select_date)
+        if not start_date <= select_date <= end_date:
+            raise ValueError(f"--select-date {select_date} must lie within the range {start_date} .. {end_date}")
+
+        allocation = controller.allocate_range(start_date, end_date, scope=RangeScope.PLANNED)
+        if not allocation.ok:
+            print(f"Allocation failed: {allocation.error}")
+            raise SystemExit(1)
+        registry = service.get_tasks(entry.task_id for entry in allocation.value.unallocated)
+        if allocation.value.unallocated:
+            print(f"Allocation left {len(allocation.value.unallocated)} task(s) unallocated across [{start_date}, {end_date}]:")
+            for entry in allocation.value.unallocated:
+                task = registry.get(entry.task_id)
+                print(f"  - {task.name if task else entry.task_id} [{entry.reason_code.value}]: {entry.explanation}")
+
+        generated = controller.generate_day(select_date)
+        if not generated.ok:
+            print(f"{generated.error}\nNothing was saved for {select_date}; its previously saved schedule is unchanged.")
+            raise SystemExit(1)
+        canonical_output = generated.value
+        print(f"Saved the schedule for {select_date}.")
+        print_canonical_day_schedule(canonical_output)
+
+        day_start_utc, _ = controller.resolve_preferences(select_date).value.to_local_day_window().to_utc_instants()
+        legacy_view = _to_legacy_export_view(canonical_output, day_start_utc)
+
+        # For an import, default output filenames are derived from the input
+        # CSV's own stem (as before), so importing a different CSV never
+        # overwrites the sample's checked-in outputs. Without an import,
+        # nothing is written unless an output path is given.
+        output_dir = base_dir / "samples" / "outputs"
+        legacy_csv_out = args.legacy_csv_out or (output_dir / f"{csv_path.stem}.csv" if csv_path else None)
+        exact_json_out = args.exact_json_out or (output_dir / f"{csv_path.stem}.exact.json" if csv_path else None)
+        if legacy_csv_out is not None:
+            export_day_schedule_to_csv(legacy_view, legacy_csv_out)
+        if exact_json_out is not None:
+            export_exact_schedule_to_json(canonical_output, exact_json_out)
+        if args.export_planning_csv is not None:
+            _export_planning(controller, args.export_planning_csv, start_date, end_date)
+    finally:
+        connection.close()
+
+
+def _import(controller: PlanningController, csv_path: Path, anchor_date: date_, tz_name: str, mode: ImportMode):
+    print(f"Importing {csv_path} ({mode.value}) with anchor_date={anchor_date} timezone={tz_name!r} (day 1 == {anchor_date}).")
+    print(
+        "Note: a legacy CSV has no ids -- every import creates new tasks and fixed blocks, so appending the "
+        "same file twice stores it twice. Use --import-mode replace to replace the dates it covers."
+    )
+    try:
+        parsed = parse_legacy_csv_file(csv_path, anchor_date=anchor_date, timezone=tz_name)
+    except CsvImportError as error:
+        print(error)
+        raise SystemExit(2) from error
+
+    applied = controller.apply_import(parsed, mode)
+    if not applied.ok:
+        print(f"The CSV was not imported; nothing was saved: {applied.error}")
+        raise SystemExit(2)
+    result = applied.value
+    print(f"Imported {len(result.tasks)} task(s) and {len(result.fixed_blocks)} fixed block(s).")
+    if result.cleared is not None:
+        cleared = result.cleared
+        print(
+            f"Replaced {parsed.start_date} .. {parsed.end_date}: removed {cleared.deleted_tasks} task(s), "
+            f"{cleared.deleted_fixed_blocks} fixed block(s), {cleared.deleted_placements} placement(s); "
+            "execution history was kept."
         )
-    except MandatoryTaskSchedulingError as exc:
-        print(f"Could not generate {select_date}: {len(exc.failures)} required task(s) could not be placed.")
-        for failure in exc.failures:
-            task = tasks_registry.get(failure.task_id)
-            print(f"  - {task.name if task else failure.task_id} [{failure.reason_code.value}]: {failure.explanation}")
-        raise
+    return parsed
 
-    print_canonical_day_schedule(canonical_output)
 
-    day_start_utc, _ = preferences_by_date[select_date].to_local_day_window().to_utc_instants()
-    legacy_view = _to_legacy_export_view(canonical_output, day_start_utc)
-
-    # Default output filenames are derived from the actual input CSV's own
-    # stem (falling back to the sample fixture's name only when the sample
-    # itself is what was imported), so importing a different CSV never
-    # silently overwrites the sample's own checked-in output files.
-    output_dir = base_dir / "samples" / "outputs"
-    output_stem = csv_path.stem
-    legacy_csv_out = args.legacy_csv_out or (output_dir / f"{output_stem}.csv")
-    exact_json_out = args.exact_json_out or (output_dir / f"{output_stem}.exact.json")
-
-    export_day_schedule_to_csv(legacy_view, legacy_csv_out)
-    export_exact_schedule_to_json(canonical_output, exact_json_out)
+def _export_planning(controller: PlanningController, path: Path, start_date, end_date) -> None:
+    exported = controller.export_planning_csv(str(path), start_date=start_date, end_date=end_date)
+    if not exported.ok:
+        print(f"Planning CSV export failed: {exported.error}")
+        raise SystemExit(1)
+    result = exported.value
+    print(
+        f"Stored planning CSV exported to: {result.path} ({result.tasks} task(s), {result.fixed_blocks} fixed "
+        f"block(s), {result.placements} placement(s))"
+    )
 
 
 if __name__ == "__main__":
