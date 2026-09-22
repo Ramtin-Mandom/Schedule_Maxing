@@ -7,10 +7,19 @@ database.
 
 Metric definitions:
     - completion_rate / skip_rate: computed over *terminal* observations
-      only (status completed or skipped). An execution still scheduled,
-      in_progress, or paused is a pending outcome, not yet a success or a
-      failure, so it is excluded from both rates' denominators rather than
-      silently counted as neither (or worse, as a success).
+      (status completed, skipped, or cancelled). An execution still
+      scheduled, in_progress, or paused is a pending outcome, not yet a
+      final result, so it is excluded from both rates' denominators rather
+      than silently counted as neither (or worse, as a success).
+      cancelled is terminal -- it counts toward terminal_count (and
+      therefore toward both rates' shared denominator) -- but is never
+      counted as completed or skipped, so it contributes to neither
+      numerator. A batch of cancellations therefore dilutes both
+      completion_rate and skip_rate downward without moving either
+      numerator; cancelled_count is exposed separately below precisely so a
+      caller (e.g. insights.py) can explain a lowered rate instead of
+      misreporting it as a drop in either successful completion or an
+      active decision to skip.
     - on_schedule_start_rate: fraction of observations with a known
       start_delay_minutes (see data_prep._recover_start_delay) whose
       absolute delay is within thresholds.on_schedule_tolerance_minutes.
@@ -106,6 +115,7 @@ class SegmentStats(BaseModel):
 
     observation_count: int
     terminal_count: int
+    cancelled_count: int = 0
     completed_duration_count: int
     evidence_level: EvidenceLevel
 
@@ -200,6 +210,7 @@ def compute_segment_stats(
     return SegmentStats(
         observation_count=observation_count,
         terminal_count=len(terminal),
+        cancelled_count=sum(1 for observation in observations if observation.is_cancelled),
         completed_duration_count=len(completed_durations),
         evidence_level=evidence_level,
         completion_rate=round(completion_rate, 4) if completion_rate is not None else None,

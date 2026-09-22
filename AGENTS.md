@@ -1,208 +1,280 @@
 # AGENTS.md
 
-## Project purpose
+## Project Purpose
 
-Schedule Maxing is a local Python scheduling and optimization application. It
-combines immovable fixed blocks with flexible tasks and attempts to maximize a
-reward score while respecting hard scheduling constraints.
+This repository is a personal scheduling and productivity application centered around a constraint-aware schedule optimization engine.
 
-The project has two entry points:
+The current core includes:
 
-- CLI: `python -m app.main`
-- CustomTkinter desktop UI: `python -m app.app`
+* task and schedule models
+* fixed and flexible tasks
+* hard scheduling constraints
+* dependency / PERT handling
+* reward-based task placement
+* a greedy optimizer
+* CSV input/output
+* a desktop UI
+* productivity-related features and tests
 
-Both entry points must continue to use the same scheduling domain models and
-optimizer behavior.
+The project will gradually expand toward:
 
-## Repository map
+* stronger optimization algorithms
+* machine-learning duration prediction
+* productivity analytics
+* persistent local storage
+* account and cloud synchronization
+* Android support
+* AI-generated productivity feedback
 
-- `app/models.py`: Pydantic input and output models.
-- `app/data_processor.py`: CSV parsing and conversion into domain models.
-- `app/constraints.py`: reusable hard-constraint and free-slot helpers.
-- `app/pert.py`: dependency graph, cycle detection, and dependency readiness.
-- `app/reward.py`: candidate-placement scoring and YAML configuration loading.
-- `app/optimizer.py`: greedy scheduling orchestration.
-- `app/main.py`: CLI execution, display, and CSV export.
-- `app/app.py`: CustomTkinter desktop interface.
-- `config/task_preferences.yaml`: active reward configuration.
-- `config/settings.py`: configuration constants; several are reserved or
-  currently unused, so confirm call sites before relying on them.
-- `samples/inputs/`: example schedule inputs.
-- `samples/outputs/`: generated example outputs.
-- `tests/`: automated tests. Add focused tests for behavior you change.
+Do not prematurely implement future roadmap items unless the current task explicitly asks for them.
 
-## Setup and standard commands
+---
 
-Use the repository's existing virtual environment when available. Otherwise:
+# Working Rules
+
+## 1. Execute queued tasks strictly sequentially
+
+When multiple user instructions or queued tasks exist, process them in the order they were given.
+
+For each task:
+
+1. Read the full task.
+2. Inspect the relevant repository files.
+3. Complete the task fully.
+4. Run the requested or appropriate verification.
+5. Fix failures caused by the task.
+6. Confirm internally that the task's acceptance criteria are satisfied.
+7. Only then continue to the next queued task.
+
+Do not begin Task N+1 while Task N is incomplete.
+
+Do not partially implement several queued tasks in parallel.
+
+Do not skip a task because a later task appears easier or more interesting.
+
+If Task N reveals a problem that blocks Task N+1, finish or resolve that blocker before continuing.
+
+If Task N genuinely cannot be completed because required information is unavailable, clearly identify the blocker and stop rather than silently moving to later tasks.
+
+---
+
+## 2. Treat each queued instruction as an atomic milestone
+
+For queued prompts, behave as though the user said:
+
+> Finish this task completely before touching the next task.
+
+Before continuing to another queued task, verify:
+
+* required files were changed
+* required behavior exists
+* requested tests were added
+* relevant tests pass
+* compile/lint checks requested by the task pass
+* no known unfinished TODO from the current task remains
+
+Do not consider a task complete merely because code was written.
+
+A task is complete only when its requested behavior is implemented and verified.
+
+---
+
+## 3. Inspect before editing
+
+Never assume repository layout from the prompt alone.
+
+Before making changes:
+
+* inspect the repository tree
+* open the files directly relevant to the task
+* inspect relevant imports and call sites
+* inspect existing tests
+* inspect configuration affecting the code
+* check for existing implementations before adding new ones
+
+Prefer extending existing architecture over creating duplicate systems.
+
+---
+
+# Project Architecture Rules
+
+## 4. Keep scheduling layers separated
+
+Preserve the conceptual separation between:
+
+### Models
+
+Data structures such as:
+
+* Task
+* FixedBlock
+* TimeWindow
+* DaySchedule
+* ScheduledTask
+* DayScheduleOutput
+
+### Hard constraints
+
+Rules determining whether a schedule is valid.
+
+Examples:
+
+* overlap prevention
+* day boundaries
+* task duration
+* fixed blocks
+* dependencies
+
+Hard constraints should not be hidden inside reward calculations.
+
+### Reward / scoring
+
+Determines how good a valid schedule is.
+
+Examples:
+
+* task priority
+* preferred time
+* category weighting
+* related tags
+* fragmentation penalties
+
+Reward logic should not silently override hard constraints.
+
+### Optimizer
+
+Searches for valid task placements and attempts to maximize the reward.
+
+The current production baseline is the greedy optimizer unless the repository explicitly changes this later.
+
+### Analytics / ML
+
+Prediction and productivity analysis should remain separate from the low-level constraint engine.
+
+ML may provide inputs such as predicted task duration, but scheduling correctness must not depend on opaque model behavior.
+
+### UI
+
+The UI should call application/domain logic rather than reimplement optimization rules.
+
+---
+
+## 5. Preserve Greedy Optimizer v1 behavior unless instructed otherwise
+
+The greedy optimizer is an important baseline.
+
+When working on testing, CI, persistence, UI, ML, or future optimizers:
+
+* do not casually change greedy scheduling semantics
+* do not replace greedy behavior without an explicit task
+* add regression tests before changing important optimizer behavior
+* keep comparison with the baseline possible
+
+Future algorithms such as simulated annealing or constraint programming should normally be introduced alongside the greedy baseline rather than silently replacing it.
+
+---
+
+# Code Change Rules
+
+## 6. Prefer focused changes
+
+Avoid unrelated refactors.
+
+Do not:
+
+* rename many files unnecessarily
+* reformat the whole repository
+* change APIs unrelated to the task
+* redesign modules merely for stylistic preference
+* add dependencies without a clear reason
+* implement roadmap features that were not requested
+
+When a small change solves the task, prefer the small change.
+
+---
+
+## 7. Preserve backward compatibility when practical
+
+Before changing public functions, models, imports, configuration keys, or file formats:
+
+* inspect their call sites
+* inspect tests
+* determine whether compatibility is expected
+
+Do not break working UI, CLI, CSV, or test flows unnecessarily.
+
+---
+
+## 8. Never hide bugs behind tests
+
+Do not weaken assertions simply to make a test pass.
+
+Do not:
+
+* delete meaningful tests
+* skip tests unnecessarily
+* replace strict assertions with meaningless ones
+* catch broad exceptions solely to hide failures
+* disable lint rules solely to conceal real issues
+
+When behavior is incorrect, fix the implementation or clearly explain the incompatibility.
+
+---
+
+# Testing and Verification
+
+## 9. Test important scheduling behavior
+
+When modifying the scheduling engine, consider tests for:
+
+* fixed blocks
+* overlapping fixed blocks
+* task/task overlap
+* day boundaries
+* task duration
+* dependency ordering
+* multiple dependencies
+* dependency cycles
+* missing dependencies
+* PERT ordering
+* reward calculations
+* preferred-time scoring
+* category/tag relationships
+* fragmentation
+* unscheduled tasks
+* CSV loading
+* invalid input
+* optimizer output invariants
+
+Do not add redundant tests solely to increase test count.
+
+---
+
+## 10. Run verification before declaring a task complete
+
+When available and relevant, run:
 
 ```bash
-python -m venv .venv
-python -m pip install -r requirements.txt
+pytest
+python -m compileall .
+ruff check .
 ```
 
-Run the CLI end to end:
+If the task affects only a narrow area, focused tests may be run first, but run the broader checks before completing a milestone when practical.
 
-```bash
-python -m app.main
-```
+Fix failures caused by your changes.
 
-Run the desktop UI:
+Do not silently ignore failing checks.
 
-```bash
-python -m app.app
-```
+---
 
-Run tests:
+# Dependencies
 
-```bash
-python -m pytest
-```
+## 11. Be conservative with dependencies
 
-Check Python syntax and imports after broad changes:
+Before adding a package:
 
-```bash
-python -m compileall app config
-```
-
-Do not claim a command passed unless it was actually run successfully.
-
-## Core scheduling invariants
-
-Preserve these behaviors unless the task explicitly changes them:
-
-- Fixed blocks are immovable.
-- Scheduled items must not overlap.
-- Every placement must remain inside the configured day window.
-- A flexible task must receive its required duration.
-- A task with real dependencies must be placed after its scheduled
-  prerequisites.
-- Cyclic dependency graphs must be rejected or reported clearly.
-- Tasks that cannot be placed must appear in the unscheduled result with a
-  useful reason.
-- `DayScheduleOutput` must keep scheduled tasks, unscheduled tasks, and the
-  total score consistent with one another.
-- CLI export and UI rendering must agree with optimizer output.
-- Existing CSV fields and output formats are compatibility boundaries.
-
-Do not silently change the current treatment of missing dependency names.
-Discuss the desired behavior and add tests before changing it.
-
-## Architecture rules
-
-- Keep domain and scheduling logic outside the UI.
-- Keep `app/main.py` as a thin CLI adapter rather than placing optimization
-  logic in it.
-- Prefer shared helpers over duplicating constraint or parsing logic.
-- When changing placement validation, inspect both `app/constraints.py` and
-  the inline checks in `app/optimizer.py` so their behavior does not drift.
-- When changing dependency syntax, inspect `app/data_processor.py`,
-  `app/pert.py`, `app/optimizer.py`, and the UI parser together.
-- Do not use a plain hyphen as the only dependency delimiter because task names
-  may themselves contain hyphens.
-- Treat task names and user-entered labels as data, not parsing syntax.
-- Maintain compatibility with both CLI and desktop UI consumers.
-- Do not introduce network services, external APIs, databases, or telemetry
-  unless the task explicitly requires them.
-
-The implemented optimizer is currently greedy. Do not describe the application
-as using simulated annealing merely because simulated-annealing constants exist
-in `config/settings.py`.
-
-## Configuration rules
-
-- Trace a setting to an actual runtime call site before stating that it affects
-  scheduling.
-- Do not expose a configuration field in the UI as functional unless the
-  optimizer or reward system actually consumes it.
-- Preserve safe defaults when `config/task_preferences.yaml` is absent or
-  incomplete.
-- Validate YAML values before using them in scheduling calculations.
-- Avoid adding additional fallback spellings or filenames; prefer one
-  documented canonical configuration path.
-- Ask before deleting currently unused public configuration fields because
-  users may already have configuration files containing them.
-
-## Time handling
-
-- Keep internal time calculations separate from display formatting.
-- Treat midnight and day-boundary values explicitly.
-- Add boundary tests for `00:00`, noon, `23:59`, and an end time of `24:00`
-  whenever time conversion code changes.
-- In particular, do not regress the known `minutes_to_time(1440)` display case:
-  an end-of-day value must not be shown as noon.
-
-## Testing expectations
-
-Every behavioral fix or feature should include focused automated tests.
-Prioritize coverage for:
-
-- fixed-block placement and overlap rejection;
-- day-window and duration constraints;
-- dependency ordering, missing dependencies, and cycle detection;
-- reward scoring and YAML overrides;
-- greedy optimizer progress and termination;
-- scheduled versus unscheduled reporting;
-- CSV parsing and export round trips;
-- midnight and other time-display boundaries.
-
-Tests must be deterministic. Do not depend on wall-clock time, display access,
-network access, or mutable files outside a temporary test directory.
-
-For UI changes, test extracted non-visual logic where possible. If the
-environment is headless, run compilation and relevant unit tests and clearly
-state that visual behavior was not manually verified.
-
-## Change workflow
-
-Before editing:
-
-1. Read `README.md` and the files involved in the requested behavior.
-2. Trace the complete input-to-output path instead of assuming a module is
-   active because it exists.
-3. Identify compatibility constraints and the smallest useful test.
-4. For changes spanning multiple components, summarize the plan before coding.
-
-While editing:
-
-- Keep changes focused on the requested outcome.
-- Preserve unrelated user changes and avoid broad mechanical rewrites.
-- Follow existing model and naming conventions.
-- Prefer simple, explicit Python over unnecessary abstractions.
-- Do not mix unrelated cleanup with a bug fix or feature.
-- Ask before adding a production dependency, changing a CSV schema, replacing
-  the optimization strategy, or removing public configuration.
-
-Before finishing:
-
-1. Review the final diff for unintended changes.
-2. Run the smallest relevant tests during development.
-3. Run `python -m pytest` before completion when the environment permits.
-4. Run `python -m app.main` when the end-to-end CLI path is affected.
-5. Report the commands run, results, changed files, and any remaining risks.
-
-## Security and repository hygiene
-
-- Never commit credentials, secrets, `.env` contents, personal schedules, or
-  private user data.
-- Do not add generated schedules, caches, virtual environments, or temporary
-  files to version control unless they are intentional fixtures.
-- Do not modify, commit, push, rebase, or open a pull request unless requested.
-- Do not delete dead code or dependencies solely because they appear unused;
-  confirm scope and intent first.
-
-## Known areas requiring care
-
-- `tests/` currently has little or no coverage, so new work should improve the
-  situation rather than rely only on manual execution.
-- Time formatting at the `1440`-minute boundary has had a midnight/noon bug.
-- Dependency parsing has used hyphens as delimiters and can conflict with
-  hyphenated task names.
-- Some simulated-annealing, neighbor-generation, enforcement, and reward
-  settings are not connected to runtime behavior.
-- `app/constraints.py` and `app/optimizer.py` contain overlapping placement
-  logic that can diverge.
-- Some documentation and UI labels may describe inactive or renamed behavior;
-  verify claims against executable code.
-
-Treat these as warnings to investigate, not permission to expand every task
-into an unrelated cleanup project.
+1. Check whether the repository already has a suitable dependency.
+2. Determine whether the standard library can reasonably solve the problem.
+3. Add the dependency only when it materially improves the implementation.
+4. Update dependency files if a new

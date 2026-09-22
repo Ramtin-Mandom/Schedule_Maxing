@@ -1,0 +1,157 @@
+{
+  "environment": {
+    "python_version": "3.10.11 (tags/v3.10.11:7d4cc5a, Apr  5 2023, 00:38:17) [MSC v.1929 64 bit (AMD64)]",
+    "platform": "Windows-10-10.0.19045-SP0",
+    "processor": "AMD64 Family 25 Model 33 Stepping 2, AuthenticAMD"
+  },
+  "method": {
+    "engine": "app.optimizer.generate_day_schedule (Task 4 canonical day engine)",
+    "anchor_date": "2026-01-05",
+    "timezone": "UTC",
+    "warmups": 3,
+    "repeats": 15,
+    "timer": "time.perf_counter"
+  },
+  "fixtures": [
+    {
+      "fixture": "valid_single_day_basic",
+      "fixed_block_count": 4,
+      "flexible_task_count": 3,
+      "modes": [
+        {
+          "mode": "precise_greedy",
+          "scheduled_count": 3,
+          "unscheduled_count": 0,
+          "total_score": 89.0,
+          "generate_time": {
+            "median_ms": 18.7308,
+            "min_ms": 18.4178,
+            "max_ms": 19.2951,
+            "stdev_ms": 0.2597,
+            "samples": 15
+          },
+          "mandatory_error": null
+        },
+        {
+          "mode": "adhd_friendly",
+          "scheduled_count": 3,
+          "unscheduled_count": 0,
+          "total_score": 89.0,
+          "generate_time": {
+            "median_ms": 1.5148,
+            "min_ms": 1.4962,
+            "max_ms": 2.039,
+            "stdev_ms": 0.133,
+            "samples": 15
+          },
+          "mandatory_error": null
+        }
+      ]
+    },
+    {
+      "fixture": "dependency_chain_linear",
+      "fixed_block_count": 2,
+      "flexible_task_count": 4,
+      "modes": [
+        {
+          "mode": "precise_greedy",
+          "scheduled_count": 4,
+          "unscheduled_count": 0,
+          "total_score": 178.0,
+          "generate_time": {
+            "median_ms": 12.4718,
+            "min_ms": 12.2296,
+            "max_ms": 13.4222,
+            "stdev_ms": 0.285,
+            "samples": 15
+          },
+          "mandatory_error": null
+        },
+        {
+          "mode": "adhd_friendly",
+          "scheduled_count": 4,
+          "unscheduled_count": 0,
+          "total_score": 178.0,
+          "generate_time": {
+            "median_ms": 0.9863,
+            "min_ms": 0.9737,
+            "max_ms": 1.2442,
+            "stdev_ms": 0.0684,
+            "samples": 15
+          },
+          "mandatory_error": null
+        }
+      ]
+    },
+    {
+      "fixture": "synthetic_medium_day",
+      "fixed_block_count": 4,
+      "flexible_task_count": 15,
+      "modes": [
+        {
+          "mode": "precise_greedy",
+          "scheduled_count": 12,
+          "unscheduled_count": 3,
+          "total_score": 352.88,
+          "generate_time": {
+            "median_ms": 141.5897,
+            "min_ms": 140.052,
+            "max_ms": 148.7836,
+            "stdev_ms": 2.3263,
+            "samples": 15
+          },
+          "mandatory_error": null
+        },
+        {
+          "mode": "adhd_friendly",
+          "scheduled_count": 12,
+          "unscheduled_count": 3,
+          "total_score": 352.88,
+          "generate_time": {
+            "median_ms": 62.4831,
+            "min_ms": 61.697,
+            "max_ms": 66.7425,
+            "stdev_ms": 1.206,
+            "samples": 15
+          },
+          "mandatory_error": null
+        }
+      ]
+    },
+    {
+      "fixture": "synthetic_larger_day",
+      "fixed_block_count": 4,
+      "flexible_task_count": 40,
+      "modes": [
+        {
+          "mode": "precise_greedy",
+          "scheduled_count": 13,
+          "unscheduled_count": 27,
+          "total_score": 539.81,
+          "generate_time": {
+            "median_ms": 543.21,
+            "min_ms": 540.9107,
+            "max_ms": 560.9568,
+            "stdev_ms": 4.8529,
+            "samples": 15
+          },
+          "mandatory_error": null
+        },
+        {
+          "mode": "adhd_friendly",
+          "scheduled_count": 13,
+          "unscheduled_count": 27,
+          "total_score": 539.81,
+          "generate_time": {
+            "median_ms": 214.4145,
+            "min_ms": 212.4465,
+            "max_ms": 249.4742,
+            "stdev_ms": 9.1867,
+            "samples": 15
+          },
+          "mandatory_error": null
+        }
+      ]
+    }
+  ]
+}

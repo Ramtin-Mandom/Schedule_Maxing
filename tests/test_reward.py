@@ -32,9 +32,12 @@ ZERO_SETTINGS = dict(
 # -----------------------------
 
 
-def test_load_reward_settings_defaults_when_no_file_found(tmp_path, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    assert load_reward_settings() == RewardSettings()
+def test_load_reward_settings_defaults_when_no_file_found(tmp_path) -> None:
+    # Discovery is anchored to project_root's own config/ directory, not
+    # cwd, so isolation from this repo's real config/task_preference.yaml
+    # requires an explicit (guaranteed-empty) project_root -- chdir alone
+    # would not do it (see test_optimizer.py's isolation fixture comment).
+    assert load_reward_settings(project_root=tmp_path) == RewardSettings()
 
 
 def test_load_reward_settings_missing_explicit_path_raises(tmp_path) -> None:
@@ -116,42 +119,116 @@ def test_load_reward_settings_rejects_non_mapping_yaml(tmp_path) -> None:
         load_reward_settings(config)
 
 
-def test_default_discovery_does_not_match_checked_in_plural_filename(tmp_path, monkeypatch) -> None:
-    """Documents the discovery mismatch: the repository's real reward config is
-    config/task_preferences.yaml (plural), but _resolve_config_path's default
-    (no config_path) search only looks for singular/misspelled variants
-    (task_prefrence.yaml, task_prefrence.yml, task_preference.yaml,
-    task_preference.yml). Placing a file under the plural name -- exactly as
-    it exists in this repo -- must NOT be picked up by default discovery.
-    """
-    monkeypatch.chdir(tmp_path)
+def test_default_discovery_finds_the_canonical_singular_filename(tmp_path) -> None:
+    """config/task_preference.yaml (singular) is the canonical, auto-discovered
+    template name (Task 3 fix -- see app/reward.py's module docstring)."""
     config_dir = tmp_path / "config"
     config_dir.mkdir()
-    (config_dir / "task_preferences.yaml").write_text(
+    (config_dir / "task_preference.yaml").write_text(
         "weights:\n  importance: 999\n", encoding="utf-8"
     )
 
-    settings = load_reward_settings()
+    settings = load_reward_settings(project_root=tmp_path)
+
+    assert settings.weight_importance == 999.0
+
+
+def test_default_discovery_recognizes_legacy_plural_filename_when_canonical_is_absent(tmp_path) -> None:
+    """The pre-fix plural filename (config/task_preferences.yaml) is now
+    recognized as a legacy variant -- for migration compatibility with a
+    file a user may have already created under that name -- but only when
+    the canonical singular filename is not present."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "task_preferences.yaml").write_text(
+        "weights:\n  importance: 888\n", encoding="utf-8"
+    )
+
+    settings = load_reward_settings(project_root=tmp_path)
+
+    assert settings.weight_importance == 888.0
+
+
+def test_canonical_filename_wins_over_legacy_plural_when_both_exist(tmp_path) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "task_preference.yaml").write_text(
+        "weights:\n  importance: 111\n", encoding="utf-8"
+    )
+    (config_dir / "task_preferences.yaml").write_text(
+        "weights:\n  importance: 222\n", encoding="utf-8"
+    )
+
+    settings = load_reward_settings(project_root=tmp_path)
+
+    assert settings.weight_importance == 111.0
+
+
+def test_default_discovery_recognizes_old_misspelled_variants(tmp_path) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "task_prefrence.yaml").write_text(
+        "weights:\n  importance: 333\n", encoding="utf-8"
+    )
+
+    settings = load_reward_settings(project_root=tmp_path)
+
+    assert settings.weight_importance == 333.0
+
+
+def test_default_discovery_does_not_walk_ancestor_directories(tmp_path) -> None:
+    """Discovery no longer walks ancestor/home directories (Task 3 fix): a
+    matching filename above project_root, or at project_root itself instead
+    of project_root/config, must NOT be picked up."""
+    nested_root = tmp_path / "a" / "b" / "c"
+    nested_root.mkdir(parents=True)
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "task_preference.yaml").write_text(
+        "weights:\n  importance: 777\n", encoding="utf-8"
+    )
+
+    settings = load_reward_settings(project_root=nested_root)
 
     assert settings == RewardSettings()
 
 
-def test_default_discovery_walks_ancestor_directories(tmp_path, monkeypatch) -> None:
-    """Documents the ancestor-walking behavior of the default search: a
-    matching filename several directories above the current working directory
-    is still found. This is why tests that must guarantee isolation from a
-    real config file (e.g. test_optimizer.py) cannot rely on chdir alone.
-    """
-    nested = tmp_path / "a" / "b" / "c"
-    nested.mkdir(parents=True)
+def test_default_discovery_does_not_search_project_root_itself_only_its_config_subdirectory(tmp_path) -> None:
     (tmp_path / "task_preference.yaml").write_text(
-        "weights:\n  importance: 777\n", encoding="utf-8"
+        "weights:\n  importance: 555\n", encoding="utf-8"
     )
-    monkeypatch.chdir(nested)
 
-    settings = load_reward_settings()
+    settings = load_reward_settings(project_root=tmp_path)
 
-    assert settings.weight_importance == 777.0
+    assert settings == RewardSettings()
+
+
+def test_explicit_config_path_wins_over_canonical_project_template(tmp_path) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "task_preference.yaml").write_text(
+        "weights:\n  importance: 111\n", encoding="utf-8"
+    )
+    explicit = tmp_path / "explicit_override.yaml"
+    explicit.write_text("weights:\n  importance: 42\n", encoding="utf-8")
+
+    settings = load_reward_settings(explicit, project_root=tmp_path)
+
+    assert settings.weight_importance == 42.0
+
+
+def test_default_discovery_is_independent_of_current_working_directory(tmp_path, monkeypatch) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "task_preference.yaml").write_text(
+        "weights:\n  importance: 444\n", encoding="utf-8"
+    )
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    settings = load_reward_settings(project_root=tmp_path)
+
+    assert settings.weight_importance == 444.0
 
 
 # -----------------------------

@@ -1,0 +1,166 @@
+{
+  "date": "2026-01-05",
+  "timezone": "UTC",
+  "fixed_blocks": [
+    {
+      "id": "58920a2e-d1c9-4459-a1ca-3a92f80c909e",
+      "label": "Sleep",
+      "planned_date": "2026-01-05",
+      "timezone": "UTC",
+      "planned_start": "2026-01-05T00:00:00Z",
+      "planned_end": "2026-01-05T08:00:00Z"
+    },
+    {
+      "id": "978d8d1d-cf3b-43a4-bd03-e88def09cc57",
+      "label": "Breakfast",
+      "planned_date": "2026-01-05",
+      "timezone": "UTC",
+      "planned_start": "2026-01-05T08:00:00Z",
+      "planned_end": "2026-01-05T08:30:00Z"
+    },
+    {
+      "id": "31087eae-3389-4439-a757-9de677551ce4",
+      "label": "Lunch",
+      "planned_date": "2026-01-05",
+      "timezone": "UTC",
+      "planned_start": "2026-01-05T12:00:00Z",
+      "planned_end": "2026-01-05T13:00:00Z"
+    },
+    {
+      "id": "6ae321f9-8138-4a48-b896-e734b50ab152",
+      "label": "Dinner",
+      "planned_date": "2026-01-05",
+      "timezone": "UTC",
+      "planned_start": "2026-01-05T18:00:00Z",
+      "planned_end": "2026-01-05T19:00:00Z"
+    }
+  ],
+  "tasks": {
+    "tasks": {
+      "2f583ce5-292f-43b5-94f8-f34bea7b3bc3": {
+        "id": "2f583ce5-292f-43b5-94f8-f34bea7b3bc3",
+        "user_id": null,
+        "project_id": null,
+        "name": "Gym",
+        "category": "health",
+        "tags": [
+          "fitness"
+        ],
+        "estimated_duration_minutes": 60,
+        "priority": 6,
+        "required": false,
+        "required_date": null,
+        "preferred_dates": [
+          "2026-01-05"
+        ],
+        "preferred_time_window": {
+          "start_minute": 780,
+          "end_minute": 1020
+        },
+        "dependency_ids": [],
+        "deadline": null,
+        "recurrence": null,
+        "created_at": "2026-09-22T12:36:33.009200Z",
+        "updated_at": "2026-09-22T12:36:33.009200Z",
+        "version": 1
+      },
+      "c4e5dec6-4e47-4c0c-98be-61c6ec7c10ef": {
+        "id": "c4e5dec6-4e47-4c0c-98be-61c6ec7c10ef",
+        "user_id": null,
+        "project_id": null,
+        "name": "Study Session",
+        "category": "study",
+        "tags": [
+          "focus"
+        ],
+        "estimated_duration_minutes": 90,
+        "priority": 7,
+        "required": false,
+        "required_date": null,
+        "preferred_dates": [
+          "2026-01-05"
+        ],
+        "preferred_time_window": {
+          "start_minute": 540,
+          "end_minute": 720
+        },
+        "dependency_ids": [],
+        "deadline": null,
+        "recurrence": null,
+        "created_at": "2026-09-22T12:36:33.009200Z",
+        "updated_at": "2026-09-22T12:36:33.009200Z",
+        "version": 1
+      },
+      "abac2819-00c5-4629-9bbe-c0dd6f368470": {
+        "id": "abac2819-00c5-4629-9bbe-c0dd6f368470",
+        "user_id": null,
+        "project_id": null,
+        "name": "Free Reading",
+        "category": "leisure",
+        "tags": [
+          "books"
+        ],
+        "estimated_duration_minutes": 60,
+        "priority": 3,
+        "required": false,
+        "required_date": null,
+        "preferred_dates": [
+          "2026-01-05"
+        ],
+        "preferred_time_window": {
+          "start_minute": 1140,
+          "end_minute": 1320
+        },
+        "dependency_ids": [],
+        "deadline": null,
+        "recurrence": null,
+        "created_at": "2026-09-22T12:36:33.009200Z",
+        "updated_at": "2026-09-22T12:36:33.009200Z",
+        "version": 1
+      }
+    }
+  },
+  "placements": [
+    {
+      "id": "4d1b8ff1-974b-4d95-b15d-6a57cdc85387",
+      "task_id": "c4e5dec6-4e47-4c0c-98be-61c6ec7c10ef",
+      "planned_date": "2026-01-05",
+      "timezone": "UTC",
+      "planned_start": "2026-01-05T09:00:00Z",
+      "planned_end": "2026-01-05T10:30:00Z",
+      "score": 38.0,
+      "optimization_metadata": {},
+      "created_at": "2026-09-22T12:36:33.046785Z",
+      "updated_at": "2026-09-22T12:36:33.046785Z",
+      "version": 1
+    },
+    {
+      "id": "6dc87fd3-00a5-44d3-8d12-5685c2cd4ab3",
+      "task_id": "2f583ce5-292f-43b5-94f8-f34bea7b3bc3",
+      "planned_date": "2026-01-05",
+      "timezone": "UTC",
+      "planned_start": "2026-01-05T13:00:00Z",
+      "planned_end": "2026-01-05T14:00:00Z",
+      "score": 33.0,
+      "optimization_metadata": {},
+      "created_at": "2026-09-22T12:36:33.046785Z",
+      "updated_at": "2026-09-22T12:36:33.046785Z",
+      "version": 1
+    },
+    {
+      "id": "02755cb7-016c-44d2-af31-22099ea5537b",
+      "task_id": "abac2819-00c5-4629-9bbe-c0dd6f368470",
+      "planned_date": "2026-01-05",
+      "timezone": "UTC",
+      "planned_start": "2026-01-05T19:00:00Z",
+      "planned_end": "2026-01-05T20:00:00Z",
+      "score": 18.0,
+      "optimization_metadata": {},
+      "created_at": "2026-09-22T12:36:33.046785Z",
+      "updated_at": "2026-09-22T12:36:33.046785Z",
+      "version": 1
+    }
+  ],
+  "unscheduled": [],
+  "total_score": 89.0
+}

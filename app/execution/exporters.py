@@ -11,6 +11,16 @@ These export the user's own data at their explicit request, so there is no
 redaction of notes or other fields -- that would defeat the purpose of an
 export. (Compare: application logs must never include notes/personal data;
 this module is not a log.)
+
+CSV export (_FIELDS below) intentionally keeps the exact established legacy
+column set -- a canonical (Task 2 / Schedule Maxing v2) execution's richer
+identity/date fields (task_id, scheduled_task_id, canonical_planned_date/
+timezone/start/end, actual_first_start_at, actual_final_end_at, version)
+are never added to it, so existing CSV consumers never see a schema change.
+JSON export already exposes those fields for every execution (canonical
+rows populate them; legacy/migrated rows report them as null) because it
+dumps the full TaskExecution model rather than a fixed column whitelist --
+no separate "exact"/versioned export was needed to satisfy that.
 """
 
 from __future__ import annotations

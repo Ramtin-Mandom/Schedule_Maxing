@@ -2,16 +2,17 @@
 
 Every test forces load_reward_settings(config_path=None) to resolve to "no
 config file found" so RewardSettings() defaults are deterministic regardless
-of what config files exist on the machine running the tests.
+of what config file this repository's own config/task_preference.yaml
+happens to contain when the tests run.
 
-Note: reward._resolve_config_path(None) doesn't just check the current
-directory -- it also walks every ancestor directory (and each ancestor's own
-config/ subdirectory) looking for task_prefrence.yaml/task_preference.yaml
-(see test_reward.py's test_default_discovery_walks_ancestor_directories).
-Merely chdir-ing to a tmp_path does not stop that walk from reaching real
-directories above tmp_path (e.g. a developer's home directory), so isolation
-here is done by monkeypatching the resolver's "no explicit path" branch
-directly rather than relying on cwd.
+Note: reward._resolve_config_path(None) now anchors its search to this
+project's own config/ directory (via app/reward.py's own file location),
+not the current working directory -- it no longer walks ancestor
+directories (see test_reward.py's discovery tests) -- but that also means
+merely chdir-ing to a tmp_path would NOT isolate these tests from the real,
+checked-in config/task_preference.yaml, since discovery does not consult
+cwd at all. Isolation here is done by monkeypatching the resolver's "no
+explicit path" branch directly rather than relying on cwd or project_root.
 """
 
 from __future__ import annotations
@@ -29,10 +30,10 @@ from app.optimizer import (
 def isolate_reward_config_search(monkeypatch):
     original_resolve = reward_module._resolve_config_path
 
-    def _fake_resolve(config_path=None):
+    def _fake_resolve(config_path=None, *, project_root=None):
         if config_path is None:
             return None
-        return original_resolve(config_path)
+        return original_resolve(config_path, project_root=project_root)
 
     monkeypatch.setattr(reward_module, "_resolve_config_path", _fake_resolve)
 

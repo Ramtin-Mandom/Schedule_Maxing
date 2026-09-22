@@ -106,7 +106,9 @@ def test_csv_to_optimizer_to_export_pipeline(tmp_path: Path, monkeypatch) -> Non
     monkeypatch.setattr(
         reward_module,
         "_resolve_config_path",
-        lambda config_path=None: None if config_path is None else original_resolve(config_path),
+        lambda config_path=None, *, project_root=None: (
+            None if config_path is None else original_resolve(config_path, project_root=project_root)
+        ),
     )
 
     input_csv = tmp_path / "input.csv"
