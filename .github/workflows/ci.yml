@@ -24,7 +24,7 @@ jobs:
         run: python -m pytest
 
       - name: Check compilation
-        run: python -m compileall app config tests
+        run: python -m compileall .
 
       - name: Run Ruff
         run: python -m ruff check .

@@ -1,15 +1,24 @@
 """
 optimizer.py
 
-Greedy schedule optimizer that now uses `task_prefrence.yaml`
-through reward.py.
+Greedy Optimizer v1: the frozen baseline scheduling algorithm. This is the
+protected implementation for Milestone 0 -- behavior here should not change
+except for the narrowly-scoped fixes documented below.
 
 Important behavior:
+    - Fixed blocks are validated (start < end, inside the day window, no
+      overlaps with each other) via app.constraints.validate_fixed_blocks
+      before scheduling begins; an invalid fixed block raises ValueError.
     - Fixed tasks are placed first.
     - Movable tasks are placed in the valid slot with the highest reward score.
     - Existing dependencies are respected.
     - Missing dependencies are ignored, as requested.
-    - Reward weights/preferences come from task_prefrence.yaml when available.
+    - Reward weights/preferences come from reward.load_reward_settings(), which
+      only reads a YAML file when an explicit config_path is passed in --
+      neither this module's callers nor app.app currently pass one, and the
+      default filesystem search does not match this repository's actual
+      config/task_preferences.yaml (see reward.py's module docstring), so
+      RewardSettings' built-in defaults are what actually drive scoring today.
 """
 
 from __future__ import annotations
@@ -17,6 +26,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from app.constraints import validate_fixed_blocks
 from app.models import DayScheduleOutput, ScheduledTask, TimeWindow
 
 try:
@@ -60,6 +70,12 @@ def optimize_day_schedule(
         Final scheduled tasks, total score, and unscheduled tasks when supported
         by your model.
     """
+
+    if not validate_fixed_blocks(day_schedule):
+        raise ValueError(
+            "Invalid fixed blocks: each fixed block must have start_time < end_time, "
+            "fit inside the day window, and not overlap any other fixed block."
+        )
 
     settings = load_reward_settings(config_path)
 

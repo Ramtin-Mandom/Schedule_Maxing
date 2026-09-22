@@ -3,16 +3,22 @@ reward.py
 
 Reward/scoring logic for the schedule optimizer.
 
-This file now reads task preference values from `task_prefrence.yaml`
-or `task_preference.yaml`.
-
-Supported file locations:
+When an explicit config_path is given, that exact file is loaded. Otherwise
+_resolve_config_path searches the current directory, a `config/` subdirectory,
+and every ancestor directory (plus each ancestor's own `config/`) for one of
+these candidate filenames:
     - task_prefrence.yaml
     - task_prefrence.yml
     - task_preference.yaml
     - task_preference.yml
-    - config/task_prefrence.yaml
-    - config/task_preference.yaml
+
+Known discovery mismatch: this repository's actual reward config file is
+`config/task_preferences.yaml` (plural). That filename is NOT in the
+candidate list above, so the default (no config_path) search never finds it
+and RewardSettings' built-in defaults are used instead. Neither app/main.py
+nor app/app.py currently passes an explicit config_path, so in practice the
+checked-in YAML file has no effect on scheduling today. Passing its path
+explicitly to load_reward_settings()/optimize_day_schedule() does work.
 
 Why this design:
     - Hard constraints still belong in optimizer/constraints.
@@ -74,6 +80,17 @@ class RewardSettings:
     #     - exam
     #     - homework
     tag_relations: dict[str, list[str]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # _time_preference_score divides by max_time_distance_minutes whenever
+        # a placement is not fully inside its preferred window, so a
+        # nonpositive value would raise ZeroDivisionError deep inside scoring
+        # instead of at configuration load time. Reject it clearly here.
+        if self.max_time_distance_minutes <= 0:
+            raise ValueError(
+                "max_time_distance_minutes must be a positive number of minutes, "
+                f"got {self.max_time_distance_minutes!r}."
+            )
 
 
 # -----------------------------

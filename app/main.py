@@ -121,8 +121,8 @@ def main() -> None:
     # app/ → go up one level to project root
     base_dir = Path(__file__).resolve().parent.parent
 
-    csv_path = base_dir / "samples" / "inputs" / "day_sample.csv"
-    output_path = base_dir / "samples" / "outputs" / "day_sample.csv"
+    csv_path = base_dir / "samples" / "inputs" / "valid_single_day_basic.csv"
+    output_path = base_dir / "samples" / "outputs" / "valid_single_day_basic.csv"
 
     if not csv_path.exists():
         raise FileNotFoundError(f"CSV file not found: {csv_path}")

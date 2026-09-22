@@ -1,7 +1,13 @@
-# task_prefrence.yaml
-# Keep this file in your project root or in config/task_prefrence.yaml.
-# Note: this file keeps your spelling: "prefrence".
-# reward.py also supports the corrected spelling: task_preference.yaml.
+# task_preferences.yaml
+#
+# NOT auto-discovered: app/reward.py's default (no explicit config_path)
+# search only looks for task_prefrence.yaml, task_prefrence.yml,
+# task_preference.yaml, or task_preference.yml (singular). This file's actual,
+# correctly-spelled, plural name is not in that list, and neither app/main.py
+# nor app/app.py currently passes an explicit config_path, so editing this
+# file has no effect on scheduling unless you load it explicitly via
+# load_reward_settings(config_path=...) or optimize_day_schedule(...,
+# config_path=...).
 
 weights:
   importance: 5
