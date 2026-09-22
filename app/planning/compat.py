@@ -61,7 +61,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import date as date_
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from app import models as legacy_models
 from app.planning.models import (
@@ -122,6 +122,20 @@ def _window_from_legacy_minutes(
     if end_minute == MINUTES_PER_DAY:
         return LocalDayWindow(day=day, tz_name=tz_name, start_minute=start_minute, end_minute=0, end_day_offset=1)
     return LocalDayWindow(day=day, tz_name=tz_name, start_minute=start_minute, end_minute=end_minute, end_day_offset=0)
+
+
+def legacy_minutes_to_utc(
+    day: date_,
+    tz_name: str,
+    start_minute: int,
+    end_minute: int,
+) -> tuple[datetime, datetime]:
+    """
+    Public form of the legacy minutes-from-midnight contract above: the aware
+    UTC (start, end) instants of [start_minute, end_minute) on local `day` in
+    `tz_name` (end_minute == 1440 means the following local midnight).
+    """
+    return _window_from_legacy_minutes(day, tz_name, start_minute, end_minute).to_utc_instants()
 
 
 # -----------------------------------------------------------------------------

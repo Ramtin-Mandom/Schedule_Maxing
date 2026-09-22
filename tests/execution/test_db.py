@@ -8,7 +8,22 @@ from pathlib import Path
 
 import pytest
 
-from app.execution.db import get_connection, initialize_schema
+from app.execution.db import LATEST_SCHEMA_VERSION, get_connection, initialize_schema
+
+# Every table the latest schema defines: execution history (v1/v2) plus the
+# persisted planning entities added in v3.
+EXPECTED_TABLES = {
+    "executions",
+    "work_sessions",
+    "projects",
+    "tasks",
+    "task_tags",
+    "task_preferred_dates",
+    "task_dependencies",
+    "task_recurrence_weekdays",
+    "fixed_blocks",
+    "scheduled_tasks",
+}
 
 
 def _table_names(conn: sqlite3.Connection) -> set[str]:
@@ -52,9 +67,8 @@ def test_initialize_schema_is_idempotent(db_path: Path) -> None:
         initialize_schema(conn)
 
         version_after = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version_before == version_after
-        assert version_after >= 1
-        assert _table_names(conn) == {"executions", "work_sessions"}
+        assert version_before == version_after == LATEST_SCHEMA_VERSION
+        assert _table_names(conn) == EXPECTED_TABLES
     finally:
         conn.close()
 
@@ -66,7 +80,7 @@ def test_initialize_schema_idempotent_across_reopen(db_path: Path) -> None:
     # Reopening an already-migrated database must not fail or duplicate anything.
     conn2 = get_connection(db_path)
     try:
-        assert _table_names(conn2) == {"executions", "work_sessions"}
+        assert _table_names(conn2) == EXPECTED_TABLES
     finally:
         conn2.close()
 

@@ -1,6 +1,8 @@
 # config/settings.py
 
 import os
+import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 # -------------------------
@@ -82,15 +84,73 @@ SHIFT_AMOUNT_MINUTES = 30
 # Local Data Storage
 # -------------------------
 
-# Directory for local runtime data (e.g. the execution-tracking SQLite database).
-# Override with the SCHEDULE_MAXING_DATA_DIR environment variable if needed.
-DATA_DIR = Path(
-    os.environ.get(
-        "SCHEDULE_MAXING_DATA_DIR",
-        Path(__file__).resolve().parent.parent / "data",
-    )
-)
+APP_DATA_DIRNAME = "ScheduleMaxing"
 
+
+def default_user_data_dir(
+    *,
+    platform: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    home: Path | None = None,
+) -> Path:
+    """
+    The stable per-user application-data directory for this platform,
+    independent of the current working directory and of where this
+    checkout lives:
+
+        Windows: %LOCALAPPDATA%/ScheduleMaxing (falls back to ~/AppData/Local)
+        macOS:   ~/Library/Application Support/ScheduleMaxing
+        other:   $XDG_DATA_HOME/ScheduleMaxing (falls back to ~/.local/share)
+
+    Standard library only (no platformdirs dependency). The keyword
+    arguments exist so tests can exercise every branch deterministically.
+    """
+    platform = platform or sys.platform
+    environ = os.environ if environ is None else environ
+    home = home or Path.home()
+
+    if platform.startswith("win"):
+        base = environ.get("LOCALAPPDATA") or str(home / "AppData" / "Local")
+    elif platform == "darwin":
+        base = str(home / "Library" / "Application Support")
+    else:
+        base = environ.get("XDG_DATA_HOME") or str(home / ".local" / "share")
+    return Path(base) / APP_DATA_DIRNAME
+
+
+# Directory for local runtime data (the application SQLite database holding
+# execution history *and* persisted planning data, plus the ML artifact).
+# Defaults to the per-user application-data directory above. Override with
+# the SCHEDULE_MAXING_DATA_DIR environment variable (unchanged from earlier
+# milestones); code that opens the database can also inject an explicit
+# path (see app.execution.db.get_connection(db_path=...)).
+DATA_DIR_ENV_VAR = "SCHEDULE_MAXING_DATA_DIR"
+
+
+def resolve_data_dir(environ: Mapping[str, str] | None = None) -> tuple[Path, bool]:
+    """(data directory, whether it came from the SCHEDULE_MAXING_DATA_DIR override)."""
+    environ = os.environ if environ is None else environ
+    override = environ.get(DATA_DIR_ENV_VAR)
+    if override:
+        return Path(override), True
+    return default_user_data_dir(environ=environ), False
+
+
+DATA_DIR, DATA_DIR_OVERRIDDEN = resolve_data_dir()
+
+# Where earlier milestones stored runtime data (inside the checkout). Only
+# ever *read* -- see app.execution.db.adopt_legacy_database for how an
+# existing repository-local executions.db is carried over (copied, never
+# moved, merged, or deleted).
+LEGACY_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+
+# IANA timezone the desktop app plans in: a legacy "minutes from midnight"
+# form value on a page date is a wall-clock time in this zone. Override with
+# SCHEDULE_MAXING_TIMEZONE (e.g. "America/Toronto").
+DEFAULT_TIMEZONE = os.environ.get("SCHEDULE_MAXING_TIMEZONE") or "UTC"
+
+# The application database. The historical filename is kept so existing
+# SCHEDULE_MAXING_DATA_DIR overrides keep pointing at the same file.
 EXECUTION_DB_FILENAME = "executions.db"
 
 # Persisted ML duration-predictor artifact (see app/productivity/ml_persistence.py).

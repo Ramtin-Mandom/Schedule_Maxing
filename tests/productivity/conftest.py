@@ -9,6 +9,7 @@ import pytest
 
 from app.execution.db import get_connection
 from app.execution.repository import ExecutionRepository
+from app.planning.repository import PlanningRepository
 from tests.productivity.fixtures import FakeClock, build_synthetic_dataset
 
 
@@ -24,6 +25,12 @@ def connection(tmp_path: Path):
 @pytest.fixture
 def repository(connection) -> ExecutionRepository:
     return ExecutionRepository(connection)
+
+
+@pytest.fixture
+def planning_repository(connection) -> PlanningRepository:
+    """Planning persistence on the same connection (and lock) as `repository`."""
+    return PlanningRepository(connection)
 
 
 @pytest.fixture
