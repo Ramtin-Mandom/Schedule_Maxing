@@ -41,6 +41,16 @@ _EXECUTION_COLUMNS = (
     "energy_rating",
     "interruption_count",
     "note",
+    "task_id",
+    "scheduled_task_id",
+    "user_id",
+    "canonical_planned_date",
+    "canonical_timezone",
+    "canonical_planned_start",
+    "canonical_planned_end",
+    "actual_first_start_at",
+    "actual_final_end_at",
+    "version",
 )
 
 
@@ -71,6 +81,62 @@ class ExecutionRepository:
                 f"INSERT INTO executions ({columns}) VALUES ({placeholders})",
                 values,
             )
+        return execution
+
+    def get_or_create_by_scheduled_task_id(self, execution: TaskExecution) -> TaskExecution:
+        """
+        Atomic identity-aware get-or-create for a canonical, placement-based
+        execution: if a row already exists with this
+        execution.scheduled_task_id, return it unchanged (its original
+        planned snapshot is never overwritten); otherwise insert `execution`
+        as a new row and return it.
+
+        Requires execution.scheduled_task_id to be set -- callers with a
+        task-only (no placement) execution should use create_execution
+        instead, which never deduplicates.
+
+        Atomicity: the existence check and the insert happen while holding
+        this repository's lock for the whole operation (not as two separate
+        locked calls), so two get-or-create calls racing on the same
+        scheduled_task_id within this process cannot both insert. The
+        partial unique index on executions(scheduled_task_id) (see
+        app/execution/db.py's v2 migration) is the ultimate guarantee at the
+        database level; the IntegrityError fallback below exists in case
+        that index is ever hit despite the lock (e.g. a second writer on the
+        same file from another process).
+        """
+        if execution.scheduled_task_id is None:
+            raise ValueError("get_or_create_by_scheduled_task_id requires execution.scheduled_task_id to be set")
+
+        scheduled_task_id = str(execution.scheduled_task_id)
+
+        with self._lock:
+            existing = self._connection.execute(
+                "SELECT * FROM executions WHERE scheduled_task_id = ?",
+                (scheduled_task_id,),
+            ).fetchone()
+            if existing is not None:
+                return _row_to_execution(existing)
+
+            values = _execution_to_row(execution)
+            placeholders = ", ".join("?" for _ in _EXECUTION_COLUMNS)
+            columns = ", ".join(_EXECUTION_COLUMNS)
+
+            with self._connection:
+                try:
+                    self._connection.execute(
+                        f"INSERT INTO executions ({columns}) VALUES ({placeholders})",
+                        values,
+                    )
+                except sqlite3.IntegrityError:
+                    row = self._connection.execute(
+                        "SELECT * FROM executions WHERE scheduled_task_id = ?",
+                        (scheduled_task_id,),
+                    ).fetchone()
+                    if row is not None:
+                        return _row_to_execution(row)
+                    raise
+
         return execution
 
     def update_execution(self, execution: TaskExecution) -> TaskExecution:
@@ -216,7 +282,25 @@ def _execution_to_row(execution: TaskExecution) -> tuple:
         execution.energy_rating,
         execution.interruption_count,
         execution.note,
+        _str_or_none(execution.task_id),
+        _str_or_none(execution.scheduled_task_id),
+        _str_or_none(execution.user_id),
+        _iso_or_none(execution.canonical_planned_date),
+        execution.canonical_timezone,
+        _iso_or_none(execution.canonical_planned_start),
+        _iso_or_none(execution.canonical_planned_end),
+        _iso_or_none(execution.actual_first_start_at),
+        _iso_or_none(execution.actual_final_end_at),
+        execution.version,
     )
+
+
+def _str_or_none(value: object) -> str | None:
+    return str(value) if value is not None else None
+
+
+def _iso_or_none(value) -> str | None:
+    return value.isoformat() if value is not None else None
 
 
 def _row_to_execution(row: sqlite3.Row) -> TaskExecution:

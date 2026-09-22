@@ -14,11 +14,14 @@ exception reaching Tk's event loop.
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 
 from app.execution.errors import ExecutionError
 from app.execution.models import ExecutionStatus, TaskExecution
 from app.execution.service import ExecutionService, compute_active_duration_minutes
+from app.planning.models import ScheduledTask as CanonicalScheduledTask
+from app.planning.models import Task as CanonicalTask
 from app.ui.background import ControllerResult
 
 # Which of start/pause/resume/complete/skip are valid from each status. This
@@ -33,6 +36,14 @@ _AVAILABLE_ACTIONS: dict[ExecutionStatus, tuple[str, ...]] = {
     ExecutionStatus.PAUSED: ("resume", "complete", "skip"),
     ExecutionStatus.COMPLETED: (),
     ExecutionStatus.SKIPPED: (),
+    # cancelled is terminal, same as completed/skipped. Listed explicitly
+    # (rather than relying on a .get(..., ()) default) so a cancelled
+    # execution loaded by the still-legacy UI (e.g. one created through the
+    # new canonical creation API elsewhere) renders with no enabled actions
+    # instead of raising a KeyError -- see Task 2's "cancelled data cannot
+    # crash the still-legacy UI" requirement. A Cancel action/button is not
+    # wired into the UI itself until Task 6.
+    ExecutionStatus.CANCELLED: (),
 }
 
 
@@ -83,6 +94,39 @@ class ExecutionController:
 
     def skip(self, execution_id: str) -> ControllerResult[TaskExecution]:
         return self._call(lambda: self._service.skip(execution_id))
+
+    def cancel(self, execution_id: str) -> ControllerResult[TaskExecution]:
+        """Not yet wired to a UI control (see Task 6); exposed so callers/tests can exercise it."""
+        return self._call(lambda: self._service.cancel(execution_id))
+
+    def get_or_create_canonical_execution(
+        self,
+        task: CanonicalTask,
+        scheduled_task: CanonicalScheduledTask,
+        *,
+        user_id: uuid.UUID | None = None,
+    ) -> ControllerResult[TaskExecution]:
+        """
+        Canonical (Task 2) identity-aware get-or-create, for a flexible
+        placement: selecting the same placement again always resolves to
+        the same execution, keyed by task_id/scheduled_task_id rather than
+        a task-name lookup -- duplicate task names remain distinguishable.
+        Only flexible ScheduledTask placements are tracked; fixed blocks are
+        never passed here.
+        """
+        return self._call(
+            lambda: self._service.get_or_create_canonical_execution(task, scheduled_task, user_id=user_id)
+        )
+
+    def create_canonical_execution(
+        self,
+        task: CanonicalTask,
+        scheduled_task: CanonicalScheduledTask | None = None,
+        *,
+        user_id: uuid.UUID | None = None,
+    ) -> ControllerResult[TaskExecution]:
+        """Canonical (Task 2) plain creation -- always a new row; see ExecutionService.create_canonical_execution."""
+        return self._call(lambda: self._service.create_canonical_execution(task, scheduled_task, user_id=user_id))
 
     def record_feedback(
         self,
