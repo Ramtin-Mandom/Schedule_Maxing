@@ -18,6 +18,7 @@ from app.execution.models import ExecutionStatus
 from app.execution.repository import ExecutionRepository
 from app.execution.service import ExecutionService
 from app.planning.models import LocalTimeWindow, ScheduledTask, Task
+from app.planning.repository import PlanningRepository
 
 
 class FakeClock:
@@ -41,29 +42,46 @@ def service_with_clock(repository: ExecutionRepository, clock: FakeClock) -> Exe
     return ExecutionService(repository, clock=clock)
 
 
-def _make_task(**overrides) -> Task:
-    defaults = dict(
-        name="Study Math",
-        category="study",
-        estimated_duration_minutes=60,
-        priority=8,
-        preferred_time_window=LocalTimeWindow(start_minute=540, end_minute=660),
-    )
-    defaults.update(overrides)
-    return Task(**defaults)
+@pytest.fixture
+def make_task(planning_repository: PlanningRepository):
+    """Build a canonical Task and persist it: since schema v3 a new execution
+    may only link to a persisted task (see app/execution/db.py)."""
+
+    def _make(**overrides) -> Task:
+        defaults = dict(
+            name="Study Math",
+            category="study",
+            estimated_duration_minutes=60,
+            priority=8,
+            preferred_time_window=LocalTimeWindow(start_minute=540, end_minute=660),
+        )
+        defaults.update(overrides)
+        task = Task(**defaults)
+        planning_repository.upsert_task(task)
+        return task
+
+    return _make
 
 
-def _make_placement(task: Task, *, start: datetime, end: datetime, tz: str = "UTC", **overrides) -> ScheduledTask:
-    defaults = dict(
-        task_id=task.id,
-        planned_date=start.date(),
-        timezone=tz,
-        planned_start=start,
-        planned_end=end,
-        score=10.0,
-    )
-    defaults.update(overrides)
-    return ScheduledTask(**defaults)
+@pytest.fixture
+def make_placement(planning_repository: PlanningRepository):
+    """Build a canonical placement for a persisted task and persist it too."""
+
+    def _make(task: Task, *, start: datetime, end: datetime, tz: str = "UTC", **overrides) -> ScheduledTask:
+        defaults = dict(
+            task_id=task.id,
+            planned_date=start.date(),
+            timezone=tz,
+            planned_start=start,
+            planned_end=end,
+            score=10.0,
+        )
+        defaults.update(overrides)
+        placement = ScheduledTask(**defaults)
+        planning_repository.upsert_placement(placement)
+        return placement
+
+    return _make
 
 
 # ----------------------------------------------------------------------
@@ -71,9 +89,11 @@ def _make_placement(task: Task, *, start: datetime, end: datetime, tz: str = "UT
 # ----------------------------------------------------------------------
 
 
-def test_create_canonical_execution_snapshots_task_fields(service_with_clock: ExecutionService) -> None:
-    task = _make_task(name="Study Math", category="study", tags=["math"], priority=9)
-    placement = _make_placement(
+def test_create_canonical_execution_snapshots_task_fields(
+    service_with_clock: ExecutionService, make_task, make_placement
+) -> None:
+    task = make_task(name="Study Math", category="study", tags=["math"], priority=9)
+    placement = make_placement(
         task, start=datetime(2024, 6, 3, 9, 0, tzinfo=timezone.utc), end=datetime(2024, 6, 3, 10, 0, tzinfo=timezone.utc)
     )
 
@@ -94,8 +114,8 @@ def test_create_canonical_execution_snapshots_task_fields(service_with_clock: Ex
     assert execution.planned_start is None
 
 
-def test_create_canonical_execution_without_placement_is_task_only(service_with_clock: ExecutionService) -> None:
-    task = _make_task()
+def test_create_canonical_execution_without_placement_is_task_only(service_with_clock: ExecutionService, make_task) -> None:
+    task = make_task()
 
     execution = service_with_clock.create_canonical_execution(task)
 
@@ -107,9 +127,10 @@ def test_create_canonical_execution_without_placement_is_task_only(service_with_
 
 def test_create_canonical_execution_never_deduplicates_task_only_attempts(
     service_with_clock: ExecutionService,
+    make_task,
 ) -> None:
     """Task-only executions (no placement) are never deduplicated by task_id alone."""
-    task = _make_task()
+    task = make_task()
 
     first = service_with_clock.create_canonical_execution(task)
     second = service_with_clock.create_canonical_execution(task)
@@ -119,12 +140,14 @@ def test_create_canonical_execution_never_deduplicates_task_only_attempts(
 
 def test_create_canonical_execution_for_distinct_placements_creates_distinct_rows(
     service_with_clock: ExecutionService,
+    make_task,
+    make_placement,
 ) -> None:
-    task = _make_task()
-    placement_a = _make_placement(
+    task = make_task()
+    placement_a = make_placement(
         task, start=datetime(2024, 6, 3, 9, 0, tzinfo=timezone.utc), end=datetime(2024, 6, 3, 10, 0, tzinfo=timezone.utc)
     )
-    placement_b = _make_placement(
+    placement_b = make_placement(
         task, start=datetime(2024, 6, 4, 9, 0, tzinfo=timezone.utc), end=datetime(2024, 6, 4, 10, 0, tzinfo=timezone.utc)
     )
 
@@ -136,6 +159,8 @@ def test_create_canonical_execution_for_distinct_placements_creates_distinct_row
 
 def test_create_canonical_execution_twice_for_the_same_placement_raises(
     service_with_clock: ExecutionService,
+    make_task,
+    make_placement,
 ) -> None:
     """create_canonical_execution always inserts, and the database's own
     uniqueness policy for non-null scheduled_task_id (see
@@ -145,8 +170,8 @@ def test_create_canonical_execution_twice_for_the_same_placement_raises(
     instead, which handles this atomically."""
     import sqlite3
 
-    task = _make_task()
-    placement = _make_placement(
+    task = make_task()
+    placement = make_placement(
         task, start=datetime(2024, 6, 3, 9, 0, tzinfo=timezone.utc), end=datetime(2024, 6, 3, 10, 0, tzinfo=timezone.utc)
     )
 
@@ -160,9 +185,11 @@ def test_create_canonical_execution_twice_for_the_same_placement_raises(
 # ----------------------------------------------------------------------
 
 
-def test_get_or_create_canonical_reuses_execution_for_same_placement(service_with_clock: ExecutionService) -> None:
-    task = _make_task()
-    placement = _make_placement(
+def test_get_or_create_canonical_reuses_execution_for_same_placement(
+    service_with_clock: ExecutionService, make_task, make_placement
+) -> None:
+    task = make_task()
+    placement = make_placement(
         task, start=datetime(2024, 6, 3, 9, 0, tzinfo=timezone.utc), end=datetime(2024, 6, 3, 10, 0, tzinfo=timezone.utc)
     )
 
@@ -172,9 +199,11 @@ def test_get_or_create_canonical_reuses_execution_for_same_placement(service_wit
     assert first.id == second.id
 
 
-def test_get_or_create_canonical_reuses_regardless_of_status(service_with_clock: ExecutionService) -> None:
-    task = _make_task()
-    placement = _make_placement(
+def test_get_or_create_canonical_reuses_regardless_of_status(
+    service_with_clock: ExecutionService, make_task, make_placement
+) -> None:
+    task = make_task()
+    placement = make_placement(
         task, start=datetime(2024, 6, 3, 9, 0, tzinfo=timezone.utc), end=datetime(2024, 6, 3, 10, 0, tzinfo=timezone.utc)
     )
 
@@ -189,16 +218,18 @@ def test_get_or_create_canonical_reuses_regardless_of_status(service_with_clock:
 
 def test_get_or_create_canonical_distinct_task_ids_stay_distinct_even_with_identical_labels_and_times(
     service_with_clock: ExecutionService,
+    make_task,
+    make_placement,
 ) -> None:
     """Two different tasks that happen to share the same name and the same
     scheduled interval must remain distinct executions."""
-    task_a = _make_task(name="Study Session")
-    task_b = _make_task(name="Study Session")
+    task_a = make_task(name="Study Session")
+    task_b = make_task(name="Study Session")
     start = datetime(2024, 6, 3, 9, 0, tzinfo=timezone.utc)
     end = datetime(2024, 6, 3, 10, 0, tzinfo=timezone.utc)
 
-    placement_a = _make_placement(task_a, start=start, end=end)
-    placement_b = _make_placement(task_b, start=start, end=end)
+    placement_a = make_placement(task_a, start=start, end=end)
+    placement_b = make_placement(task_b, start=start, end=end)
 
     execution_a = service_with_clock.get_or_create_canonical_execution(task_a, placement_a)
     execution_b = service_with_clock.get_or_create_canonical_execution(task_b, placement_b)
@@ -209,16 +240,18 @@ def test_get_or_create_canonical_distinct_task_ids_stay_distinct_even_with_ident
 
 def test_get_or_create_canonical_moved_placement_does_not_overwrite_original_snapshot(
     service_with_clock: ExecutionService,
+    make_task,
+    make_placement,
 ) -> None:
     """A task re-placed at a new time (a new ScheduledTask.id) gets a new
     execution; the original execution's planned snapshot is untouched."""
-    task = _make_task(name="Study Math")
-    original_placement = _make_placement(
+    task = make_task(name="Study Math")
+    original_placement = make_placement(
         task, start=datetime(2024, 6, 3, 9, 0, tzinfo=timezone.utc), end=datetime(2024, 6, 3, 10, 0, tzinfo=timezone.utc)
     )
     original_execution = service_with_clock.get_or_create_canonical_execution(task, original_placement)
 
-    moved_placement = _make_placement(
+    moved_placement = make_placement(
         task, start=datetime(2024, 6, 3, 14, 0, tzinfo=timezone.utc), end=datetime(2024, 6, 3, 15, 0, tzinfo=timezone.utc)
     )
     moved_execution = service_with_clock.get_or_create_canonical_execution(task, moved_placement)
@@ -243,8 +276,8 @@ def test_get_or_create_canonical_requires_a_placement(service_with_clock: Execut
 
 
 @pytest.mark.parametrize("source_status_setup", ["scheduled", "in_progress", "paused"])
-def test_cancel_from_each_valid_source(service_with_clock: ExecutionService, source_status_setup: str) -> None:
-    task = _make_task()
+def test_cancel_from_each_valid_source(service_with_clock: ExecutionService, source_status_setup: str, make_task) -> None:
+    task = make_task()
     execution = service_with_clock.create_canonical_execution(task)
 
     if source_status_setup in ("in_progress", "paused"):
@@ -259,8 +292,8 @@ def test_cancel_from_each_valid_source(service_with_clock: ExecutionService, sou
     assert cancelled.actual_final_end_at is not None
 
 
-def test_cancel_closes_open_session(service_with_clock: ExecutionService, repository: ExecutionRepository) -> None:
-    task = _make_task()
+def test_cancel_closes_open_session(service_with_clock: ExecutionService, repository: ExecutionRepository, make_task) -> None:
+    task = make_task()
     execution = service_with_clock.create_canonical_execution(task)
     service_with_clock.start(execution.id)
 
@@ -272,8 +305,8 @@ def test_cancel_closes_open_session(service_with_clock: ExecutionService, reposi
 
 
 @pytest.mark.parametrize("action", ["start", "pause", "resume", "complete", "skip", "cancel"])
-def test_no_transition_out_of_cancelled(service_with_clock: ExecutionService, action: str) -> None:
-    task = _make_task()
+def test_no_transition_out_of_cancelled(service_with_clock: ExecutionService, action: str, make_task) -> None:
+    task = make_task()
     execution = service_with_clock.create_canonical_execution(task)
     service_with_clock.cancel(execution.id)
 
@@ -281,8 +314,8 @@ def test_no_transition_out_of_cancelled(service_with_clock: ExecutionService, ac
         getattr(service_with_clock, action)(execution.id)
 
 
-def test_cancel_from_completed_is_invalid(service_with_clock: ExecutionService) -> None:
-    task = _make_task()
+def test_cancel_from_completed_is_invalid(service_with_clock: ExecutionService, make_task) -> None:
+    task = make_task()
     execution = service_with_clock.create_canonical_execution(task)
     service_with_clock.start(execution.id)
     service_with_clock.complete(execution.id)
@@ -291,8 +324,8 @@ def test_cancel_from_completed_is_invalid(service_with_clock: ExecutionService) 
         service_with_clock.cancel(execution.id)
 
 
-def test_skip_records_actual_final_end_at(service_with_clock: ExecutionService) -> None:
-    task = _make_task()
+def test_skip_records_actual_final_end_at(service_with_clock: ExecutionService, make_task) -> None:
+    task = make_task()
     execution = service_with_clock.create_canonical_execution(task)
 
     skipped = service_with_clock.skip(execution.id)
@@ -307,10 +340,10 @@ def test_skip_records_actual_final_end_at(service_with_clock: ExecutionService) 
 
 def test_canonical_start_delay_is_exact_instant_difference(
     service_with_clock: ExecutionService, clock: FakeClock
-) -> None:
-    task = _make_task()
+, make_task, make_placement) -> None:
+    task = make_task()
     planned_start = datetime(2024, 6, 3, 9, 0, tzinfo=timezone.utc)
-    placement = _make_placement(task, start=planned_start, end=planned_start + timedelta(hours=1))
+    placement = make_placement(task, start=planned_start, end=planned_start + timedelta(hours=1))
     execution = service_with_clock.create_canonical_execution(task, placement)
 
     clock.advance(timedelta(minutes=12))  # clock starts at planned_start already; advance to simulate lateness
@@ -323,13 +356,13 @@ def test_canonical_start_delay_is_exact_instant_difference(
 
 def test_canonical_start_delay_handles_midnight_crossing_correctly(
     service_with_clock: ExecutionService, clock: FakeClock
-) -> None:
+, make_task, make_placement) -> None:
     """planned_start just before midnight UTC, actual start just after --
     the exact-instant subtraction must not wrap around like a naive
     time-of-day comparison would."""
-    task = _make_task()
+    task = make_task()
     planned_start = datetime(2024, 6, 3, 23, 50, tzinfo=timezone.utc)
-    placement = _make_placement(task, start=planned_start, end=planned_start + timedelta(hours=1))
+    placement = make_placement(task, start=planned_start, end=planned_start + timedelta(hours=1))
     execution = service_with_clock.create_canonical_execution(task, placement)
 
     clock.advance(timedelta(hours=15))  # move clock to 2024-06-04 00:00 UTC (planned_start + 10 min)
@@ -345,10 +378,10 @@ def test_canonical_start_delay_handles_midnight_crossing_correctly(
 
 def test_canonical_start_delay_negative_for_early_start(
     service_with_clock: ExecutionService, clock: FakeClock
-) -> None:
-    task = _make_task()
+, make_task, make_placement) -> None:
+    task = make_task()
     planned_start = datetime(2024, 6, 3, 9, 0, tzinfo=timezone.utc)
-    placement = _make_placement(task, start=planned_start, end=planned_start + timedelta(hours=1))
+    placement = make_placement(task, start=planned_start, end=planned_start + timedelta(hours=1))
     execution = service_with_clock.create_canonical_execution(task, placement)
 
     clock.advance(timedelta(minutes=-15))
@@ -359,8 +392,8 @@ def test_canonical_start_delay_negative_for_early_start(
     assert completed.start_delay_minutes == pytest.approx(-15.0)
 
 
-def test_actual_first_start_at_is_not_reset_by_resume(service_with_clock: ExecutionService, clock: FakeClock) -> None:
-    task = _make_task()
+def test_actual_first_start_at_is_not_reset_by_resume(service_with_clock: ExecutionService, clock: FakeClock, make_task) -> None:
+    task = make_task()
     execution = service_with_clock.create_canonical_execution(task)
 
     started = service_with_clock.start(execution.id)
@@ -375,12 +408,12 @@ def test_actual_first_start_at_is_not_reset_by_resume(service_with_clock: Execut
 
 def test_task_only_execution_has_no_start_delay_when_no_planned_start_exists(
     service_with_clock: ExecutionService, clock: FakeClock
-) -> None:
+, make_task) -> None:
     """A canonical, task-only execution (no placement) has neither a
     canonical_planned_start nor a legacy planned_start, so start_delay_minutes
     stays None rather than being computed against a fabricated "midnight"
     planned time."""
-    task = _make_task()
+    task = make_task()
     execution = service_with_clock.create_canonical_execution(task)
 
     service_with_clock.start(execution.id)
@@ -395,12 +428,12 @@ def test_task_only_execution_has_no_start_delay_when_no_planned_start_exists(
 # ----------------------------------------------------------------------
 
 
-def test_list_executions_returns_both_legacy_and_canonical_rows(service_with_clock: ExecutionService) -> None:
+def test_list_executions_returns_both_legacy_and_canonical_rows(service_with_clock: ExecutionService, make_task) -> None:
     legacy = service_with_clock.create_execution(
         task_name="Legacy Task", category="study", tag="math",
         planned_date=1, planned_start=540, planned_end=600, planned_duration=60, priority=5,
     )
-    task = _make_task(name="Canonical Task")
+    task = make_task(name="Canonical Task")
     canonical = service_with_clock.create_canonical_execution(task)
 
     all_ids = {execution.id for execution in service_with_clock.list_executions()}

@@ -1,62 +1,129 @@
-"""Integration tests for app/main.py's Task 6 canonical CLI pipeline:
-explicit anchor/timezone requirements, multi-day allocate-then-select-one
-behavior, and the exact-interval JSON export preserving short tasks and
-non-grid boundaries that the legacy 30-minute CSV export cannot represent.
+"""Integration tests for app/main.py's CLI on the persistence-backed service
+(Milestone 2): plain startup reads SQLite and imports nothing, the sample is
+only used with an explicit --demo, CSV imports go through the transactional
+importer with an explicit anchor date, only the selected date is generated,
+results are saved and reused, and the exact JSON / stored-planning CSV
+exports keep exact intervals that the legacy 30-minute CSV cannot represent.
+
+Every run passes a temporary --db-path (and tests/conftest.py redirects the
+default data location to a temporary folder as a safety net).
 """
 
 from __future__ import annotations
 
+import csv
 import json
+from pathlib import Path
 
 import pytest
 
+from app.execution.db import get_connection
 from app.main import main
+from app.planning.application import PlanningService
+from app.planning.repository import PlanningRepository
 
 SAMPLE_CSV = "samples/inputs/valid_single_day_basic.csv"
 MULTI_DAY_CSV = "samples/inputs/valid_multi_day_two_days.csv"
 
 
-def test_default_invocation_runs_the_sample_fixture(tmp_path):
-    legacy_out = tmp_path / "legacy.csv"
-    exact_out = tmp_path / "exact.json"
+def stored(db_path: Path) -> tuple[list, list, list]:
+    connection = get_connection(db_path)
+    try:
+        service = PlanningService(PlanningRepository(connection))
+        return service.list_tasks(), service.list_fixed_blocks(), service.list_placements()
+    finally:
+        connection.close()
 
-    main(["--legacy-csv-out", str(legacy_out), "--exact-json-out", str(exact_out)])
 
-    assert legacy_out.exists()
-    assert exact_out.exists()
+def outputs(tmp_path: Path) -> list[str]:
+    return ["--legacy-csv-out", str(tmp_path / "legacy.csv"), "--exact-json-out", str(tmp_path / "exact.json")]
 
 
-def test_non_sample_csv_requires_explicit_anchor_date(tmp_path):
+# -----------------------------------------------------------------------------
+# Startup contract
+# -----------------------------------------------------------------------------
+
+
+def test_plain_startup_reads_sqlite_and_imports_nothing(tmp_path, capsys):
+    db_path = tmp_path / "app.db"
+
+    main(["--db-path", str(db_path)])
+    main(["--db-path", str(db_path)])
+
+    assert stored(db_path) == ([], [], [])
+    assert "Stored: 0 task(s)" in capsys.readouterr().out
+    assert not (tmp_path / "legacy.csv").exists()
+
+
+def test_plain_startup_summarizes_previously_saved_data(tmp_path, capsys):
+    db_path = tmp_path / "app.db"
+    main(["--db-path", str(db_path), "--import-csv", SAMPLE_CSV, "--anchor-date", "2026-01-05", *outputs(tmp_path)])
+    before = stored(db_path)
+    capsys.readouterr()
+
+    main(["--db-path", str(db_path)])
+
+    assert stored(db_path) == before  # nothing added, nothing overwritten
+    out = capsys.readouterr().out
+    assert "Stored: 3 task(s), 4 fixed block(s), 3 scheduled placement(s)." in out
+
+
+def test_demo_is_explicit_and_uses_a_throwaway_database(tmp_path):
+    main(["--demo", *outputs(tmp_path)])
+
+    data = json.loads((tmp_path / "exact.json").read_text())
+    assert data["date"] == "2026-01-05"
+    assert {task["name"] for task in data["tasks"]["tasks"].values()} == {"Study Session", "Gym", "Free Reading"}
+    assert (tmp_path / "legacy.csv").exists()
+
+
+def test_demo_into_an_explicit_database_persists_the_sample(tmp_path):
+    db_path = tmp_path / "demo.db"
+    main(["--demo", "--db-path", str(db_path), *outputs(tmp_path)])
+    tasks, blocks, placements = stored(db_path)
+    assert len(tasks) == 3 and len(blocks) == 4 and len(placements) == 3
+
+
+# -----------------------------------------------------------------------------
+# Import + selected-date generation (coverage kept from the pre-SQLite CLI)
+# -----------------------------------------------------------------------------
+
+
+def test_csv_import_requires_explicit_anchor_date(tmp_path):
     with pytest.raises(ValueError, match="anchor-date is required"):
-        main(["--csv", MULTI_DAY_CSV, "--legacy-csv-out", str(tmp_path / "l.csv"), "--exact-json-out", str(tmp_path / "e.json")])
+        main(["--db-path", str(tmp_path / "app.db"), "--csv", MULTI_DAY_CSV, *outputs(tmp_path)])
+    assert not (tmp_path / "app.db").exists()  # refused before anything was opened
 
 
 def test_multi_day_csv_generates_only_the_selected_date(tmp_path):
-    exact_out = tmp_path / "exact.json"
-    main([
-        "--csv", MULTI_DAY_CSV, "--anchor-date", "2026-01-05", "--timezone", "UTC",
-        "--legacy-csv-out", str(tmp_path / "legacy.csv"), "--exact-json-out", str(exact_out),
-    ])
+    db_path = tmp_path / "app.db"
+    main(["--db-path", str(db_path), "--csv", MULTI_DAY_CSV, "--anchor-date", "2026-01-05", "--timezone", "UTC",
+          *outputs(tmp_path)])
 
-    data = json.loads(exact_out.read_text())
+    data = json.loads((tmp_path / "exact.json").read_text())
     assert data["date"] == "2026-01-05"
-
     task_names = {task["name"] for task in data["tasks"]["tasks"].values()}
     # Day 2's tasks (Edit Draft / Submit Assignment) must not appear in day 1's output.
     assert "Edit Draft" not in task_names
     assert "Submit Assignment" not in task_names
 
+    tasks, blocks, placements = stored(db_path)
+    assert len(tasks) == 4 and len(blocks) == 8  # both days were imported ...
+    assert {placement.planned_date.isoformat() for placement in placements} == {"2026-01-05"}  # ... one generated
+
 
 def test_explicit_select_date_picks_the_other_day(tmp_path):
-    exact_out = tmp_path / "exact.json"
-    main([
-        "--csv", MULTI_DAY_CSV, "--anchor-date", "2026-01-05", "--timezone", "UTC",
-        "--select-date", "2026-01-06",
-        "--legacy-csv-out", str(tmp_path / "legacy.csv"), "--exact-json-out", str(exact_out),
-    ])
+    main(["--db-path", str(tmp_path / "app.db"), "--csv", MULTI_DAY_CSV, "--anchor-date", "2026-01-05",
+          "--timezone", "UTC", "--select-date", "2026-01-06", *outputs(tmp_path)])
 
-    data = json.loads(exact_out.read_text())
+    data = json.loads((tmp_path / "exact.json").read_text())
     assert data["date"] == "2026-01-06"
+
+
+def test_mode_option_reaches_the_day_scheduler(tmp_path):
+    main(["--db-path", str(tmp_path / "app.db"), "--csv", SAMPLE_CSV, "--anchor-date", "2026-01-05",
+          "--mode", "adhd_friendly", *outputs(tmp_path)])
+    assert json.loads((tmp_path / "exact.json").read_text())["placements"]
 
 
 def test_exact_export_preserves_short_task_and_non_grid_boundary(tmp_path):
@@ -69,36 +136,82 @@ def test_exact_export_preserves_short_task_and_non_grid_boundary(tmp_path):
         "1,Quick Note,work,,false,613,616,3,5,\n",
         encoding="utf-8",
     )
-    exact_out = tmp_path / "exact.json"
 
-    main([
-        "--csv", str(csv_path), "--anchor-date", "2026-01-05", "--timezone", "UTC",
-        "--legacy-csv-out", str(tmp_path / "legacy.csv"), "--exact-json-out", str(exact_out),
-    ])
+    main(["--db-path", str(tmp_path / "app.db"), "--csv", str(csv_path), "--anchor-date", "2026-01-05",
+          "--timezone", "UTC", *outputs(tmp_path)])
 
-    data = json.loads(exact_out.read_text())
-    placements = data["placements"]
-    assert len(placements) == 1
-    placement = placements[0]
+    [placement] = json.loads((tmp_path / "exact.json").read_text())["placements"]
     assert placement["planned_start"] == "2026-01-05T10:13:00Z"
     assert placement["planned_end"] == "2026-01-05T10:16:00Z"
 
 
-def test_midnight_boundary_preserved_exactly():
+def test_midnight_boundary_preserved_exactly(tmp_path):
     """samples/inputs/end_of_day_boundary_1440.csv's fixed block ending
-    exactly at 24:00 must round-trip to the following date at 00:00, not
-    be silently misreported as noon or otherwise mangled."""
-    import tempfile
-    from pathlib import Path
+    exactly at 24:00 must round-trip to the following date at 00:00."""
+    main(["--db-path", str(tmp_path / "app.db"), "--csv", "samples/inputs/end_of_day_boundary_1440.csv",
+          "--anchor-date", "2026-01-05", "--timezone", "UTC", *outputs(tmp_path)])
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmp_path = Path(tmpdir)
-        exact_out = tmp_path / "exact.json"
-        main([
-            "--csv", "samples/inputs/end_of_day_boundary_1440.csv", "--anchor-date", "2026-01-05", "--timezone", "UTC",
-            "--legacy-csv-out", str(tmp_path / "legacy.csv"), "--exact-json-out", str(exact_out),
-        ])
+    data = json.loads((tmp_path / "exact.json").read_text())
+    fixed_blocks = {block["label"]: block for block in data["fixed_blocks"]}
+    assert fixed_blocks["Late Night Work"]["planned_end"] == "2026-01-06T00:00:00Z"
 
-        data = json.loads(exact_out.read_text())
-        fixed_blocks = {block["label"]: block for block in data["fixed_blocks"]}
-        assert fixed_blocks["Late Night Work"]["planned_end"] == "2026-01-06T00:00:00Z"
+
+# -----------------------------------------------------------------------------
+# Persistence-specific behavior
+# -----------------------------------------------------------------------------
+
+
+def test_scheduling_stored_tasks_later_reuses_saved_placement_ids(tmp_path):
+    db_path = tmp_path / "app.db"
+    main(["--db-path", str(db_path), "--csv", MULTI_DAY_CSV, "--anchor-date", "2026-01-05", *outputs(tmp_path)])
+    first = json.loads((tmp_path / "exact.json").read_text())["placements"]
+
+    # No import this time: schedule both stored days, then day 1 again.
+    main(["--db-path", str(db_path), "--start-date", "2026-01-05", "--end-date", "2026-01-06",
+          "--select-date", "2026-01-06", *outputs(tmp_path)])
+    main(["--db-path", str(db_path), "--start-date", "2026-01-05", "--end-date", "2026-01-06",
+          "--select-date", "2026-01-05", *outputs(tmp_path)])
+    again = json.loads((tmp_path / "exact.json").read_text())["placements"]
+
+    assert [p["id"] for p in again] == [p["id"] for p in first]
+    assert [p["planned_start"] for p in again] == [p["planned_start"] for p in first]
+    assert {p.planned_date.isoformat() for p in stored(db_path)[2]} == {"2026-01-05", "2026-01-06"}
+
+
+def test_invalid_csv_exits_nonzero_and_saves_nothing(tmp_path, capsys):
+    db_path = tmp_path / "app.db"
+    with pytest.raises(SystemExit) as info:
+        main(["--db-path", str(db_path), "--csv", "samples/inputs/dependency_missing_reference.csv",
+              "--anchor-date", "2026-01-05", *outputs(tmp_path)])
+
+    assert info.value.code == 2
+    assert "Nonexistent Task" in capsys.readouterr().out
+    assert stored(db_path) == ([], [], [])
+    assert not (tmp_path / "exact.json").exists()
+
+
+def test_replace_import_replaces_only_the_files_dates(tmp_path):
+    db_path = tmp_path / "app.db"
+    main(["--db-path", str(db_path), "--csv", MULTI_DAY_CSV, "--anchor-date", "2026-01-05", *outputs(tmp_path)])
+    main(["--db-path", str(db_path), "--csv", SAMPLE_CSV, "--anchor-date", "2026-01-06",
+          "--import-mode", "replace", *outputs(tmp_path)])
+
+    tasks, blocks, _ = stored(db_path)
+    by_date = {}
+    for task in tasks:
+        by_date.setdefault(task.preferred_dates[0].isoformat(), set()).add(task.name)
+    assert by_date["2026-01-05"] == {"Research Topic", "Write Draft"}  # untouched
+    assert by_date["2026-01-06"] == {"Study Session", "Gym", "Free Reading"}  # replaced
+    assert len(blocks) == 8
+
+
+def test_export_planning_csv_from_the_cli(tmp_path):
+    db_path = tmp_path / "app.db"
+    export = tmp_path / "planning.csv"
+    main(["--db-path", str(db_path), "--csv", SAMPLE_CSV, "--anchor-date", "2026-01-05",
+          "--export-planning-csv", str(export), *outputs(tmp_path)])
+
+    with export.open(newline="", encoding="utf-8") as file:
+        rows = list(csv.DictReader(file))
+    assert [row["record_type"] for row in rows].count("placement") == 3
+    assert {row["name"] for row in rows if row["record_type"] == "fixed_block"} == {"Sleep", "Breakfast", "Lunch", "Dinner"}

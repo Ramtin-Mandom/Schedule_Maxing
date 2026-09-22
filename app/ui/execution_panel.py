@@ -10,17 +10,24 @@ run off the Tk main thread via app.ui.background.run_in_background, and every
 result is a ControllerResult -- failures are shown via messagebox, never left
 to raise into Tk's event loop.
 
-Duplicate prevention: this widget always resolves a selection through
-ExecutionController.get_or_create_execution, never a raw "create" call, so
-re-selecting the same task after the schedule is refreshed or the app is
-reopened reuses the existing execution record (see
-ExecutionService.get_or_create_execution in app/execution/service.py).
+Identity and duplicate prevention (Milestone 2): the selectable items are
+saved canonical placements (ExecutablePlacement: the persisted Task and
+ScheduledTask), and a selection always resolves through
+ExecutionController.get_or_create_canonical_execution, keyed by
+task_id/scheduled_task_id -- never by task name or day index. Selecting a
+placement only *looks up* its execution (find_execution_for_placement), so
+re-selecting it after a refresh or after reopening the app restores the
+existing execution (status, sessions, feedback) and merely viewing a
+placement never writes a row. The execution is created (get-or-create,
+so never duplicated) the first time the user starts or skips it. Two tasks
+with the same name stay distinct. A refresh keeps the current selection
+when that placement still exists.
 """
 
 from __future__ import annotations
 
 import tkinter as tk
-from dataclasses import dataclass
+import uuid
 from datetime import datetime, timezone
 from tkinter import messagebox
 
@@ -31,6 +38,7 @@ from app.ui import theme
 from app.ui.background import ControllerResult, run_in_background
 from app.ui.execution_controller import ExecutionController
 from app.ui.feedback_dialog import FeedbackDialog
+from app.ui.schedule_page_controller import ExecutablePlacement
 
 _STATUS_LABELS = {
     ExecutionStatus.SCHEDULED: "Scheduled",
@@ -53,27 +61,7 @@ _ACTION_LABELS = {
 }
 
 _TICK_INTERVAL_MS = 1000
-
-
-@dataclass(frozen=True)
-class ExecutableTask:
-    """One scheduled task the execution panel can track, decoupled from app.models/app.optimizer types."""
-
-    day: int
-    task_name: str
-    category: str
-    tag: str
-    planned_start: int
-    planned_end: int
-    priority: int
-
-    @property
-    def planned_duration(self) -> int:
-        return self.planned_end - self.planned_start
-
-    @property
-    def label(self) -> str:
-        return f"Day {self.day}: {self.task_name}"
+_NO_TASKS_LABEL = "(no saved schedule -- run Make Schedule)"
 
 
 class ExecutionPanel(ctk.CTkFrame):
@@ -83,8 +71,9 @@ class ExecutionPanel(ctk.CTkFrame):
         super().__init__(parent, fg_color="transparent")
         self._controller = execution_controller
 
-        self._tasks: list[ExecutableTask] = []
-        self._current_task: ExecutableTask | None = None
+        self._tasks: list[ExecutablePlacement] = []
+        self._by_label: dict[str, ExecutablePlacement] = {}
+        self._current_task: ExecutablePlacement | None = None
         self._current_execution: TaskExecution | None = None
         self._elapsed_base_minutes = 0.0
         self._elapsed_base_time: datetime | None = None
@@ -97,26 +86,35 @@ class ExecutionPanel(ctk.CTkFrame):
     # Public API
     # ------------------------------------------------------------------
 
-    def set_scheduled_tasks(self, tasks: list[ExecutableTask]) -> None:
-        """Replace the list of selectable tasks, e.g. after Make Schedule runs."""
-        self._tasks = tasks
-        labels = [task.label for task in tasks] or ["(no scheduled tasks -- run Make Schedule)"]
+    def set_scheduled_tasks(self, tasks: list[ExecutablePlacement]) -> None:
+        """Replace the selectable saved placements (after a load/Make Schedule), keeping the selection if possible."""
+        previous_id = self._current_task.placement.id if self._current_task is not None else None
+        self._tasks = list(tasks)
+        self._by_label = {task.label: task for task in self._tasks}
+        labels = [task.label for task in self._tasks] or [_NO_TASKS_LABEL]
         self.task_menu.configure(values=labels)
-        self.task_var.set(labels[0])
         self._stop_ticking()
         self._current_task = None
         self._current_execution = None
-        if tasks:
-            self._on_task_selected(labels[0])
-        else:
+
+        if not self._tasks:
+            self.task_var.set(labels[0])
             self._render_status(None)
+            return
+
+        selected = self._find_by_placement_id(previous_id) or self._tasks[0]
+        self.task_var.set(selected.label)
+        self._on_task_selected(selected.label)
+
+    def _find_by_placement_id(self, placement_id: uuid.UUID | None) -> ExecutablePlacement | None:
+        return next((task for task in self._tasks if task.placement.id == placement_id), None)
 
     # ------------------------------------------------------------------
     # Layout
     # ------------------------------------------------------------------
 
     def _build(self) -> None:
-        self.task_var = tk.StringVar(value="(no scheduled tasks -- run Make Schedule)")
+        self.task_var = tk.StringVar(value=_NO_TASKS_LABEL)
         ctk.CTkLabel(self, text="Task", text_color=theme.TEXT_MUTED, anchor="w").grid(
             row=0, column=0, sticky="ew", padx=4, pady=(4, 2)
         )
@@ -155,7 +153,7 @@ class ExecutionPanel(ctk.CTkFrame):
     # ------------------------------------------------------------------
 
     def _on_task_selected(self, label: str) -> None:
-        task = next((task for task in self._tasks if task.label == label), None)
+        task = self._by_label.get(label)
         self._current_task = task
         self._stop_ticking()
 
@@ -168,26 +166,19 @@ class ExecutionPanel(ctk.CTkFrame):
 
         run_in_background(
             self,
-            lambda: self._controller.get_or_create_execution(
-                task_name=task.task_name,
-                category=task.category,
-                tag=task.tag,
-                planned_date=task.day,
-                planned_start=task.planned_start,
-                planned_end=task.planned_end,
-                planned_duration=task.planned_duration,
-                priority=task.priority,
-            ),
-            self._on_execution_loaded,
+            lambda: self._controller.find_execution_for_placement(task.placement.id),
+            lambda result: self._on_execution_loaded(task, result),
         )
 
-    def _on_execution_loaded(self, result: ControllerResult[TaskExecution]) -> None:
+    def _on_execution_loaded(self, task: ExecutablePlacement, result: ControllerResult[TaskExecution | None]) -> None:
+        if task is not self._current_task:
+            return  # the selection changed while this was loading
         if not result.ok:
             self._show_error(result.error)
             self._render_status(None)
             return
 
-        self._current_execution = result.value
+        self._current_execution = result.value  # None: not started yet
         self._render_status(result.value)
 
     # ------------------------------------------------------------------
@@ -195,7 +186,9 @@ class ExecutionPanel(ctk.CTkFrame):
     # ------------------------------------------------------------------
 
     def _perform_action(self, action: str) -> None:
-        if self._current_execution is None:
+        if self._current_task is None:
+            return
+        if self._current_execution is None and action not in ("start", "skip"):
             return
 
         if action in ("complete", "skip"):
@@ -232,11 +225,20 @@ class ExecutionPanel(ctk.CTkFrame):
         interruption_count: int | None = None,
         note: str | None = None,
     ) -> None:
-        execution_id = self._current_execution.id
+        task = self._current_task
+        known = self._current_execution
         transition = getattr(self._controller, action)
         self._for_buttons(lambda button: button.configure(state="disabled"))
 
         def work() -> ControllerResult[TaskExecution]:
+            if known is None:
+                # First action on this placement: create its execution (get-or-create, never a duplicate).
+                created = self._controller.get_or_create_canonical_execution(task.task, task.placement)
+                if not created.ok:
+                    return created
+                execution_id = created.value.id
+            else:
+                execution_id = known.id
             result = transition(execution_id)
             has_feedback = any(
                 value is not None
@@ -252,9 +254,11 @@ class ExecutionPanel(ctk.CTkFrame):
                 )
             return result
 
-        run_in_background(self, work, self._on_transition_done)
+        run_in_background(self, work, lambda result: self._on_transition_done(task, result))
 
-    def _on_transition_done(self, result: ControllerResult[TaskExecution]) -> None:
+    def _on_transition_done(self, task: ExecutablePlacement, result: ControllerResult[TaskExecution]) -> None:
+        if task is not self._current_task:
+            return  # the selection changed while the transition was running
         if not result.ok:
             self._show_error(result.error)
             # Re-render with the last known execution so buttons re-enable sensibly.
@@ -271,10 +275,18 @@ class ExecutionPanel(ctk.CTkFrame):
     def _render_status(self, execution: TaskExecution | None) -> None:
         self._stop_ticking()
 
-        if execution is None:
+        if self._current_task is None:
             self.status_label.configure(text="Select a task to begin.")
             self.elapsed_label.configure(text="")
             self._for_buttons(lambda button: button.configure(state="disabled"))
+            return
+
+        if execution is None:
+            self.status_label.configure(text=f"{self._current_task.label} -- Not started")
+            self.elapsed_label.configure(text="")
+            allowed = set(self._controller.available_actions(ExecutionStatus.SCHEDULED))
+            for action, button in self._action_buttons.items():
+                button.configure(state="normal" if action in allowed else "disabled")
             return
 
         self.status_label.configure(text=f"{self._current_task.label} -- {_STATUS_LABELS[execution.status]}")
@@ -332,6 +344,10 @@ class ExecutionPanel(ctk.CTkFrame):
             self.after_cancel(self._tick_job)
             self._tick_job = None
         self._elapsed_base_time = None
+
+    def destroy(self) -> None:
+        self._stop_ticking()
+        super().destroy()
 
     # ------------------------------------------------------------------
     # Helpers
