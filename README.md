@@ -251,7 +251,9 @@ The local task-execution domain, used by both the desktop UI and the CLI report 
 
 ### `app/productivity/`
 
-Turns execution history into statistics and predictions: `data_prep.py` (flattens executions into analysis-ready records), `stats.py`/`segments.py` (aggregate statistics and groupings, each carrying its own sample count and evidence label), `prediction.py` (the duration estimator and its documented fallback hierarchy), `insights.py` (structured, template-generated observations), `trends.py` (recent-vs-baseline comparison), `reporting.py` (the `ProductivityService` boundary and report/dashboard bundles), `exporters.py`, and `report_cli.py` (`python -m app.productivity.report_cli`).
+Turns execution history into statistics and predictions: `data_prep.py` (flattens executions into analysis-ready records), `stats.py`/`segments.py` (aggregate statistics and groupings, each carrying its own sample count and evidence label), `prediction.py` (the median duration estimator and its documented fallback hierarchy — the production predictor), `insights.py` (structured, template-generated observations), `trends.py` (recent-vs-baseline comparison), `reporting.py` (the `ProductivityService` boundary and report/dashboard bundles), `exporters.py`, and `report_cli.py` (`python -m app.productivity.report_cli`).
+
+The evidence-gated ML duration predictor (see [Evidence-gated ML duration predictor](#evidence-gated-ml-duration-predictor-experimental-disabled-by-default)) lives in its own small, focused modules: `ml_features.py` (leakage-safe feature construction), `ml_split.py` (chronological train/test splitting), `ml_model.py` (the sklearn `Pipeline` definition and fitting), `ml_metrics.py` (MAE/median-AE/tolerance-rate calculations), `ml_evaluation.py` (the three-way comparison and activation gate), `ml_persistence.py` (saving/loading the model artifact, never raising), `ml_prediction.py` (the runtime, fail-safe prediction path), and `predictor_comparison_cli.py` (`python -m app.productivity.predictor_comparison_cli`).
 
 ---
 
@@ -316,15 +318,17 @@ Currently, `day_sample.csv` is used as the exported result from `app/main.py`.
 
 ### `tests/`
 
-This folder is reserved for future tests.
+Contains the automated test suite, run with `python -m pytest`. It covers:
 
-Recommended tests to add:
+- `test_constraints.py`: overlap detection, day-window bounds, duration and fixed-block checks, free-slot computation.
+- `test_pert.py`: dependency graph construction, cycle detection, topological order, and dependency-ready scheduling helpers.
+- `test_reward.py`: YAML-backed reward configuration loading and each scoring component (priority, preferred-time, neighboring-tag, and fragmentation-penalty scoring).
+- `test_optimizer.py`: the greedy optimizer end to end (fixed-block preservation, non-overlap, exact durations, day-window boundaries, dependency ordering and cycles, and unscheduled-task reporting).
+- `test_data_processor.py`: CSV loading for fixed and flexible tasks, dependency parsing, and malformed/missing input handling.
+- `test_main_time_formatting.py`: CLI time-display and CSV export helpers, including the `minutes_to_time(1440)` midnight/noon boundary.
+- `execution/`, `productivity/`, `ui/`: the execution-tracking domain, productivity analytics, and desktop-UI-facing controllers.
 
-- Constraint tests for overlap and valid time windows.
-- CSV loading tests.
-- PERT dependency tests.
-- Reward scoring tests.
-- Optimizer tests for fixed blocks, preferred times, dependencies, and unscheduled tasks.
+CI (`.github/workflows/ci.yml`) runs `pytest`, `python -m compileall`, and `ruff check .` on every push and pull request.
 
 ---
 
@@ -543,6 +547,8 @@ Execution history lives in a single local SQLite file at:
 
 Override the location with the `SCHEDULE_MAXING_DATA_DIR` environment variable if you want it elsewhere. The `data/` directory (and any `*.db`/`*.db-journal`/`*.db-wal`/`*.db-shm` file) is listed in `.gitignore`, so it is never committed. The database and its schema are created automatically the first time the app or the productivity CLI runs; nothing needs to be set up by hand.
 
+If you run `python -m app.productivity.predictor_comparison_cli --save-model` and the ML activation gate passes, the trained model is saved alongside it as `<project root>/data/ml_duration_model.joblib` plus a `ml_duration_model.meta.json` sidecar — also under `data/`, so also never committed.
+
 ### Recording execution (desktop UI)
 
 After running **Make Schedule** on the Day/Week/Month page, open the **Execute** tab (next to Added Tasks/Unscheduled) to:
@@ -577,6 +583,33 @@ Filters: a time window (all time / last 7 / 30 / 90 days), category, tag, day of
 
 In the task-entry form, once you've filled in a category and start time, click **Suggest duration from history** to see a historical prediction alongside your own entered duration, with the evidence behind it (e.g. "Based on 12 completed study tasks in the morning" or "Not enough history yet — using your original estimate"). The suggestion is never applied automatically — click **Use suggestion** to fill it into the (still freely editable) duration field yourself.
 
+This suggestion always comes from the median predictor described above (`app/productivity/prediction.py`) — it is the safe default and the only predictor the UI currently reads from. See the next section for an optional, separately evaluated machine-learning predictor that can only replace it once it has proven itself on your own real history.
+
+### Evidence-gated ML duration predictor (experimental, disabled by default)
+
+Alongside the median predictor, this repo includes an optional scikit-learn regression model, evaluated honestly against both the median predictor and your own original estimate before it is ever allowed to make a real prediction. This is not a claim that ML is better — it is a mechanism for finding out, on your own history, whether it actually is.
+
+**What it's allowed to see.** Only information known before a task begins: planned duration, category, tag, priority, planned start time (and the time-of-day bucket derived from it), day of week, and historical median-duration aggregates computed only from tasks completed *before* the task being predicted (a strict, chronologically-ordered "no future data" rule — see `app/productivity/ml_features.py`). It never sees actual duration, focus/energy/interruption feedback, or completion outcome as an input.
+
+**How it's evaluated.** `app/productivity/ml_evaluation.py` sorts your completed, plausible-duration history chronologically and splits it into a training set and a held-out test set by time (the most recent `--test-fraction`, default 20%) — never a random split. All three approaches are then scored on the exact same held-out test rows:
+- your original estimate,
+- the median predictor (re-run per test row using only the history that existed strictly before that row, so it doesn't get to "see" the test set either),
+- the ML model (an sklearn `Pipeline` — median/most-frequent imputation, one-hot encoding with unknown categories handled safely, and `Ridge` regression — trained only on the training rows).
+
+Reported for each: mean absolute error, median absolute error, percentage of predictions within 15 and within 30 minutes, sample counts, and the exact chronological cutoff.
+
+**Activation rule.** ML can only become active when *both* are true: your history clears configurable, conservative minimum-sample thresholds (defaults: 40 total / 25 train / 10 test observations), and its held-out mean absolute error is strictly lower than the median predictor's held-out mean absolute error on that same test set. If either condition fails, ML stays disabled and every prediction keeps coming from the median predictor — nothing about the existing "Suggest duration from history" behavior changes. The concrete numbers behind every enable/reject decision are recorded, never asserted without evidence.
+
+**Reproducing it yourself:**
+
+```bash
+python -m app.productivity.predictor_comparison_cli
+```
+
+Add `--format json` for machine-readable output, `--db-path` to point at a different execution database, `--min-total-samples`/`--min-train-samples`/`--min-test-samples`/`--test-fraction` to adjust the gate, and `--save-model` to persist the trained model (as `ml_duration_model.joblib` + `ml_duration_model.meta.json` under the same local data directory as `executions.db`) so it can be used at runtime — only written when the activation gate actually passes. Run `python -m app.productivity.predictor_comparison_cli --help` for the full list.
+
+On a fresh install (no completed execution history yet), this correctly reports "insufficient history" and leaves ML disabled — that is the expected, honest result, not an error.
+
 ### Exporting and resetting your data
 
 On the Productivity page's **Data** section:
@@ -604,6 +637,7 @@ This README does not embed screenshots of the desktop UI. To add your own: run `
 - Error messages for unscheduled tasks are currently general and could become more specific in the future.
 - Execution tracking identifies a task by its planned snapshot (name, category, tag, and scheduled time), not a separate stable ID: two genuinely distinct tasks that happen to share an identical snapshot will be treated as the same execution.
 - Day-of-week and "recent" productivity statistics are anchored to when an execution *record* was created (a real timestamp), not a real calendar date for the *plan* itself, since this app's schedule uses abstract day numbers (Day 1, Day 2, ...) rather than calendar dates.
+- The ML duration predictor is evidence-gated and, on a typical personal-scale history, is expected to stay disabled (the stock test fixture's 19 completed tasks are well below its default 40/25/10 sample thresholds) — this is by design, not a defect. It is not wired into the desktop UI; use `python -m app.productivity.predictor_comparison_cli` to evaluate and, if it qualifies, persist it.
 
 ---
 
@@ -620,9 +654,10 @@ Possible next steps:
 - Add persistent saving/loading of UI-created schedules.
 - Feed productivity-derived duration predictions back into the optimizer as an opt-in input (currently the suggestion is shown but never applied automatically).
 - Add a real calendar-date mapping for the abstract day-index schedule model, which would make day-of-week productivity statistics exact rather than an approximation.
+- If real usage history grows enough to clear the ML activation gate, surface the comparison result (and, once it wins honestly, the ML suggestion itself) in the desktop UI's duration-suggestion widget alongside the median predictor.
 
 ---
 
 ## Project Status
 
-The project has a working scheduling pipeline, CSV input/output, reward-based optimization, PERT-style dependency handling, a desktop UI, local SQLite task-execution tracking, and personal productivity analytics (completion rates, duration accuracy, evidence-labeled insights, and historical duration suggestions) — all covered by an automated test suite (`python -m pytest`). The next major improvement should be extending duration predictions into an opt-in optimizer input, and adding a real calendar-date model for more precise day-of-week analytics.
+The project has a working scheduling pipeline, CSV input/output, reward-based optimization, PERT-style dependency handling, a desktop UI, local SQLite task-execution tracking, personal productivity analytics (completion rates, duration accuracy, evidence-labeled insights, and historical duration suggestions), and an evidence-gated experimental ML duration predictor evaluated against that same median predictor on real history — all covered by an automated test suite (`python -m pytest`). The next major improvement should be extending duration predictions into an opt-in optimizer input, and adding a real calendar-date model for more precise day-of-week analytics.

@@ -1,0 +1,8 @@
+date,name,category,tag,fixed,start_time,end_time,duration,priority,dependencies
+1,Sleep,sleep,fixed,true,0,480,480,0,
+1,Breakfast,food,fixed,true,480,510,30,0,
+1,Lunch,food,fixed,true,720,780,60,0,
+1,Dinner,food,fixed,true,1080,1140,60,0,
+1,Study Session,study,focus,false,540,720,90,7,
+1,Gym,health,fitness,false,780,1020,60,6,
+1,Free Reading,leisure,books,false,1140,1320,60,3,

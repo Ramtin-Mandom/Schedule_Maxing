@@ -1,5 +1,6 @@
+from typing import Dict
+
 from pydantic import BaseModel, Field
-from typing import  Optional,  Dict
 
 
 class TimeWindow(BaseModel):

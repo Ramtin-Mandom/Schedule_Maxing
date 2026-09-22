@@ -57,7 +57,7 @@ ENFORCE_DEADLINES = True
 # Simulated Annealing
 # -------------------------
 
-DEFAULT_OPTIMIZER = "simulated_annealing"
+DEFAULT_OPTIMIZER = "greedy"
 
 INITIAL_TEMPERATURE = 100.0
 MIN_TEMPERATURE = 0.1
@@ -92,3 +92,8 @@ DATA_DIR = Path(
 )
 
 EXECUTION_DB_FILENAME = "executions.db"
+
+# Persisted ML duration-predictor artifact (see app/productivity/ml_persistence.py).
+# Lives alongside the execution database under the same DATA_DIR.
+ML_MODEL_FILENAME = "ml_duration_model.joblib"
+ML_MODEL_META_FILENAME = "ml_duration_model.meta.json"

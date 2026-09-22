@@ -1,0 +1,4 @@
+date,name,category,tag,fixed,start_time,end_time,duration,priority,dependencies
+1,Sleep,sleep,fixed,true,0,480,480,0,
+1,Pre-Calc Review,study,math,false,540,660,60,8,
+1,Study Session,study,math,false,780,900,60,7,Pre-Calc Review

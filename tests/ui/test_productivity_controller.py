@@ -117,6 +117,62 @@ def test_predict_duration_with_insufficient_history_says_so(
 
 
 # ----------------------------------------------------------------------
+# Duration prediction comparison: the median predictor stays the active
+# production predictor when ML doesn't qualify; the comparison is read-only.
+# ----------------------------------------------------------------------
+
+
+def test_predict_duration_comparison_does_not_create_or_modify_any_execution(
+    productivity_controller: ProductivityController, repository: ExecutionRepository, tmp_path: Path
+) -> None:
+    build_synthetic_dataset(repository)
+    executions_before = {execution.id: execution for execution in repository.list_executions()}
+
+    result = productivity_controller.predict_duration_comparison(
+        category="study",
+        tag="math",
+        priority=8,
+        planned_start=540,
+        original_estimate_minutes=45,
+        data_dir=str(tmp_path),
+    )
+
+    assert result.ok
+    executions_after = {execution.id: execution for execution in repository.list_executions()}
+    assert executions_before == executions_after  # no execution rows created, changed, or removed
+
+
+def test_predict_duration_comparison_stays_median_only_when_ml_has_no_artifact(
+    productivity_controller: ProductivityController, repository: ExecutionRepository, tmp_path: Path
+) -> None:
+    """With no persisted ML model (the stock fixture's history is well below
+    the activation gate's thresholds anyway), the comparison must report the
+    exact same median prediction the plain predict_duration path would, and
+    ml_prediction must be None -- i.e. the median predictor remains the
+    only usable predictor, exactly as before this feature existed."""
+    build_synthetic_dataset(repository)
+
+    median_only_result = productivity_controller.predict_duration(
+        category="study", time_bucket=TimeBucket.MORNING, original_estimate_minutes=45
+    )
+    comparison_result = productivity_controller.predict_duration_comparison(
+        category="study",
+        tag="math",
+        priority=8,
+        planned_start=540,  # 09:00 -> TimeBucket.MORNING
+        original_estimate_minutes=45,
+        data_dir=str(tmp_path),
+    )
+
+    assert median_only_result.ok
+    assert comparison_result.ok
+    comparison = comparison_result.value
+
+    assert comparison.median_prediction == median_only_result.value
+    assert comparison.ml_prediction is None
+
+
+# ----------------------------------------------------------------------
 # Export / reset
 # ----------------------------------------------------------------------
 

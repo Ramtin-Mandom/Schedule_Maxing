@@ -16,6 +16,7 @@ ExecutionNotFoundError rather than silently doing nothing.
 from __future__ import annotations
 
 import sqlite3
+import threading
 
 from app.execution.errors import ExecutionError, ExecutionNotFoundError
 from app.execution.models import ExecutionStatus, TaskExecution, WorkSession
@@ -48,6 +49,12 @@ class ExecutionRepository:
 
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
+        # The desktop UI shares one connection between the Tk main thread and
+        # background worker threads (app.ui.background.run_in_background).
+        # sqlite3 connections aren't safe under unsynchronized concurrent
+        # access, so every method below takes this lock before touching
+        # self._connection.
+        self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Executions
@@ -59,7 +66,7 @@ class ExecutionRepository:
         placeholders = ", ".join("?" for _ in _EXECUTION_COLUMNS)
         columns = ", ".join(_EXECUTION_COLUMNS)
 
-        with self._connection:
+        with self._lock, self._connection:
             self._connection.execute(
                 f"INSERT INTO executions ({columns}) VALUES ({placeholders})",
                 values,
@@ -81,7 +88,7 @@ class ExecutionRepository:
         ]
         values.append(execution.id)
 
-        with self._connection:
+        with self._lock, self._connection:
             cursor = self._connection.execute(
                 f"UPDATE executions SET {assignments} WHERE id = ?",
                 values,
@@ -93,10 +100,11 @@ class ExecutionRepository:
 
     def get_execution(self, execution_id: str) -> TaskExecution:
         """Raises ExecutionNotFoundError if no such execution exists."""
-        row = self._connection.execute(
-            "SELECT * FROM executions WHERE id = ?",
-            (execution_id,),
-        ).fetchone()
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM executions WHERE id = ?",
+                (execution_id,),
+            ).fetchone()
 
         if row is None:
             raise ExecutionNotFoundError(execution_id)
@@ -105,15 +113,16 @@ class ExecutionRepository:
 
     def list_executions(self, status: ExecutionStatus | None = None) -> list[TaskExecution]:
         """Return all executions, optionally filtered by status, oldest first."""
-        if status is None:
-            rows = self._connection.execute(
-                "SELECT * FROM executions ORDER BY created_at"
-            ).fetchall()
-        else:
-            rows = self._connection.execute(
-                "SELECT * FROM executions WHERE status = ? ORDER BY created_at",
-                (status.value,),
-            ).fetchall()
+        with self._lock:
+            if status is None:
+                rows = self._connection.execute(
+                    "SELECT * FROM executions ORDER BY created_at"
+                ).fetchall()
+            else:
+                rows = self._connection.execute(
+                    "SELECT * FROM executions WHERE status = ? ORDER BY created_at",
+                    (status.value,),
+                ).fetchall()
 
         return [_row_to_execution(row) for row in rows]
 
@@ -127,7 +136,7 @@ class ExecutionRepository:
         ExecutionService.reset_all_history) are expected to gate it behind
         a user confirmation; this method itself performs no confirmation.
         """
-        with self._connection:
+        with self._lock, self._connection:
             cursor = self._connection.execute("DELETE FROM executions")
             return cursor.rowcount
 
@@ -136,7 +145,7 @@ class ExecutionRepository:
     # ------------------------------------------------------------------
 
     def create_session(self, execution_id: str, started_at: str) -> WorkSession:
-        with self._connection:
+        with self._lock, self._connection:
             cursor = self._connection.execute(
                 "INSERT INTO work_sessions (execution_id, started_at) VALUES (?, ?)",
                 (execution_id, started_at),
@@ -149,37 +158,40 @@ class ExecutionRepository:
 
         Raises ExecutionError if the session does not exist or is already closed.
         """
-        with self._connection:
-            cursor = self._connection.execute(
-                "UPDATE work_sessions SET ended_at = ? WHERE id = ? AND ended_at IS NULL",
-                (ended_at, session_id),
-            )
-            if cursor.rowcount == 0:
-                raise ExecutionError(
-                    f"No open work session with id={session_id!r} to close."
+        with self._lock:
+            with self._connection:
+                cursor = self._connection.execute(
+                    "UPDATE work_sessions SET ended_at = ? WHERE id = ? AND ended_at IS NULL",
+                    (ended_at, session_id),
                 )
+                if cursor.rowcount == 0:
+                    raise ExecutionError(
+                        f"No open work session with id={session_id!r} to close."
+                    )
 
-        row = self._connection.execute(
-            "SELECT * FROM work_sessions WHERE id = ?",
-            (session_id,),
-        ).fetchone()
+            row = self._connection.execute(
+                "SELECT * FROM work_sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
         return _row_to_session(row)
 
     def get_open_session(self, execution_id: str) -> WorkSession | None:
         """Return the currently-open session for this execution, if any."""
-        row = self._connection.execute(
-            "SELECT * FROM work_sessions WHERE execution_id = ? AND ended_at IS NULL "
-            "ORDER BY started_at DESC LIMIT 1",
-            (execution_id,),
-        ).fetchone()
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM work_sessions WHERE execution_id = ? AND ended_at IS NULL "
+                "ORDER BY started_at DESC LIMIT 1",
+                (execution_id,),
+            ).fetchone()
         return _row_to_session(row) if row is not None else None
 
     def list_sessions(self, execution_id: str) -> list[WorkSession]:
         """Return all sessions for an execution, in chronological order."""
-        rows = self._connection.execute(
-            "SELECT * FROM work_sessions WHERE execution_id = ? ORDER BY started_at",
-            (execution_id,),
-        ).fetchall()
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT * FROM work_sessions WHERE execution_id = ? ORDER BY started_at",
+                (execution_id,),
+            ).fetchall()
         return [_row_to_session(row) for row in rows]
 
 

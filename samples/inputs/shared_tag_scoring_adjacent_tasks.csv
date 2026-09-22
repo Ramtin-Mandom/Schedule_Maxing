@@ -1,0 +1,5 @@
+date,name,category,tag,fixed,start_time,end_time,duration,priority,dependencies
+1,Sleep,sleep,fixed,true,0,480,480,0,
+1,Algorithm Practice,study,coding,false,540,660,60,8,
+1,Debugging Session,study,coding,false,660,780,60,8,
+1,Unrelated Errand,errand,shopping,false,780,900,60,5,

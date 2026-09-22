@@ -1,0 +1,4 @@
+date,name,category,tag,fixed,start_time,end_time,duration,priority,dependencies
+1,Sleep,sleep,fixed,true,0,480,480,0,
+1,Task A,study,cycle,false,540,660,60,8,Task B
+1,Task B,study,cycle,false,660,780,60,8,Task A

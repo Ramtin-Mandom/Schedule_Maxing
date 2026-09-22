@@ -1,0 +1,5 @@
+date,name,category,tag,fixed,start_time,end_time,duration,priority,dependencies
+1,Sleep,sleep,fixed,true,0,480,480,0,
+1,High Priority Task,study,focus,false,540,600,60,10,
+1,Medium Priority Task,study,focus,false,540,600,60,5,
+1,Low Priority Task,study,focus,false,540,600,60,1,

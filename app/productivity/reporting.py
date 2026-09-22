@@ -17,10 +17,11 @@ from datetime import datetime, timezone
 from pydantic import BaseModel
 
 from app.execution.repository import ExecutionRepository
-from app.productivity.buckets import TimeBucket
+from app.productivity.buckets import TimeBucket, day_of_week_for_timestamp, time_bucket_for_minutes
 from app.productivity.data_prep import Observation, Period, build_observations
 from app.productivity.filters import ObservationFilters, apply_filters
 from app.productivity.insights import Insight, generate_insights
+from app.productivity.ml_prediction import MLDurationPrediction, predict_duration_with_ml
 from app.productivity.prediction import DurationPrediction, predict_duration
 from app.productivity.segments import (
     best_supported_time_bucket_by_category,
@@ -35,6 +36,20 @@ from app.productivity.stats import ProductivityThresholds, SegmentStats
 from app.productivity.trends import RecentTrend, compute_recent_trend
 
 _RECENT_TREND_WINDOW_DAYS = 7
+
+
+class DurationPredictionComparison(BaseModel):
+    """
+    Both predictors' output for the same task, side by side, purely for
+    comparison. This never changes which predictor is used in production --
+    predict_duration (below) remains the median-predictor-only production
+    path, untouched. ml_prediction is None whenever the evidence-gated ML
+    model isn't currently active or couldn't produce a result; see
+    app/productivity/ml_prediction.py for the fallback rules.
+    """
+
+    median_prediction: DurationPrediction
+    ml_prediction: MLDurationPrediction | None
 
 
 class ProductivityReport(BaseModel):
@@ -150,6 +165,53 @@ class ProductivityService:
             original_estimate_minutes=original_estimate_minutes,
             thresholds=self._thresholds,
         )
+
+    def predict_duration_comparison(
+        self,
+        *,
+        category: str,
+        tag: str,
+        priority: int,
+        planned_start: int,
+        original_estimate_minutes: float,
+        period: Period = "all_time",
+        filters: ObservationFilters | None = None,
+        data_dir: str | None = None,
+    ) -> DurationPredictionComparison:
+        """
+        Predict a task's actual duration with both the median predictor (the
+        one actually used in production, via `predict_duration` above) and,
+        only if it is currently activated, the evidence-gated ML model --
+        for side-by-side comparison. Read-only: this never writes a model
+        artifact, changes the activation decision, or touches execution
+        history.
+
+        `data_dir` overrides where the persisted ML model artifact is read
+        from (default: config.settings.DATA_DIR); tests pass a tmp_path here
+        so they never depend on, or interfere with, the real local artifact.
+        """
+        observations = self._observations_for(period=period, filters=filters)
+        time_bucket = time_bucket_for_minutes(planned_start)
+
+        median_prediction = predict_duration(
+            observations,
+            category=category,
+            time_bucket=time_bucket,
+            original_estimate_minutes=original_estimate_minutes,
+            thresholds=self._thresholds,
+        )
+        ml_prediction = predict_duration_with_ml(
+            observations,
+            category=category,
+            tag=tag,
+            priority=priority,
+            time_bucket=time_bucket,
+            day_of_week=day_of_week_for_timestamp(self._clock().isoformat()),
+            planned_duration=round(original_estimate_minutes),
+            planned_start=planned_start,
+            data_dir=data_dir,
+        )
+        return DurationPredictionComparison(median_prediction=median_prediction, ml_prediction=ml_prediction)
 
     def build_observations(
         self,

@@ -41,8 +41,7 @@ def test_generate_report_includes_insights(populated_repository) -> None:
 
 
 def test_generate_report_last_7_days_can_be_empty(populated_repository) -> None:
-    repository, clock = populated_repository
-    service = ProductivityService(repository, thresholds=THRESHOLDS, clock=clock)
+    repository, _clock = populated_repository
 
     # The fixture's data is all generated starting "now" (clock start) and moving forward,
     # so asking for the 7 days *before* the very first record yields nothing.

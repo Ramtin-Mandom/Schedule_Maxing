@@ -1,0 +1,7 @@
+date,name,category,tag,fixed,start_time,end_time,duration,priority,dependencies
+1,Sleep,sleep,fixed,true,0,480,480,0,
+1,Breakfast,food,fixed,true,480,510,30,0,
+1,Task A,study,chain,false,540,660,60,8,
+1,Task B,study,chain,false,660,780,60,8,Task A
+1,Task C,study,chain,false,780,900,60,8,Task B
+1,Task D,study,chain,false,900,1020,60,8,Task C

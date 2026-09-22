@@ -112,7 +112,9 @@ class ProductivityPage(ctk.CTkFrame):
             text_color=theme.TEXT_PRIMARY, command=self._clear_filters,
         ).pack(fill="x")
 
-    def _filter_menu(self, parent: tk.Widget, column: int, label: str, variable: tk.StringVar, values: list[str]) -> ctk.CTkOptionMenu:
+    def _filter_menu(
+        self, parent: tk.Widget, column: int, label: str, variable: tk.StringVar, values: list[str]
+    ) -> ctk.CTkOptionMenu:
         ctk.CTkLabel(parent, text=label, text_color=theme.TEXT_MUTED, font=ctk.CTkFont(size=11, weight="bold")).grid(
             row=0, column=column, sticky="w", padx=10, pady=(10, 2)
         )

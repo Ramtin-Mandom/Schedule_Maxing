@@ -15,7 +15,7 @@ from app.execution.exporters import export_executions_to_csv, export_executions_
 from app.productivity.buckets import TimeBucket
 from app.productivity.filters import ObservationFilters
 from app.productivity.prediction import DurationPrediction
-from app.productivity.reporting import ProductivityDashboard, ProductivityService
+from app.productivity.reporting import DurationPredictionComparison, ProductivityDashboard, ProductivityService
 from app.ui.background import ControllerResult
 from app.ui.execution_controller import ExecutionController
 
@@ -44,6 +44,30 @@ class ProductivityController:
                 time_bucket=time_bucket,
                 original_estimate_minutes=original_estimate_minutes,
                 filters=filters,
+            )
+        )
+
+    def predict_duration_comparison(
+        self,
+        *,
+        category: str,
+        tag: str,
+        priority: int,
+        planned_start: int,
+        original_estimate_minutes: float,
+        filters: ObservationFilters | None = None,
+        data_dir: str | None = None,
+    ) -> ControllerResult[DurationPredictionComparison]:
+        """Side-by-side median-vs-ML comparison for the same task; does not change which predictor is active."""
+        return self._call(
+            lambda: self._service.predict_duration_comparison(
+                category=category,
+                tag=tag,
+                priority=priority,
+                planned_start=planned_start,
+                original_estimate_minutes=original_estimate_minutes,
+                filters=filters,
+                data_dir=data_dir,
             )
         )
 

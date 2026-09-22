@@ -1,0 +1,5 @@
+date,name,category,tag,fixed,start_time,end_time,duration,priority,dependencies
+1,Sleep,sleep,fixed,true,0,480,480,0,
+1,Study Session,study,focus,false,540,660,60,8,
+1,Study Session,study,focus,false,780,900,60,6,
+1,Follow Up Task,study,focus,false,960,1020,30,7,Study Session

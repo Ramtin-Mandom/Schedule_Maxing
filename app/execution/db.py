@@ -104,7 +104,12 @@ def get_connection(db_path: str | Path | None = None) -> sqlite3.Connection:
     resolved_path = resolve_db_path(db_path)
     resolved_path.parent.mkdir(parents=True, exist_ok=True)
 
-    connection = sqlite3.connect(str(resolved_path))
+    # The desktop UI opens this connection once on the Tk main thread but
+    # reads/writes it from background worker threads (see
+    # app.ui.background.run_in_background), so the default same-thread
+    # affinity check must be disabled. ExecutionRepository is responsible for
+    # serializing actual access so this stays safe.
+    connection = sqlite3.connect(str(resolved_path), check_same_thread=False)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
 

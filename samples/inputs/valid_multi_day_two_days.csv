@@ -1,0 +1,13 @@
+date,name,category,tag,fixed,start_time,end_time,duration,priority,dependencies
+1,Sleep,sleep,fixed,true,0,480,480,0,
+1,Breakfast,food,fixed,true,480,510,30,0,
+1,Lunch,food,fixed,true,720,780,60,0,
+1,Dinner,food,fixed,true,1080,1140,60,0,
+1,Research Topic,study,writing,false,540,720,90,8,
+1,Write Draft,study,writing,false,780,1020,120,9,Research Topic
+2,Sleep,sleep,fixed,true,0,480,480,0,
+2,Breakfast,food,fixed,true,480,510,30,0,
+2,Lunch,food,fixed,true,720,780,60,0,
+2,Dinner,food,fixed,true,1080,1140,60,0,
+2,Edit Draft,study,writing,false,540,720,90,9,
+2,Submit Assignment,study,writing,false,780,900,30,10,Edit Draft

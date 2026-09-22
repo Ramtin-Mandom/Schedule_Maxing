@@ -1,0 +1,4 @@
+date,name,category,tag,fixed,start_time,end_time,duration,priority,dependencies
+1,Sleep,sleep,fixed,true,0,480,480,0,
+1,Work Block,work,fixed,true,480,1020,540,0,
+1,Dinner,food,fixed,true,1080,1140,60,0,
