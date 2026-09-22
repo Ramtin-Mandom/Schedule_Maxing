@@ -1,0 +1,45 @@
+date,name,category,tag,fixed,start_time,end_time,duration,priority,dependencies
+1,Sleep,sleep,fixed,true,0,480,480,0,
+1,Breakfast,food,fixed,true,480,510,30,0,
+1,Lunch,food,fixed,true,720,780,60,0,
+1,Dinner,food,fixed,true,1080,1140,60,0,
+1,Task 1-00,entertainment,prep,false,930,1050,30,5,
+1,Task 1-01,food,,false,510,690,30,8,
+1,Task 1-02,other,chore,false,870,960,120,9,Task 1-00
+1,Task 1-03,work,review,false,660,840,30,7,Task 1-01
+1,Task 1-04,exercise,prep,false,870,930,120,9,Task 1-00
+1,Task 1-05,other,prep,false,780,900,45,1,
+1,Task 1-06,study,focus,false,600,780,120,10,
+1,Task 1-07,food,,false,660,750,60,6,
+1,Task 1-08,food,creative,false,840,930,60,1,
+1,Task 1-09,entertainment,review,false,780,960,30,9,
+1,Task 1-10,study,,false,900,960,60,7,
+1,Task 1-11,food,creative,false,600,780,30,3,
+1,Task 1-12,study,review,false,600,690,30,3,
+1,Task 1-13,entertainment,,false,750,930,60,2,
+1,Task 1-14,entertainment,focus,false,570,660,90,2,
+1,Task 1-15,entertainment,chore,false,750,930,90,4,
+1,Task 1-16,exercise,focus,false,660,750,60,7,
+1,Task 1-17,entertainment,admin,false,780,870,45,1,
+1,Task 1-18,other,chore,false,720,780,45,7,
+1,Task 1-19,study,focus,false,1020,1080,30,2,
+1,Task 1-20,work,,false,870,960,60,4,Task 1-03
+1,Task 1-21,food,chore,false,690,870,45,2,
+1,Task 1-22,errand,review,false,810,930,30,3,Task 1-04
+1,Task 1-23,work,admin,false,690,780,120,10,Task 1-08
+1,Task 1-24,other,review,false,960,1080,90,5,Task 1-07
+1,Task 1-25,errand,prep,false,780,960,30,4,Task 1-15
+1,Task 1-26,other,,false,1020,1200,90,5,
+1,Task 1-27,study,admin,false,630,690,120,10,
+1,Task 1-28,work,admin,false,990,1050,30,4,Task 1-15
+1,Task 1-29,exercise,review,false,810,990,90,7,
+1,Task 1-30,work,review,false,810,930,60,8,
+1,Task 1-31,entertainment,,false,810,930,30,7,
+1,Task 1-32,other,,false,660,780,45,4,
+1,Task 1-33,other,creative,false,990,1050,90,4,
+1,Task 1-34,other,prep,false,690,780,60,3,Task 1-32
+1,Task 1-35,errand,chore,false,990,1080,45,5,
+1,Task 1-36,exercise,prep,false,600,780,30,9,
+1,Task 1-37,work,chore,false,540,720,60,2,
+1,Task 1-38,errand,review,false,510,690,90,9,
+1,Task 1-39,study,admin,false,930,990,30,5,

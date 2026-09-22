@@ -1,0 +1,72 @@
+# config/task_preference.yaml
+#
+# The canonical, auto-discovered reward-configuration template for Schedule
+# Maxing. See app/reward.py's module docstring for the full discovery
+# precedence. In short: an explicit config_path always wins; otherwise this
+# file (config/task_preference.yaml, singular) is used when present;
+# otherwise a recognized legacy filename in config/ (task_preferences.yaml,
+# task_prefrence.yaml, task_prefrence.yml, task_preference.yml) is used for
+# migration compatibility; otherwise RewardSettings' built-in defaults apply.
+#
+# Discovery is anchored to this project's own directory, not the current
+# working directory, and does not walk ancestor or home directories --
+# editing this file affects `python -m app.main` / `python -m app.app`
+# regardless of where they are run from.
+
+weights:
+  importance: 5
+  time_bonus: 3
+  tag_relation: 2
+  fragmentation_penalty: -4
+  category_bonus: 1
+
+preference:
+  max_time_distance_minutes: 240
+  same_tag_window_minutes: 120
+  min_gap_between_tasks_minutes: 30
+
+# Multiplies the priority reward by category. A multiplier of 1.0 leaves
+# scoring unchanged for that category (see app/reward.py's
+# _priority_score). The five primary categories are listed here with
+# neutral (1.0) defaults -- edit them to express your own preferences.
+# Any other category name (including older sample categories such as
+# "study"/"food"/"exercise") remains valid and simply falls back to a
+# neutral 1.0 multiplier; it is never silently remapped into one of these
+# five.
+category_weights:
+  health: 1.0
+  enjoyment: 1.0
+  study: 1.0
+  work: 1.0
+  chores: 1.0
+
+# Optional exact task multipliers, keyed by task name exactly as it
+# appears in your CSV/input. Empty by default -- add your own overrides
+# below, e.g.:
+#   task_weights:
+#     Study Math: 1.3
+task_weights: {}
+
+# Optional preferred windows for exact task names. Times are minutes from
+# midnight. Empty by default -- add your own overrides below, e.g.:
+#   task_time_windows:
+#     Study Math:
+#       start_time: 540
+#       end_time: 720
+task_time_windows: {}
+
+# Optional fallback windows by category. Times are minutes from midnight.
+# Empty by default -- add your own overrides below, e.g.:
+#   category_time_windows:
+#     study:
+#       start_time: 540
+#       end_time: 1020
+category_time_windows: {}
+
+# Tags that should be rewarded when placed near each other. Empty by
+# default -- add your own relations below, e.g.:
+#   tag_relations:
+#     math:
+#       - exam
+#       - homework
+tag_relations: {}

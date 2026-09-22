@@ -1,0 +1,20 @@
+date,name,category,tag,fixed,start_time,end_time,duration,priority,dependencies
+1,Sleep,sleep,fixed,true,0,480,480,0,
+1,Breakfast,food,fixed,true,480,510,30,0,
+1,Lunch,food,fixed,true,720,780,60,0,
+1,Dinner,food,fixed,true,1080,1140,60,0,
+1,Task 1-00,entertainment,creative,false,720,810,30,1,
+1,Task 1-01,entertainment,review,false,1050,1230,45,2,Task 1-00
+1,Task 1-02,food,focus,false,1020,1110,45,4,
+1,Task 1-03,work,,false,1050,1170,120,7,
+1,Task 1-04,entertainment,chore,false,810,930,30,3,Task 1-02
+1,Task 1-05,errand,review,false,840,960,30,2,
+1,Task 1-06,food,review,false,870,930,30,8,
+1,Task 1-07,food,admin,false,570,630,120,6,
+1,Task 1-08,other,admin,false,600,780,60,2,Task 1-05
+1,Task 1-09,exercise,admin,false,750,810,45,6,
+1,Task 1-10,entertainment,admin,false,660,840,45,9,
+1,Task 1-11,entertainment,social,false,540,630,120,4,
+1,Task 1-12,exercise,review,false,690,810,60,7,Task 1-07
+1,Task 1-13,work,creative,false,630,720,90,8,
+1,Task 1-14,entertainment,chore,false,1050,1230,120,5,
