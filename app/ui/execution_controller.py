@@ -118,6 +118,10 @@ class ExecutionController:
             lambda: self._service.get_or_create_canonical_execution(task, scheduled_task, user_id=user_id)
         )
 
+    def find_execution_for_placement(self, scheduled_task_id: uuid.UUID) -> ControllerResult[TaskExecution | None]:
+        """Look up (never create) the execution of a saved placement -- used to restore status on selection."""
+        return self._call(lambda: self._service.find_execution_for_placement(scheduled_task_id))
+
     def create_canonical_execution(
         self,
         task: CanonicalTask,

@@ -19,8 +19,10 @@ from app.execution.db import get_connection
 from app.execution.repository import ExecutionRepository
 from app.execution.service import ExecutionService
 from app.optimizer import generate_day_schedule
+from app.planning.application import PlanningService
 from app.planning.models import DaySchedule, DayScheduleOutput, LocalTimeWindow, Task, TaskRegistry
 from app.planning.preferences import resolve_day_preferences
+from app.planning.repository import PlanningRepository
 from app.productivity.data_prep import build_observations
 from app.productivity.reporting import ProductivityService
 from app.productivity.stats import ProductivityThresholds
@@ -61,9 +63,15 @@ def test_duplicate_names_stay_distinct_from_generation_through_execution(tmp_pat
     assert placements_by_task_id[task_a.id].id != placements_by_task_id[task_b.id].id
 
     # Both placements flow into distinct executions, identified by
-    # task_id/scheduled_task_id -- never by the (identical) task name.
+    # task_id/scheduled_task_id -- never by the (identical) task name. The
+    # tasks and the generated placements are persisted first (a new
+    # execution may only link to persisted planning entities).
     connection = get_connection(tmp_path / "executions.db")
     try:
+        planning = PlanningService(PlanningRepository(connection))
+        planning.save_tasks([task_a, task_b])
+        planning.replace_placements(DAY, DAY, output.placements)
+
         repository = ExecutionRepository(connection)
         service = ExecutionService(repository)
 
@@ -89,9 +97,10 @@ def test_duplicate_names_stay_distinct_from_generation_through_execution(tmp_pat
 
 
 def test_full_pipeline_generation_execution_and_productivity_report(tmp_path):
-    """Canonical DaySchedule -> generate_day_schedule -> canonical
-    execution -> start/complete -> ProductivityService report, as one
-    coherent flow using only public APIs from each milestone."""
+    """Canonical DaySchedule -> generate_day_schedule -> persisted
+    tasks/placements -> canonical execution -> start/complete ->
+    ProductivityService report, as one coherent flow using only public APIs
+    from each milestone."""
     task = _make_task("Deep Work", category="work", priority=8)
     registry = TaskRegistry()
     registry.add(task)
@@ -103,6 +112,10 @@ def test_full_pipeline_generation_execution_and_productivity_report(tmp_path):
 
     connection = get_connection(tmp_path / "executions.db")
     try:
+        planning = PlanningService(PlanningRepository(connection))
+        planning.save_task(task)
+        planning.replace_placements(DAY, DAY, output.placements)
+
         repository = ExecutionRepository(connection)
         clock_time = datetime(2024, 6, 3, 9, 0, tzinfo=timezone.utc)
 

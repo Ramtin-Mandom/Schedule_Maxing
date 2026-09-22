@@ -14,6 +14,7 @@ import pytest
 from app.execution.repository import ExecutionRepository
 from app.execution.service import ExecutionService
 from app.planning.models import LocalTimeWindow, ScheduledTask, Task
+from app.planning.repository import PlanningRepository
 from app.productivity.data_prep import build_observations
 from app.productivity.exporters import export_report_to_csv, export_report_to_json
 from app.productivity.reporting import ProductivityService
@@ -31,21 +32,36 @@ class FakeClock:
         self._current += delta
 
 
-def _make_task(**overrides) -> Task:
-    defaults = dict(
-        name="Study Math",
-        category="study",
-        tags=["math"],
-        estimated_duration_minutes=60,
-        priority=8,
-        preferred_time_window=LocalTimeWindow(start_minute=540, end_minute=660),
-    )
-    defaults.update(overrides)
-    return Task(**defaults)
+@pytest.fixture
+def make_task(planning_repository: PlanningRepository):
+    """Build and persist a canonical Task (a new execution may only link to a
+    persisted task since schema v3 -- see app/execution/db.py)."""
+
+    def _make(**overrides) -> Task:
+        defaults = dict(
+            name="Study Math",
+            category="study",
+            tags=["math"],
+            estimated_duration_minutes=60,
+            priority=8,
+            preferred_time_window=LocalTimeWindow(start_minute=540, end_minute=660),
+        )
+        defaults.update(overrides)
+        task = Task(**defaults)
+        planning_repository.upsert_task(task)
+        return task
+
+    return _make
 
 
-def _make_placement(task: Task, *, start: datetime, end: datetime, tz: str = "America/New_York") -> ScheduledTask:
-    return ScheduledTask(task_id=task.id, planned_date=start.date(), timezone=tz, planned_start=start, planned_end=end)
+@pytest.fixture
+def make_placement(planning_repository: PlanningRepository):
+    def _make(task: Task, *, start: datetime, end: datetime, tz: str = "America/New_York") -> ScheduledTask:
+        placement = ScheduledTask(task_id=task.id, planned_date=start.date(), timezone=tz, planned_start=start, planned_end=end)
+        planning_repository.upsert_placement(placement)
+        return placement
+
+    return _make
 
 
 @pytest.fixture
@@ -60,13 +76,13 @@ def service(repository: ExecutionRepository, clock: FakeClock) -> ExecutionServi
 
 def test_canonical_observation_uses_planned_date_for_weekday_not_created_at(
     service: ExecutionService, repository: ExecutionRepository, clock: FakeClock
-) -> None:
+, make_task, make_placement) -> None:
     # canonical_planned_date is a Saturday (2024-06-08); created_at (the
     # clock, when the execution is created) is a Monday (2024-06-03). The
     # canonical basis must report the Saturday, not the created_at Monday.
-    task = _make_task()
+    task = make_task()
     planned_start = datetime(2024, 6, 8, 13, 0, tzinfo=timezone.utc)  # Saturday 09:00 America/New_York
-    placement = _make_placement(task, start=planned_start, end=planned_start + timedelta(hours=1))
+    placement = make_placement(task, start=planned_start, end=planned_start + timedelta(hours=1))
     service.create_canonical_execution(task, placement)
 
     [observation] = build_observations(repository)
@@ -93,11 +109,11 @@ def test_legacy_observation_falls_back_to_created_at_weekday(
 
 def test_canonical_observation_time_bucket_uses_local_wall_clock(
     service: ExecutionService, repository: ExecutionRepository
-) -> None:
-    task = _make_task()
+, make_task, make_placement) -> None:
+    task = make_task()
     # 13:00 UTC == 09:00 America/New_York -> morning bucket.
     planned_start = datetime(2024, 6, 3, 13, 0, tzinfo=timezone.utc)
-    placement = _make_placement(task, start=planned_start, end=planned_start + timedelta(hours=1), tz="America/New_York")
+    placement = make_placement(task, start=planned_start, end=planned_start + timedelta(hours=1), tz="America/New_York")
     service.create_canonical_execution(task, placement)
 
     [observation] = build_observations(repository)
@@ -108,8 +124,8 @@ def test_canonical_observation_time_bucket_uses_local_wall_clock(
 
 def test_cancelled_is_terminal_but_not_completed_or_skipped(
     service: ExecutionService, repository: ExecutionRepository
-) -> None:
-    task = _make_task()
+, make_task) -> None:
+    task = make_task()
     execution = service.create_canonical_execution(task)
     service.cancel(execution.id)
 
@@ -123,16 +139,16 @@ def test_cancelled_is_terminal_but_not_completed_or_skipped(
 
 def test_cancelled_dilutes_completion_and_skip_rate_denominator(
     service: ExecutionService, repository: ExecutionRepository
-) -> None:
+, make_task) -> None:
     from app.productivity.stats import compute_segment_stats
 
     # 1 completed, 1 cancelled -> terminal_count=2, completion_rate=0.5, not 1.0.
-    task = _make_task(name="Completed Task")
+    task = make_task(name="Completed Task")
     execution = service.create_canonical_execution(task)
     service.start(execution.id)
     service.complete(execution.id)
 
-    cancelled_task = _make_task(name="Cancelled Task")
+    cancelled_task = make_task(name="Cancelled Task")
     cancelled_execution = service.create_canonical_execution(cancelled_task)
     service.cancel(cancelled_execution.id)
 
@@ -147,7 +163,7 @@ def test_cancelled_dilutes_completion_and_skip_rate_denominator(
 
 def test_mixed_legacy_and_canonical_records_in_one_report(
     service: ExecutionService, repository: ExecutionRepository, clock: FakeClock, tmp_path: Path
-) -> None:
+, make_task, make_placement) -> None:
     legacy_execution = service.create_execution(
         task_name="Legacy Study", category="study", tag="math",
         planned_date=1, planned_start=540, planned_end=600, planned_duration=60, priority=5,
@@ -156,9 +172,9 @@ def test_mixed_legacy_and_canonical_records_in_one_report(
     clock.advance(timedelta(minutes=45))
     service.complete(legacy_execution.id)
 
-    task = _make_task(name="Canonical Study")
+    task = make_task(name="Canonical Study")
     planned_start = datetime(2024, 6, 4, 13, 0, tzinfo=timezone.utc)
-    placement = _make_placement(task, start=planned_start, end=planned_start + timedelta(hours=1))
+    placement = make_placement(task, start=planned_start, end=planned_start + timedelta(hours=1))
     canonical_execution = service.create_canonical_execution(task, placement)
     service.start(canonical_execution.id)
     clock.advance(timedelta(minutes=50))

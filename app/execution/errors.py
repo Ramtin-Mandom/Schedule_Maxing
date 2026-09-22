@@ -48,3 +48,15 @@ class InvalidFeedbackError(ExecutionError):
 
     def __init__(self, message: str) -> None:
         super().__init__(message)
+
+
+class ExecutionLinkError(ExecutionError):
+    """
+    Raised when an execution would be linked to a task/placement that is not
+    persisted, or to a placement belonging to a different task, or when a
+    write would change an execution's (immutable) task_id/scheduled_task_id.
+    See app/execution/db.py's "Execution <-> planning links" notes.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)

@@ -1,31 +1,41 @@
 """
-Modern CustomTkinter UI for the schedule optimizer.
-
-Place this file inside your project `app/` folder as:
-
-    app/ui_app.py
+Modern CustomTkinter desktop UI for the schedule optimizer.
 
 Run from the project root with:
 
-    python -m app.ui_app
+    python -m app.app
 
-Install the extra UI dependency first:
+Data flow (Milestone 2): every page is backed by the application's SQLite
+database. A widget callback calls a Tk-free presenter
+(app/ui/schedule_page_controller.py), which goes through PlanningController
+-> PlanningService -> repository -> SQLite; the page is then redrawn from a
+fresh read of what was committed. There is no widget-owned task collection:
+tasks, fixed blocks, and generated placements are loaded from SQLite at
+startup and after every change.
 
-    pip install customtkinter
-
-This is still UI-only:
-- It builds Task, FixedBlock, TimeWindow, and DaySchedule objects.
-- It validates user input before accepting tasks.
-- It calls the existing optimizer function.
-- It displays scheduled and unscheduled tasks.
-- It supports CSV upload and task removal.
+- Startup opens the one shared database connection (app/ui/app_services.py).
+  If it cannot be opened, the app shows the error instead of a scheduler
+  whose edits would never be saved.
+- Tasks and fixed blocks are created, edited, and deleted by UUID; the
+  dependency picker and row selection use UUIDs, so duplicate names work.
+- Each page shows real calendar dates from an explicit, editable start date,
+  in the configured timezone (config.settings.DEFAULT_TIMEZONE).
+- "Make Schedule" allocates the page's dates and runs the canonical day
+  scheduler once per date (app.planning.service.generate_selected_day), then
+  saves the whole range in one transaction. Greedy Optimizer v1
+  (app.optimizer.optimize_day_schedule) remains the legacy/CLI baseline and
+  is unchanged.
+- The Execute tab tracks saved placements by task/placement id.
+- Closing waits for background work, then closes the database.
 """
 
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-from typing import Callable, Literal
+from datetime import date
+from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
+from typing import Callable
 
 try:
     import customtkinter as ctk
@@ -35,53 +45,34 @@ except ImportError as error:  # pragma: no cover - runtime dependency message
         "pip install customtkinter"
     ) from error
 
-from app.models import (
-    Task,
-    FixedBlock,
-    DaySchedule,
-    TimeWindow,
-    DayScheduleOutput,
-    ScheduledTask,
-    UnscheduledTask,
-)
-from app.constraints import does_overlap
-from app.optimizer import combine_fixed_and_optimized_scheduled_tasks
-from app.data_processor import load_schedule_from_csv
-from config import settings
-from config.settings import (
-    DEFAULT_DAY_START,
-    DEFAULT_DAY_END,
-    TIME_SLOT_MINUTES,
-)
-
-from app.execution.db import get_connection
-from app.execution.repository import ExecutionRepository
-from app.execution.service import ExecutionService
-from app.productivity.reporting import ProductivityService
+from app.planning.csv_import import ImportMode
+from app.ui.app_services import AppServices, describe_startup_failure, open_app_services
+from app.ui.background import ControllerResult, run_in_background
 from app.ui.duration_suggestion import DurationSuggestionWidget, SuggestionContext
 from app.ui.execution_controller import ExecutionController
-from app.ui.execution_panel import ExecutableTask, ExecutionPanel
+from app.ui.execution_panel import ExecutionPanel
 from app.ui.productivity_controller import ProductivityController
 from app.ui.productivity_page import ProductivityPage
-
+from app.ui.schedule_page_controller import (
+    CATEGORY_OPTIONS,
+    FIXED_OPTIONS,
+    CanvasItem,
+    FormState,
+    PageSnapshot,
+    ResetScope,
+    RowRef,
+    SchedulePageController,
+    ScheduleRun,
+    TaskRow,
+    UnscheduledRow,
+    default_anchor,
+    format_window,
+)
+from config import settings
 
 # -----------------------------------------------------------------------------
 # Constants / Theme
 # -----------------------------------------------------------------------------
-
-CATEGORY_OPTIONS = [
-    "study",
-    "sleep",
-    "food",
-    "exercise",
-    "work",
-    "event",
-    "entertainment",
-    "errand",
-    "other",
-]
-
-FIXED_OPTIONS = ["False", "True"]
 
 CATEGORY_COLORS = {
     "study": "#7CC8FF",
@@ -130,79 +121,7 @@ PIXELS_PER_HOUR = 56
 DAY_HEIGHT = 24 * PIXELS_PER_HOUR
 MINUTES_PER_DAY = 24 * 60
 
-TaskKind = Literal["fixed", "flexible"]
-
-
-# -----------------------------------------------------------------------------
-# Small Helpers
-# -----------------------------------------------------------------------------
-
-def minutes_to_hhmm(minutes: int) -> str:
-    minutes = max(0, min(MINUTES_PER_DAY, minutes))
-    hour = minutes // 60
-    minute = minutes % 60
-    if hour == 24:
-        return "24:00"
-    return f"{hour:02d}:{minute:02d}"
-
-
-def format_window(start_time: int, end_time: int) -> str:
-    return f"{minutes_to_hhmm(start_time)} - {minutes_to_hhmm(end_time)}"
-
-
-def parse_dependency_string(raw_dependencies: str) -> list[str]:
-    if not raw_dependencies.strip():
-        return []
-
-    separators = [";", ",", "-"]
-    for separator in separators:
-        if separator in raw_dependencies:
-            return [part.strip() for part in raw_dependencies.split(separator) if part.strip()]
-
-    return [raw_dependencies.strip()]
-
-
-def get_unscheduled_name(task: UnscheduledTask) -> str:
-    return str(getattr(task, "name", str(task)))
-
-
-def get_unscheduled_reason(task: UnscheduledTask) -> str:
-    return str(getattr(task, "reason", "unknown"))
-
-
-# -----------------------------------------------------------------------------
-# State
-# -----------------------------------------------------------------------------
-
-class ScheduleState:
-    """Stores UI-side schedule data before and after optimization."""
-
-    def __init__(self, number_of_days: int) -> None:
-        self.number_of_days = number_of_days
-        self.days: dict[int, DaySchedule] = {
-            day: DaySchedule(
-                time_window=TimeWindow(
-                    start_time=DEFAULT_DAY_START,
-                    end_time=DEFAULT_DAY_END,
-                ),
-                fixed_blocks=[],
-                tasks=[],
-            )
-            for day in range(1, number_of_days + 1)
-        }
-        self.outputs: dict[int, DayScheduleOutput] = {}
-
-    def reset(self) -> None:
-        self.__init__(self.number_of_days)
-
-    def count_fixed(self) -> int:
-        return sum(len(day.fixed_blocks) for day in self.days.values())
-
-    def count_flexible(self) -> int:
-        return sum(len(day.tasks) for day in self.days.values())
-
-    def count_all_tasks(self) -> int:
-        return self.count_fixed() + self.count_flexible()
+PAGE_DAYS = {"day": 1, "week": 7, "month": 30}
 
 
 # -----------------------------------------------------------------------------
@@ -276,7 +195,11 @@ class StatPill(ctk.CTkFrame):
 # -----------------------------------------------------------------------------
 
 class TaskForm(Card):
-    """Left-side task entry form."""
+    """
+    Left-side task entry form, used both to add and (in edit mode) to change
+    a task or fixed block. It only collects raw field values plus the chosen
+    dependency task ids; validation and saving happen in the presenter.
+    """
 
     def __init__(
         self,
@@ -284,6 +207,8 @@ class TaskForm(Card):
         mode_name: str,
         number_of_days: int,
         on_add_task: Callable[[dict[str, str]], None],
+        on_cancel_edit: Callable[[], None],
+        on_pick_dependencies: Callable[[], None],
         productivity_controller: ProductivityController | None = None,
     ) -> None:
         super().__init__(parent)
@@ -291,6 +216,8 @@ class TaskForm(Card):
         self.mode_name = mode_name
         self.number_of_days = number_of_days
         self.on_add_task = on_add_task
+        self.on_cancel_edit = on_cancel_edit
+        self.on_pick_dependencies = on_pick_dependencies
         self.productivity_controller = productivity_controller
 
         self.name_var = tk.StringVar()
@@ -302,7 +229,9 @@ class TaskForm(Card):
         self.end_var = tk.StringVar()
         self.duration_var = tk.StringVar()
         self.priority_var = tk.StringVar()
-        self.dependencies_var = tk.StringVar()
+        self.dependencies_text = tk.StringVar(value="None")
+        self.dependency_ids: list = []
+        self.editing = False
 
         self._build_form()
         self._sync_fixed_fields()
@@ -310,11 +239,12 @@ class TaskForm(Card):
     def _build_form(self) -> None:
         self.columnconfigure(0, weight=1)
 
-        SectionTitle(
+        self.title = SectionTitle(
             self,
             "Task Input",
             "Add fixed blocks or flexible tasks with preferred windows.",
-        ).grid(row=0, column=0, sticky="ew", padx=18, pady=(18, 10))
+        )
+        self.title.grid(row=0, column=0, sticky="ew", padx=18, pady=(18, 10))
 
         form_body = ctk.CTkFrame(self, fg_color="transparent")
         form_body.grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 10))
@@ -325,7 +255,9 @@ class TaskForm(Card):
         row += 1
 
         if self.mode_name != "day":
-            self._add_entry(form_body, row, f"Day (1-{self.number_of_days})", self.day_var, "1")
+            self._add_entry(
+                form_body, row, f"Day (1-{self.number_of_days}, 1 = start date)", self.day_var, "1"
+            )
             row += 1
 
         self._add_option_menu(form_body, row, "Category", self.category_var, CATEGORY_OPTIONS)
@@ -384,16 +316,38 @@ class TaskForm(Card):
         else:
             self.duration_suggestion = None
 
-        self.dependencies_entry = self._add_entry(
-            form_body,
-            row,
-            "Dependencies",
-            self.dependencies_var,
-            "Task A - Task B",
+        dependencies = ctk.CTkFrame(form_body, fg_color="transparent")
+        dependencies.grid(row=row, column=0, sticky="ew", pady=(3, 5))
+        dependencies.columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            dependencies,
+            text="Dependencies (pick rows in Added Tasks)",
+            text_color=TEXT_MUTED,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            anchor="w",
+        ).grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 4))
+        ctk.CTkLabel(
+            dependencies,
+            textvariable=self.dependencies_text,
+            text_color=TEXT_PRIMARY,
+            anchor="w",
+            justify="left",
+            wraplength=260,
+        ).grid(row=1, column=0, columnspan=2, sticky="ew")
+        self.pick_dependencies_button = ctk.CTkButton(
+            dependencies, text="Use selected rows", height=30, corner_radius=10,
+            fg_color="#334155", hover_color="#1E293B", command=self.on_pick_dependencies,
         )
+        self.pick_dependencies_button.grid(row=2, column=0, sticky="ew", padx=(0, 4), pady=(4, 0))
+        self.clear_dependencies_button = ctk.CTkButton(
+            dependencies, text="Clear", height=30, corner_radius=10,
+            fg_color="#E2E8F0", hover_color="#CBD5E1", text_color=TEXT_PRIMARY,
+            command=lambda: self.set_dependencies([], []),
+        )
+        self.clear_dependencies_button.grid(row=2, column=1, sticky="ew", padx=(4, 0), pady=(4, 0))
         row += 1
 
-        ctk.CTkButton(
+        self.submit_button = ctk.CTkButton(
             self,
             text="+ Add Task",
             height=44,
@@ -402,7 +356,21 @@ class TaskForm(Card):
             hover_color=ACCENT_HOVER,
             font=ctk.CTkFont(size=14, weight="bold"),
             command=self._submit,
-        ).grid(row=2, column=0, sticky="ew", padx=18, pady=(4, 18))
+        )
+        self.submit_button.grid(row=2, column=0, sticky="ew", padx=18, pady=(4, 8))
+
+        self.cancel_edit_button = ctk.CTkButton(
+            self,
+            text="Cancel Edit",
+            height=34,
+            corner_radius=14,
+            fg_color="#E2E8F0",
+            hover_color="#CBD5E1",
+            text_color=TEXT_PRIMARY,
+            command=self.on_cancel_edit,
+        )
+        self._bottom_spacer = ctk.CTkFrame(self, fg_color="transparent", height=10)
+        self._bottom_spacer.grid(row=3, column=0, pady=(0, 10))
 
     def _add_label(self, parent: tk.Widget, row: int, text: str) -> None:
         ctk.CTkLabel(
@@ -525,15 +493,20 @@ class TaskForm(Card):
 
         self.duration_entry.configure(state=state)
         self.priority_entry.configure(state=state)
-        self.dependencies_entry.configure(state=state)
+        self.pick_dependencies_button.configure(state=state)
+        self.clear_dependencies_button.configure(state=state)
 
         if is_fixed:
             self.duration_var.set("")
             self.priority_var.set("")
-            self.dependencies_var.set("")
+            self.set_dependencies([], [])
 
-    def _submit(self) -> None:
-        values = {
+    def set_dependencies(self, dependency_ids: list, labels: list[str]) -> None:
+        self.dependency_ids = list(dependency_ids)
+        self.dependencies_text.set("; ".join(labels) if labels else "None")
+
+    def values(self) -> dict[str, str]:
+        return {
             "name": self.name_var.get().strip(),
             "day": self.day_var.get().strip(),
             "category": self.category_var.get().strip(),
@@ -543,9 +516,34 @@ class TaskForm(Card):
             "end_time": self.end_var.get().strip(),
             "duration": self.duration_var.get().strip(),
             "priority": self.priority_var.get().strip(),
-            "dependencies": self.dependencies_var.get().strip(),
         }
-        self.on_add_task(values)
+
+    def _submit(self) -> None:
+        self.on_add_task(self.values())
+
+    def enter_edit_mode(self, state: FormState, dependency_labels: list[str]) -> None:
+        values = state.values
+        self.editing = True
+        self.fixed_var.set(values["fixed"])
+        self._sync_fixed_fields()
+        self.name_var.set(values["name"])
+        self.day_var.set(values["day"])
+        self.category_var.set(values["category"] if values["category"] in CATEGORY_OPTIONS else CATEGORY_OPTIONS[-1])
+        self.tag_var.set(values["tag"])
+        self.start_var.set(values["start_time"])
+        self.end_var.set(values["end_time"])
+        self.duration_var.set(values["duration"])
+        self.priority_var.set(values["priority"])
+        self.set_dependencies(state.dependency_ids, dependency_labels)
+        self.fixed_option.configure(state="disabled")  # kind cannot change while editing
+        self.submit_button.configure(text="Save Changes")
+        self.cancel_edit_button.grid(row=3, column=0, sticky="ew", padx=18, pady=(0, 18))
+
+    def exit_edit_mode(self) -> None:
+        self.editing = False
+        self.fixed_option.configure(state="normal")
+        self.submit_button.configure(text="+ Add Task")
+        self.cancel_edit_button.grid_remove()
 
     def clear_fields(self) -> None:
         self.name_var.set("")
@@ -557,7 +555,7 @@ class TaskForm(Card):
         self.end_var.set("")
         self.duration_var.set("")
         self.priority_var.set("")
-        self.dependencies_var.set("")
+        self.set_dependencies([], [])
         self._sync_fixed_fields()
         if self.duration_suggestion is not None:
             self.duration_suggestion.reset()
@@ -600,23 +598,30 @@ class TaskForm(Card):
 # -----------------------------------------------------------------------------
 
 class AddedTasksPanel(ctk.CTkFrame):
-    """Right-side task table."""
+    """Right-side table of the saved tasks/fixed blocks on this page's dates, keyed by UUID."""
 
-    def __init__(self, parent: tk.Widget, on_remove_task: Callable[[], None]) -> None:
+    def __init__(
+        self,
+        parent: tk.Widget,
+        on_remove_task: Callable[[], None],
+        on_edit_task: Callable[[], None],
+    ) -> None:
         super().__init__(parent, fg_color="transparent")
-        self.item_refs: dict[str, tuple[TaskKind, int, int]] = {}
-        self.columnconfigure(0, weight=1)
+        self.item_refs: dict[str, RowRef] = {}
+        self.columnconfigure((0, 1), weight=1)
         self.rowconfigure(1, weight=1)
 
         ctk.CTkLabel(
             self,
-            text="Tasks currently stored in the schedule state.",
+            text="Saved tasks for these dates. Ctrl-click rows to pick dependencies.",
             text_color=TEXT_MUTED,
             anchor="w",
-        ).grid(row=0, column=0, sticky="ew", padx=8, pady=(6, 10))
+            justify="left",
+            wraplength=290,
+        ).grid(row=0, column=0, columnspan=2, sticky="ew", padx=8, pady=(6, 10))
 
         table_frame = ctk.CTkFrame(self, fg_color="#FFFFFF", corner_radius=14, border_color=CARD_BORDER, border_width=1)
-        table_frame.grid(row=1, column=0, sticky="nsew", padx=8)
+        table_frame.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=8)
         table_frame.rowconfigure(0, weight=1)
         table_frame.columnconfigure(0, weight=1)
 
@@ -624,16 +629,16 @@ class AddedTasksPanel(ctk.CTkFrame):
             table_frame,
             columns=("day", "name", "type", "time"),
             show="headings",
-            selectmode="browse",
+            selectmode="extended",
             height=16,
         )
-        self.tree.heading("day", text="Day")
+        self.tree.heading("day", text="Date")
         self.tree.heading("name", text="Task")
         self.tree.heading("type", text="Type")
         self.tree.heading("time", text="Time / Preference")
-        self.tree.column("day", width=48, minwidth=44, anchor="center", stretch=False)
-        self.tree.column("name", width=150, minwidth=110, anchor="w", stretch=True)
-        self.tree.column("type", width=80, minwidth=75, anchor="center", stretch=False)
+        self.tree.column("day", width=74, minwidth=66, anchor="center", stretch=False)
+        self.tree.column("name", width=130, minwidth=100, anchor="w", stretch=True)
+        self.tree.column("type", width=66, minwidth=60, anchor="center", stretch=False)
         self.tree.column("time", width=145, minwidth=125, anchor="center", stretch=False)
 
         y_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
@@ -645,75 +650,67 @@ class AddedTasksPanel(ctk.CTkFrame):
 
         ctk.CTkButton(
             self,
-            text="Remove Selected Task",
+            text="Edit Selected",
+            height=40,
+            corner_radius=14,
+            fg_color=ACCENT,
+            hover_color=ACCENT_HOVER,
+            command=on_edit_task,
+        ).grid(row=2, column=0, sticky="ew", padx=(8, 4), pady=(12, 6))
+
+        ctk.CTkButton(
+            self,
+            text="Remove Selected",
             height=40,
             corner_radius=14,
             fg_color=DANGER,
             hover_color=DANGER_HOVER,
             command=on_remove_task,
-        ).grid(row=2, column=0, sticky="ew", padx=8, pady=(12, 6))
+        ).grid(row=2, column=1, sticky="ew", padx=(4, 8), pady=(12, 6))
 
         ctk.CTkLabel(
             self,
-            text="Removing a task also removes it from the schedule strip.",
+            text="Changes are saved immediately; removing a task also removes its saved schedule entries.",
             text_color=TEXT_MUTED,
             font=ctk.CTkFont(size=12),
             anchor="w",
-        ).grid(row=3, column=0, sticky="ew", padx=8, pady=(0, 8))
+            wraplength=290,
+            justify="left",
+        ).grid(row=3, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 8))
 
     def clear(self) -> None:
         self.item_refs.clear()
         for item_id in self.tree.get_children():
             self.tree.delete(item_id)
 
-    def refresh(self, state: ScheduleState) -> None:
+    def refresh(self, rows: list[TaskRow]) -> None:
+        selected = set(self.tree.selection())
         self.clear()
 
-        for day, day_schedule in state.days.items():
-            for index, block in enumerate(day_schedule.fixed_blocks):
-                item_id = f"fixed-{day}-{index}"
-                self.item_refs[item_id] = ("fixed", day, index)
-                self.tree.insert(
-                    "",
-                    tk.END,
-                    iid=item_id,
-                    values=(
-                        day,
-                        block.name,
-                        "fixed",
-                        format_window(block.time_window.start_time, block.time_window.end_time),
-                    ),
-                    tags=("fixed",),
-                )
+        for row in rows:
+            item_id = f"{row.ref.kind}:{row.ref.id}"
+            self.item_refs[item_id] = row.ref
+            self.tree.insert(
+                "",
+                tk.END,
+                iid=item_id,
+                values=(row.day_label, row.name, row.type_label, row.time_text),
+                tags=("fixed" if row.ref.kind == "block" else "flexible",),
+            )
 
-            for index, task in enumerate(day_schedule.tasks):
-                item_id = f"flexible-{day}-{index}"
-                self.item_refs[item_id] = ("flexible", day, index)
-                self.tree.insert(
-                    "",
-                    tk.END,
-                    iid=item_id,
-                    values=(
-                        day,
-                        task.name,
-                        "flexible",
-                        f"pref {format_window(task.preference_time.start_time, task.preference_time.end_time)}",
-                    ),
-                    tags=("flexible",),
-                )
+        still_there = [item_id for item_id in selected if item_id in self.item_refs]
+        if still_there:
+            self.tree.selection_set(still_there)
 
         self.tree.tag_configure("fixed", foreground="#334155")
         self.tree.tag_configure("flexible", foreground="#1E3A8A")
 
-    def selected_ref(self) -> tuple[TaskKind, int, int] | None:
-        selected = self.tree.selection()
-        if not selected:
-            return None
-        return self.item_refs.get(selected[0])
+    def selected_refs(self) -> list[RowRef]:
+        return [self.item_refs[item_id] for item_id in self.tree.selection() if item_id in self.item_refs]
 
 
 class UnscheduledPanel(ctk.CTkFrame):
-    """Right-side optimizer failure table."""
+    """Right-side table of what the last Make Schedule run could not place."""
 
     def __init__(self, parent: tk.Widget) -> None:
         super().__init__(parent, fg_color="transparent")
@@ -739,10 +736,10 @@ class UnscheduledPanel(ctk.CTkFrame):
             show="headings",
             height=16,
         )
-        self.tree.heading("day", text="Day")
+        self.tree.heading("day", text="Date")
         self.tree.heading("task", text="Task")
         self.tree.heading("reason", text="Reason")
-        self.tree.column("day", width=48, minwidth=44, anchor="center", stretch=False)
+        self.tree.column("day", width=82, minwidth=70, anchor="center", stretch=False)
         self.tree.column("task", width=150, minwidth=110, anchor="w", stretch=True)
         self.tree.column("reason", width=270, minwidth=200, anchor="w", stretch=True)
 
@@ -758,13 +755,14 @@ class UnscheduledPanel(ctk.CTkFrame):
             self.tree.delete(item_id)
         self.empty_text.configure(text="No unscheduled tasks yet. Run Make Schedule to see results.")
 
-    def add_unscheduled_result(self, day: int, task: UnscheduledTask) -> None:
-        self.tree.insert(
-            "",
-            tk.END,
-            values=(day, get_unscheduled_name(task), get_unscheduled_reason(task)),
-        )
-        self.empty_text.configure(text="Some tasks could not be placed. Review the reasons below.")
+    def show(self, rows: list[UnscheduledRow]) -> None:
+        self.clear()
+        for row in rows:
+            self.tree.insert("", tk.END, values=(row.day_label, row.name, row.reason))
+        if rows:
+            self.empty_text.configure(text="Some tasks could not be placed. Review the reasons below.")
+        else:
+            self.empty_text.configure(text="Every task was placed by the last Make Schedule run.")
 
 
 # -----------------------------------------------------------------------------
@@ -772,11 +770,12 @@ class UnscheduledPanel(ctk.CTkFrame):
 # -----------------------------------------------------------------------------
 
 class ScheduleCanvas(Card):
-    """Scrollable visual schedule strips."""
+    """Scrollable visual schedule strips, one per real date of the page."""
 
     def __init__(self, parent: tk.Widget, number_of_days: int) -> None:
         super().__init__(parent)
         self.number_of_days = number_of_days
+        self.dates: list[date] = []
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
 
@@ -784,15 +783,16 @@ class ScheduleCanvas(Card):
         header.grid(row=0, column=0, sticky="ew", padx=18, pady=(16, 6))
         header.columnconfigure(0, weight=1)
 
-        SectionTitle(header, "Schedule Strip", "Preview preferred windows, then run the optimizer.").grid(
+        SectionTitle(header, "Schedule Strip", "Saved schedule, or preferred-window previews before scheduling.").grid(
             row=0, column=0, sticky="ew"
         )
 
         legend = ctk.CTkFrame(header, fg_color="transparent")
         legend.grid(row=0, column=1, sticky="e")
         self._legend_item(legend, "Fixed", CATEGORY_COLORS["fixed"], 0)
-        self._legend_item(legend, "Flexible preview", "#DBEAFE", 1)
-        self._legend_item(legend, "Optimized", ACCENT, 2)
+        self._legend_item(legend, "Preview", "#DBEAFE", 1)
+        self._legend_item(legend, "Scheduled", ACCENT, 2)
+        self._legend_item(legend, "Out of date", WARNING, 3)
 
         canvas_shell = ctk.CTkFrame(self, fg_color=CANVAS_BG, corner_radius=16, border_color=CARD_BORDER, border_width=1)
         canvas_shell.grid(row=1, column=0, sticky="nsew", padx=18, pady=(6, 18))
@@ -831,35 +831,14 @@ class ScheduleCanvas(Card):
         for day in range(1, self.number_of_days + 1):
             self._draw_day_strip(day)
 
-    def draw_state(self, state: ScheduleState) -> None:
-        """Draw fixed tasks and flexible tasks at their preferred windows."""
+    def draw(self, snapshot: PageSnapshot) -> None:
+        """Draw fixed blocks, saved placements (current or out of date), and previews."""
+        self.dates = list(snapshot.dates)
+        self.number_of_days = len(self.dates)
         self.draw_empty()
-        for day, day_schedule in state.days.items():
-            for block in day_schedule.fixed_blocks:
-                task = ScheduledTask(
-                    name=block.name,
-                    category=block.category,
-                    tag="fixed",
-                    time_window=block.time_window,
-                    score=0,
-                )
-                self._draw_task_box(day, task, mode="fixed")
-
-            for task in day_schedule.tasks:
-                preview_task = ScheduledTask(
-                    name=f"{task.name}  · pref",
-                    category=task.category,
-                    tag=task.tag,
-                    time_window=task.preference_time,
-                    score=0,
-                )
-                self._draw_task_box(day, preview_task, mode="preview")
-
-    def draw_outputs(self, outputs: dict[int, DayScheduleOutput]) -> None:
-        self.draw_empty()
-        for day, output in outputs.items():
-            for task in output.scheduled_tasks:
-                self._draw_task_box(day, task, mode="optimized")
+        order = {"fixed": 0, "preview": 1, "stale": 2, "optimized": 3}
+        for item in sorted(snapshot.canvas_items, key=lambda entry: order[entry.mode]):
+            self._draw_task_box(item)
 
     def _day_x(self, day: int) -> int:
         return 78 + (day - 1) * DAY_STRIP_WIDTH
@@ -873,10 +852,11 @@ class ScheduleCanvas(Card):
         y0 = DAY_HEADER_HEIGHT
         y1 = DAY_HEADER_HEIGHT + DAY_HEIGHT
 
+        header = f"{self.dates[day - 1]:%a %b} {self.dates[day - 1].day}" if day <= len(self.dates) else f"Day {day}"
         self.canvas.create_text(
             (x0 + x1) / 2,
             20,
-            text=f"Day {day}",
+            text=header,
             font=("Segoe UI", 11, "bold"),
             fill=TEXT_PRIMARY,
         )
@@ -899,32 +879,30 @@ class ScheduleCanvas(Card):
                     fill=TEXT_MUTED,
                 )
 
-    def _draw_task_box(
-        self,
-        day: int,
-        task: ScheduledTask,
-        mode: Literal["fixed", "preview", "optimized"],
-    ) -> None:
-        x0 = self._day_x(day) + 10
+    def _draw_task_box(self, item: CanvasItem) -> None:
+        x0 = self._day_x(item.day_index) + 10
         x1 = x0 + DAY_STRIP_WIDTH - 40
-        y0 = self._minute_y(task.time_window.start_time) + 3
-        y1 = self._minute_y(task.time_window.end_time) - 3
+        y0 = self._minute_y(item.start_minute) + 3
+        y1 = self._minute_y(item.end_minute) - 3
 
         if y1 - y0 < 18:
             y1 = y0 + 18
 
-        category = task.category if task.category in CATEGORY_COLORS else "other"
+        category = item.category if item.category in CATEGORY_COLORS else "other"
         fill = CATEGORY_COLORS.get(category, CATEGORY_COLORS["other"])
         text_fill = CATEGORY_TEXT_COLORS.get(category, TEXT_PRIMARY)
         outline = "#FFFFFF"
         dash = None
 
-        if mode == "preview":
+        if item.mode == "preview":
             outline = fill
             fill = "#EFF6FF"
             dash = (4, 3)
             text_fill = "#1E3A8A"
-        elif mode == "optimized" and task.score > 0:
+        elif item.mode == "stale":
+            outline = WARNING
+            dash = (6, 3)
+        elif item.mode == "optimized" and item.score > 0:
             outline = "#1D4ED8"
 
         # Soft shadow.
@@ -938,7 +916,7 @@ class ScheduleCanvas(Card):
         self.canvas.create_text(
             (x0 + x1) / 2,
             y0 + box_height * 0.45,
-            text=task.name,
+            text=item.name,
             width=DAY_STRIP_WIDTH - 50,
             font=("Segoe UI", name_font_size, "bold"),
             fill=text_fill,
@@ -949,7 +927,7 @@ class ScheduleCanvas(Card):
             self.canvas.create_text(
                 (x0 + x1) / 2,
                 y1 - 9,
-                text=format_window(task.time_window.start_time, task.time_window.end_time),
+                text=format_window(item.start_minute, item.end_minute),
                 width=DAY_STRIP_WIDTH - 50,
                 font=("Segoe UI", time_font_size),
                 fill=text_fill,
@@ -983,26 +961,83 @@ class ScheduleCanvas(Card):
 
 
 # -----------------------------------------------------------------------------
+# Reset Dialog
+# -----------------------------------------------------------------------------
+
+class ChoiceDialog(ctk.CTkToplevel):
+    """A small modal choice (radio buttons + Continue/Cancel); the page then asks for a final confirmation."""
+
+    def __init__(
+        self,
+        parent: tk.Widget,
+        *,
+        title: str,
+        prompt: str,
+        options: list[tuple[str, str]],
+        note: str,
+        on_choose: Callable[[str], None],
+        danger: bool = False,
+    ) -> None:
+        super().__init__(parent)
+        self.title(title)
+        self.resizable(False, False)
+        self._on_choose = on_choose
+        self.choice_var = tk.StringVar(value=options[0][0])
+
+        ctk.CTkLabel(self, text=prompt, anchor="w").pack(anchor="w", padx=18, pady=(18, 8))
+        for value, label in options:
+            ctk.CTkRadioButton(self, text=label, variable=self.choice_var, value=value).pack(anchor="w", padx=18, pady=4)
+        ctk.CTkLabel(self, text=note, text_color=TEXT_MUTED, anchor="w", justify="left", wraplength=420).pack(
+            anchor="w", padx=18, pady=(8, 4)
+        )
+
+        buttons = ctk.CTkFrame(self, fg_color="transparent")
+        buttons.pack(fill="x", padx=18, pady=(8, 18))
+        ctk.CTkButton(buttons, text="Cancel", fg_color="#E2E8F0", hover_color="#CBD5E1",
+                      text_color=TEXT_PRIMARY, command=self.destroy).pack(side="right", padx=(8, 0))
+        ctk.CTkButton(
+            buttons, text="Continue...",
+            fg_color=DANGER if danger else ACCENT, hover_color=DANGER_HOVER if danger else ACCENT_HOVER,
+            command=self._choose,
+        ).pack(side="right")
+
+        self.transient(parent.winfo_toplevel())
+        self.after(50, self.grab_set)
+
+    def _choose(self) -> None:
+        choice = self.choice_var.get()
+        self.destroy()
+        self._on_choose(choice)
+
+
+# -----------------------------------------------------------------------------
 # Schedule Page
 # -----------------------------------------------------------------------------
 
 class SchedulePage(ctk.CTkFrame):
-    """Reusable page for day, week, and month scheduling."""
+    """
+    Reusable page for day, week, and month scheduling. Every callback
+    delegates to its SchedulePageController and redraws from the snapshot
+    it returns (always a fresh read of committed SQLite state).
+    """
 
     def __init__(
         self,
         parent: tk.Widget,
         mode_name: str,
-        number_of_days: int,
+        page_controller: SchedulePageController,
         execution_controller: ExecutionController | None = None,
         productivity_controller: ProductivityController | None = None,
     ) -> None:
         super().__init__(parent, fg_color=APP_BG)
         self.mode_name = mode_name
-        self.number_of_days = number_of_days
-        self.state = ScheduleState(number_of_days)
+        self.page_controller = page_controller
+        self.number_of_days = page_controller.number_of_days
         self.execution_controller = execution_controller
         self.productivity_controller = productivity_controller
+        self.snapshot: PageSnapshot | None = None
+        self._editing: RowRef | None = None
+        self._busy = False
 
         self.columnconfigure(0, weight=0, minsize=360)
         self.columnconfigure(1, weight=1)
@@ -1013,7 +1048,7 @@ class SchedulePage(ctk.CTkFrame):
         self._build_left_panel()
         self._build_schedule_canvas()
         self._build_right_panel()
-        self.refresh_all()
+        self.reload()
 
     def _build_header(self) -> None:
         header = ctk.CTkFrame(self, fg_color="transparent")
@@ -1029,16 +1064,27 @@ class SchedulePage(ctk.CTkFrame):
             anchor="w",
         ).grid(row=0, column=0, sticky="w")
 
+        range_bar = ctk.CTkFrame(header, fg_color="transparent")
+        range_bar.grid(row=1, column=0, sticky="w", pady=(3, 0))
         ctk.CTkLabel(
-            header,
-            text="Build a schedule, preview task windows, upload CSV data, then optimize.",
+            range_bar,
+            text="Date:" if self.mode_name == "day" else "Start date:",
             font=ctk.CTkFont(size=13),
             text_color=TEXT_MUTED,
-            anchor="w",
-        ).grid(row=1, column=0, sticky="w", pady=(3, 0))
+        ).pack(side="left")
+        self.start_date_var = tk.StringVar(value=self.page_controller.anchor_date.isoformat())
+        ctk.CTkEntry(range_bar, textvariable=self.start_date_var, width=110, height=30).pack(side="left", padx=(6, 4))
+        ctk.CTkButton(range_bar, text="Go", width=44, height=30, command=self.apply_start_date).pack(side="left")
+        self.range_label = ctk.CTkLabel(range_bar, text="", font=ctk.CTkFont(size=13), text_color=TEXT_MUTED)
+        self.range_label.pack(side="left", padx=(10, 0))
+
+        self.status_label = ctk.CTkLabel(
+            header, text="", font=ctk.CTkFont(size=12), text_color=TEXT_MUTED, anchor="w"
+        )
+        self.status_label.grid(row=2, column=0, sticky="w", pady=(2, 0))
 
         stats = ctk.CTkFrame(header, fg_color="transparent")
-        stats.grid(row=0, column=1, rowspan=2, sticky="e")
+        stats.grid(row=0, column=1, rowspan=3, sticky="e")
         self.total_pill = StatPill(stats, "Total", "0", ACCENT)
         self.fixed_pill = StatPill(stats, "Fixed", "0", "#475569")
         self.flex_pill = StatPill(stats, "Flexible", "0", SUCCESS)
@@ -1055,7 +1101,9 @@ class SchedulePage(ctk.CTkFrame):
             self.left_panel,
             mode_name=self.mode_name,
             number_of_days=self.number_of_days,
-            on_add_task=self.add_task,
+            on_add_task=self.submit_task,
+            on_cancel_edit=self.cancel_edit,
+            on_pick_dependencies=self.use_selected_as_dependencies,
             productivity_controller=self.productivity_controller,
         )
         self.form.grid(row=0, column=0, sticky="ew", pady=(0, 14))
@@ -1063,11 +1111,11 @@ class SchedulePage(ctk.CTkFrame):
         controls = Card(self.left_panel)
         controls.grid(row=1, column=0, sticky="ew")
         controls.columnconfigure((0, 1), weight=1)
-        SectionTitle(controls, "Controls", "Run optimization or load a CSV schedule.").grid(
+        SectionTitle(controls, "Controls", "Schedule, import, export, or clear these dates.").grid(
             row=0, column=0, columnspan=2, sticky="ew", padx=18, pady=(18, 12)
         )
 
-        ctk.CTkButton(
+        self.make_schedule_button = ctk.CTkButton(
             controls,
             text="Make Schedule",
             height=42,
@@ -1076,28 +1124,40 @@ class SchedulePage(ctk.CTkFrame):
             hover_color=ACCENT_HOVER,
             font=ctk.CTkFont(size=13, weight="bold"),
             command=self.make_schedule,
-        ).grid(row=1, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 10))
+        )
+        self.make_schedule_button.grid(row=1, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 10))
 
-        ctk.CTkButton(
+        self.upload_button = ctk.CTkButton(
             controls,
-            text="Upload CSV",
+            text="Upload CSV...",
             height=38,
             corner_radius=14,
             fg_color="#334155",
             hover_color="#1E293B",
             command=self.upload_csv,
-        ).grid(row=2, column=0, sticky="ew", padx=(18, 6), pady=(0, 18))
+        )
+        self.upload_button.grid(row=2, column=0, sticky="ew", padx=(18, 6), pady=(0, 10))
 
         ctk.CTkButton(
             controls,
-            text="Reset",
+            text="Export CSV...",
+            height=38,
+            corner_radius=14,
+            fg_color="#334155",
+            hover_color="#1E293B",
+            command=self.export_csv,
+        ).grid(row=3, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 18))
+
+        ctk.CTkButton(
+            controls,
+            text="Reset...",
             height=38,
             corner_radius=14,
             fg_color="#E2E8F0",
             hover_color="#CBD5E1",
             text_color=TEXT_PRIMARY,
             command=self.reset,
-        ).grid(row=2, column=1, sticky="ew", padx=(6, 18), pady=(0, 18))
+        ).grid(row=2, column=1, sticky="ew", padx=(6, 18), pady=(0, 10))
 
     def _build_schedule_canvas(self) -> None:
         self.schedule_canvas = ScheduleCanvas(self, self.number_of_days)
@@ -1109,7 +1169,7 @@ class SchedulePage(ctk.CTkFrame):
         right_card.columnconfigure(0, weight=1)
         right_card.rowconfigure(1, weight=1)
 
-        SectionTitle(right_card, "Task Manager", "Review, remove, and inspect optimizer results.").grid(
+        SectionTitle(right_card, "Task Manager", "Review, edit, remove, and inspect optimizer results.").grid(
             row=0, column=0, sticky="ew", padx=18, pady=(18, 10)
         )
 
@@ -1133,7 +1193,9 @@ class SchedulePage(ctk.CTkFrame):
         unscheduled_tab.columnconfigure(0, weight=1)
         unscheduled_tab.rowconfigure(0, weight=1)
 
-        self.added_tasks_panel = AddedTasksPanel(added_tab, on_remove_task=self.remove_selected_task)
+        self.added_tasks_panel = AddedTasksPanel(
+            added_tab, on_remove_task=self.remove_selected_task, on_edit_task=self.edit_selected_task
+        )
         self.unscheduled_panel = UnscheduledPanel(unscheduled_tab)
         self.added_tasks_panel.grid(row=0, column=0, sticky="nsew")
         self.unscheduled_panel.grid(row=0, column=0, sticky="nsew")
@@ -1148,305 +1210,251 @@ class SchedulePage(ctk.CTkFrame):
 
     # ----------------------------- User actions -----------------------------
 
-    def add_task(self, values: dict[str, str]) -> None:
-        try:
-            validated = self._validate_values(values)
-        except ValueError as error:
-            messagebox.showerror("Invalid Task", str(error))
-            return
-
-        day = validated["day"]
-        day_schedule = self.state.days[day]
-
-        if validated["fixed"]:
-            fixed_block = FixedBlock(
-                name=validated["name"],
-                category=validated["category"],
-                time_window=TimeWindow(
-                    start_time=validated["start_time"],
-                    end_time=validated["end_time"],
-                ),
-            )
-            day_schedule.fixed_blocks.append(fixed_block)
+    def reload(self) -> None:
+        """Re-read this page from SQLite (startup, page switch, after any failure)."""
+        result = self.page_controller.load()
+        if result.ok:
+            self._render(result.value)
         else:
-            task = Task(
-                name=validated["name"],
-                date=day,
-                category=validated["category"],
-                tag=validated["tag"],
-                fixed=False,
-                duration=validated["duration"],
-                priority=validated["priority"],
-                preference_time=TimeWindow(
-                    start_time=validated["start_time"],
-                    end_time=validated["end_time"],
-                ),
-                dependencies=validated["dependencies"],
-            )
-            day_schedule.tasks.append(task)
+            messagebox.showerror("Could Not Load Saved Data", result.error or "Unknown error.", parent=self)
 
-        self.state.outputs = {}
+    def on_show(self) -> None:
+        """Called when the page is raised: other pages may have changed shared data."""
+        if not self._busy:
+            self.reload()
+
+    def apply_start_date(self) -> None:
+        if self._refuse_while_busy():
+            return
+        result = self.page_controller.set_anchor_date(self.start_date_var.get())
+        if not result.ok:
+            messagebox.showerror("Invalid Date", result.error or "Unknown error.", parent=self)
+            self.start_date_var.set(self.page_controller.anchor_date.isoformat())
+            return
+        self._leave_edit_mode()
+        self.unscheduled_panel.clear()
+        self._render(result.value)
+
+    def submit_task(self, values: dict[str, str]) -> None:
+        """Add (or, in edit mode, save) the form's task/fixed block through the service."""
+        if self._refuse_while_busy():
+            return
+        result = self.page_controller.submit_task_form(
+            values, dependency_ids=list(self.form.dependency_ids), editing=self._editing
+        )
+        self._render_result(result, "Could Not Save Task")
+        if result.ok:
+            self._leave_edit_mode()
+            self.form.clear_fields()
+
+    # Kept for callers of the previous API name.
+    add_task = submit_task
+
+    def edit_selected_task(self) -> None:
+        if self._refuse_while_busy():
+            return
+        refs = self.added_tasks_panel.selected_refs()
+        if len(refs) != 1:
+            messagebox.showinfo("Edit Task", "Select exactly one task or fixed block to edit.", parent=self)
+            return
+        state = self.page_controller.form_state_for(refs[0])
+        if not state.ok:
+            messagebox.showerror("Could Not Edit", state.error or "Unknown error.", parent=self)
+            self.reload()
+            return
+        labels = self.page_controller.describe_tasks(state.value.dependency_ids)
+        self._editing = refs[0]
+        self.form.enter_edit_mode(state.value, labels.value if labels.ok else [])
+
+    def cancel_edit(self) -> None:
+        self._leave_edit_mode()
         self.form.clear_fields()
-        self.refresh_all()
+
+    def use_selected_as_dependencies(self) -> None:
+        refs = self.added_tasks_panel.selected_refs()
+        task_ids = [ref.id for ref in refs if ref.kind == "task"]
+        if len(task_ids) != len(refs):
+            messagebox.showinfo("Dependencies", "Fixed blocks cannot be dependencies; they were ignored.", parent=self)
+        labels = self.page_controller.describe_tasks(task_ids)
+        if not labels.ok:
+            messagebox.showerror("Dependencies", labels.error or "Unknown error.", parent=self)
+            return
+        self.form.set_dependencies(task_ids, labels.value)
 
     def remove_selected_task(self) -> None:
-        selected = self.added_tasks_panel.selected_ref()
-        if selected is None:
-            messagebox.showinfo("No Selection", "Select a task to remove first.")
+        if self._refuse_while_busy():
             return
-
-        task_type, day, index = selected
-        day_schedule = self.state.days[day]
-
-        if task_type == "fixed":
-            if index < len(day_schedule.fixed_blocks):
-                del day_schedule.fixed_blocks[index]
-        else:
-            if index < len(day_schedule.tasks):
-                del day_schedule.tasks[index]
-
-        self.state.outputs = {}
-        self.unscheduled_panel.clear()
-        self.refresh_all()
+        refs = self.added_tasks_panel.selected_refs()
+        if not refs:
+            messagebox.showinfo("No Selection", "Select a task to remove first.", parent=self)
+            return
+        if len(refs) > 1:
+            messagebox.showinfo("Remove Task", "Remove one task or fixed block at a time.", parent=self)
+            return
+        result = self.page_controller.delete(refs[0])
+        self._render_result(result, "Could Not Remove Task")
+        if result.ok and self._editing == refs[0]:
+            self.cancel_edit()
 
     def upload_csv(self) -> None:
-        file_path = filedialog.askopenfilename(
-            title="Upload Schedule CSV",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+        """Pick a legacy CSV, choose Append or Replace, confirm, then import it in one transaction."""
+        if self._refuse_while_busy():
+            return
+        path = filedialog.askopenfilename(
+            title="Upload Schedule CSV", filetypes=[("CSV files", "*.csv"), ("All files", "*.*")], parent=self
         )
-        if not file_path:
+        if not path:
             return
+        ChoiceDialog(
+            self,
+            title="Import CSV",
+            prompt=f"How should {Path(path).name} be imported?",
+            options=[
+                (ImportMode.APPEND.value, "Append: add its tasks and fixed blocks"),
+                (ImportMode.REPLACE.value, "Replace: clear the dates it covers first, then add it"),
+            ],
+            note=f"Day 1 of the file is this page's start date ({self.page_controller.anchor_date.isoformat()}).",
+            on_choose=lambda mode: self.confirm_import(path, ImportMode(mode)),
+        )
 
-        try:
-            schedule_input = load_schedule_from_csv(file_path)
-            imported_days = schedule_input.schedules
-            self._validate_imported_days(imported_days)
-            self._validate_imported_fixed_blocks(imported_days)
-        except Exception as error:
-            messagebox.showerror("CSV Import Error", str(error))
+    def confirm_import(self, path: str, mode: ImportMode) -> None:
+        confirmed = messagebox.askyesno(
+            "Confirm Import",
+            self.page_controller.import_description(mode) + "\n\nContinue?",
+            icon="warning" if mode == ImportMode.REPLACE else "question",
+            parent=self,
+        )
+        if not confirmed:
             return
-
-        self.state.reset()
-        for day, day_schedule in imported_days.items():
-            if 1 <= day <= self.number_of_days:
-                self.state.days[day] = day_schedule
-
-        self.state.outputs = {}
+        result = self.page_controller.import_csv(path, mode)
+        if not result.ok:
+            if result.value is not None:
+                self._render(result.value)
+            messagebox.showerror("CSV Import Error", result.error or "Unknown error.", parent=self)
+            return
+        self._leave_edit_mode()
         self.unscheduled_panel.clear()
-        if self.execution_panel is not None:
-            self.execution_panel.set_scheduled_tasks([])
-        self.refresh_all()
+        self._render(result.value.snapshot)
+        messagebox.showinfo("CSV Imported", result.value.summary, parent=self)
+
+    def export_csv(self) -> None:
+        """Export the saved tasks, fixed blocks, and schedule of these dates (read from SQLite)."""
+        path = filedialog.asksaveasfilename(
+            title="Export Saved Planning Data",
+            defaultextension=".csv",
+            initialfile=f"planning_{self.page_controller.anchor_date.isoformat()}.csv",
+            filetypes=[("CSV files", "*.csv")],
+            parent=self,
+        )
+        if not path:
+            return
+        result = self.page_controller.export_csv(path)
+        if not result.ok:
+            messagebox.showerror("Export Error", result.error or "Unknown error.", parent=self)
+            return
+        exported = result.value
+        messagebox.showinfo(
+            "Export Complete",
+            f"Exported {exported.tasks} task(s), {exported.fixed_blocks} fixed block(s), and "
+            f"{exported.placements} scheduled entr(ies) to {exported.path}.",
+            parent=self,
+        )
 
     def make_schedule(self) -> None:
-        outputs: dict[int, DayScheduleOutput] = {}
+        if self._refuse_while_busy():
+            return
+        self._set_busy(True)
+        if not run_in_background(self, self.page_controller.make_schedule, self._on_schedule_done):
+            self._set_busy(False)
 
-        try:
-            for day, day_schedule in self.state.days.items():
-                if not day_schedule.fixed_blocks and not day_schedule.tasks:
-                    continue
-
-                outputs[day] = combine_fixed_and_optimized_scheduled_tasks(
-                    date=day,
-                    day_schedule=day_schedule,
-                )
-        except ValueError as error:
-            messagebox.showerror("Scheduling Error", str(error))
+    def _on_schedule_done(self, result: ControllerResult[ScheduleRun]) -> None:
+        self._set_busy(False)
+        if not result.ok:
+            messagebox.showerror("Scheduling Error", result.error or "Unknown error.", parent=self)
+            self.reload()
             return
 
-        self.state.outputs = outputs
-        self.schedule_canvas.draw_outputs(outputs)
-        self._refresh_unscheduled_results(outputs)
-        self._refresh_stats()
-
-        if self.execution_panel is not None:
-            self.execution_panel.set_scheduled_tasks(self._build_executable_tasks(outputs))
-
-        if not outputs:
-            messagebox.showinfo("No Tasks", "There are no tasks to schedule yet.")
-
-    def _build_executable_tasks(self, outputs: dict[int, DayScheduleOutput]) -> list[ExecutableTask]:
-        """
-        Flatten this page's optimizer output into the flexible (non-fixed)
-        scheduled tasks the Execute tab can track. Fixed blocks (sleep,
-        meals, ...) are intentionally excluded -- they have no priority and
-        are not really "executed" in the same sense as a flexible task.
-        """
-        executable: list[ExecutableTask] = []
-
-        for day, output in outputs.items():
-            priority_by_name = {task.name: task.priority for task in self.state.days[day].tasks}
-
-            for scheduled_task in output.scheduled_tasks:
-                if scheduled_task.name not in priority_by_name:
-                    continue  # a fixed block, not a flexible task
-
-                executable.append(
-                    ExecutableTask(
-                        day=day,
-                        task_name=scheduled_task.name,
-                        category=scheduled_task.category,
-                        tag=scheduled_task.tag,
-                        planned_start=scheduled_task.time_window.start_time,
-                        planned_end=scheduled_task.time_window.end_time,
-                        priority=priority_by_name[scheduled_task.name],
-                    )
-                )
-
-        return executable
+        run = result.value
+        self._render(run.snapshot)
+        self.unscheduled_panel.show(run.unscheduled)
+        if run.snapshot.total_count == 0:
+            messagebox.showinfo("No Tasks", "There are no tasks to schedule on these dates yet.", parent=self)
 
     def reset(self) -> None:
-        self.state.reset()
-        self.form.clear_fields()
-        self.unscheduled_panel.clear()
-        if self.execution_panel is not None:
-            self.execution_panel.set_scheduled_tasks([])
-        self.refresh_all()
+        if self._refuse_while_busy():
+            return
+        span = f"{self.page_controller.anchor_date.isoformat()} to {self.page_controller.end_date.isoformat()}"
+        ChoiceDialog(
+            self,
+            title="Reset",
+            prompt=f"What should be cleared for {span}?",
+            options=[
+                (ResetScope.SCHEDULE.value, "Only the saved schedule (generated placements)"),
+                (ResetScope.PLANNING_DATA.value, "Schedule, fixed blocks, and tasks planned on these dates"),
+            ],
+            note="Execution history is never deleted here (see the Productivity page).",
+            on_choose=lambda scope: self.confirm_reset(ResetScope(scope)),
+            danger=True,
+        )
 
-    # ----------------------------- Refresh logic -----------------------------
+    def confirm_reset(self, scope: ResetScope) -> None:
+        confirmed = messagebox.askyesno(
+            "Confirm Reset",
+            self.page_controller.reset_description(scope) + "\n\nContinue?",
+            icon="warning",
+            parent=self,
+        )
+        if not confirmed:
+            return
+        result = self.page_controller.reset(scope)
+        self._render_result(result, "Reset Failed")
+        if result.ok:
+            self._leave_edit_mode()
+            self.form.clear_fields()
+            self.unscheduled_panel.clear()
 
-    def refresh_all(self) -> None:
-        self.added_tasks_panel.refresh(self.state)
-        self.schedule_canvas.draw_state(self.state)
-        self._refresh_stats()
+    # ----------------------------- Rendering -----------------------------
 
-    def _refresh_stats(self) -> None:
-        self.total_pill.set_value(str(self.state.count_all_tasks()))
-        self.fixed_pill.set_value(str(self.state.count_fixed()))
-        self.flex_pill.set_value(str(self.state.count_flexible()))
+    def _render_result(self, result: ControllerResult[PageSnapshot], error_title: str) -> None:
+        """Redraw from the (re-read) snapshot; on failure show the error, then the committed state."""
+        if result.value is not None:
+            self._render(result.value)
+        if not result.ok:
+            messagebox.showerror(error_title, result.error or "Unknown error.", parent=self)
+            if result.value is None:
+                self.reload()
 
-    def _refresh_unscheduled_results(self, outputs: dict[int, DayScheduleOutput]) -> None:
-        self.unscheduled_panel.clear()
-        for day, output in outputs.items():
-            for task in getattr(output, "unscheduled_tasks", []):
-                self.unscheduled_panel.add_unscheduled_result(day, task)
-
-    # ------------------------------- Validation ------------------------------
-
-    def _validate_values(self, values: dict[str, str]) -> dict[str, object]:
-        name = values["name"]
-        category = values["category"]
-        tag = values["tag"]
-        fixed_text = values["fixed"]
-
-        if not name:
-            raise ValueError("Name is required.")
-
-        day = self._parse_int(values["day"], "Day")
-        if not 1 <= day <= self.number_of_days:
-            raise ValueError(f"Day must be between 1 and {self.number_of_days}.")
-
-        if not category or category not in CATEGORY_OPTIONS:
-            raise ValueError("Category must be selected from the category dropdown.")
-
-        if not tag:
-            raise ValueError("Tag is required.")
-
-        if fixed_text not in FIXED_OPTIONS:
-            raise ValueError("Fixed must be either True or False.")
-
-        fixed = fixed_text == "True"
-        start_time = self._parse_int(values["start_time"], "Start time")
-        end_time = self._parse_int(values["end_time"], "End time")
-        self._validate_time_window(start_time, end_time)
-
-        dependencies: list[str] = []
-        duration = 0
-        priority = 1
-
-        if fixed:
-            self._validate_no_fixed_overlap(day, start_time, end_time)
+    def _render(self, snapshot: PageSnapshot) -> None:
+        self.snapshot = snapshot
+        self.start_date_var.set(snapshot.start_date.isoformat())
+        if snapshot.start_date == snapshot.end_date:
+            span = f"{snapshot.start_date:%A}"
         else:
-            duration = self._parse_int(values["duration"], "Duration")
-            priority = self._parse_int(values["priority"], "Priority")
+            span = f"to {snapshot.end_date.isoformat()}"
+        self.range_label.configure(text=f"{span}   ·   times in {snapshot.timezone}")
+        self.status_label.configure(text=snapshot.status_text)
+        self.added_tasks_panel.refresh(snapshot.rows)
+        self.schedule_canvas.draw(snapshot)
+        self.total_pill.set_value(str(snapshot.total_count))
+        self.fixed_pill.set_value(str(snapshot.fixed_count))
+        self.flex_pill.set_value(str(snapshot.flexible_count))
+        if self.execution_panel is not None:
+            self.execution_panel.set_scheduled_tasks(snapshot.executables)
 
-            if duration <= 0:
-                raise ValueError("Duration must be greater than 0.")
-            if duration % TIME_SLOT_MINUTES != 0:
-                raise ValueError(f"Duration must be a multiple of {TIME_SLOT_MINUTES} minutes.")
-            if duration > MINUTES_PER_DAY:
-                raise ValueError("Duration cannot be longer than 24 hours.")
-            if not 1 <= priority <= 10:
-                raise ValueError("Priority must be between 1 and 10.")
+    def _leave_edit_mode(self) -> None:
+        self._editing = None
+        self.form.exit_edit_mode()
 
-            dependencies = parse_dependency_string(values["dependencies"])
+    def _set_busy(self, busy: bool) -> None:
+        self._busy = busy
+        self.make_schedule_button.configure(
+            state="disabled" if busy else "normal", text="Scheduling..." if busy else "Make Schedule"
+        )
 
-        return {
-            "name": name,
-            "day": day,
-            "category": category,
-            "tag": tag,
-            "fixed": fixed,
-            "start_time": start_time,
-            "end_time": end_time,
-            "duration": duration,
-            "priority": priority,
-            "dependencies": dependencies,
-        }
-
-    def _parse_int(self, value: str, field_name: str) -> int:
-        if value == "":
-            raise ValueError(f"{field_name} is required.")
-        try:
-            return int(value)
-        except ValueError as error:
-            raise ValueError(f"{field_name} must be an integer.") from error
-
-    def _validate_time_window(self, start_time: int, end_time: int) -> None:
-        if start_time < 0 or end_time > MINUTES_PER_DAY:
-            raise ValueError("Times must be between 0 and 1440 minutes.")
-        if start_time >= end_time:
-            raise ValueError("Start time must be smaller than end time.")
-        if start_time % TIME_SLOT_MINUTES != 0 or end_time % TIME_SLOT_MINUTES != 0:
-            raise ValueError(f"Start and end times must be multiples of {TIME_SLOT_MINUTES} minutes.")
-
-    def _validate_no_fixed_overlap(self, day: int, start_time: int, end_time: int) -> None:
-        fixed_blocks = self.state.days[day].fixed_blocks
-        for block in fixed_blocks:
-            if does_overlap(
-                start_time,
-                end_time,
-                block.time_window.start_time,
-                block.time_window.end_time,
-            ):
-                raise ValueError(f"Fixed task overlaps with existing fixed task: {block.name}")
-
-    def _validate_imported_days(self, imported_days: dict[int, DaySchedule]) -> None:
-        invalid_days = [day for day in imported_days if day < 1 or day > self.number_of_days]
-        if invalid_days:
-            raise ValueError(
-                f"CSV contains day/date values outside 1-{self.number_of_days}: {invalid_days}"
-            )
-
-    def _validate_imported_fixed_blocks(self, imported_days: dict[int, DaySchedule]) -> None:
-        for day, day_schedule in imported_days.items():
-            fixed_blocks = day_schedule.fixed_blocks
-
-            for i in range(len(fixed_blocks)):
-                current = fixed_blocks[i]
-                self._validate_time_window(current.time_window.start_time, current.time_window.end_time)
-
-                for j in range(i + 1, len(fixed_blocks)):
-                    other = fixed_blocks[j]
-                    if does_overlap(
-                        current.time_window.start_time,
-                        current.time_window.end_time,
-                        other.time_window.start_time,
-                        other.time_window.end_time,
-                    ):
-                        raise ValueError(
-                            f"CSV fixed tasks overlap on day {day}: {current.name} and {other.name}"
-                        )
-
-            for task in day_schedule.tasks:
-                self._validate_time_window(task.preference_time.start_time, task.preference_time.end_time)
-                if task.duration <= 0:
-                    raise ValueError(f"CSV task has invalid duration: {task.name}")
-                if task.duration % TIME_SLOT_MINUTES != 0:
-                    raise ValueError(
-                        f"CSV task duration must be a multiple of {TIME_SLOT_MINUTES}: {task.name}"
-                    )
-                if not 1 <= task.priority <= 10:
-                    raise ValueError(f"CSV task has invalid priority: {task.name}")
+    def _refuse_while_busy(self) -> bool:
+        if self._busy:
+            messagebox.showinfo("Please Wait", "Scheduling is still running for this page.", parent=self)
+        return self._busy
 
 
 # -----------------------------------------------------------------------------
@@ -1493,7 +1501,10 @@ class RewardConfigPage(ctk.CTkFrame):
         ).pack(anchor="w")
         ctk.CTkLabel(
             header,
-            text="These values are applied at runtime only. They do not rewrite config/settings.py.",
+            text=(
+                "These values are applied at runtime only and affect the legacy Greedy Optimizer v1 "
+                "(CLI baseline). The desktop scheduler reads config/task_preference.yaml instead."
+            ),
             font=ctk.CTkFont(size=13),
             text_color=TEXT_MUTED,
             anchor="w",
@@ -1597,7 +1608,14 @@ class RewardConfigPage(ctk.CTkFrame):
 # -----------------------------------------------------------------------------
 
 class ScheduleOptimizerApp(ctk.CTk):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        db_path: str | None = None,
+        timezone: str | None = None,
+        project_root: str | None = None,
+        today: date | None = None,
+    ) -> None:
         super().__init__()
         ctk.set_appearance_mode("light")
         ctk.set_default_color_theme("blue")
@@ -1607,45 +1625,42 @@ class ScheduleOptimizerApp(ctk.CTk):
         self.minsize(1240, 760)
         self.configure(fg_color=APP_BG)
 
-        self._db_connection = None
-        self._init_execution_tracking()
+        self.services: AppServices | None = None
+        self.startup_error: str | None = None
+        self.pages: dict[str, ctk.CTkFrame] = {}
+        self.nav_buttons: dict[str, ctk.CTkButton] = {}
+        self._today = today or date.today()
 
         self._configure_treeview_style()
-        self._build_shell()
-        self.show_page("day")
+        try:
+            self.services = open_app_services(db_path, timezone=timezone, project_root=project_root)
+        except Exception as error:  # noqa: BLE001 - reported to the user; no scheduler without storage
+            self.startup_error = describe_startup_failure(error, db_path)
+
+        if self.services is None:
+            self._build_startup_error()
+            messagebox.showerror("Database Unavailable", self.startup_error, parent=self)
+        else:
+            self._build_shell()
+            self.show_page("day")
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    def _init_execution_tracking(self) -> None:
-        """
-        Open the local execution-tracking database and build the shared
-        controllers, once, for the whole app. Failure here (e.g. the data
-        directory is not writable) must not crash the scheduler -- it falls
-        back to running with execution tracking and the Productivity page
-        disabled, and tells the user why.
-        """
-        self.execution_controller: ExecutionController | None = None
-        self.productivity_controller: ProductivityController | None = None
+    @property
+    def execution_controller(self) -> ExecutionController | None:
+        return self.services.execution_controller if self.services is not None else None
 
-        try:
-            self._db_connection = get_connection()
-            repository = ExecutionRepository(self._db_connection)
-            self.execution_controller = ExecutionController(ExecutionService(repository))
-            self.productivity_controller = ProductivityController(
-                ProductivityService(repository), self.execution_controller
-            )
-        except Exception as error:  # noqa: BLE001 - must never crash the scheduler UI
-            self._db_connection = None
-            messagebox.showwarning(
-                "Execution Tracking Unavailable",
-                "Could not open the local execution-tracking database, so task "
-                "execution tracking and the Productivity page are disabled for "
-                f"this session. The scheduler itself is unaffected.\n\nDetails: {error}",
-            )
+    @property
+    def productivity_controller(self) -> ProductivityController | None:
+        return self.services.productivity_controller if self.services is not None else None
+
+    def close_services(self) -> None:
+        """Wait for background work, then close the database (idempotent)."""
+        if self.services is not None:
+            self.services.close()
 
     def _on_close(self) -> None:
-        if self._db_connection is not None:
-            self._db_connection.close()
+        self.close_services()
         self.destroy()
 
     def _configure_treeview_style(self) -> None:
@@ -1674,6 +1689,20 @@ class ScheduleOptimizerApp(ctk.CTk):
             foreground=[("selected", TEXT_PRIMARY)],
         )
 
+    def _build_startup_error(self) -> None:
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+        panel = Card(self)
+        panel.grid(row=0, column=0, padx=80, pady=80, sticky="nsew")
+        ctk.CTkLabel(
+            panel, text="Database Unavailable", font=ctk.CTkFont(size=24, weight="bold"),
+            text_color=DANGER, anchor="w",
+        ).pack(anchor="w", padx=28, pady=(28, 12))
+        ctk.CTkLabel(
+            panel, text=self.startup_error, font=ctk.CTkFont(size=13), text_color=TEXT_PRIMARY,
+            anchor="w", justify="left", wraplength=1100,
+        ).pack(anchor="w", padx=28, pady=(0, 28))
+
     def _build_shell(self) -> None:
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
@@ -1699,15 +1728,13 @@ class ScheduleOptimizerApp(ctk.CTk):
             justify="left",
         ).grid(row=1, column=0, sticky="w", padx=24, pady=(0, 26))
 
-        self.nav_buttons: dict[str, ctk.CTkButton] = {}
         nav_items = [
             ("day", "Day Schedule"),
             ("week", "Week Schedule"),
             ("month", "Month Schedule"),
             ("reward", "Reward Config"),
+            ("productivity", "Productivity"),
         ]
-        if self.productivity_controller is not None:
-            nav_items.append(("productivity", "Productivity"))
 
         for row, (page_name, label) in enumerate(nav_items, start=2):
             button = ctk.CTkButton(
@@ -1730,14 +1757,14 @@ class ScheduleOptimizerApp(ctk.CTk):
         footer.grid(row=spacer_row + 1, column=0, sticky="sew", padx=16, pady=(0, 20))
         ctk.CTkLabel(
             footer,
-            text="Tip",
+            text="Saved locally",
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color="white",
             anchor="w",
         ).pack(anchor="w", padx=14, pady=(12, 2))
         ctk.CTkLabel(
             footer,
-            text="Flexible tasks are shown as preferred-window previews before optimization.",
+            text=f"Every change is saved to {self.services.db_path.name} in your data folder.",
             font=ctk.CTkFont(size=11),
             text_color="#94A3B8",
             wraplength=170,
@@ -1750,26 +1777,29 @@ class ScheduleOptimizerApp(ctk.CTk):
         self.page_container.grid_rowconfigure(0, weight=1)
         self.page_container.grid_columnconfigure(0, weight=1)
 
-        self.pages: dict[str, ctk.CTkFrame] = {
-            "day": SchedulePage(
-                self.page_container, "day", 1, self.execution_controller, self.productivity_controller
-            ),
-            "week": SchedulePage(
-                self.page_container, "week", 7, self.execution_controller, self.productivity_controller
-            ),
-            "month": SchedulePage(
-                self.page_container, "month", 30, self.execution_controller, self.productivity_controller
-            ),
-            "reward": RewardConfigPage(self.page_container),
-        }
-        if self.productivity_controller is not None:
-            self.pages["productivity"] = ProductivityPage(self.page_container, self.productivity_controller)
+        services = self.services
+        for mode_name, days in PAGE_DAYS.items():
+            page_controller = SchedulePageController(
+                services.planning_controller,
+                number_of_days=days,
+                anchor_date=default_anchor(mode_name, self._today),
+                timezone=services.timezone,
+            )
+            self.pages[mode_name] = SchedulePage(
+                self.page_container, mode_name, page_controller,
+                services.execution_controller, services.productivity_controller,
+            )
+        self.pages["reward"] = RewardConfigPage(self.page_container)
+        self.pages["productivity"] = ProductivityPage(self.page_container, services.productivity_controller)
 
         for page in self.pages.values():
             page.grid(row=0, column=0, sticky="nsew")
 
     def show_page(self, page_name: str) -> None:
-        self.pages[page_name].tkraise()
+        page = self.pages[page_name]
+        page.tkraise()
+        if isinstance(page, SchedulePage):
+            page.on_show()
         for name, button in self.nav_buttons.items():
             if name == page_name:
                 button.configure(fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="white")

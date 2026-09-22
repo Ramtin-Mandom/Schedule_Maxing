@@ -37,11 +37,23 @@ Legacy vs. canonical creation:
     optionally the ScheduledTask placement it came from) instead of loose
     keyword snapshot fields. Both paths produce ordinary TaskExecution rows
     that share the same status machine, work sessions, and metrics
-    computation below.
+    computation below. Since schema v3 the Task (and placement, if given)
+    must already be persisted (app.planning.repository / PlanningService):
+    the database rejects a link to an unknown task/placement, or to a
+    placement of a different task, with ExecutionLinkError. Rows written
+    before v3 keep whatever ids they had -- see app/execution/db.py.
+
+Atomicity: every public mutation below is one logical operation (e.g.
+start = status transition + new work session + first-start timestamp) and
+runs inside a single ExecutionRepository.transaction() via @_atomic, so a
+failure at any step rolls back every earlier step of that operation. The
+repository's own per-call transactions nest inside it as savepoints and
+never commit the enclosing operation early.
 """
 
 from __future__ import annotations
 
+import functools
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -127,6 +139,17 @@ def compute_start_delay_minutes(first_started_at: str, planned_start: int) -> fl
     return round(minutes_since_midnight - planned_start, 2)
 
 
+def _atomic(method):
+    """Run an ExecutionService method as one repository transaction (see the module docstring)."""
+
+    @functools.wraps(method)
+    def wrapper(self: "ExecutionService", *args, **kwargs):
+        with self._repository.transaction():
+            return method(self, *args, **kwargs)
+
+    return wrapper
+
+
 class ExecutionService:
     """Domain service for creating and driving TaskExecution records through their lifecycle."""
 
@@ -138,6 +161,7 @@ class ExecutionService:
     # Creation
     # ------------------------------------------------------------------
 
+    @_atomic
     def create_execution(
         self,
         *,
@@ -168,6 +192,7 @@ class ExecutionService:
         )
         return self._repository.create_execution(execution)
 
+    @_atomic
     def create_execution_from_scheduled_task(
         self,
         scheduled_task: ScheduledTask,
@@ -193,6 +218,7 @@ class ExecutionService:
             priority=priority,
         )
 
+    @_atomic
     def get_or_create_execution(
         self,
         *,
@@ -253,6 +279,7 @@ class ExecutionService:
     # Canonical creation (Task 2 / Schedule Maxing v2 identity migration)
     # ------------------------------------------------------------------
 
+    @_atomic
     def create_canonical_execution(
         self,
         task: CanonicalTask,
@@ -282,6 +309,7 @@ class ExecutionService:
             self._build_canonical_execution(task, scheduled_task, user_id=user_id)
         )
 
+    @_atomic
     def get_or_create_canonical_execution(
         self,
         task: CanonicalTask,
@@ -359,6 +387,7 @@ class ExecutionService:
     # State transitions
     # ------------------------------------------------------------------
 
+    @_atomic
     def start(self, execution_id: str) -> TaskExecution:
         """
         scheduled -> in_progress. Opens a new work session.
@@ -380,18 +409,21 @@ class ExecutionService:
 
         return execution
 
+    @_atomic
     def pause(self, execution_id: str) -> TaskExecution:
         """in_progress -> paused. Closes the currently-open work session."""
         execution = self._transition(execution_id, "pause")
         self._close_open_session(execution_id)
         return execution
 
+    @_atomic
     def resume(self, execution_id: str) -> TaskExecution:
         """paused -> in_progress. Opens a new work session."""
         execution = self._transition(execution_id, "resume")
         self._repository.create_session(execution_id, self._now_iso())
         return execution
 
+    @_atomic
     def complete(self, execution_id: str) -> TaskExecution:
         """
         (in_progress | paused) -> completed.
@@ -440,6 +472,7 @@ class ExecutionService:
         )
         return self._repository.update_execution(execution)
 
+    @_atomic
     def skip(self, execution_id: str) -> TaskExecution:
         """(scheduled | in_progress | paused) -> skipped. Closes any open session; no completion metrics are computed."""
         execution = self._transition(execution_id, "skip")
@@ -449,6 +482,7 @@ class ExecutionService:
         )
         return self._repository.update_execution(execution)
 
+    @_atomic
     def cancel(self, execution_id: str) -> TaskExecution:
         """
         (scheduled | in_progress | paused) -> cancelled. Closes any open
@@ -467,6 +501,7 @@ class ExecutionService:
     # Feedback
     # ------------------------------------------------------------------
 
+    @_atomic
     def record_feedback(
         self,
         execution_id: str,
@@ -513,6 +548,10 @@ class ExecutionService:
     def get_execution(self, execution_id: str) -> TaskExecution:
         return self._repository.get_execution(execution_id)
 
+    def find_execution_for_placement(self, scheduled_task_id: uuid.UUID) -> TaskExecution | None:
+        """The existing execution for a canonical placement, or None -- never creates one."""
+        return self._repository.find_by_scheduled_task_id(str(scheduled_task_id))
+
     def list_executions(self, status: ExecutionStatus | None = None) -> list[TaskExecution]:
         return self._repository.list_executions(status)
 
@@ -520,6 +559,7 @@ class ExecutionService:
         """Expose an execution's raw work sessions, e.g. for a caller computing a live elapsed-time display."""
         return self._repository.list_sessions(execution_id)
 
+    @_atomic
     def reset_all_history(self) -> int:
         """
         Permanently delete all execution history (executions and their work
