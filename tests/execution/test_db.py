@@ -23,6 +23,17 @@ EXPECTED_TABLES = {
     "task_recurrence_weekdays",
     "fixed_blocks",
     "scheduled_tasks",
+    # v4 (Milestone 3)
+    "preference_overrides",
+    "schedule_generations",
+    "execution_wire_ids",
+    # v5 (synchronization client)
+    "sync_control",
+    "sync_dirty",
+    "sync_accounts",
+    "sync_shadows",
+    "sync_outbox",
+    "sync_conflicts",
 }
 
 

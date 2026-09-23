@@ -48,7 +48,7 @@ def make_task(planning_repository: PlanningRepository):
         )
         defaults.update(overrides)
         task = Task(**defaults)
-        planning_repository.upsert_task(task)
+        planning_repository.insert_task(task)
         return task
 
     return _make
@@ -58,7 +58,7 @@ def make_task(planning_repository: PlanningRepository):
 def make_placement(planning_repository: PlanningRepository):
     def _make(task: Task, *, start: datetime, end: datetime, tz: str = "America/New_York") -> ScheduledTask:
         placement = ScheduledTask(task_id=task.id, planned_date=start.date(), timezone=tz, planned_start=start, planned_end=end)
-        planning_repository.upsert_placement(placement)
+        planning_repository.insert_placement(placement)
         return placement
 
     return _make

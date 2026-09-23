@@ -13,7 +13,14 @@ desktop app then shows a clear error instead of the scheduler, because
 there is no longer an in-memory fallback whose edits would silently never
 be saved.
 
-AppServices.close() is the orderly shutdown: it stops accepting new
+Synchronization (app/sync): a SyncService is always created. It is inert
+unless SCHEDULE_MAXING_BACKEND_URL (or backend_url=) names a backend and an
+account signs in through its service API -- no widget exists for that yet.
+When a backend is configured its background loop is started; it never holds
+a SQLite transaction across a network call.
+
+AppServices.close() is the orderly shutdown: it stops the sync loop (waiting
+for a running sync), stops accepting new
 background work, waits for running workers (app.ui.background) to finish,
 takes the connection's lock so no transaction is mid-flight, and only then
 closes the connection. It is idempotent.
@@ -34,6 +41,8 @@ from app.planning.application import PlanningService
 from app.planning.repository import PlanningRepository
 from app.planning.time import validate_timezone
 from app.productivity.reporting import ProductivityService
+from app.sync.service import SyncService
+from app.sync.transport import HttpTransport
 from app.ui.background import WorkerRegistry, install_registry
 from app.ui.execution_controller import ExecutionController
 from app.ui.planning_controller import PlanningController
@@ -52,13 +61,15 @@ class AppServices:
     execution_controller: ExecutionController
     productivity_controller: ProductivityController
     registry: WorkerRegistry
+    sync_service: SyncService
     closed: bool = field(default=False, init=False)
 
     def close(self, timeout: float = 10.0) -> bool:
         """Wait for background workers, then close the connection. True if every worker finished in time."""
         if self.closed:
             return True
-        finished = self.registry.shutdown(timeout=timeout)
+        sync_stopped = self.sync_service.stop(timeout=timeout)
+        finished = self.registry.shutdown(timeout=timeout) and sync_stopped
         if not finished:
             logger.warning("Closing the database while %d background task(s) are still running.", self.registry.active)
 
@@ -73,12 +84,24 @@ class AppServices:
         return finished
 
 
+def _sync_transport(backend_url: str | None) -> HttpTransport | None:
+    """The sync transport, or None (inert) -- a bad backend setting never prevents offline use."""
+    if not backend_url:
+        return None
+    try:
+        return HttpTransport(backend_url)
+    except ValueError:
+        logger.warning("Ignoring an invalid SCHEDULE_MAXING_BACKEND_URL; synchronization is off.")
+        return None
+
+
 def open_app_services(
     db_path: str | Path | None = None,
     *,
     timezone: str | None = None,
     project_root: str | None = None,
     registry: WorkerRegistry | None = None,
+    backend_url: str | None = None,
 ) -> AppServices:
     """
     Open the application database and build the shared controllers.
@@ -99,13 +122,15 @@ def open_app_services(
         execution_repository = ExecutionRepository(connection)
         execution_controller = ExecutionController(ExecutionService(execution_repository))
         productivity_controller = ProductivityController(ProductivityService(execution_repository), execution_controller)
+        backend_url = backend_url or settings.BACKEND_URL
+        sync_service = SyncService(connection, _sync_transport(backend_url))
     except BaseException:
         connection.close()
         raise
 
     registry = registry or WorkerRegistry()
     install_registry(registry)
-    return AppServices(
+    services = AppServices(
         db_path=resolved,
         timezone=timezone,
         connection=connection,
@@ -113,7 +138,10 @@ def open_app_services(
         execution_controller=execution_controller,
         productivity_controller=productivity_controller,
         registry=registry,
+        sync_service=sync_service,
     )
+    services.sync_service.start()  # a no-op without a configured backend
+    return services
 
 
 def describe_startup_failure(error: BaseException, db_path: str | Path | None = None) -> str:

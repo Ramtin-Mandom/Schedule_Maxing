@@ -24,16 +24,31 @@ app.planning.repository.PlanningRepository) is serialized together.
 Link violations raised by the database's v3 triggers (see app/execution/
 db.py, "Execution <-> planning links") are translated into
 ExecutionLinkError.
+
+Milestone 3 (schema v4): update_execution is an atomic compare-and-update
+(`WHERE id = ? AND version = ? AND deleted_at IS NULL`) -- a stale write
+raises ExecutionVersionConflictError and changes nothing. Deletion of one
+execution is a tombstone (soft_delete_execution); every normal read skips
+tombstones. An execution whose id is not a UUID has a durable wire id in
+execution_wire_ids (see wire_id), assigned once and never reminted.
 """
 
 from __future__ import annotations
 
 import sqlite3
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime, timezone
 
 from app.execution.db import EXECUTION_LINK_VIOLATION, TransactionState, locked, transaction, transaction_state_for
-from app.execution.errors import ExecutionError, ExecutionLinkError, ExecutionNotFoundError
+from app.execution.errors import (
+    ExecutionDeletedError,
+    ExecutionError,
+    ExecutionLinkError,
+    ExecutionNotFoundError,
+    ExecutionVersionConflictError,
+)
 from app.execution.models import ExecutionStatus, TaskExecution, WorkSession
 
 _EXECUTION_COLUMNS = (
@@ -66,7 +81,16 @@ _EXECUTION_COLUMNS = (
     "actual_first_start_at",
     "actual_final_end_at",
     "version",
+    "deleted_at",
 )
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+    except (ValueError, AttributeError, TypeError):
+        return False
+    return True
 
 
 class ExecutionRepository:
@@ -108,7 +132,33 @@ class ExecutionRepository:
                 f"INSERT INTO executions ({columns}) VALUES ({placeholders})",
                 values,
             )
+            self._assign_wire_id(execution.id)
         return execution
+
+    def _assign_wire_id(self, execution_id: str) -> None:
+        """A non-UUID id gets its durable wire id when its row is created (a UUID id is its own)."""
+        if not _is_uuid(execution_id):
+            self._connection.execute(
+                "INSERT OR IGNORE INTO execution_wire_ids (execution_id, wire_id) VALUES (?, ?)",
+                (execution_id, str(uuid.uuid4())),
+            )
+
+    def wire_id(self, execution_id: str) -> uuid.UUID:
+        """
+        The stable identity this execution has outside this device (see
+        docs/sync-contract.md): the id itself when it is a UUID, otherwise
+        the mapping assigned once (by migration v4 or at creation). The
+        local id is never rewritten.
+        """
+        if _is_uuid(execution_id):
+            return uuid.UUID(execution_id)
+        with self._read():
+            row = self._connection.execute(
+                "SELECT wire_id FROM execution_wire_ids WHERE execution_id = ?", (execution_id,)
+            ).fetchone()
+        if row is None:
+            raise ExecutionNotFoundError(execution_id)
+        return uuid.UUID(row["wire_id"])
 
     def get_or_create_by_scheduled_task_id(self, execution: TaskExecution) -> TaskExecution:
         """
@@ -116,7 +166,9 @@ class ExecutionRepository:
         execution: if a row already exists with this
         execution.scheduled_task_id, return it unchanged (its original
         planned snapshot is never overwritten); otherwise insert `execution`
-        as a new row and return it.
+        as a new row and return it. If the placement's execution exists only
+        as a tombstone, ExecutionDeletedError is raised: it is neither
+        revived nor silently duplicated.
 
         Requires execution.scheduled_task_id to be set -- callers with a
         task-only (no placement) execution should use create_execution
@@ -143,6 +195,8 @@ class ExecutionRepository:
                 (scheduled_task_id,),
             ).fetchone()
             if existing is not None:
+                if existing["deleted_at"] is not None:
+                    raise ExecutionDeletedError(existing["id"])
                 return _row_to_execution(existing)
 
             values = _execution_to_row(execution)
@@ -155,9 +209,10 @@ class ExecutionRepository:
                         f"INSERT INTO executions ({columns}) VALUES ({placeholders})",
                         values,
                     )
+                    self._assign_wire_id(execution.id)
             except sqlite3.IntegrityError:
                 row = self._connection.execute(
-                    "SELECT * FROM executions WHERE scheduled_task_id = ?",
+                    "SELECT * FROM executions WHERE scheduled_task_id = ? AND deleted_at IS NULL",
                     (scheduled_task_id,),
                 ).fetchone()
                 if row is not None:
@@ -166,12 +221,16 @@ class ExecutionRepository:
 
         return execution
 
-    def update_execution(self, execution: TaskExecution) -> TaskExecution:
+    def update_execution(self, execution: TaskExecution, *, expected_version: int) -> TaskExecution:
         """
-        Overwrite an existing execution row with the given state.
+        Atomically overwrite a live execution row with the given state, only
+        if it is still at `expected_version` (compare-and-update).
 
-        Raises ExecutionNotFoundError if no row with this id exists, rather
-        than silently inserting one — callers must create before updating.
+        Raises ExecutionNotFoundError if no row with this id exists (callers
+        must create before updating), and ExecutionVersionConflictError --
+        leaving the row unchanged -- if it is at another version or has been
+        deleted. The caller sets the new version (see ExecutionService's
+        logical-mutation rule); this method stores it verbatim.
         """
         assignments = ", ".join(f"{column} = ?" for column in _EXECUTION_COLUMNS if column != "id")
         values = [
@@ -179,23 +238,47 @@ class ExecutionRepository:
             for column, value in zip(_EXECUTION_COLUMNS, _execution_to_row(execution))
             if column != "id"
         ]
-        values.append(execution.id)
+        values.extend([execution.id, expected_version])
 
         with self.transaction(), _translate_link_errors():
             cursor = self._connection.execute(
-                f"UPDATE executions SET {assignments} WHERE id = ?",
+                f"UPDATE executions SET {assignments} WHERE id = ? AND version = ? AND deleted_at IS NULL",
                 values,
             )
             if cursor.rowcount == 0:
-                raise ExecutionNotFoundError(execution.id)
+                self._raise_precondition_failure(execution.id, expected_version)
 
         return execution
 
-    def get_execution(self, execution_id: str) -> TaskExecution:
-        """Raises ExecutionNotFoundError if no such execution exists."""
+    def soft_delete_execution(self, execution_id: str, *, expected_version: int, deleted_at: datetime) -> None:
+        """Tombstone a live execution at `expected_version` (version + 1). Its work sessions are kept."""
+        stamp = deleted_at.astimezone(timezone.utc).isoformat()
+        with self.transaction():
+            cursor = self._connection.execute(
+                "UPDATE executions SET deleted_at = ?, updated_at = ?, version = version + 1 "
+                "WHERE id = ? AND version = ? AND deleted_at IS NULL",
+                (stamp, stamp, execution_id, expected_version),
+            )
+            if cursor.rowcount == 0:
+                self._raise_precondition_failure(execution_id, expected_version)
+
+    def _raise_precondition_failure(self, execution_id: str, expected_version: int) -> None:
+        row = self._connection.execute(
+            "SELECT version, deleted_at FROM executions WHERE id = ?", (execution_id,)
+        ).fetchone()
+        if row is None:
+            raise ExecutionNotFoundError(execution_id)
+        raise ExecutionVersionConflictError(
+            execution_id, expected_version=expected_version, current_version=row["version"],
+            deleted=row["deleted_at"] is not None,
+        )
+
+    def get_execution(self, execution_id: str, *, include_deleted: bool = False) -> TaskExecution:
+        """Raises ExecutionNotFoundError if no such (live, unless include_deleted) execution exists."""
+        live = "" if include_deleted else " AND deleted_at IS NULL"
         with self._read():
             row = self._connection.execute(
-                "SELECT * FROM executions WHERE id = ?",
+                f"SELECT * FROM executions WHERE id = ?{live}",
                 (execution_id,),
             ).fetchone()
 
@@ -205,24 +288,24 @@ class ExecutionRepository:
         return _row_to_execution(row)
 
     def find_by_scheduled_task_id(self, scheduled_task_id: str) -> TaskExecution | None:
-        """The execution recorded for a placement id, if any (lookup only, never creates)."""
+        """The live execution recorded for a placement id, if any (lookup only, never creates)."""
         with self._read():
             row = self._connection.execute(
-                "SELECT * FROM executions WHERE scheduled_task_id = ?",
+                "SELECT * FROM executions WHERE scheduled_task_id = ? AND deleted_at IS NULL",
                 (scheduled_task_id,),
             ).fetchone()
         return _row_to_execution(row) if row is not None else None
 
     def list_executions(self, status: ExecutionStatus | None = None) -> list[TaskExecution]:
-        """Return all executions, optionally filtered by status, oldest first."""
+        """Return all live executions, optionally filtered by status, oldest first."""
         with self._read():
             if status is None:
                 rows = self._connection.execute(
-                    "SELECT * FROM executions ORDER BY created_at"
+                    "SELECT * FROM executions WHERE deleted_at IS NULL ORDER BY created_at"
                 ).fetchall()
             else:
                 rows = self._connection.execute(
-                    "SELECT * FROM executions WHERE status = ? ORDER BY created_at",
+                    "SELECT * FROM executions WHERE status = ? AND deleted_at IS NULL ORDER BY created_at",
                     (status.value,),
                 ).fetchall()
 
@@ -231,12 +314,14 @@ class ExecutionRepository:
     def delete_all_executions(self) -> int:
         """
         Permanently delete every execution (and, via the schema's
-        ON DELETE CASCADE, every work session). Returns the number of
-        executions deleted.
+        ON DELETE CASCADE, every work session and wire-id mapping). Returns
+        the number of executions deleted.
 
-        This is a destructive, explicit reset operation -- callers (see
+        This is a destructive, explicit local reset operation -- callers (see
         ExecutionService.reset_all_history) are expected to gate it behind
         a user confirmation; this method itself performs no confirmation.
+        It is a local purge, not a synchronizable deletion (see
+        docs/sync-contract.md); deleting one execution is a tombstone.
         """
         with self.transaction():
             cursor = self._connection.execute("DELETE FROM executions")
@@ -296,20 +381,60 @@ class ExecutionRepository:
         return [_row_to_session(row) for row in rows]
 
 
+    def store_synced(self, execution: TaskExecution, sessions: list[tuple[str, str | None]]) -> None:
+        """
+        Insert or overwrite one execution aggregate (row and sessions) exactly as
+        given, for app/sync applying a server-accepted record when the device has
+        no pending change of it. A non-UUID id keeps a wire-id mapping.
+        """
+        columns = ", ".join(_EXECUTION_COLUMNS)
+        placeholders = ", ".join("?" for _ in _EXECUTION_COLUMNS)
+        assignments = ", ".join(f"{column} = excluded.{column}" for column in _EXECUTION_COLUMNS if column != "id")
+        with self.transaction():
+            self._connection.execute(
+                f"INSERT INTO executions ({columns}) VALUES ({placeholders}) ON CONFLICT(id) DO UPDATE SET {assignments}",
+                _execution_to_row(execution),
+            )
+            self._connection.execute("DELETE FROM work_sessions WHERE execution_id = ?", (execution.id,))
+            self._connection.executemany(
+                "INSERT INTO work_sessions (execution_id, started_at, ended_at) VALUES (?, ?, ?)",
+                [(execution.id, started, ended) for started, ended in sessions],
+            )
+
+    def set_wire_id(self, execution_id: str, wire_id: uuid.UUID) -> None:
+        with self.transaction():
+            self._connection.execute(
+                "INSERT OR IGNORE INTO execution_wire_ids (execution_id, wire_id) VALUES (?, ?)",
+                (execution_id, str(wire_id)),
+            )
+
+    def local_id_for_wire(self, wire_id: uuid.UUID) -> str | None:
+        """The local id of the execution with this wire id, if the device has it."""
+        with self._read():
+            row = self._connection.execute(
+                "SELECT execution_id FROM execution_wire_ids WHERE wire_id = ?", (str(wire_id),)
+            ).fetchone()
+            if row is not None:
+                return row["execution_id"]
+            row = self._connection.execute("SELECT id FROM executions WHERE id = ?", (str(wire_id),)).fetchone()
+        return row["id"] if row is not None else None
+
     def list_executions_with_unresolved_links(self) -> list[TaskExecution]:
         """
-        Executions whose historical task_id/scheduled_task_id no longer (or
-        never did) resolve to a persisted task/placement -- pre-v3 rows whose
-        parents were never persisted, and rows whose task/placement was later
-        deleted or replaced. Their snapshots remain the record of what was
-        planned; nothing is fabricated for them.
+        Live executions whose historical task_id/scheduled_task_id no longer
+        (or never did) resolve to a live persisted task/placement -- pre-v3
+        rows whose parents were never persisted, and rows whose
+        task/placement was later deleted (tombstoned) or replaced. Their
+        snapshots remain the record of what was planned; nothing is
+        fabricated for them.
         """
         with self._read():
             rows = self._connection.execute(
-                "SELECT e.* FROM executions AS e "
-                "WHERE (e.task_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tasks AS t WHERE t.id = e.task_id)) "
-                "OR (e.scheduled_task_id IS NOT NULL "
-                "AND NOT EXISTS (SELECT 1 FROM scheduled_tasks AS s WHERE s.id = e.scheduled_task_id)) "
+                "SELECT e.* FROM executions AS e WHERE e.deleted_at IS NULL AND ("
+                "(e.task_id IS NOT NULL AND NOT EXISTS "
+                "(SELECT 1 FROM tasks AS t WHERE t.id = e.task_id AND t.deleted_at IS NULL)) "
+                "OR (e.scheduled_task_id IS NOT NULL AND NOT EXISTS "
+                "(SELECT 1 FROM scheduled_tasks AS s WHERE s.id = e.scheduled_task_id AND s.deleted_at IS NULL))) "
                 "ORDER BY e.created_at, e.id"
             ).fetchall()
         return [_row_to_execution(row) for row in rows]
@@ -356,6 +481,7 @@ def _execution_to_row(execution: TaskExecution) -> tuple:
         _iso_or_none(execution.actual_first_start_at),
         _iso_or_none(execution.actual_final_end_at),
         execution.version,
+        execution.deleted_at,
     )
 
 

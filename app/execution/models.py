@@ -149,7 +149,12 @@ class TaskExecution(BaseModel):
     status: ExecutionStatus
     created_at: str
     updated_at: str
+    #: Local edit revision: +1 per logical mutation, work sessions included
+    #: (see app/execution/service.py's "Versions" notes).
     version: int = Field(default=1, gt=0)
+    #: Tombstone time (ISO 8601 UTC, like created_at/updated_at); None = live.
+    #: Lifecycle `status` is unrelated: a deleted execution keeps its status.
+    deleted_at: str | None = None
 
     # Populated only once the execution reaches "completed" (see service.py).
     actual_active_duration_minutes: float | None = None

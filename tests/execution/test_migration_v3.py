@@ -30,7 +30,7 @@ from app.execution.errors import ExecutionLinkError
 from app.execution.models import ExecutionStatus
 from app.execution.repository import ExecutionRepository
 from app.execution.service import ExecutionService
-from app.planning.errors import InvalidEntityError
+from app.planning.errors import DuplicateEntityError, InvalidEntityError
 from app.planning.models import ScheduledTask, Task
 from app.planning.repository import PlanningRepository
 from tests.execution.test_migration_v2 import _build_v1_database
@@ -92,9 +92,9 @@ def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
 def _persist(connection, *, task: Task | None = None, placement: ScheduledTask | None = None) -> None:
     repository = PlanningRepository(connection)
     if task is not None:
-        repository.upsert_task(task)
+        repository.insert_task(task)
     if placement is not None:
-        repository.upsert_placement(placement)
+        repository.insert_placement(placement)
 
 
 def _task(**overrides) -> Task:
@@ -119,7 +119,7 @@ def _placement(task: Task, hour: int = 9) -> ScheduledTask:
 def test_fresh_database_is_latest_with_foreign_keys_on_and_clean_integrity(tmp_path: Path) -> None:
     conn = get_connection(tmp_path / "fresh.db")
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST_SCHEMA_VERSION == 3
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST_SCHEMA_VERSION
         assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -174,7 +174,11 @@ def test_upgrade_from_v2_preserves_every_column_of_every_row(tmp_path: Path) -> 
 
     conn = get_connection(db_path)
     try:
-        assert _snapshot(conn, "executions") == before
+        after = _snapshot(conn, "executions")
+        # Every pre-existing column of every row is unchanged; later
+        # migrations only add columns (e.g. v4's deleted_at, left unset).
+        assert [{column: row[column] for column in before[0]} for row in after] == before
+        assert all(row["deleted_at"] is None for row in after)
         assert _snapshot(conn, "work_sessions") == sessions_before
     finally:
         conn.close()
@@ -220,7 +224,7 @@ def test_orphan_rows_keep_working_through_the_execution_lifecycle(tmp_path: Path
         service.pause("canonical-orphan")
         service.resume("canonical-orphan")
         completed = service.complete("canonical-orphan")
-        service.record_feedback("canonical-orphan", focus_rating=4)
+        service.record_feedback("canonical-orphan", expected_version=completed.version, focus_rating=4)
         skipped = service.skip("task-only-orphan")
 
         assert completed.status == ExecutionStatus.COMPLETED
@@ -300,7 +304,9 @@ def test_execution_identity_is_immutable_after_creation(tmp_path: Path) -> None:
         execution = ExecutionService(repository).create_canonical_execution(task_a)
 
         with pytest.raises(ExecutionLinkError, match="immutable"):
-            repository.update_execution(execution.model_copy(update={"task_id": task_b.id}))
+            repository.update_execution(
+                execution.model_copy(update={"task_id": task_b.id}), expected_version=execution.version
+            )
         assert repository.get_execution(execution.id).task_id == task_a.id
     finally:
         conn.close()
@@ -316,12 +322,22 @@ def test_history_referenced_placement_id_cannot_be_restored_for_another_task(tmp
         ExecutionService(ExecutionRepository(conn)).get_or_create_canonical_execution(task_a, placement)
         planning = PlanningRepository(conn)
 
+        with pytest.raises(InvalidEntityError, match="task"):
+            planning.update_placement(
+                placement.model_copy(update={"task_id": task_b.id}), expected_version=placement.version
+            )
+        # Since v4 a deleted placement stays as a tombstone: the history trigger still refuses another
+        # task, and the tombstone keeps the id taken even for the same task...
+        planning.soft_delete_placements([placement.id], deleted_at=datetime(2024, 6, 4, tzinfo=timezone.utc))
         with pytest.raises(InvalidEntityError, match="different task"):
-            planning.upsert_placement(placement.model_copy(update={"task_id": task_b.id}))
-        planning.delete_placements([placement.id])
+            planning.insert_placement(placement.model_copy(update={"task_id": task_b.id}))
+        with pytest.raises(DuplicateEntityError):
+            planning.insert_placement(placement)
+        # ...and a row physically removed before v4 is still guarded by the history trigger.
+        conn.execute("DELETE FROM scheduled_tasks WHERE id = ?", (str(placement.id),))
         with pytest.raises(InvalidEntityError, match="different task"):
-            planning.upsert_placement(placement.model_copy(update={"task_id": task_b.id}))
-        planning.upsert_placement(placement)  # the same task may re-store it
+            planning.insert_placement(placement.model_copy(update={"task_id": task_b.id}))
+        planning.insert_placement(placement)  # the same task may re-store it
     finally:
         conn.close()
 
@@ -381,16 +397,18 @@ def test_failed_later_migration_rolls_back_only_itself(tmp_path: Path, monkeypat
     db_path = tmp_path / "executions.db"
     get_connection(db_path).close()
 
-    failing_v4 = (4, ("CREATE TABLE partial_v4 (x INTEGER)", "INSERT INTO no_such_table VALUES (1)"))
-    monkeypatch.setattr(db_module, "MIGRATIONS", db_module.MIGRATIONS + (failing_v4,))
+    failing_next = (
+        LATEST_SCHEMA_VERSION + 1, ("CREATE TABLE partial_next (x INTEGER)", "INSERT INTO no_such_table VALUES (1)")
+    )
+    monkeypatch.setattr(db_module, "MIGRATIONS", db_module.MIGRATIONS + (failing_next,))
 
     with pytest.raises(MigrationError):
         get_connection(db_path)
 
     conn = sqlite3.connect(str(db_path))
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
-        assert not _table_exists(conn, "partial_v4")
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST_SCHEMA_VERSION
+        assert not _table_exists(conn, "partial_next")
     finally:
         conn.close()
 

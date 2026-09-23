@@ -287,7 +287,7 @@ def test_injected_write_failure_rolls_back_everything_including_replace_deletion
     apply(planning_service, parse("1,Keep me,study,,false,540,600,30,5,\n1,Keep block,event,,true,0,60,0,0,\n"))
     before = (planning_service.list_tasks(), planning_service.list_fixed_blocks())
 
-    original = planning_repository.upsert_task
+    original = planning_repository.insert_task
     calls = {"count": 0}
 
     def fail_late(task):
@@ -296,7 +296,7 @@ def test_injected_write_failure_rolls_back_everything_including_replace_deletion
             raise RuntimeError("disk full (injected)")
         original(task)
 
-    monkeypatch.setattr(planning_repository, "upsert_task", fail_late)
+    monkeypatch.setattr(planning_repository, "insert_task", fail_late)
     replacement = parse("1,New A,study,,false,540,600,30,5,\n1,New B,study,,false,600,660,30,5,\n1,Blk,event,,true,0,30,0,0,\n")
     with pytest.raises(RuntimeError, match="injected"):
         apply(planning_service, replacement, replace=True)
