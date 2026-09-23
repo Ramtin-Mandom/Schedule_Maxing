@@ -50,6 +50,33 @@ class InvalidFeedbackError(ExecutionError):
         super().__init__(message)
 
 
+class ExecutionVersionConflictError(ExecutionError):
+    """
+    Raised when an execution mutation's expected_version is not the stored
+    execution's current version (or the execution was deleted meanwhile).
+    The stored execution and its work sessions are left unchanged.
+    """
+
+    def __init__(self, execution_id: str, *, expected_version: int, current_version: int | None, deleted: bool = False) -> None:
+        self.execution_id = execution_id
+        self.expected_version = expected_version
+        self.current_version = current_version
+        self.deleted = deleted
+        state = "has been deleted" if deleted else f"is at version {current_version}"
+        super().__init__(
+            f"Execution {execution_id!r} was changed by someone else: expected version {expected_version}, "
+            f"but it {state}. Reload it and try again."
+        )
+
+
+class ExecutionDeletedError(ExecutionError):
+    """Raised when a placement's execution exists only as a tombstone, so it can be neither reused nor recreated."""
+
+    def __init__(self, execution_id: str) -> None:
+        self.execution_id = execution_id
+        super().__init__(f"The execution {execution_id!r} recorded for this placement was deleted.")
+
+
 class ExecutionLinkError(ExecutionError):
     """
     Raised when an execution would be linked to a task/placement that is not

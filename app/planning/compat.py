@@ -273,6 +273,7 @@ def _convert_fixed_blocks(
         converted.append(
             CanonicalFixedBlock(
                 label=block.name,
+                category=block.category or "fixed",
                 planned_date=target_date,
                 timezone=tz_name,
                 planned_start=start_utc,
@@ -377,6 +378,7 @@ def _import_legacy_csv_day(
             fixed_blocks.append(
                 CanonicalFixedBlock(
                     label=row["name"],
+                    category=(row.get("category") or "").strip() or "fixed",
                     planned_date=target_date,
                     timezone=tz_name,
                     planned_start=start_utc,

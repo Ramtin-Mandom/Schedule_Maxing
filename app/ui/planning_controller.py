@@ -4,56 +4,53 @@ app/ui/planning_controller.py
 The shared, testable state/controller boundary for canonical week/month/day
 planning (Task 6 / Schedule Maxing v2). Deliberately Tk-free -- every method
 here is plain Python, exercised by tests/ui/test_planning_controller.py
-without a display -- so app/app.py's eventual widget wiring has a single,
+without a display -- so app/app.py's widget wiring has a single,
 already-tested source of truth for task identities, preferences,
 allocation, and generated results, instead of reimplementing any of
 app/planning/'s logic in a callback. Domain decisions (scheduling,
 allocation, scoring) stay in app/planning/ and app/optimizer.py; this class
-only holds state and delegates.
+only delegates.
 
-Authoritative data (Milestone 2): tasks, fixed blocks, and generated
-placements are read from and written to the persistence-backed
+Authoritative data: tasks, fixed blocks, generated placements, the user
+and per-date preference layers, and schedule provenance (Milestone 3) are
+read from and written to the persistence-backed
 app.planning.application.PlanningService -- the controller keeps no copy
 of them. Every task/block/placement it returns is a fresh snapshot loaded
 from the database, so mutating a returned model never changes saved state;
-call add_or_update_task/set_fixed_blocks to save an edit. If no service is
-injected, the controller opens a private in-memory SQLite database (the
-previous in-memory behavior, now through the same code path); pass
-`service=` to persist to a real database file.
+call add_or_update_task/set_fixed_blocks/... to save an edit. If no
+service is injected, the controller opens a private in-memory SQLite
+database; pass `service=` to persist to a real database file.
 
-PlanningController still holds, in memory only (temporary render state,
-never stored):
-    - a layered preference stack per app.planning.preferences (YAML
-      template -> one in-memory "user" override layer -> per-date override
-      layers), resolved on demand -- never a per-day YAML file (see
-      resolve_day_preferences's own "independent data" guarantee: editing
-      one date's override here can never mutate another date's, or the
-      YAML layer, or a DayPreferences already handed to a caller);
-    - the current AllocationResult (or None before any Week/Month
-      allocation has run) and a SelectedDayState per date, invalidated via
-      app.planning.service.mark_stale_if_outdated whenever a new
-      allocation run supersedes the one an existing generated day came
-      from, or whenever a successful task/fixed-block/preference edit could
-      affect an already-generated day (see _invalidate_generated_results).
-      A failed write changes nothing and invalidates nothing.
+Preconditions: an update or delete passes the version the caller last read
+(expected_version / expected_versions); a stale write fails with the
+service's VersionConflictError message and changes nothing. Creates omit it.
 
-generate_day saves the generated placements for that one date through
-PlanningService.replace_placements (only after generation succeeds; if the
-save fails, the day's state is left as it was). The previous result used
-for placement-id reuse is the stored placements of that date, so an
-unchanged placement keeps its id -- and any execution history linked to
-it -- across regenerations and restarts. schedule_range (the desktop
-pages' "Make Schedule") allocates a range and then runs selected-day
-generation once per date of it -- each call still optimizes exactly one
-date -- and saves every date's placements in one transaction: either the
-whole range's new schedule is committed, or none of it is.
+Preferences: resolved on demand as YAML template (loaded once, see
+refresh_yaml_layer) -> the stored user layer -> the stored layer of that
+date. Nothing is cached, so a value saved by any caller is what the next
+resolution uses.
 
-Restart handling of derived state: allocation and SelectedDayStates are
-not persisted. A date that has saved placements but no in-memory state
-(e.g. after reopening the app) is reported by day_state as STALE with the
-saved placements as its result -- never as GENERATED/current, because the
-edits made since it was generated are unknown -- and the saved placements
-are kept, not deleted. Generating the date again makes it GENERATED.
+Derived state kept in memory only: the current AllocationResult of an
+explicit allocate_range/allocate_week/allocate_month (Week/Month
+allocation is a preview, and generate_day generates from it). A
+successful task/fixed-block/preference edit clears it (it must be re-run,
+never silently redone). A failed write changes nothing and clears nothing.
+
+Day state (day_state/day_states) is derived from SQLite, so it survives a
+restart: a date with a generation record whose inputs fingerprint and
+placement digest still match is GENERATED (current) -- even if it placed
+nothing; one whose inputs or placements changed is STALE; saved placements
+without any record (pre-v4 data) are STALE with StaleReason.NO_PROVENANCE;
+nothing at all is ALLOCATED (initial). See app/planning/provenance.py.
+
+generate_day and schedule_range (the desktop pages' "Make Schedule") save
+through PlanningService.reschedule_range: the previous stored placements
+of each generated date are the engine's previous_result (so an unchanged
+placement keeps its id -- and any execution history linked to it -- across
+regenerations and restarts) *and* the save's precondition; placements of
+the same occurrences outside the range are superseded; and the provenance
+is written in the same transaction. Either the whole range's new schedule
+is committed, or none of it is.
 
 Every mutating/possibly-failing method returns a ControllerResult, matching
 ExecutionController/ProductivityController's convention, so a Tk callback
@@ -67,14 +64,16 @@ from __future__ import annotations
 
 import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date as date_
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.execution.db import get_connection
 from app.optimizer import MandatoryTaskSchedulingError
 from app.planning.allocation import AllocationResult, allocate_tasks, month_dates, week_dates
 from app.planning.application import (
+    BatchApplyResult,
+    GenerationProvenance,
     ImportApplyResult,
     PlacementReplacement,
     PlanningRange,
@@ -82,18 +81,28 @@ from app.planning.application import (
     RangeClearResult,
     RangeScope,
 )
+from app.planning.csv_canonical import is_canonical_csv, parse_canonical_csv_file
 from app.planning.csv_export import PlanningExportResult, export_planning_csv
-from app.planning.csv_import import ImportMode, ParsedImport, parse_legacy_csv_file
-from app.planning.errors import PlanningError
+from app.planning.csv_import import ImportMode, ParsedImport, read_csv_text, parse_legacy_csv_file
+from app.planning.errors import PlanningError, VersionConflictError
+from app.planning.external_dependencies import (
+    ExternalDependency,
+    allocation_dates,
+    explain_unallocated,
+    satisfaction_instants,
+)
 from app.planning.models import DayScheduleOutput, FixedBlock, ScheduledTask, Task, TaskRegistry
 from app.planning.preferences import (
     DayPreferences,
+    OptimizerMode,
     PreferenceOverrides,
+    PreferenceRecord,
     day_preferences_overrides_from_reward_settings,
     resolve_day_preferences,
 )
+from app.planning.provenance import classify_generation, inputs_fingerprint, placements_digest
 from app.planning.repository import PlanningRepository
-from app.planning.service import DayResultStatus, SelectedDayState, generate_selected_day, initial_state, mark_stale_if_outdated
+from app.planning.service import DayResultStatus, SelectedDayState, generate_selected_day, initial_state
 from app.reward import load_reward_settings
 from app.ui.background import ControllerResult
 
@@ -105,6 +114,21 @@ class RangeScheduleResult:
     allocation: AllocationResult
     outputs: dict[date_, DayScheduleOutput]
     replacement: PlacementReplacement
+    #: Active placements outside the range that this run superseded (removed).
+    superseded_ids: list[uuid.UUID] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _SchedulingInputs:
+    """One consistent snapshot of everything a range generation reads, plus its fingerprint."""
+
+    start_date: date_
+    end_date: date_
+    scope: RangeScope
+    planning_range: PlanningRange
+    preferences_by_date: dict[date_, DayPreferences]
+    external: dict[uuid.UUID, ExternalDependency]
+    fingerprint: str
 
 
 def _scheduling_failure_message(selected_date: date_, error: MandatoryTaskSchedulingError) -> str:
@@ -112,6 +136,10 @@ def _scheduling_failure_message(selected_date: date_, error: MandatoryTaskSchedu
         f"{failure.task_id} [{failure.reason_code.value}]: {failure.explanation}" for failure in error.failures
     )
     return f"Could not generate {selected_date}: {reasons}"
+
+
+def _range_dates(start_date: date_, end_date: date_) -> list[date_]:
+    return [start_date + timedelta(days=offset) for offset in range((end_date - start_date).days + 1)]
 
 
 class PlanningController:
@@ -130,16 +158,13 @@ class PlanningController:
         self._lock = threading.RLock()
 
         self._timezone = timezone
-        self._user_overrides: PreferenceOverrides | None = None
-        self._date_overrides: dict[date_, PreferenceOverrides] = {}
         # Loaded once at construction, not reloaded from disk on every
         # resolution -- see app/optimizer.py's own "avoid reloading YAML"
         # performance note. Call refresh_yaml_layer() to pick up an edited
         # config/task_preference.yaml without recreating the controller.
         self._yaml_overrides = day_preferences_overrides_from_reward_settings(load_reward_settings(project_root=project_root))
         self._allocation: AllocationResult | None = None
-        self._allocation_scope = RangeScope.ELIGIBLE
-        self._day_states: dict[date_, SelectedDayState] = {}
+        self._allocation_inputs: _SchedulingInputs | None = None
 
     def close(self) -> None:
         """Close the private in-memory database, if this controller opened one."""
@@ -151,29 +176,31 @@ class PlanningController:
     # Tasks (shared identity across Day/Week/Month views)
     # ------------------------------------------------------------------
 
-    def add_or_update_task(self, task: Task) -> ControllerResult[Task]:
-        """Save one task; the value is the stored snapshot (with any version bump)."""
+    def add_or_update_task(self, task: Task, *, expected_version: int | None = None) -> ControllerResult[Task]:
+        """Create (no expected_version) or update one task; the value is the stored snapshot."""
 
         def op() -> Task:
-            saved = self._service.save_task(task)
+            saved = self._service.save_task(task, expected_version=expected_version)
             self._invalidate_generated_results()
             return saved
 
         return self._call(op)
 
-    def add_or_update_tasks(self, tasks: list[Task]) -> ControllerResult[list[Task]]:
-        """Save several tasks atomically (all or none)."""
+    def add_or_update_tasks(
+        self, tasks: list[Task], *, expected_versions: dict[uuid.UUID, int] | None = None
+    ) -> ControllerResult[list[Task]]:
+        """Save several tasks atomically (all or none); ids in expected_versions are updates."""
 
         def op() -> list[Task]:
-            saved = self._service.save_tasks(tasks)
+            saved = self._service.save_tasks(tasks, expected_versions=expected_versions)
             self._invalidate_generated_results()
             return saved
 
         return self._call(op)
 
-    def remove_task(self, task_id: uuid.UUID) -> ControllerResult[None]:
+    def remove_task(self, task_id: uuid.UUID, *, expected_version: int) -> ControllerResult[None]:
         def op() -> None:
-            if self._service.delete_task(task_id):
+            if self._service.delete_task(task_id, expected_version=expected_version):
                 self._invalidate_generated_results()
 
         return self._call(op)
@@ -191,9 +218,13 @@ class PlanningController:
     # Fixed blocks
     # ------------------------------------------------------------------
 
-    def set_fixed_blocks(self, day: date_, blocks: list[FixedBlock]) -> ControllerResult[None]:
+    def set_fixed_blocks(
+        self, day: date_, blocks: list[FixedBlock], *, expected_versions: dict[uuid.UUID, int] | None = None
+    ) -> ControllerResult[None]:
+        """Make `day`'s blocks exactly `blocks`; expected_versions must cover every block stored on `day`."""
+
         def op() -> None:
-            self._service.set_fixed_blocks_for_date(day, blocks)
+            self._service.set_fixed_blocks_for_date(day, blocks, expected_versions=expected_versions)
             self._invalidate_generated_results()
 
         return self._call(op)
@@ -201,19 +232,19 @@ class PlanningController:
     def get_fixed_blocks(self, day: date_) -> ControllerResult[list[FixedBlock]]:
         return self._call(lambda: self._service.fixed_blocks_for_date(day))
 
-    def save_fixed_block(self, block: FixedBlock) -> ControllerResult[FixedBlock]:
-        """Create or edit one fixed block (its date may change)."""
+    def save_fixed_block(self, block: FixedBlock, *, expected_version: int | None = None) -> ControllerResult[FixedBlock]:
+        """Create (no expected_version) or edit one fixed block (its date may change)."""
 
         def op() -> FixedBlock:
-            saved = self._service.save_fixed_block(block)
+            saved = self._service.save_fixed_block(block, expected_version=expected_version)
             self._invalidate_generated_results()
             return saved
 
         return self._call(op)
 
-    def delete_fixed_block(self, block_id: uuid.UUID) -> ControllerResult[bool]:
+    def delete_fixed_block(self, block_id: uuid.UUID, *, expected_version: int) -> ControllerResult[bool]:
         def op() -> bool:
-            deleted = self._service.delete_fixed_block(block_id)
+            deleted = self._service.delete_fixed_block(block_id, expected_version=expected_version)
             if deleted:
                 self._invalidate_generated_results()
             return deleted
@@ -231,24 +262,50 @@ class PlanningController:
         return self._call(lambda: self._service.load_range(start_date, end_date, scope=scope))
 
     def apply_import(self, parsed: ParsedImport, mode: ImportMode) -> ControllerResult[ImportApplyResult]:
-        """Write a validated CSV import in one transaction (see app/planning/csv_import.py for the modes)."""
+        """Write a validated legacy CSV import in one transaction (see app/planning/csv_import.py for the modes)."""
 
         def op() -> ImportApplyResult:
             replace_range = (parsed.start_date, parsed.end_date) if mode == ImportMode.REPLACE else None
             result = self._service.apply_import(parsed.tasks, parsed.fixed_blocks, replace_range=replace_range)
             self._invalidate_generated_results()
-            if replace_range is not None:
-                for day in list(self._day_states):
-                    if parsed.start_date <= day <= parsed.end_date:
-                        del self._day_states[day]
             return result
 
         return self._call(op)
 
     def import_csv_file(
-        self, path: str, *, anchor_date: date_, mode: ImportMode
-    ) -> ControllerResult[ImportApplyResult]:
-        """Parse and validate the whole file (day 1 == anchor_date, this controller's timezone), then apply it."""
+        self, path: str, *, anchor_date: date_, mode: ImportMode, allow_updates: bool = False
+    ) -> ControllerResult[ImportApplyResult | BatchApplyResult]:
+        """
+        Import a CSV. A legacy schedule CSV is parsed with day 1 ==
+        anchor_date in this controller's timezone and applied per `mode`. A
+        canonical stored-planning CSV (it has `record_type`/`id` columns) is
+        merged by identity (app/planning/csv_canonical.py); the anchor date
+        does not apply to it, and REPLACE is refused for it rather than
+        silently reinterpreted.
+        """
+        try:
+            text = read_csv_text(path)
+        except (OSError, UnicodeDecodeError) as error:
+            return ControllerResult.failure(f"Could not read {path}: {error}")
+
+        if is_canonical_csv(text):
+            if mode == ImportMode.REPLACE:
+                return ControllerResult.failure(
+                    "This is a stored-planning CSV with record ids; it is merged by id and cannot be imported "
+                    "with Replace. Use Append."
+                )
+            try:
+                batch = parse_canonical_csv_file(path)
+            except PlanningError as error:
+                return ControllerResult.failure(str(error))
+
+            def op() -> BatchApplyResult:
+                result = self._service.apply_record_batch(batch, allow_updates=allow_updates)
+                self._invalidate_generated_results()
+                return result
+
+            return self._call(op)
+
         try:
             parsed = parse_legacy_csv_file(path, anchor_date=anchor_date, timezone=self._timezone)
         except PlanningError as error:
@@ -256,10 +313,14 @@ class PlanningController:
         return self.apply_import(parsed, mode)
 
     def export_planning_csv(
-        self, path: str, *, start_date: date_ | None = None, end_date: date_ | None = None
+        self, path: str, *, start_date: date_ | None = None, end_date: date_ | None = None, include_deleted: bool = False
     ) -> ControllerResult[PlanningExportResult]:
         """Write the stored-planning CSV (read-only; see app/planning/csv_export.py)."""
-        return self._call(lambda: export_planning_csv(self._service, path, start_date=start_date, end_date=end_date))
+        return self._call(
+            lambda: export_planning_csv(
+                self._service, path, start_date=start_date, end_date=end_date, include_deleted=include_deleted
+            )
+        )
 
     def clear_range(
         self, start_date: date_, end_date: date_, *, include_planning_data: bool
@@ -269,9 +330,6 @@ class PlanningController:
         def op() -> RangeClearResult:
             result = self._service.clear_range(start_date, end_date, include_planning_data=include_planning_data)
             self._invalidate_generated_results()
-            for day in list(self._day_states):
-                if start_date <= day <= end_date:
-                    del self._day_states[day]
             return result
 
         return self._call(op)
@@ -293,35 +351,101 @@ class PlanningController:
 
         return self._call(op)
 
-    def set_user_overrides(self, overrides: PreferenceOverrides | None) -> ControllerResult[None]:
-        """Session-scoped overrides applied to every date unless a date-specific override says otherwise."""
+    def user_preferences(self) -> ControllerResult[PreferenceRecord | None]:
+        """The stored user layer (with its version, the precondition for changing it)."""
+        return self._call(self._service.user_preferences)
 
-        def op() -> None:
-            self._user_overrides = overrides
-            self._invalidate_generated_results()
+    def date_preferences(self, day: date_) -> ControllerResult[PreferenceRecord | None]:
+        return self._call(lambda: self._service.date_preferences(day))
 
-        return self._call(op)
+    def set_user_overrides(
+        self, overrides: PreferenceOverrides | None, *, expected_version: int | None = None
+    ) -> ControllerResult[PreferenceRecord | None]:
+        """
+        Save the user layer (applied to every date unless a date layer says
+        otherwise), or delete it with overrides=None. Creating omits
+        expected_version; changing or deleting an existing layer needs it.
+        """
 
-    def set_date_overrides(self, day: date_, overrides: PreferenceOverrides | None) -> ControllerResult[None]:
-        def op() -> None:
+        def op() -> PreferenceRecord | None:
             if overrides is None:
-                self._date_overrides.pop(day, None)
-            else:
-                self._date_overrides[day] = overrides
+                self._delete_preference_layer(None, expected_version)
+                self._invalidate_generated_results()
+                return None
+            saved = self._service.save_user_preferences(overrides, expected_version=expected_version)
             self._invalidate_generated_results()
+            return saved
 
         return self._call(op)
+
+    def set_date_overrides(
+        self, day: date_, overrides: PreferenceOverrides | None, *, expected_version: int | None = None
+    ) -> ControllerResult[PreferenceRecord | None]:
+        """Save (or, with overrides=None, delete) the layer of one date; see set_user_overrides."""
+
+        def op() -> PreferenceRecord | None:
+            if overrides is None:
+                self._delete_preference_layer(day, expected_version)
+                self._invalidate_generated_results()
+                return None
+            saved = self._service.save_date_preferences(day, overrides, expected_version=expected_version)
+            self._invalidate_generated_results()
+            return saved
+
+        return self._call(op)
+
+    def set_engine_mode(self, mode: OptimizerMode) -> ControllerResult[PreferenceRecord]:
+        """
+        An explicit "schedule in this mode from now on" command (e.g. the
+        CLI's --mode): sets optimizer_mode on the stored user layer, keeping
+        every other stored field. The read and the compare-and-update happen
+        in one transaction, so the precondition is the version just read and
+        no concurrent change to the layer is overwritten.
+        """
+
+        def op() -> PreferenceRecord:
+            with self._service.transaction():
+                stored = self._service.user_preferences()
+                if stored is None:
+                    saved = self._service.save_user_preferences(PreferenceOverrides(optimizer_mode=mode))
+                else:
+                    updated = stored.overrides.model_copy(update={"optimizer_mode": mode})
+                    saved = self._service.save_user_preferences(updated, expected_version=stored.version)
+            self._invalidate_generated_results()
+            return saved
+
+        return self._call(op)
+
+    def _delete_preference_layer(self, day: date_ | None, expected_version: int | None) -> None:
+        stored = self._service.user_preferences() if day is None else self._service.date_preferences(day)
+        if stored is None:
+            return
+        if expected_version is None:
+            raise VersionConflictError(
+                "preference", stored.id, expected_version=None, current_version=stored.version,
+                message="These preferences exist (version "
+                f"{stored.version}); pass the version you read to delete them.",
+            )
+        if day is None:
+            self._service.delete_user_preferences(expected_version=expected_version)
+        else:
+            self._service.delete_date_preferences(day, expected_version=expected_version)
 
     def resolve_preferences(self, day: date_) -> ControllerResult[DayPreferences]:
-        return self._call(lambda: self._resolve(day))
+        return self._call(lambda: self._resolve_range([day])[day])
 
-    def _resolve(self, day: date_) -> DayPreferences:
-        return resolve_day_preferences(
-            date=day, timezone=self._timezone,
-            yaml_overrides=self._yaml_overrides,
-            user_overrides=self._user_overrides,
-            date_overrides=self._date_overrides.get(day),
-        )
+    def _resolve_range(self, dates: list[date_]) -> dict[date_, DayPreferences]:
+        user = self._service.user_preferences()
+        by_date = self._service.date_preferences_for_range(min(dates), max(dates))
+        return {
+            day: resolve_day_preferences(
+                date=day, timezone=self._timezone,
+                yaml_overrides=self._yaml_overrides,
+                user_overrides=user.overrides if user is not None else None,
+                date_overrides=by_date[day].overrides if day in by_date else None,
+            )
+            for day in dates
+        }
 
     # ------------------------------------------------------------------
     # Allocation (Week / Month) -- never calls the Day Scheduler
@@ -331,35 +455,42 @@ class PlanningController:
         self, start_date: date_, end_date: date_, *, scope: RangeScope = RangeScope.ELIGIBLE
     ) -> ControllerResult[AllocationResult]:
         def op() -> AllocationResult:
-            result = self._compute_allocation(start_date, end_date, scope)
-            self._adopt_allocation(result, scope)
+            inputs = self._scheduling_inputs(start_date, end_date, scope)
+            result = self._allocate(inputs)
+            self._allocation, self._allocation_inputs = result, inputs
             return result
 
         return self._call(op)
 
-    def _compute_allocation(self, start_date: date_, end_date: date_, scope: RangeScope) -> AllocationResult:
-        planning_range = self._service.load_range(start_date, end_date, scope=scope)
-        dates = [start_date]
-        current = start_date
-        while current < end_date:
-            current = current + timedelta(days=1)
-            dates.append(current)
-
-        preferences_by_date = {day: self._resolve(day) for day in dates}
-        result = allocate_tasks(
-            start_date=start_date, end_date=end_date, tasks=planning_range.tasks,
-            task_ids=planning_range.task_ids, preferences_by_date=preferences_by_date,
-            fixed_blocks_by_date=planning_range.fixed_blocks_by_date,
+    def _scheduling_inputs(self, start_date: date_, end_date: date_, scope: RangeScope) -> _SchedulingInputs:
+        """Everything a generation of [start_date, end_date] reads, as one consistent snapshot."""
+        dates = _range_dates(start_date, end_date)
+        with self._service.transaction():
+            planning_range = self._service.load_range(start_date, end_date, scope=scope)
+            preferences_by_date = self._resolve_range(dates)
+            external = self._service.external_dependencies(
+                planning_range.tasks.tasks.values(), start_date, end_date, self._timezone
+            )
+        fingerprint = inputs_fingerprint(
+            start_date=start_date, end_date=end_date, scope=scope.value, timezone_name=self._timezone,
+            tasks=planning_range.tasks.tasks.values(),
+            fixed_blocks=[block for day in dates for block in planning_range.fixed_blocks_by_date[day]],
+            preferences_by_date=preferences_by_date, external_dependencies=external,
         )
-        return result
+        return _SchedulingInputs(
+            start_date=start_date, end_date=end_date, scope=scope, planning_range=planning_range,
+            preferences_by_date=preferences_by_date, external=external, fingerprint=fingerprint,
+        )
 
-    def _adopt_allocation(self, result: AllocationResult, scope: RangeScope) -> None:
-        self._allocation = result
-        self._allocation_scope = scope
-        self._day_states = {
-            day: mark_stale_if_outdated(state, result.id) for day, state in self._day_states.items()
-        }
-        return result
+    def _allocate(self, inputs: _SchedulingInputs) -> AllocationResult:
+        planning_range = inputs.planning_range
+        result = allocate_tasks(
+            start_date=inputs.start_date, end_date=inputs.end_date, tasks=planning_range.tasks,
+            task_ids=planning_range.task_ids, preferences_by_date=inputs.preferences_by_date,
+            fixed_blocks_by_date=planning_range.fixed_blocks_by_date,
+            external_dependency_dates=allocation_dates(inputs.external),
+        )
+        return explain_unallocated(result, planning_range.tasks.tasks, inputs.external)
 
     def allocate_week(self, start_date: date_) -> ControllerResult[AllocationResult]:
         dates = week_dates(start_date)
@@ -378,99 +509,138 @@ class PlanningController:
 
     def generate_day(self, selected_date: date_) -> ControllerResult[DayScheduleOutput]:
         def op() -> DayScheduleOutput:
-            if self._allocation is None:
+            if self._allocation is None or self._allocation_inputs is None:
                 raise RuntimeError("Allocate a week/month (allocate_week/allocate_month) before generating a day.")
+            allocation, inputs = self._allocation, self._allocation_inputs
+            if not inputs.start_date <= selected_date <= inputs.end_date:
+                raise RuntimeError(f"{selected_date} is outside the allocated range {inputs.start_date} .. {inputs.end_date}.")
 
-            allocation = self._allocation
-            tasks = self._service.load_range(
-                allocation.start_date, allocation.end_date, scope=self._allocation_scope
-            ).tasks
-            result, state = self._generate(allocation, selected_date, tasks)
-            # Save first; only a successfully saved result becomes the day's state.
-            self._service.replace_placements(selected_date, selected_date, result.placements)
-            self._day_states[selected_date] = state
-            return result
+            output, expected = self._generate(allocation, inputs, selected_date)
+            # Save first (placements + provenance, atomically); only then is it the day's result.
+            self._service.reschedule_range(
+                selected_date, selected_date, {selected_date: output},
+                expected_versions=expected, provenance=self._provenance(allocation, inputs, [selected_date]),
+            )
+            return output
 
-        try:
-            with self._lock:
-                return ControllerResult.success(op())
-        except MandatoryTaskSchedulingError as error:
-            # A structured, expected outcome (not every day generates
-            # successfully) -- surfaced through the same ControllerResult
-            # channel as any other failure, with the per-task reasons
-            # preserved in the message rather than swallowed.
-            return ControllerResult.failure(_scheduling_failure_message(selected_date, error))
-        except PlanningError as error:
-            return ControllerResult.failure(str(error))
-        except Exception as error:  # noqa: BLE001 - last-resort safety net
-            return ControllerResult.failure(f"Unexpected error: {error}")
+        return self._generation_call(op, lambda: selected_date)
 
     def schedule_range(
         self, start_date: date_, end_date: date_, *, scope: RangeScope = RangeScope.PLANNED
     ) -> ControllerResult[RangeScheduleResult]:
         """
         Allocate [start_date, end_date], generate each of its dates (one
-        selected-day generation per date), and save all of the range's
-        placements in one transaction. On any failure nothing is saved and
-        no day state changes; the previously committed schedule stays.
+        selected-day generation per date), and save the whole range --
+        placements, superseded-placement cleanup, and provenance -- in one
+        transaction. On any failure nothing is saved; the previously
+        committed schedule stays.
         """
         current_date = start_date
 
         def op() -> RangeScheduleResult:
             nonlocal current_date
-            allocation = self._compute_allocation(start_date, end_date, scope)
-            tasks = self._service.load_range(start_date, end_date, scope=scope).tasks
+            inputs = self._scheduling_inputs(start_date, end_date, scope)
+            allocation = self._allocate(inputs)
 
             outputs: dict[date_, DayScheduleOutput] = {}
-            states: dict[date_, SelectedDayState] = {}
-            current_date = start_date
-            while current_date <= end_date:
-                outputs[current_date], states[current_date] = self._generate(allocation, current_date, tasks)
-                current_date += timedelta(days=1)
+            expected: dict[uuid.UUID, int] = {}
+            for current_date in _range_dates(start_date, end_date):
+                outputs[current_date], previous_versions = self._generate(allocation, inputs, current_date)
+                expected.update(previous_versions)
 
-            placements = [placement for output in outputs.values() for placement in output.placements]
-            replacement = self._service.replace_placements(start_date, end_date, placements)
-            # Committed: only now does the new allocation/day state become visible.
-            self._adopt_allocation(allocation, scope)
-            self._day_states.update(states)
-            return RangeScheduleResult(allocation=allocation, outputs=outputs, replacement=replacement)
+            result = self._service.reschedule_range(
+                start_date, end_date, outputs, expected_versions=expected,
+                provenance=self._provenance(allocation, inputs, list(outputs)),
+            )
+            # Committed: only now does the new allocation become the current one.
+            self._allocation, self._allocation_inputs = allocation, inputs
+            return RangeScheduleResult(
+                allocation=allocation, outputs=outputs, replacement=result.replacement,
+                superseded_ids=result.superseded_ids,
+            )
 
-        try:
-            with self._lock:
-                return ControllerResult.success(op())
-        except MandatoryTaskSchedulingError as error:
-            return ControllerResult.failure(_scheduling_failure_message(current_date, error))
-        except PlanningError as error:
-            return ControllerResult.failure(str(error))
-        except Exception as error:  # noqa: BLE001 - last-resort safety net
-            return ControllerResult.failure(f"Unexpected error: {error}")
+        return self._generation_call(op, lambda: current_date)
 
     def _generate(
-        self, allocation: AllocationResult, selected_date: date_, tasks: TaskRegistry
-    ) -> tuple[DayScheduleOutput, SelectedDayState]:
-        preferences = self._resolve(selected_date)
+        self, allocation: AllocationResult, inputs: _SchedulingInputs, selected_date: date_
+    ) -> tuple[DayScheduleOutput, dict[uuid.UUID, int]]:
+        """Generate one date; also return the stored placements it replaces, {id: version} (the save's precondition)."""
+        preferences = inputs.preferences_by_date[selected_date]
         previous_result = self._service.stored_day_output(selected_date, preferences.timezone)
-        return generate_selected_day(
-            allocation, selected_date, tasks, {selected_date: preferences},
-            {selected_date: self._service.fixed_blocks_for_date(selected_date)},
+        output, _ = generate_selected_day(
+            allocation, selected_date, inputs.planning_range.tasks, {selected_date: preferences},
+            {selected_date: inputs.planning_range.fixed_blocks_by_date[selected_date]},
             previous_result=previous_result,
+            external_dependency_satisfaction=satisfaction_instants(inputs.external),
+        )
+        previous = {placement.id: placement.version for placement in previous_result.placements} if previous_result else {}
+        return output, previous
+
+    def _provenance(
+        self, allocation: AllocationResult, inputs: _SchedulingInputs, dates: list[date_]
+    ) -> GenerationProvenance:
+        return GenerationProvenance(
+            allocation_id=allocation.id,
+            range_start=inputs.start_date,
+            range_end=inputs.end_date,
+            range_scope=inputs.scope.value,
+            fingerprint=inputs.fingerprint,
+            timezone=self._timezone,
+            engine_modes={day: inputs.preferences_by_date[day].optimizer_mode for day in dates},
+            generated_at=datetime.now(timezone.utc),
         )
 
     def day_state(self, day: date_) -> ControllerResult[SelectedDayState]:
-        """In-memory state; else STALE for saved placements from an earlier session (see module docstring)."""
+        """The persisted state of one date (see the module docstring)."""
+        return self._call(lambda: self._day_states([day])[day])
 
-        def op() -> SelectedDayState:
-            state = self._day_states.get(day)
-            if state is not None:
-                return state
-            stored = self._service.stored_day_output(day, self._timezone)
-            if stored is None:
-                return initial_state(day)
-            return SelectedDayState(
-                date=day, status=DayResultStatus.STALE, result=stored, generated_from_allocation_id=None
+    def day_states(self, dates: list[date_]) -> ControllerResult[dict[date_, SelectedDayState]]:
+        """day_state for several dates, recomputing each distinct recorded range's inputs only once."""
+        return self._call(lambda: self._day_states(dates))
+
+    def _day_states(self, dates: list[date_]) -> dict[date_, SelectedDayState]:
+        if not dates:
+            return {}
+        start, end = min(dates), max(dates)
+        records = self._service.generation_records(start, end)
+        placements_by_date = self._service.placements_for_range(start, end)
+        fingerprints: dict[tuple, str | None] = {}
+        states: dict[date_, SelectedDayState] = {}
+
+        for day in dates:
+            record = records.get(day)
+            placements = placements_by_date[day]
+            current_fingerprint = None
+            if record is not None:
+                key = (record.range_start, record.range_end, record.range_scope)
+                if key not in fingerprints:
+                    try:
+                        fingerprints[key] = self._scheduling_inputs(
+                            record.range_start, record.range_end, RangeScope(record.range_scope)
+                        ).fingerprint
+                    except (PlanningError, ValueError):
+                        fingerprints[key] = None  # the recorded inputs can no longer be recomputed
+                current_fingerprint = fingerprints[key]
+
+            is_current, reason = classify_generation(
+                record, has_placements=bool(placements), current_fingerprint=current_fingerprint,
+                current_placements_digest=placements_digest(placements),
             )
-
-        return self._call(op)
+            if is_current is None:
+                states[day] = initial_state(day)
+                continue
+            timezone_name = record.timezone if record is not None else self._timezone
+            result = self._service.stored_day_output(day, timezone_name) or DayScheduleOutput(
+                date=day, timezone=timezone_name
+            )
+            states[day] = SelectedDayState(
+                date=day,
+                status=DayResultStatus.GENERATED if is_current else DayResultStatus.STALE,
+                result=result,
+                generated_from_allocation_id=record.allocation_id if record is not None else None,
+                stale_reason=reason,
+            )
+        return states
 
     # ------------------------------------------------------------------
     # Internals
@@ -478,27 +648,29 @@ class PlanningController:
 
     def _invalidate_generated_results(self) -> None:
         """
-        A task/fixed-block/preference edit can affect any already-generated
-        day, so every GENERATED state is marked STALE (kept, only
-        relabeled) rather than silently left looking current. This is
-        intentionally coarse -- like app.planning.service's own
-        allocation-id-based invalidation, it can only over-invalidate, never
-        under-invalidate. The current allocation itself is also cleared:
-        Week/Month must be explicitly re-allocated after an edit, never
-        silently re-run.
+        A successful task/fixed-block/preference edit clears the current
+        in-memory allocation: Week/Month must be explicitly re-allocated,
+        never silently re-run. Saved schedules need no invalidation here --
+        their current/stale state is recomputed from SQLite (provenance),
+        so any edit, by any caller, is taken into account.
         """
         self._allocation = None
-        self._day_states = {
-            day: (
-                SelectedDayState(
-                    date=state.date, status=DayResultStatus.STALE, result=state.result,
-                    generated_from_allocation_id=state.generated_from_allocation_id,
-                )
-                if state.status == DayResultStatus.GENERATED
-                else state
-            )
-            for day, state in self._day_states.items()
-        }
+        self._allocation_inputs = None
+
+    def _generation_call(self, operation, current_date):
+        try:
+            with self._lock:
+                return ControllerResult.success(operation())
+        except MandatoryTaskSchedulingError as error:
+            # A structured, expected outcome (not every day generates
+            # successfully) -- surfaced through the same ControllerResult
+            # channel as any other failure, with the per-task reasons
+            # preserved in the message rather than swallowed.
+            return ControllerResult.failure(_scheduling_failure_message(current_date(), error))
+        except PlanningError as error:
+            return ControllerResult.failure(str(error))
+        except Exception as error:  # noqa: BLE001 - last-resort safety net
+            return ControllerResult.failure(f"Unexpected error: {error}")
 
     def _call(self, operation):
         try:

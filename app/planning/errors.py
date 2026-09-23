@@ -61,3 +61,36 @@ class ScopeError(PlanningError):
 class InvalidEntityError(PlanningError):
     """Raised when an entity cannot be stored as given (e.g. non-JSON
     optimization_metadata)."""
+
+
+class VersionConflictError(PlanningError):
+    """
+    Raised when a write's precondition does not hold: the caller's
+    expected_version is not the stored record's current version (someone
+    else changed it since the caller read it), or the record has since been
+    deleted (current_version is then the tombstone's version and `deleted`
+    is True). The stored record is left exactly as it was.
+    """
+
+    def __init__(
+        self,
+        kind: str,
+        entity_id: object,
+        *,
+        expected_version: int | None,
+        current_version: int | None,
+        deleted: bool = False,
+        message: str | None = None,
+    ) -> None:
+        self.kind = kind
+        self.entity_id = entity_id
+        self.expected_version = expected_version
+        self.current_version = current_version
+        self.deleted = deleted
+        if message is None:
+            state = "has been deleted" if deleted else f"is at version {current_version}"
+            message = (
+                f"The {kind} {entity_id} was changed by someone else: expected version {expected_version}, "
+                f"but it {state}. Reload it and try again."
+            )
+        super().__init__(message)

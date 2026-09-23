@@ -215,3 +215,36 @@ def test_export_planning_csv_from_the_cli(tmp_path):
         rows = list(csv.DictReader(file))
     assert [row["record_type"] for row in rows].count("placement") == 3
     assert {row["name"] for row in rows if row["record_type"] == "fixed_block"} == {"Sleep", "Breakfast", "Lunch", "Dinner"}
+
+
+# -----------------------------------------------------------------------------
+# Milestone 3: persisted engine mode, identity-preserving CSV round trip
+# -----------------------------------------------------------------------------
+
+
+def test_mode_is_saved_as_the_user_preference_and_reused(tmp_path):
+    db_path = tmp_path / "app.db"
+    main(["--db-path", str(db_path), "--csv", SAMPLE_CSV, "--anchor-date", "2026-01-05",
+          "--mode", "adhd_friendly", *outputs(tmp_path)])
+    main(["--db-path", str(db_path)])  # a later run without --mode keeps the saved preference
+
+    connection = get_connection(db_path)
+    try:
+        service = PlanningService(PlanningRepository(connection))
+        assert service.user_preferences().overrides.optimizer_mode.value == "adhd_friendly"
+        assert service.generation_record(service.list_placements()[0].planned_date).engine_mode.value == "adhd_friendly"
+    finally:
+        connection.close()
+
+
+def test_stored_planning_csv_round_trips_through_the_cli(tmp_path, capsys):
+    source, target = tmp_path / "source.db", tmp_path / "target.db"
+    exported = tmp_path / "planning.csv"
+    main(["--db-path", str(source), "--csv", SAMPLE_CSV, "--anchor-date", "2026-01-05", *outputs(tmp_path)])
+    main(["--db-path", str(source), "--export-planning-csv", str(exported)])
+
+    main(["--db-path", str(target), "--import-csv", str(exported), *outputs(tmp_path)])
+    main(["--db-path", str(target), "--import-csv", str(exported), *outputs(tmp_path)])  # again: a no-op
+
+    assert stored(target) == stored(source)  # same ids, versions, timestamps, categories, placements
+    assert "Unchanged: 0 project(s), 3 task(s), 4 fixed_block(s), 3 placement(s)" in capsys.readouterr().out

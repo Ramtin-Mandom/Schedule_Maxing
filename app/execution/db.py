@@ -60,6 +60,28 @@ which is genuinely arbitrary, is stored as a small JSON text column; no
 whole-model blobs. Existing `executions`/`work_sessions` rows, ids, and
 timestamps are not rewritten.
 
+Version 4 (Milestone 3 / sync-ready local records, see
+docs/sync-contract.md and _migrate_v3_to_v4): every synchronizable table
+(projects, tasks, fixed_blocks, scheduled_tasks, executions, and the new
+preference_overrides and schedule_generations) carries an owner (user_id,
+NULL for a local ownerless record), UTC audit timestamps, an integer local
+revision (`version`), and a `deleted_at` tombstone; fixed_blocks gains
+`category`; execution_wire_ids maps non-UUID execution ids to durable wire
+ids. Deletes of synchronizable planning records are soft (tombstones) from
+v4 on, so every normal read filters `deleted_at IS NULL`. The execution
+link-insert trigger is recreated to reject links to tombstoned
+tasks/placements. Additive only: released v1-v3 migrations are unchanged.
+
+Version 5 (Milestone 3 / synchronization client, see app/sync and
+docs/sync-protocol.md): change capture triggers that record every local
+write to a synchronizable row in sync_dirty in the same transaction (and
+stamp records created while an account is active with its owner);
+sync_control (suppresses capture while pulled records are applied);
+per-account sync_accounts (cursor), sync_shadows (last acknowledged server
+state), sync_outbox (materialized operations with stable op ids) and
+sync_conflicts. The execution link trigger is recreated once more so pulled
+history is validated by the server, not re-checked locally.
+
 Execution <-> planning links (the legacy compatibility strategy):
     executions.task_id / scheduled_task_id are *historical identity*: they
     record which task/placement an execution was created for, alongside the
@@ -72,8 +94,9 @@ Execution <-> planning links (the legacy compatibility strategy):
       (b) deleting/replacing a task or placement must never cascade into,
           null out, or block on execution history.
     Relationships are instead enforced at *link time* by triggers created
-    in v3: a newly inserted execution that names a task_id must reference a
-    persisted task; one that names a scheduled_task_id must also name a
+    in v3 (the insert trigger recreated in v4 to ignore tombstones): a newly
+    inserted execution that names a task_id must reference a live persisted
+    task; one that names a scheduled_task_id must also name a
     task_id, reference a persisted placement, and that placement must
     belong to the same task. Once written, an execution's task_id/
     scheduled_task_id are immutable (a status/session/feedback update never
@@ -104,9 +127,11 @@ import logging
 import os
 import sqlite3
 import threading
+import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 
@@ -524,6 +549,344 @@ _V3_PLANNING_STATEMENTS: tuple[str, ...] = (
 )
 
 
+#: Columns added to existing tables by v4, as (table, column, definition).
+#: Every definition either allows NULL or has a constant default, as SQLite's
+#: ALTER TABLE ADD COLUMN requires; the fixed-block audit timestamps are then
+#: filled in by _migrate_v3_to_v4 itself.
+_V4_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("projects", "deleted_at", "TEXT"),
+    ("tasks", "deleted_at", "TEXT"),
+    ("fixed_blocks", "user_id", "TEXT"),
+    ("fixed_blocks", "category", "TEXT NOT NULL DEFAULT 'fixed' CHECK (length(category) > 0)"),
+    ("fixed_blocks", "created_at", "TEXT"),
+    ("fixed_blocks", "updated_at", "TEXT"),
+    ("fixed_blocks", "version", "INTEGER NOT NULL DEFAULT 1 CHECK (version > 0)"),
+    ("fixed_blocks", "deleted_at", "TEXT"),
+    ("scheduled_tasks", "user_id", "TEXT"),
+    ("scheduled_tasks", "deleted_at", "TEXT"),
+    ("executions", "deleted_at", "TEXT"),
+)
+
+_V4_STATEMENTS: tuple[str, ...] = (
+    # Persisted preference layers (the "user" layer and per-date layers of
+    # app.planning.preferences.resolve_day_preferences). optimizer_mode is a
+    # real column; the remaining PreferenceOverrides fields are one
+    # pydantic-validated JSON document, because their absent/value/None
+    # three-state semantics are exactly what that document encodes.
+    """
+    CREATE TABLE IF NOT EXISTS preference_overrides (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        scope TEXT NOT NULL CHECK (scope IN ('user', 'date')),
+        scope_date TEXT,
+        optimizer_mode TEXT CHECK (optimizer_mode IS NULL OR optimizer_mode IN ('precise_greedy', 'adhd_friendly')),
+        overrides TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        version INTEGER NOT NULL CHECK (version > 0),
+        deleted_at TEXT,
+        CHECK ((scope = 'date') = (scope_date IS NOT NULL))
+    )
+    """,
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_preference_overrides_live_scope "
+    "ON preference_overrides(COALESCE(user_id, ''), scope, COALESCE(scope_date, '')) WHERE deleted_at IS NULL",
+    # Provenance of the saved schedule of one date: which inputs (by
+    # fingerprint, see app/planning/provenance.py) and which placements (by
+    # digest) it was generated from. One live row per (owner, date).
+    """
+    CREATE TABLE IF NOT EXISTS schedule_generations (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        planned_date TEXT NOT NULL,
+        timezone TEXT NOT NULL,
+        engine_mode TEXT NOT NULL,
+        range_start TEXT NOT NULL,
+        range_end TEXT NOT NULL,
+        range_scope TEXT NOT NULL,
+        allocation_id TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        fingerprint_version INTEGER NOT NULL,
+        placements_digest TEXT NOT NULL,
+        placement_count INTEGER NOT NULL CHECK (placement_count >= 0),
+        unscheduled_count INTEGER NOT NULL CHECK (unscheduled_count >= 0),
+        total_score REAL NOT NULL,
+        generated_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        version INTEGER NOT NULL CHECK (version > 0),
+        deleted_at TEXT,
+        CHECK (range_start <= planned_date AND planned_date <= range_end)
+    )
+    """,
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_generations_live_date "
+    "ON schedule_generations(COALESCE(user_id, ''), planned_date) WHERE deleted_at IS NULL",
+    # A stable wire identity for executions whose local id is not a UUID
+    # (legacy/fixture ids are preserved exactly, never reminted -- see
+    # docs/sync-contract.md). UUID-shaped ids are their own wire id.
+    """
+    CREATE TABLE IF NOT EXISTS execution_wire_ids (
+        execution_id TEXT PRIMARY KEY REFERENCES executions(id) ON DELETE CASCADE,
+        wire_id TEXT NOT NULL UNIQUE
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_task_live ON scheduled_tasks(task_id) WHERE deleted_at IS NULL",
+    # Soft deletion: a new execution may only link to a *live* task and
+    # placement. The v3 trigger is replaced (by name) rather than edited in
+    # the released v3 migration.
+    "DROP TRIGGER IF EXISTS trg_executions_link_insert",
+    f"""
+    CREATE TRIGGER trg_executions_link_insert
+    BEFORE INSERT ON executions
+    FOR EACH ROW
+    WHEN NEW.task_id IS NOT NULL OR NEW.scheduled_task_id IS NOT NULL
+    BEGIN
+        SELECT RAISE(ABORT, '{EXECUTION_LINK_VIOLATION}: scheduled_task_id requires task_id')
+        WHERE NEW.task_id IS NULL;
+        SELECT RAISE(ABORT, '{EXECUTION_LINK_VIOLATION}: task_id does not reference a persisted task')
+        WHERE NOT EXISTS (SELECT 1 FROM tasks WHERE id = NEW.task_id AND deleted_at IS NULL);
+        SELECT RAISE(ABORT, '{EXECUTION_LINK_VIOLATION}: scheduled_task_id does not reference a persisted placement')
+        WHERE NEW.scheduled_task_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM scheduled_tasks WHERE id = NEW.scheduled_task_id AND deleted_at IS NULL);
+        SELECT RAISE(ABORT, '{EXECUTION_LINK_VIOLATION}: placement belongs to a different task')
+        WHERE NEW.scheduled_task_id IS NOT NULL
+          AND EXISTS (
+              SELECT 1 FROM scheduled_tasks WHERE id = NEW.scheduled_task_id AND task_id <> NEW.task_id
+          );
+    END
+    """,
+)
+
+
+def _is_uuid_text(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+    except (ValueError, AttributeError, TypeError):
+        return False
+    return True
+
+
+def _column_names(connection: sqlite3.Connection, table: str) -> set[str]:
+    return {row[1] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def _migrate_v3_to_v4(connection: sqlite3.Connection) -> None:
+    """
+    Version 4 (Milestone 3 / sync-ready local records): uniform ownership,
+    audit timestamps, record versions and soft-deletion (deleted_at)
+    metadata on every synchronizable table; FixedBlock.category; persisted
+    preference layers; persisted schedule provenance; a durable wire id for
+    non-UUID execution ids; and a link trigger that ignores tombstones.
+
+    Purely additive: no existing id, timestamp, snapshot, work session, or
+    version is rewritten. Existing fixed blocks receive the migration instant
+    as their (previously unrecorded) created_at/updated_at and version 1.
+
+    A callable (not a statement tuple) because ALTER TABLE ADD COLUMN has no
+    IF NOT EXISTS (so columns are added only when missing, keeping repeated
+    runs safe) and because wire ids are minted with Python's uuid4. Like the
+    statement migrations it is one transaction together with its
+    user_version bump and foreign_key_check: any failure leaves v3 intact.
+    """
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        for table, column, definition in _V4_ADDED_COLUMNS:
+            if column not in _column_names(connection, table):
+                connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+        now = datetime.now(timezone.utc).isoformat()
+        connection.execute(
+            "UPDATE fixed_blocks SET created_at = COALESCE(created_at, ?), updated_at = COALESCE(updated_at, ?) "
+            "WHERE created_at IS NULL OR updated_at IS NULL",
+            (now, now),
+        )
+
+        for statement in _V4_STATEMENTS:
+            connection.execute(statement)
+
+        mapped = {row[0] for row in connection.execute("SELECT execution_id FROM execution_wire_ids").fetchall()}
+        for (execution_id,) in [tuple(row) for row in connection.execute("SELECT id FROM executions").fetchall()]:
+            if not _is_uuid_text(execution_id) and execution_id not in mapped:
+                connection.execute(
+                    "INSERT INTO execution_wire_ids (execution_id, wire_id) VALUES (?, ?)",
+                    (execution_id, str(uuid.uuid4())),
+                )
+
+        _check_foreign_keys(connection, 4)
+        connection.execute("PRAGMA user_version = 4")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+    connection.execute("COMMIT")
+
+
+#: (entity type on the wire, local table) for every synchronizable table.
+SYNC_TABLES: tuple[tuple[str, str], ...] = (
+    ("project", "projects"),
+    ("task", "tasks"),
+    ("fixed_block", "fixed_blocks"),
+    ("placement", "scheduled_tasks"),
+    ("preference", "preference_overrides"),
+    ("schedule_generation", "schedule_generations"),
+    ("execution", "executions"),
+)
+
+#: True while synchronization applies pulled records (app/sync): change
+#: capture is suppressed (no outbound echo) and link checks are left to the
+#: server, which already validated the records within the user's scope.
+_APPLYING_REMOTE = "(SELECT value FROM sync_control WHERE name = 'applying_remote') = 1"
+
+
+def _v5_capture_triggers() -> tuple[str, ...]:
+    """
+    Change capture (app/sync, docs/sync-protocol.md). Every local write to a
+    synchronizable row -- whatever code path makes it: a service method, CSV
+    import, rescheduling cleanup, a work session, a history reset -- bumps
+    that record's local revision in sync_dirty inside the same transaction,
+    so a rolled-back mutation leaves no trace and a committed one can never
+    be missed. Work-session writes mark their execution (the aggregate).
+    """
+    mark = (
+        "INSERT INTO sync_dirty (entity_type, entity_id, local_rev, changed_at) "
+        "VALUES ('{type}', {ref}.{column}, 1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) "
+        "ON CONFLICT (entity_type, entity_id) DO UPDATE SET local_rev = local_rev + 1, changed_at = excluded.changed_at"
+    )
+    statements = []
+    targets = [(entity, table, "id") for entity, table in SYNC_TABLES] + [("execution", "work_sessions", "execution_id")]
+    for entity, table, column in targets:
+        for event, ref in (("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD")):
+            name = f"trg_sync_{table}_{event.lower()}"
+            statements.append(f"DROP TRIGGER IF EXISTS {name}")
+            statements.append(
+                f"CREATE TRIGGER {name} AFTER {event} ON {table} FOR EACH ROW WHEN NOT {_APPLYING_REMOTE} "
+                f"BEGIN {mark.format(type=entity, ref=ref, column=column)}; END"
+            )
+    for _, table in SYNC_TABLES:
+        # Records created while an account is *active* on this device belong to it; nothing
+        # existing is reassigned (that is the explicit association step in app/sync).
+        name = f"trg_sync_{table}_owner"
+        statements.append(f"DROP TRIGGER IF EXISTS {name}")
+        statements.append(
+            f"CREATE TRIGGER {name} AFTER INSERT ON {table} FOR EACH ROW "
+            f"WHEN NEW.user_id IS NULL AND NOT {_APPLYING_REMOTE} AND EXISTS (SELECT 1 FROM sync_accounts WHERE active = 1) "
+            f"BEGIN UPDATE {table} SET user_id = (SELECT user_id FROM sync_accounts WHERE active = 1) "
+            f"WHERE id = NEW.id; END"
+        )
+    return tuple(statements)
+
+
+_V5_STATEMENTS: tuple[str, ...] = (
+    "CREATE TABLE IF NOT EXISTS sync_control (name TEXT PRIMARY KEY, value INTEGER NOT NULL)",
+    "INSERT OR IGNORE INTO sync_control (name, value) VALUES ('applying_remote', 0)",
+    # One row per record changed locally and not yet acknowledged by the server; local_rev
+    # counts local changes (it is not a server version).
+    """
+    CREATE TABLE IF NOT EXISTS sync_dirty (
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        local_rev INTEGER NOT NULL CHECK (local_rev > 0),
+        changed_at TEXT NOT NULL,
+        PRIMARY KEY (entity_type, entity_id)
+    )
+    """,
+    # One row per (backend, server account) this device has signed in to. Cursors, shadows,
+    # outbox operations and conflicts all hang off it, so accounts never mix.
+    """
+    CREATE TABLE IF NOT EXISTS sync_accounts (
+        account_key TEXT PRIMARY KEY,
+        backend_url TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        email TEXT,
+        pull_cursor INTEGER NOT NULL DEFAULT 0 CHECK (pull_cursor >= 0),
+        active INTEGER NOT NULL DEFAULT 0 CHECK (active IN (0, 1)),
+        associated_at TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (backend_url, user_id)
+    )
+    """,
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_accounts_one_active ON sync_accounts(active) WHERE active = 1",
+    # The last server state acknowledged for a record (its server version is the precondition of
+    # the next local change).
+    """
+    CREATE TABLE IF NOT EXISTS sync_shadows (
+        account_key TEXT NOT NULL REFERENCES sync_accounts(account_key) ON DELETE CASCADE,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        server_version INTEGER NOT NULL CHECK (server_version > 0),
+        deleted INTEGER NOT NULL CHECK (deleted IN (0, 1)),
+        record TEXT NOT NULL,
+        PRIMARY KEY (account_key, entity_type, entity_id)
+    )
+    """,
+    # Materialized operations awaiting a server answer. An operation keeps its op_id until it is
+    # answered, so a resend after a lost response is recognized by the server.
+    """
+    CREATE TABLE IF NOT EXISTS sync_outbox (
+        op_seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        op_id TEXT NOT NULL UNIQUE,
+        account_key TEXT NOT NULL REFERENCES sync_accounts(account_key) ON DELETE CASCADE,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        local_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('create', 'update', 'delete', 'action', 'feedback')),
+        action TEXT,
+        base_version INTEGER,
+        payload TEXT,
+        group_id TEXT,
+        local_rev INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('pending', 'blocked')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        created_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_sync_outbox_entity ON sync_outbox(account_key, entity_type, entity_id)",
+    """
+    CREATE TABLE IF NOT EXISTS sync_conflicts (
+        id TEXT PRIMARY KEY,
+        account_key TEXT NOT NULL REFERENCES sync_accounts(account_key) ON DELETE CASCADE,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        local_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('push_conflict', 'push_rejected', 'pull_conflict')),
+        op_id TEXT,
+        base_version INTEGER,
+        local_record TEXT,
+        remote_record TEXT,
+        error TEXT,
+        status TEXT NOT NULL CHECK (status IN ('open', 'resolved')),
+        resolution TEXT,
+        created_at TEXT NOT NULL,
+        resolved_at TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_sync_conflicts_open ON sync_conflicts(account_key, status)",
+    # The link trigger again (see v4), now leaving pulled history to the server's validation.
+    "DROP TRIGGER IF EXISTS trg_executions_link_insert",
+    f"""
+    CREATE TRIGGER trg_executions_link_insert
+    BEFORE INSERT ON executions
+    FOR EACH ROW
+    WHEN (NEW.task_id IS NOT NULL OR NEW.scheduled_task_id IS NOT NULL) AND NOT {_APPLYING_REMOTE}
+    BEGIN
+        SELECT RAISE(ABORT, '{EXECUTION_LINK_VIOLATION}: scheduled_task_id requires task_id')
+        WHERE NEW.task_id IS NULL;
+        SELECT RAISE(ABORT, '{EXECUTION_LINK_VIOLATION}: task_id does not reference a persisted task')
+        WHERE NOT EXISTS (SELECT 1 FROM tasks WHERE id = NEW.task_id AND deleted_at IS NULL);
+        SELECT RAISE(ABORT, '{EXECUTION_LINK_VIOLATION}: scheduled_task_id does not reference a persisted placement')
+        WHERE NEW.scheduled_task_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM scheduled_tasks WHERE id = NEW.scheduled_task_id AND deleted_at IS NULL);
+        SELECT RAISE(ABORT, '{EXECUTION_LINK_VIOLATION}: placement belongs to a different task')
+        WHERE NEW.scheduled_task_id IS NOT NULL
+          AND EXISTS (
+              SELECT 1 FROM scheduled_tasks WHERE id = NEW.scheduled_task_id AND task_id <> NEW.task_id
+          );
+    END
+    """,
+    *_v5_capture_triggers(),
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     (
         1,
@@ -577,6 +940,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     ),
     (2, _migrate_v1_to_v2),
     (3, _V3_PLANNING_STATEMENTS),
+    (4, _migrate_v3_to_v4),
+    (5, _V5_STATEMENTS),
 )
 
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1][0]

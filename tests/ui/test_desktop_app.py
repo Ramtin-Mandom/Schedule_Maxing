@@ -170,7 +170,8 @@ def test_create_edit_delete_schedule_execute_close_reopen_reset(tmp_path: Path, 
     try:
         week = app.pages["week"]
         assert sorted(tree_names(week)) == ["Lecture", "Study"]
-        assert "out of date" in week.status_label.cget("text")  # restored conservatively as stale
+        # Restored with its persisted provenance: nothing it depends on changed, so it is still current.
+        assert "current" in week.status_label.cget("text")
         panel = week.execution_panel
         pump(app, until=lambda: "In progress" in panel.status_label.cget("text"))
 

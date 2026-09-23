@@ -157,3 +157,8 @@ EXECUTION_DB_FILENAME = "executions.db"
 # Lives alongside the execution database under the same DATA_DIR.
 ML_MODEL_FILENAME = "ml_duration_model.joblib"
 ML_MODEL_META_FILENAME = "ml_duration_model.meta.json"
+# Optional synchronization backend (app/sync, docs/sync-protocol.md). Unset
+# (the default) keeps the desktop app fully offline: sync is inert and no
+# network access, account, or backend setting is needed. Credentials are
+# never configured here -- they are entered at sign-in and kept in memory.
+BACKEND_URL = os.environ.get("SCHEDULE_MAXING_BACKEND_URL", "").strip() or None

@@ -55,14 +55,14 @@ def test_get_missing_execution_raises_not_found(repository: ExecutionRepository)
 
 def test_update_missing_execution_raises_not_found(repository: ExecutionRepository) -> None:
     with pytest.raises(ExecutionNotFoundError):
-        repository.update_execution(_make_execution())
+        repository.update_execution(_make_execution(), expected_version=1)
 
 
 def test_update_execution_persists_changes(repository: ExecutionRepository) -> None:
     repository.create_execution(_make_execution())
 
-    updated = _make_execution(status=ExecutionStatus.IN_PROGRESS, focus_rating=4)
-    repository.update_execution(updated)
+    updated = _make_execution(status=ExecutionStatus.IN_PROGRESS, focus_rating=4, version=2)
+    repository.update_execution(updated, expected_version=1)
 
     fetched = repository.get_execution("exec-1")
     assert fetched.status == ExecutionStatus.IN_PROGRESS

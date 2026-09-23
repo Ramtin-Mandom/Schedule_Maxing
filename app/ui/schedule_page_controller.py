@@ -26,6 +26,18 @@ Identity: rows, dependency choices, edit targets, and executable
 placements are all keyed by UUID (RowRef / ExecutablePlacement), never by a
 row index, task name, or display label -- duplicate names work.
 
+Preconditions (Milestone 3): a RowRef also carries the version of the
+record as it was shown. Editing or deleting that row passes it as the
+expected version, so a change made elsewhere since the page was drawn is
+reported ("changed by someone else ... reload") instead of overwritten.
+The version is not part of a RowRef's identity (equality/hash).
+
+Fixed-block category: the form's category is saved on the block. When an
+existing block's stored category is not one of the form's options (e.g. an
+imported "sleep" or the legacy default "fixed"), the form shows the
+fallback "other"; leaving it at "other" keeps the stored category rather
+than silently replacing it.
+
 Form validation keeps the legacy desktop form's rules (30-minute grid,
 1-10 priority, required tag, no overlapping fixed blocks on a date); the
 schedulers' own rules are untouched.
@@ -40,7 +52,7 @@ from datetime import timedelta
 from enum import Enum
 from typing import Literal
 
-from app.planning.application import RangeScope, task_planned_date
+from app.planning.application import BatchApplyResult, RangeScope, task_planned_date
 from app.planning.csv_export import PlanningExportResult
 from app.planning.csv_import import ImportMode
 from app.planning.compat import legacy_day_to_date, legacy_minutes_to_utc
@@ -86,6 +98,8 @@ class ResetScope(str, Enum):
 class RowRef:
     kind: RowKind
     id: uuid.UUID
+    #: The record's version when the row was drawn: the precondition for editing/deleting it.
+    version: int | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -262,7 +276,7 @@ class SchedulePageController:
             values = {
                 "name": block.label,
                 "day": str(self._day_index(block.planned_date)),
-                "category": "other",
+                "category": block.category if block.category in CATEGORY_OPTIONS else "other",
                 "tag": "fixed",
                 "fixed": "True",
                 "start_time": str(local_minutes(block.planned_start, block.planned_date, block.timezone)),
@@ -302,29 +316,31 @@ class SchedulePageController:
             validated = self._validate(values)
             target_date = legacy_day_to_date(validated["day"], self._anchor)
 
+            expected_version = self._precondition(editing)
             if validated["fixed"]:
                 if editing is not None and editing.kind != "block":
                     raise InvalidFormError("A flexible task cannot be turned into a fixed block; delete it and add a new one.")
                 block = self._build_block(validated, target_date, editing)
-                self._unwrap(self._planning.save_fixed_block(block))
+                self._unwrap(self._planning.save_fixed_block(block, expected_version=expected_version))
             else:
                 if editing is not None and editing.kind != "task":
                     raise InvalidFormError("A fixed block cannot be turned into a flexible task; delete it and add a new one.")
                 task = self._build_task(validated, target_date, list(dependency_ids or []), editing)
-                self._unwrap(self._planning.add_or_update_task(task))
+                self._unwrap(self._planning.add_or_update_task(task, expected_version=expected_version))
         except (InvalidFormError, _Failure) as error:
             return self._fail_with_reload(str(error))
         return self.load()
 
     def delete(self, ref: RowRef) -> ControllerResult[PageSnapshot]:
         try:
+            expected_version = self._precondition(ref)
             if ref.kind == "task":
                 self._explain_dependents(ref.id)
-                self._unwrap(self._planning.remove_task(ref.id))
+                self._unwrap(self._planning.remove_task(ref.id, expected_version=expected_version))
             else:
-                self._unwrap(self._planning.delete_fixed_block(ref.id))
-        except _Failure as failure:
-            return self._fail_with_reload(failure.message)
+                self._unwrap(self._planning.delete_fixed_block(ref.id, expected_version=expected_version))
+        except (InvalidFormError, _Failure) as error:
+            return self._fail_with_reload(str(error))
         return self.load()
 
     def make_schedule(self) -> ControllerResult[ScheduleRun]:
@@ -378,6 +394,8 @@ class SchedulePageController:
         loaded = self.load()
         if not loaded.ok:
             return ControllerResult.failure(loaded.error)
+        if isinstance(applied, BatchApplyResult):
+            return ControllerResult.success(ImportRun(snapshot=loaded.value, summary=_batch_summary(applied)))
         summary = f"Imported {len(applied.tasks)} task(s) and {len(applied.fixed_blocks)} fixed block(s)"
         if applied.replaced_range is not None:
             start, end = applied.replaced_range
@@ -394,7 +412,11 @@ class SchedulePageController:
             f"{self.timezone}. The whole file is checked first; if anything is invalid nothing is saved."
         )
         if mode == ImportMode.APPEND:
-            return base + " Append adds every row as a new task or fixed block (importing the same file twice adds it twice)."
+            return base + (
+                " Append adds every row as a new task or fixed block (importing the same file twice adds it twice)."
+                " A stored-planning CSV exported by this app (with record ids) is instead merged by id: records "
+                "already saved unchanged are skipped, and a record that differs is refused, never overwritten."
+            )
         return base + (
             " Replace first deletes the saved schedule, fixed blocks, and tasks planned on every date the "
             "file covers (first to last day), then adds the file. Execution history is kept."
@@ -430,10 +452,13 @@ class SchedulePageController:
         if missing:
             tasks.update(self._unwrap(self._planning.get_tasks(missing)).tasks)
 
-        day_status: dict[date_, DayResultStatus] = {}
-        for day in self.dates:
-            if planning_range.placements_by_date[day]:
-                day_status[day] = self._unwrap(self._planning.day_state(day)).status
+        # Persisted status (see PlanningController.day_states): a date with a
+        # saved schedule -- even an empty one -- is either current or stale.
+        day_status: dict[date_, DayResultStatus] = {
+            day: state.status
+            for day, state in self._unwrap(self._planning.day_states(self.dates)).items()
+            if state.status != DayResultStatus.ALLOCATED
+        }
 
         rows: list[tuple[tuple, TaskRow]] = []
         canvas: list[CanvasItem] = []
@@ -445,7 +470,7 @@ class SchedulePageController:
                 start_minute = local_minutes(block.planned_start, day, block.timezone)
                 end_minute = local_minutes(block.planned_end, day, block.timezone) or MINUTES_PER_DAY
                 rows.append(((day, start_minute, 0, str(block.id)), TaskRow(
-                    ref=RowRef("block", block.id), date=day, day_label=day_label(day), name=block.label,
+                    ref=RowRef("block", block.id, block.version), date=day, day_label=day_label(day), name=block.label,
                     type_label="fixed", time_text=format_window(start_minute, end_minute),
                 )))
                 canvas.append(CanvasItem(self._day_index(day), block.label, "fixed", start_minute, end_minute, "fixed"))
@@ -470,7 +495,7 @@ class SchedulePageController:
             window_text = f"pref {format_window(window.start_minute, window.end_minute)}" if window else "any time"
             sort_start = window.start_minute if window else 0
             rows.append((((planned or date_.max), sort_start, 1, str(task.id)), TaskRow(
-                ref=RowRef("task", task.id), date=planned,
+                ref=RowRef("task", task.id, task.version), date=planned,
                 day_label=day_label(planned) if planned is not None else "any",
                 name=task.name, type_label="flexible", time_text=window_text,
             )))
@@ -520,8 +545,8 @@ class SchedulePageController:
         if all(status == DayResultStatus.GENERATED for status in day_status.values()):
             return "Showing the saved schedule; it is current."
         return (
-            "Showing the saved schedule, which may be out of date (edited since, or saved in an "
-            "earlier session). Run Make Schedule to refresh it."
+            "Showing the saved schedule, which is out of date (something it depends on changed since it "
+            "was made, or it was saved before schedules were tracked). Run Make Schedule to refresh it."
         )
 
     # ------------------------------------------------------------------
@@ -577,18 +602,25 @@ class SchedulePageController:
     def _build_block(self, validated: dict, target_date: date_, editing: RowRef | None) -> FixedBlock:
         start_utc, end_utc = legacy_minutes_to_utc(target_date, self.timezone, validated["start_time"], validated["end_time"])
         block_id = editing.id if editing is not None else uuid.uuid4()
+        category = validated["category"]
+        stored = None
         if editing is not None:
-            self._find_block(editing.id)  # must still exist
+            stored = self._find_block(editing.id)  # must still exist
+            if category == "other" and stored.category not in CATEGORY_OPTIONS:
+                category = stored.category
 
         others = self._unwrap(self._planning.get_fixed_blocks(target_date))
         for other in others:
             if other.id != block_id and start_utc < other.planned_end and other.planned_start < end_utc:
                 raise InvalidFormError(f"Fixed task overlaps with existing fixed task: {other.label}")
 
-        return FixedBlock(
-            id=block_id, label=validated["name"], planned_date=target_date, timezone=self.timezone,
+        fields = dict(
+            id=block_id, label=validated["name"], category=category, planned_date=target_date, timezone=self.timezone,
             planned_start=start_utc, planned_end=end_utc,
         )
+        if stored is not None:
+            fields.update(user_id=stored.user_id, created_at=stored.created_at, version=stored.version)
+        return FixedBlock(**fields)
 
     def _build_task(
         self, validated: dict, target_date: date_, dependency_ids: list[uuid.UUID], editing: RowRef | None
@@ -625,6 +657,15 @@ class SchedulePageController:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _precondition(ref: RowRef | None) -> int | None:
+        """The expected version for editing/deleting `ref` (None: creating a new record)."""
+        if ref is None:
+            return None
+        if ref.version is None:
+            raise InvalidFormError("This row has no saved version to compare against; reload the page and try again.")
+        return ref.version
 
     def _explain_dependents(self, task_id: uuid.UUID) -> None:
         """Turn "other tasks depend on this" into a readable, name-based message before deleting."""
@@ -673,6 +714,16 @@ class SchedulePageController:
         if not result.ok:
             raise _Failure(result.error or "An unknown error occurred.")
         return result.value
+
+
+def _batch_summary(applied: BatchApplyResult) -> str:
+    def counts(kind_counts: dict[str, int]) -> str:
+        return ", ".join(f"{count} {kind.replace('_', ' ')}(s)" for kind, count in kind_counts.items() if count) or "nothing"
+
+    return (
+        f"Merged the stored-planning CSV by id: created {counts(applied.created)}; updated {counts(applied.updated)}; "
+        f"deleted {counts(applied.deleted)}; already up to date: {counts(applied.unchanged)}."
+    )
 
 
 class _Failure(Exception):

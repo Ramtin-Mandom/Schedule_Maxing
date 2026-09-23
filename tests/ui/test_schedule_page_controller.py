@@ -237,7 +237,8 @@ def test_make_schedule_saves_placements_and_shows_them_as_current(stack: Stack) 
     [placement] = stack.service.placements_for_date(MON)
     assert run.placed_count == 1 and run.unscheduled == []
     assert placement.planned_start >= datetime(2024, 6, 3, 10, tzinfo=timezone.utc)  # after the lecture
-    assert run.snapshot.day_status == {MON: DayResultStatus.GENERATED}
+    # Every date of the page was generated -- the dates that placed nothing are current too.
+    assert run.snapshot.day_status == {day: DayResultStatus.GENERATED for day in run.snapshot.dates}
     assert "current" in run.snapshot.status_text
     assert [item.mode for item in run.snapshot.canvas_items if item.name == "Study"] == ["optimized"]
     [executable] = run.snapshot.executables
@@ -280,7 +281,7 @@ def test_failed_save_keeps_the_previous_schedule_and_its_status(stack: Stack, mo
     def fail(*args, **kwargs):
         raise RuntimeError("disk I/O error (injected)")
 
-    monkeypatch.setattr(stack.service, "replace_placements", fail)
+    monkeypatch.setattr(stack.service, "reschedule_range", fail)
     result = stack.page.make_schedule()
 
     assert not result.ok
@@ -318,7 +319,7 @@ def test_editing_after_scheduling_marks_the_saved_schedule_stale(stack: Stack) -
 
     snapshot = ok(stack.page.submit_task_form(flexible("New", day="2")))
 
-    assert snapshot.day_status == {MON: DayResultStatus.STALE}
+    assert set(snapshot.day_status.values()) == {DayResultStatus.STALE} and MON in snapshot.day_status
     assert "out of date" in snapshot.status_text
     assert [item.mode for item in snapshot.canvas_items if item.name == "Study"] == ["stale"]
     assert len(stack.service.placements_for_date(MON)) == 1  # kept, only relabelled
@@ -329,7 +330,7 @@ def test_editing_after_scheduling_marks_the_saved_schedule_stale(stack: Stack) -
 # -----------------------------------------------------------------------------
 
 
-def test_reopen_restores_everything_and_labels_the_old_schedule_stale(db_path, tmp_path) -> None:
+def test_reopen_restores_everything_and_the_unchanged_schedule_stays_current(db_path, tmp_path) -> None:
     first = Stack(db_path, tmp_path)
     ok(first.page.submit_task_form(fixed("Lecture", day="1", start="480", end="540")))
     ok(first.page.submit_task_form(flexible("Study", day="1")))
@@ -343,13 +344,19 @@ def test_reopen_restores_everything_and_labels_the_old_schedule_stale(db_path, t
         snapshot = ok(second.page.load())
         assert snapshot.rows == saved_rows
         assert [e.placement for e in snapshot.executables] == [e.placement for e in saved_executables]
-        # Transient allocation state is gone: never shown as current.
-        assert set(snapshot.day_status.values()) == {DayResultStatus.STALE}
-        assert all(item.mode != "optimized" for item in snapshot.canvas_items)
+        # The persisted provenance still matches the unchanged inputs: current, not "unknown".
+        assert set(snapshot.day_status.values()) == {DayResultStatus.GENERATED}
+        assert "current" in snapshot.status_text
+        assert all(item.mode == "optimized" for item in snapshot.canvas_items if item.mode != "fixed")
+
+        # An edit after the restart makes it stale.
+        stale = ok(second.page.submit_task_form(flexible("New", day="3")))
+        assert set(stale.day_status.values()) == {DayResultStatus.STALE}
 
         rerun = ok(second.page.make_schedule())
         assert set(rerun.snapshot.day_status.values()) == {DayResultStatus.GENERATED}
-        assert [e.placement.id for e in rerun.snapshot.executables] == [e.placement.id for e in saved_executables]
+        kept = [e.placement.id for e in rerun.snapshot.executables if e.task.name != "New"]
+        assert kept == [e.placement.id for e in saved_executables]  # unchanged placements keep their ids
     finally:
         second.close()
 
@@ -465,7 +472,7 @@ def test_import_uses_the_page_anchor_and_marks_saved_schedules_stale(stack: Stac
     imported = next(t for t in stack.service.list_tasks() if t.name == "Imported")
     assert imported.preferred_dates == [date(2024, 6, 4)]  # day 2 of the page anchored on June 3
     assert "Imported 1 task(s)" in run.summary
-    assert run.snapshot.day_status == {MON: DayResultStatus.STALE}
+    assert set(run.snapshot.day_status.values()) == {DayResultStatus.STALE} and MON in run.snapshot.day_status
 
 
 def test_invalid_import_changes_nothing_and_returns_the_committed_view(stack: Stack, tmp_path: Path) -> None:

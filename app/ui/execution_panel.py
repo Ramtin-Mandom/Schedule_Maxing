@@ -236,17 +236,20 @@ class ExecutionPanel(ctk.CTkFrame):
                 created = self._controller.get_or_create_canonical_execution(task.task, task.placement)
                 if not created.ok:
                     return created
-                execution_id = created.value.id
+                current = created.value
             else:
-                execution_id = known.id
-            result = transition(execution_id)
+                current = known
+            # The version on screen is the precondition: a change made
+            # elsewhere since then is reported instead of overwritten.
+            result = transition(current.id, expected_version=current.version)
             has_feedback = any(
                 value is not None
                 for value in (focus_rating, energy_rating, interruption_count, note)
             )
             if result.ok and has_feedback:
                 return self._controller.record_feedback(
-                    execution_id,
+                    current.id,
+                    expected_version=result.value.version,
                     focus_rating=focus_rating,
                     energy_rating=energy_rating,
                     interruption_count=interruption_count,

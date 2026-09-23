@@ -57,7 +57,7 @@ def make_task(planning_repository: PlanningRepository):
         )
         defaults.update(overrides)
         task = Task(**defaults)
-        planning_repository.upsert_task(task)
+        planning_repository.insert_task(task)
         return task
 
     return _make
@@ -78,7 +78,7 @@ def make_placement(planning_repository: PlanningRepository):
         )
         defaults.update(overrides)
         placement = ScheduledTask(**defaults)
-        planning_repository.upsert_placement(placement)
+        planning_repository.insert_placement(placement)
         return placement
 
     return _make
