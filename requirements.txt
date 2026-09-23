@@ -6,3 +6,7 @@ pydantic>=2.10.0
 customtkinter>=5.2.2
 ruff>=0.16.0
 scikit-learn>=1.4.0
+
+# Backend (server) dependencies, so the full test suite runs locally and in CI.
+-r requirements-backend.txt
+httpx>=0.27

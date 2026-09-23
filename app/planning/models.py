@@ -24,6 +24,12 @@ Key differences from the legacy models:
       `project_scheduled_task_display` where display fields are needed.
     - Audit timestamps are aware UTC datetimes with a monotonically
       increasing integer `version`, not left implicit.
+    - Sync-ready metadata (Milestone 3, see docs/sync-contract.md): every
+      persisted entity here (Project, Task, FixedBlock, ScheduledTask) has
+      an owner (`user_id`; None = a local, ownerless record), created_at/
+      updated_at, a local edit revision (`version`), and a soft-deletion
+      tombstone (`deleted_at`; None = live). Normal reads only ever return
+      live records.
 
 Recurrence note: RecurrenceSpec is a model only -- it describes a
 recurrence *rule* attached to a template Task. Nothing here expands a
@@ -61,6 +67,13 @@ def _require_aware(value: datetime, field_name: str) -> datetime:
     if value.tzinfo is None:
         raise ValueError(f"{field_name} must be an aware datetime (include a UTC offset)")
     return value
+
+
+def _utc_timestamp(value: datetime | None) -> datetime | None:
+    """Audit timestamps (created_at/updated_at/deleted_at) are aware and normalized to UTC."""
+    if value is None:
+        return None
+    return _require_aware(value, "timestamp").astimezone(timezone.utc)
 
 
 # -----------------------------------------------------------------------------
@@ -143,7 +156,7 @@ class LocalTimeWindow(BaseModel):
 
 
 class Project(BaseModel):
-    """Model only -- no project-management service or persistence here."""
+    """Persisted with its tasks (PlanningService); no project-management service or UI."""
 
     id: uuid.UUID = Field(default_factory=_new_id)
     user_id: uuid.UUID | None = None
@@ -153,11 +166,12 @@ class Project(BaseModel):
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
     version: int = Field(default=1, gt=0)
+    deleted_at: datetime | None = None
 
-    @field_validator("created_at", "updated_at")
+    @field_validator("created_at", "updated_at", "deleted_at")
     @classmethod
-    def _timestamps_aware(cls, value: datetime) -> datetime:
-        return _require_aware(value, "timestamp").astimezone(timezone.utc)
+    def _timestamps_aware(cls, value: datetime | None) -> datetime | None:
+        return _utc_timestamp(value)
 
 
 # -----------------------------------------------------------------------------
@@ -203,6 +217,7 @@ class Task(BaseModel):
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
     version: int = Field(default=1, gt=0)
+    deleted_at: datetime | None = None
 
     @field_validator("deadline")
     @classmethod
@@ -211,10 +226,10 @@ class Task(BaseModel):
             return value
         return _require_aware(value, "deadline")
 
-    @field_validator("created_at", "updated_at")
+    @field_validator("created_at", "updated_at", "deleted_at")
     @classmethod
-    def _timestamps_aware(cls, value: datetime) -> datetime:
-        return _require_aware(value, "timestamp").astimezone(timezone.utc)
+    def _timestamps_aware(cls, value: datetime | None) -> datetime | None:
+        return _utc_timestamp(value)
 
     @model_validator(mode="after")
     def _validate_no_self_dependency(self) -> "Task":
@@ -256,12 +271,22 @@ class FixedBlock(BaseModel):
     """
 
     id: uuid.UUID = Field(default_factory=_new_id)
+    user_id: uuid.UUID | None = None
     label: str = Field(min_length=1)
+    #: What kind of commitment this is (e.g. "sleep", "food", "event"). The
+    #: default mirrors app.models.FixedBlock's legacy default, so blocks
+    #: created before categories existed stay valid.
+    category: str = Field(default="fixed", min_length=1)
 
     planned_date: date_
     timezone: str
     planned_start: datetime
     planned_end: datetime
+
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+    version: int = Field(default=1, gt=0)
+    deleted_at: datetime | None = None
 
     @field_validator("timezone")
     @classmethod
@@ -273,6 +298,11 @@ class FixedBlock(BaseModel):
     @classmethod
     def _instants_aware(cls, value: datetime) -> datetime:
         return _require_aware(value, "planned_start/planned_end")
+
+    @field_validator("created_at", "updated_at", "deleted_at")
+    @classmethod
+    def _timestamps_aware(cls, value: datetime | None) -> datetime | None:
+        return _utc_timestamp(value)
 
     @model_validator(mode="after")
     def _validate_order(self) -> "FixedBlock":
@@ -292,6 +322,8 @@ class ScheduledTask(BaseModel):
 
     id: uuid.UUID = Field(default_factory=_new_id)
     task_id: uuid.UUID
+    #: Owner; persisted placements always carry their task's owner.
+    user_id: uuid.UUID | None = None
 
     planned_date: date_
     timezone: str
@@ -304,6 +336,7 @@ class ScheduledTask(BaseModel):
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
     version: int = Field(default=1, gt=0)
+    deleted_at: datetime | None = None
 
     @field_validator("timezone")
     @classmethod
@@ -316,10 +349,10 @@ class ScheduledTask(BaseModel):
     def _instants_aware(cls, value: datetime) -> datetime:
         return _require_aware(value, "planned_start/planned_end")
 
-    @field_validator("created_at", "updated_at")
+    @field_validator("created_at", "updated_at", "deleted_at")
     @classmethod
-    def _timestamps_aware(cls, value: datetime) -> datetime:
-        return _require_aware(value, "timestamp").astimezone(timezone.utc)
+    def _timestamps_aware(cls, value: datetime | None) -> datetime | None:
+        return _utc_timestamp(value)
 
     @model_validator(mode="after")
     def _validate_order(self) -> "ScheduledTask":

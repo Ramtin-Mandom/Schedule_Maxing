@@ -77,8 +77,12 @@ def test_full_persistent_lifecycle(tmp_path: Path) -> None:
         controller = services.execution_controller
         execution = controller.get_or_create_canonical_execution(target.task, target.placement).value
         for action in ("start", "pause", "resume", "complete"):
-            assert getattr(controller, action)(execution.id).ok
-        assert controller.record_feedback(execution.id, focus_rating=4, note="went well").ok
+            result = getattr(controller, action)(execution.id, expected_version=execution.version)
+            assert result.ok, result.error
+            execution = result.value
+        assert controller.record_feedback(
+            execution.id, expected_version=execution.version, focus_rating=4, note="went well"
+        ).ok
 
         before = persisted_state(services)
         write_draft = next(task for task in before["tasks"] if task.name == "Write Draft")

@@ -319,11 +319,13 @@ def test_compute_start_delay_minutes_negative_for_early_start() -> None:
 def test_record_feedback_updates_only_provided_fields(service_with_clock: ExecutionService) -> None:
     execution = service_with_clock.create_execution(**make_execution_kwargs())
 
-    first = service_with_clock.record_feedback(execution.id, focus_rating=4)
+    first = service_with_clock.record_feedback(execution.id, expected_version=execution.version, focus_rating=4)
     assert first.focus_rating == 4
     assert first.energy_rating is None
 
-    second = service_with_clock.record_feedback(execution.id, energy_rating=3, note="Went well")
+    second = service_with_clock.record_feedback(
+        execution.id, expected_version=first.version, energy_rating=3, note="Went well"
+    )
     assert second.focus_rating == 4  # untouched by the second call
     assert second.energy_rating == 3
     assert second.note == "Went well"
@@ -333,15 +335,15 @@ def test_record_feedback_bumps_updated_at(service_with_clock: ExecutionService, 
     execution = service_with_clock.create_execution(**make_execution_kwargs())
     clock.advance(timedelta(minutes=5))
 
-    updated = service_with_clock.record_feedback(execution.id, interruption_count=2)
+    updated = service_with_clock.record_feedback(execution.id, expected_version=execution.version, interruption_count=2)
     assert updated.updated_at != execution.updated_at
 
 
 def test_record_feedback_allowed_in_any_status(service_with_clock: ExecutionService) -> None:
     execution = service_with_clock.create_execution(**make_execution_kwargs())
-    service_with_clock.skip(execution.id)
+    skipped = service_with_clock.skip(execution.id)
 
-    updated = service_with_clock.record_feedback(execution.id, note="Skipped, ran out of time")
+    updated = service_with_clock.record_feedback(execution.id, expected_version=skipped.version, note="Skipped, ran out of time")
     assert updated.status == ExecutionStatus.SKIPPED
     assert updated.note == "Skipped, ran out of time"
 
@@ -362,7 +364,7 @@ def test_record_feedback_rejects_out_of_range_values(
     execution = service_with_clock.create_execution(**make_execution_kwargs())
 
     with pytest.raises(InvalidFeedbackError):
-        service_with_clock.record_feedback(execution.id, **kwargs)
+        service_with_clock.record_feedback(execution.id, expected_version=execution.version, **kwargs)
 
 
 # ----------------------------------------------------------------------

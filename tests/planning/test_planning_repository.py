@@ -88,8 +88,8 @@ def test_full_task_round_trip_is_exact(planning_repository: PlanningRepository) 
     dependency = minimal_task(name="Dependency")
     task = full_task(dependency_ids=[dependency.id])
     with planning_repository.transaction():
-        planning_repository.upsert_task(dependency)
-        planning_repository.upsert_task(task)
+        planning_repository.insert_task(dependency)
+        planning_repository.insert_task(task)
 
     loaded = planning_repository.get_task(task.id)
 
@@ -101,7 +101,7 @@ def test_full_task_round_trip_is_exact(planning_repository: PlanningRepository) 
 
 def test_minimal_task_round_trip_keeps_nullable_fields_null(planning_repository: PlanningRepository) -> None:
     task = minimal_task()
-    planning_repository.upsert_task(task)
+    planning_repository.insert_task(task)
 
     loaded = planning_repository.get_task(task.id)
 
@@ -123,15 +123,15 @@ def test_minimal_task_round_trip_keeps_nullable_fields_null(planning_repository:
 )
 def test_recurrence_variants_round_trip(planning_repository: PlanningRepository, recurrence: RecurrenceSpec) -> None:
     task = minimal_task(recurrence=recurrence)
-    planning_repository.upsert_task(task)
+    planning_repository.insert_task(task)
     assert planning_repository.get_task(task.id).recurrence == recurrence
 
 
 def test_task_fields_are_stored_relationally_not_as_blobs(planning_repository: PlanningRepository, connection) -> None:
     dependency = minimal_task(name="Dependency")
     task = full_task(dependency_ids=[dependency.id])
-    planning_repository.upsert_task(dependency)
-    planning_repository.upsert_task(task)
+    planning_repository.insert_task(dependency)
+    planning_repository.insert_task(task)
     task_id = str(task.id)
 
     row = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
@@ -155,10 +155,12 @@ def test_task_fields_are_stored_relationally_not_as_blobs(planning_repository: P
 
 def test_overwriting_a_task_replaces_its_child_rows(planning_repository: PlanningRepository, connection) -> None:
     task = full_task(required_date=None)
-    planning_repository.upsert_task(task)
+    planning_repository.insert_task(task)
 
-    edited = task.model_copy(update={"tags": ["only"], "preferred_dates": [], "recurrence": None, "deadline": None})
-    planning_repository.upsert_task(edited)
+    edited = task.model_copy(
+        update={"tags": ["only"], "preferred_dates": [], "recurrence": None, "deadline": None, "version": task.version + 1}
+    )
+    assert planning_repository.update_task(edited, expected_version=task.version) is True
 
     assert planning_repository.get_task(task.id) == edited
     assert connection.execute("SELECT COUNT(*) FROM task_recurrence_weekdays").fetchone()[0] == 0
@@ -171,9 +173,9 @@ def test_project_round_trip(planning_repository: PlanningRepository) -> None:
         created_at=datetime(2024, 1, 1, tzinfo=timezone.utc), updated_at=datetime(2024, 1, 2, tzinfo=timezone.utc),
         version=4,
     )
-    planning_repository.upsert_project(project)
+    planning_repository.insert_project(project)
     task = minimal_task(project_id=project.id)
-    planning_repository.upsert_task(task)
+    planning_repository.insert_task(task)
 
     assert planning_repository.get_project(project.id) == project
     assert planning_repository.get_task(task.id).project_id == project.id
@@ -182,7 +184,7 @@ def test_project_round_trip(planning_repository: PlanningRepository) -> None:
 
 def test_fixed_block_round_trip_keeps_local_offset(planning_repository: PlanningRepository) -> None:
     block = block_on(date(2024, 6, 3), 8, label="Lecture", tz="America/New_York")
-    planning_repository.upsert_fixed_block(block)
+    planning_repository.insert_fixed_block(block)
 
     [loaded] = planning_repository.list_fixed_blocks(date(2024, 6, 3), date(2024, 6, 3))
 
@@ -192,28 +194,28 @@ def test_fixed_block_round_trip_keeps_local_offset(planning_repository: Planning
 
 def test_placement_round_trip_with_metadata(planning_repository: PlanningRepository) -> None:
     task = minimal_task()
-    planning_repository.upsert_task(task)
+    planning_repository.insert_task(task)
     placement = placement_for(
         task, date(2024, 6, 3), 10,
         optimization_metadata={"mode": "precise_greedy", "candidates": [1, 2.5, None], "nested": {"ok": True}},
         version=2,
     )
-    planning_repository.upsert_placement(placement)
+    planning_repository.insert_placement(placement)
 
     assert planning_repository.get_placements([placement.id])[placement.id] == placement
 
 
 def test_placement_metadata_must_be_json(planning_repository: PlanningRepository) -> None:
     task = minimal_task()
-    planning_repository.upsert_task(task)
+    planning_repository.insert_task(task)
 
     with pytest.raises(InvalidEntityError, match="JSON"):
-        planning_repository.upsert_placement(placement_for(task, date(2024, 6, 3), 9, optimization_metadata={"x": object()}))
+        planning_repository.insert_placement(placement_for(task, date(2024, 6, 3), 9, optimization_metadata={"x": object()}))
 
 
 def test_returned_models_are_independent_snapshots(planning_repository: PlanningRepository) -> None:
     task = full_task(required_date=None)
-    planning_repository.upsert_task(task)
+    planning_repository.insert_task(task)
 
     loaded = planning_repository.get_task(task.id)
     loaded.name = "mutated"
@@ -240,11 +242,11 @@ def test_independent_close_and_reopen_restores_everything(db_path: Path) -> None
     block = block_on(date(2024, 6, 3), 7)
     placement = placement_for(task, date(2024, 6, 5), 9, optimization_metadata={"k": "v"})
     with repository.transaction():
-        repository.upsert_project(project)
-        repository.upsert_task(dependency)
-        repository.upsert_task(task)
-        repository.upsert_fixed_block(block)
-        repository.upsert_placement(placement)
+        repository.insert_project(project)
+        repository.insert_task(dependency)
+        repository.insert_task(task)
+        repository.insert_fixed_block(block)
+        repository.insert_placement(placement)
     connection.close()
 
     reopened = get_connection(db_path)
@@ -265,8 +267,8 @@ def test_multi_row_write_rolls_back_entirely_after_an_injected_failure(
 
     with pytest.raises(RuntimeError):
         with planning_repository.transaction():
-            planning_repository.upsert_task(first)
-            planning_repository.upsert_task(second)  # task row + four child tables
+            planning_repository.insert_task(first)
+            planning_repository.insert_task(second)  # task row + four child tables
             raise RuntimeError("injected")
 
     for table in ("tasks", "task_tags", "task_preferred_dates", "task_recurrence_weekdays"):
@@ -279,30 +281,45 @@ def test_deferred_foreign_keys_allow_any_order_but_fail_at_commit_when_missing(
     dependency = minimal_task(name="Dep")
     dependent = minimal_task(name="Dependent", dependency_ids=[dependency.id])
     with planning_repository.transaction():
-        planning_repository.upsert_task(dependent)  # before its dependency: fine inside one transaction
-        planning_repository.upsert_task(dependency)
+        planning_repository.insert_task(dependent)  # before its dependency: fine inside one transaction
+        planning_repository.insert_task(dependency)
     assert planning_repository.get_task(dependent.id).dependency_ids == [dependency.id]
 
     orphan = minimal_task(name="Orphan", dependency_ids=[uuid.uuid4()])
     with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
-        planning_repository.upsert_task(orphan)
+        planning_repository.insert_task(orphan)
     assert planning_repository.get_task(orphan.id) is None
 
 
-def test_deleting_a_task_cascades_to_its_children_and_placements_only(
+def test_soft_deleting_a_task_hides_it_but_keeps_its_row_and_children(
     planning_repository: PlanningRepository, connection
 ) -> None:
     keep, remove = minimal_task(name="Keep", tags=["a"]), full_task(required_date=None)
-    planning_repository.upsert_task(keep)
-    planning_repository.upsert_task(remove)
-    planning_repository.upsert_placement(placement_for(keep, date(2024, 6, 3), 9))
-    planning_repository.upsert_placement(placement_for(remove, date(2024, 6, 3), 11))
+    planning_repository.insert_task(keep)
+    planning_repository.insert_task(remove)
+    deleted_at = datetime(2024, 6, 10, tzinfo=timezone.utc)
 
-    assert planning_repository.delete_tasks([remove.id]) == 1
+    assert planning_repository.soft_delete_task(remove.id, deleted_at=deleted_at, expected_version=remove.version)
+    # A second (stale) delete matches no live row and changes nothing.
+    assert not planning_repository.soft_delete_task(remove.id, deleted_at=deleted_at, expected_version=remove.version)
 
     assert [task.id for task in planning_repository.list_tasks()] == [keep.id]
-    assert [p.task_id for p in planning_repository.list_placements(date(2024, 6, 3), date(2024, 6, 3))] == [keep.id]
-    assert connection.execute("SELECT COUNT(*) FROM task_tags").fetchone()[0] == 1
+    assert planning_repository.get_task(remove.id) is None
+    tombstone = planning_repository.get_task(remove.id, include_deleted=True)
+    assert tombstone.deleted_at == deleted_at and tombstone.version == remove.version + 1
+    assert tombstone.tags == remove.tags  # child rows stay with the tombstone (history)
+    assert connection.execute("SELECT COUNT(*) FROM task_tags").fetchone()[0] == 1 + len(remove.tags)
+
+
+def test_compare_and_update_leaves_a_newer_row_untouched(planning_repository: PlanningRepository) -> None:
+    task = minimal_task(name="Original")
+    planning_repository.insert_task(task)
+    newer = task.model_copy(update={"name": "Newer", "version": 2})
+    assert planning_repository.update_task(newer, expected_version=1)
+
+    stale = task.model_copy(update={"name": "Stale", "version": 2})
+    assert planning_repository.update_task(stale, expected_version=1) is False
+    assert planning_repository.get_task(task.id).name == "Newer"
 
 
 # -----------------------------------------------------------------------------
@@ -312,12 +329,12 @@ def test_deleting_a_task_cascades_to_its_children_and_placements_only(
 
 def test_range_queries_are_inclusive_ordered_and_isolated(planning_repository: PlanningRepository) -> None:
     task = minimal_task()
-    planning_repository.upsert_task(task)
+    planning_repository.insert_task(task)
     days = [date(2024, 6, 2), date(2024, 6, 3), date(2024, 6, 4), date(2024, 6, 5)]
     for day in reversed(days):
-        planning_repository.upsert_placement(placement_for(task, day, 15))
-        planning_repository.upsert_placement(placement_for(task, day, 9))
-        planning_repository.upsert_fixed_block(block_on(day, 12))
+        planning_repository.insert_placement(placement_for(task, day, 15))
+        planning_repository.insert_placement(placement_for(task, day, 9))
+        planning_repository.insert_fixed_block(block_on(day, 12))
 
     placements = planning_repository.list_placements(date(2024, 6, 3), date(2024, 6, 4))
     blocks = planning_repository.list_fixed_blocks(date(2024, 6, 3), date(2024, 6, 4))
@@ -338,8 +355,8 @@ def test_ordering_uses_utc_instants_across_offsets(planning_repository: Planning
         label="10:00Z", planned_date=day, timezone="UTC",
         planned_start=datetime(2024, 6, 3, 10, tzinfo=timezone.utc), planned_end=datetime(2024, 6, 3, 11, tzinfo=timezone.utc),
     )
-    planning_repository.upsert_fixed_block(later_local)
-    planning_repository.upsert_fixed_block(earlier_utc)
+    planning_repository.insert_fixed_block(later_local)
+    planning_repository.insert_fixed_block(earlier_utc)
 
     assert [b.label for b in planning_repository.list_fixed_blocks(day, day)] == ["10:00Z", "NY 08:00 (12:00Z)"]
 
@@ -359,7 +376,7 @@ def test_task_eligibility_query(planning_repository: PlanningRepository) -> None
     )
     for task in (floating, pinned_inside, pinned_outside, deadline_on_start, deadline_before, deadline_offset,
                  pinned_outside_with_deadline):
-        planning_repository.upsert_task(task)
+        planning_repository.insert_task(task)
 
     names = {task.name for task in planning_repository.list_tasks_eligible_for_range(start, end)}
 

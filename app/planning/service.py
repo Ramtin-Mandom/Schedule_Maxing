@@ -23,9 +23,22 @@ unresolved external context blocks its dependent, exactly matching
 app.optimizer.generate_day_schedule's own contract for
 external_dependency_ends.
 
+Dependencies outside the allocation (Milestone 3): the caller may pass
+external_dependency_satisfaction -- {dependency id: (satisfied date,
+satisfied instant)} for dependencies it resolved from persisted state (a
+completion, or an earlier generated placement; see
+app/planning/external_dependencies.py). One satisfied on an earlier date is
+treated like an earlier-date allocated dependency (satisfied from the day's
+start); one satisfied on the selected date is satisfied from its real
+instant, rounded up to the next whole minute (never earlier than the day's
+start); one satisfied only later is left out, so it blocks.
+
 Result staleness: DayResultStatus/SelectedDayState provide a minimal,
 explicit policy: a generated result is tied to the AllocationResult.id it
-was generated from. Any *new* allocation run (a different id -- produced
+was generated from. (Since Milestone 3 the desktop/CLI controller derives
+a date's state from persisted provenance instead -- see
+app/planning/provenance.py -- so it survives restarts; mark_stale_if_outdated
+remains the in-memory rule for callers that hold states themselves.) Any *new* allocation run (a different id -- produced
 whenever the caller re-allocates after a task/preference/fixed-block edit)
 makes every previously generated SelectedDayState stale, via
 mark_stale_if_outdated. This is intentionally coarse (a fresh allocation
@@ -39,14 +52,17 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from collections.abc import Mapping
 from datetime import date as date_
-from datetime import timedelta
+from datetime import datetime, timedelta
 from enum import Enum
 
 from app.optimizer import generate_day_schedule
 from app.planning.allocation import AllocationResult
+from app.planning.external_dependencies import ceil_to_minute
 from app.planning.models import DaySchedule, DayScheduleOutput, FixedBlock, TaskRegistry
 from app.planning.preferences import DayPreferences
+from app.planning.provenance import StaleReason
 
 
 class DayResultStatus(str, Enum):
@@ -71,6 +87,8 @@ class SelectedDayState:
     status: DayResultStatus
     result: DayScheduleOutput | None
     generated_from_allocation_id: uuid.UUID | None
+    #: Why a STALE state is stale (None for other statuses, or when unknown).
+    stale_reason: StaleReason | None = None
 
 
 def initial_state(day: date_) -> SelectedDayState:
@@ -89,6 +107,7 @@ def mark_stale_if_outdated(state: SelectedDayState, current_allocation_id: uuid.
         return SelectedDayState(
             date=state.date, status=DayResultStatus.STALE, result=state.result,
             generated_from_allocation_id=state.generated_from_allocation_id,
+            stale_reason=StaleReason.SUPERSEDED_ALLOCATION,
         )
     return state
 
@@ -101,6 +120,7 @@ def generate_selected_day(
     fixed_blocks_by_date: dict[date_, list[FixedBlock]] | None = None,
     *,
     previous_result: DayScheduleOutput | None = None,
+    external_dependency_satisfaction: Mapping[uuid.UUID, tuple[date_, datetime]] | None = None,
 ) -> tuple[DayScheduleOutput, SelectedDayState]:
     """
     Generate the minute-level schedule for exactly `selected_date`, from
@@ -141,6 +161,12 @@ def generate_selected_day(
             # unallocated dependency is intentionally left out here, so it
             # blocks this task exactly as generate_day_schedule's own
             # contract requires.
+            elif dependency_date is None and dependency_id in (external_dependency_satisfaction or {}):
+                satisfied_date, satisfied_at = external_dependency_satisfaction[dependency_id]
+                if satisfied_date < selected_date:
+                    external_dependency_ends[dependency_id] = day_start_utc
+                elif satisfied_date == selected_date:
+                    external_dependency_ends[dependency_id] = max(day_start_utc, ceil_to_minute(satisfied_at))
 
     result = generate_day_schedule(
         day_schedule, preferences, previous_result=previous_result, external_dependency_ends=external_dependency_ends

@@ -175,6 +175,7 @@ def _complete(
     if focus_rating is not None or energy_rating is not None or interruption_count is not None:
         completed = service.record_feedback(
             execution.id,
+            expected_version=completed.version,
             focus_rating=focus_rating,
             energy_rating=energy_rating,
             interruption_count=interruption_count,

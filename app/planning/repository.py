@@ -3,19 +3,34 @@ app/planning/repository.py
 
 SQLite persistence for the canonical planning models (app/planning/models.py):
 Project, Task (with its tags, preferred dates, preferred time window,
-dependencies, deadline, and recurrence rule), FixedBlock, and ScheduledTask
-placements. Tables are created by schema migration v3 in app/execution/db.py
--- the same database file and migration chain as execution history, not a
-second database.
+dependencies, deadline, and recurrence rule), FixedBlock, ScheduledTask
+placements, persisted preference layers (PreferenceRecord) and schedule
+provenance (GenerationRecord). Tables are created by schema migrations v3/v4
+in app/execution/db.py -- the same database file and migration chain as
+execution history, not a second database.
 
 Like app/execution/repository.py, this is the only planning module that
 writes SQL, every statement is parameterized (`?` placeholders; the only
-interpolated fragments are internal constant column lists/WHERE clauses),
-and it holds no business rules: which ids may be deleted, what a
+interpolated fragments are internal constant table/column lists and WHERE
+clauses), and it holds no business rules: which ids may be deleted, what a
 replacement scope means, how versions advance, and which tasks are eligible
 for a date range are decided by app/planning/application.py. The repository
 maps models <-> rows faithfully and exactly (UUIDs, aware timestamps with
 their original UTC offsets, versions, nullable fields, ordered collections).
+
+Writes (Milestone 3) -- there is no silent last-write-wins primitive:
+    - insert_*: a new row; an id that already exists (live *or* tombstoned)
+      raises DuplicateEntityError.
+    - update_*(model, expected_version=...): an atomic compare-and-update --
+      one `UPDATE ... WHERE id = ? AND version = ? AND deleted_at IS NULL`.
+      Returns False (and changes nothing) when the stored record is absent,
+      tombstoned, or at another version; the service turns that into a
+      structured conflict.
+    - soft_delete_*: sets deleted_at (a tombstone), updated_at, and
+      version + 1, optionally guarded by an expected version the same way.
+      Tombstones keep their row (and, for tasks, their child rows), so
+      history and deletions stay representable for synchronization.
+Reads return live records only unless include_deleted=True is passed.
 
 Every read returns freshly constructed model instances, so mutating a
 returned model never changes stored state (or another caller's copy).
@@ -41,13 +56,23 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.execution.db import EXECUTION_LINK_VIOLATION, TransactionState, locked, transaction, transaction_state_for
-from app.planning.errors import InvalidEntityError
+from app.planning.errors import DuplicateEntityError, InvalidEntityError
+from app.planning.external_dependencies import ExecutionFact
 from app.planning.models import FixedBlock, Project, ScheduledTask, Task
+from app.planning.preferences import (
+    PreferenceRecord,
+    PreferenceScope,
+    overrides_from_document,
+    overrides_to_document,
+)
+from app.planning.provenance import GenerationRecord
 
 # SQLite's historical default limit on bound variables is 999; stay well below.
 _IN_CHUNK = 500
 
-_PROJECT_COLUMNS = ("id", "user_id", "name", "description", "created_at", "updated_at", "version")
+_LIVE = "deleted_at IS NULL"
+
+_PROJECT_COLUMNS = ("id", "user_id", "name", "description", "created_at", "updated_at", "version", "deleted_at")
 
 _TASK_COLUMNS = (
     "id", "user_id", "project_id", "name", "category",
@@ -56,18 +81,29 @@ _TASK_COLUMNS = (
     "deadline", "deadline_utc",
     "recurrence_frequency", "recurrence_interval", "recurrence_day_of_month",
     "recurrence_end_date", "recurrence_count",
-    "created_at", "updated_at", "version",
+    "created_at", "updated_at", "version", "deleted_at",
 )
 
 _FIXED_BLOCK_COLUMNS = (
-    "id", "label", "planned_date", "timezone", "planned_start", "planned_end",
-    "planned_start_utc", "planned_end_utc",
+    "id", "user_id", "label", "category", "planned_date", "timezone", "planned_start", "planned_end",
+    "planned_start_utc", "planned_end_utc", "created_at", "updated_at", "version", "deleted_at",
 )
 
 _PLACEMENT_COLUMNS = (
-    "id", "task_id", "planned_date", "timezone", "planned_start", "planned_end",
+    "id", "task_id", "user_id", "planned_date", "timezone", "planned_start", "planned_end",
     "planned_start_utc", "planned_end_utc", "score", "optimization_metadata",
-    "created_at", "updated_at", "version",
+    "created_at", "updated_at", "version", "deleted_at",
+)
+
+_PREFERENCE_COLUMNS = (
+    "id", "user_id", "scope", "scope_date", "optimizer_mode", "overrides",
+    "created_at", "updated_at", "version", "deleted_at",
+)
+
+_GENERATION_COLUMNS = (
+    "id", "user_id", "planned_date", "timezone", "engine_mode", "range_start", "range_end", "range_scope",
+    "allocation_id", "fingerprint", "fingerprint_version", "placements_digest", "placement_count",
+    "unscheduled_count", "total_score", "generated_at", "created_at", "updated_at", "version", "deleted_at",
 )
 
 # Deterministic task eligibility for an inclusive date range, mirroring
@@ -99,15 +135,6 @@ _PLANNED_IN_RANGE_WHERE = (
 _DATED_IN_RANGE_WHERE = f"{_PLANNED_DATE_SQL} BETWEEN ? AND ?"
 
 
-def _upsert_sql(table: str, columns: Sequence[str]) -> str:
-    column_list = ", ".join(columns)
-    placeholders = ", ".join("?" for _ in columns)
-    assignments = ", ".join(f"{column} = excluded.{column}" for column in columns if column != "id")
-    # ON CONFLICT DO UPDATE (not INSERT OR REPLACE): REPLACE would delete the
-    # old row first and fire ON DELETE CASCADE into child rows/placements.
-    return f"INSERT INTO {table} ({column_list}) VALUES ({placeholders}) ON CONFLICT(id) DO UPDATE SET {assignments}"
-
-
 def _chunks(values: Sequence[str]) -> Iterator[Sequence[str]]:
     for offset in range(0, len(values), _IN_CHUNK):
         yield values[offset:offset + _IN_CHUNK]
@@ -134,12 +161,20 @@ def _uuid_or_none(value: str | None) -> uuid.UUID | None:
     return uuid.UUID(value) if value is not None else None
 
 
+def _str_or_none(value: object) -> str | None:
+    return str(value) if value is not None else None
+
+
 def _date_or_none(value: str | None) -> date_ | None:
     return date_.fromisoformat(value) if value is not None else None
 
 
 def _datetime_or_none(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value) if value is not None else None
+
+
+def _live_clause(include_deleted: bool) -> str:
+    return "1 = 1" if include_deleted else _LIVE
 
 
 class PlanningRepository:
@@ -161,32 +196,100 @@ class PlanningRepository:
             yield self._connection
 
     # ------------------------------------------------------------------
+    # Generic write primitives
+    # ------------------------------------------------------------------
+
+    def _insert(self, table: str, columns: Sequence[str], row: tuple, kind: str, entity_id: object) -> None:
+        sql = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({_placeholders(columns)})"
+        try:
+            self._connection.execute(sql, row)
+        except sqlite3.IntegrityError as error:
+            message = str(error)
+            if f"{table}.id" in message:
+                raise DuplicateEntityError(kind, entity_id) from error
+            if EXECUTION_LINK_VIOLATION in message:
+                raise InvalidEntityError(f"{kind} {entity_id}: {message}") from error
+            raise
+
+    def _compare_and_update(
+        self, table: str, columns: Sequence[str], row: tuple, expected_version: int, kind: str, entity_id: object
+    ) -> bool:
+        assignments = ", ".join(f"{column} = ?" for column in columns if column != "id")
+        values = [value for column, value in zip(columns, row) if column != "id"]
+        try:
+            cursor = self._connection.execute(
+                f"UPDATE {table} SET {assignments} WHERE id = ? AND version = ? AND {_LIVE}",
+                (*values, str(entity_id), expected_version),
+            )
+        except sqlite3.IntegrityError as error:
+            if EXECUTION_LINK_VIOLATION in str(error):
+                raise InvalidEntityError(f"{kind} {entity_id}: {error}") from error
+            raise
+        return cursor.rowcount == 1
+
+    def _soft_delete(
+        self, table: str, entity_id: object, deleted_at: datetime, expected_version: int | None = None
+    ) -> bool:
+        stamp = deleted_at.astimezone(timezone.utc).isoformat()
+        guard = "" if expected_version is None else " AND version = ?"
+        params: tuple = (stamp, stamp, str(entity_id)) + (() if expected_version is None else (expected_version,))
+        cursor = self._connection.execute(
+            f"UPDATE {table} SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ? AND {_LIVE}{guard}",
+            params,
+        )
+        return cursor.rowcount == 1
+
+    def record_states(self, table: str, ids: Iterable[object]) -> dict[str, tuple[int, bool]]:
+        """{id: (version, is_deleted)} for every stored row (live or tombstoned) among `ids`."""
+        if table not in {"projects", "tasks", "fixed_blocks", "scheduled_tasks", "preference_overrides",
+                         "schedule_generations"}:
+            raise ValueError(f"unknown table {table!r}")
+        found: dict[str, tuple[int, bool]] = {}
+        with self._read():
+            for chunk in _chunks(list(dict.fromkeys(str(value) for value in ids))):
+                rows = self._connection.execute(
+                    f"SELECT id, version, deleted_at FROM {table} WHERE id IN ({_placeholders(chunk)})", tuple(chunk)
+                ).fetchall()
+                found.update({row["id"]: (row["version"], row["deleted_at"] is not None) for row in rows})
+        return found
+
+    # ------------------------------------------------------------------
     # Projects
     # ------------------------------------------------------------------
 
-    def upsert_project(self, project: Project) -> None:
+    def insert_project(self, project: Project) -> None:
         with self.transaction():
-            self._connection.execute(_upsert_sql("projects", _PROJECT_COLUMNS), _project_to_row(project))
+            self._insert("projects", _PROJECT_COLUMNS, _project_to_row(project), "project", project.id)
 
-    def get_project(self, project_id: uuid.UUID) -> Project | None:
+    def update_project(self, project: Project, *, expected_version: int) -> bool:
+        with self.transaction():
+            return self._compare_and_update(
+                "projects", _PROJECT_COLUMNS, _project_to_row(project), expected_version, "project", project.id
+            )
+
+    def soft_delete_project(self, project_id: uuid.UUID, *, deleted_at: datetime, expected_version: int | None) -> bool:
+        with self.transaction():
+            return self._soft_delete("projects", project_id, deleted_at, expected_version)
+
+    def get_project(self, project_id: uuid.UUID, *, include_deleted: bool = False) -> Project | None:
         with self._read():
-            row = self._connection.execute("SELECT * FROM projects WHERE id = ?", (str(project_id),)).fetchone()
+            row = self._connection.execute(
+                f"SELECT * FROM projects WHERE id = ? AND {_live_clause(include_deleted)}", (str(project_id),)
+            ).fetchone()
         return _row_to_project(row) if row is not None else None
 
-    def list_projects(self) -> list[Project]:
-        with self._read():
-            rows = self._connection.execute("SELECT * FROM projects ORDER BY created_at, id").fetchall()
-        return [_row_to_project(row) for row in rows]
-
-    def delete_project(self, project_id: uuid.UUID) -> bool:
-        with self.transaction():
-            cursor = self._connection.execute("DELETE FROM projects WHERE id = ?", (str(project_id),))
-        return cursor.rowcount > 0
-
-    def task_ids_for_project(self, project_id: uuid.UUID) -> list[uuid.UUID]:
+    def list_projects(self, *, include_deleted: bool = False) -> list[Project]:
         with self._read():
             rows = self._connection.execute(
-                "SELECT id FROM tasks WHERE project_id = ? ORDER BY id", (str(project_id),)
+                f"SELECT * FROM projects WHERE {_live_clause(include_deleted)} ORDER BY created_at, id"
+            ).fetchall()
+        return [_row_to_project(row) for row in rows]
+
+    def task_ids_for_project(self, project_id: uuid.UUID) -> list[uuid.UUID]:
+        """Live tasks that belong to the project."""
+        with self._read():
+            rows = self._connection.execute(
+                f"SELECT id FROM tasks WHERE project_id = ? AND {_LIVE} ORDER BY id", (str(project_id),)
             ).fetchall()
         return [uuid.UUID(row["id"]) for row in rows]
 
@@ -194,59 +297,74 @@ class PlanningRepository:
     # Tasks
     # ------------------------------------------------------------------
 
-    def upsert_task(self, task: Task) -> None:
-        """Insert or fully overwrite one task and its child rows (atomic)."""
-        task_id = str(task.id)
+    def insert_task(self, task: Task) -> None:
+        """Insert one new task and its child rows (atomic)."""
         with self.transaction():
-            self._connection.execute(_upsert_sql("tasks", _TASK_COLUMNS), _task_to_row(task))
+            self._insert("tasks", _TASK_COLUMNS, _task_to_row(task), "task", task.id)
+            self._write_task_children(task)
 
-            for table in ("task_tags", "task_preferred_dates", "task_dependencies", "task_recurrence_weekdays"):
-                self._connection.execute(f"DELETE FROM {table} WHERE task_id = ?", (task_id,))
+    def update_task(self, task: Task, *, expected_version: int) -> bool:
+        """Compare-and-update one live task and rewrite its child rows (atomic). False if the precondition fails."""
+        with self.transaction():
+            if not self._compare_and_update("tasks", _TASK_COLUMNS, _task_to_row(task), expected_version, "task", task.id):
+                return False
+            self._write_task_children(task)
+            return True
 
-            self._connection.executemany(
-                "INSERT INTO task_tags (task_id, position, tag) VALUES (?, ?, ?)",
-                [(task_id, position, tag) for position, tag in enumerate(task.tags)],
-            )
-            self._connection.executemany(
-                "INSERT INTO task_preferred_dates (task_id, position, preferred_date) VALUES (?, ?, ?)",
-                [(task_id, position, day.isoformat()) for position, day in enumerate(task.preferred_dates)],
-            )
-            self._connection.executemany(
-                "INSERT INTO task_dependencies (task_id, position, depends_on_task_id) VALUES (?, ?, ?)",
-                [(task_id, position, str(dependency)) for position, dependency in enumerate(task.dependency_ids)],
-            )
-            weekdays = task.recurrence.weekdays if task.recurrence is not None else None
-            self._connection.executemany(
-                "INSERT INTO task_recurrence_weekdays (task_id, weekday) VALUES (?, ?)",
-                [(task_id, weekday) for weekday in weekdays or []],
-            )
+    def _write_task_children(self, task: Task) -> None:
+        task_id = str(task.id)
+        for table in ("task_tags", "task_preferred_dates", "task_dependencies", "task_recurrence_weekdays"):
+            self._connection.execute(f"DELETE FROM {table} WHERE task_id = ?", (task_id,))
 
-    def get_task(self, task_id: uuid.UUID) -> Task | None:
-        return self.get_tasks([task_id]).get(task_id)
+        self._connection.executemany(
+            "INSERT INTO task_tags (task_id, position, tag) VALUES (?, ?, ?)",
+            [(task_id, position, tag) for position, tag in enumerate(task.tags)],
+        )
+        self._connection.executemany(
+            "INSERT INTO task_preferred_dates (task_id, position, preferred_date) VALUES (?, ?, ?)",
+            [(task_id, position, day.isoformat()) for position, day in enumerate(task.preferred_dates)],
+        )
+        self._connection.executemany(
+            "INSERT INTO task_dependencies (task_id, position, depends_on_task_id) VALUES (?, ?, ?)",
+            [(task_id, position, str(dependency)) for position, dependency in enumerate(task.dependency_ids)],
+        )
+        weekdays = task.recurrence.weekdays if task.recurrence is not None else None
+        self._connection.executemany(
+            "INSERT INTO task_recurrence_weekdays (task_id, weekday) VALUES (?, ?)",
+            [(task_id, weekday) for weekday in weekdays or []],
+        )
 
-    def get_tasks(self, task_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, Task]:
+    def soft_delete_task(self, task_id: uuid.UUID, *, deleted_at: datetime, expected_version: int | None) -> bool:
+        """Tombstone one live task. Its child rows are kept with the tombstone (history)."""
+        with self.transaction():
+            return self._soft_delete("tasks", task_id, deleted_at, expected_version)
+
+    def get_task(self, task_id: uuid.UUID, *, include_deleted: bool = False) -> Task | None:
+        return self.get_tasks([task_id], include_deleted=include_deleted).get(task_id)
+
+    def get_tasks(self, task_ids: Iterable[uuid.UUID], *, include_deleted: bool = False) -> dict[uuid.UUID, Task]:
         ids = _ids(task_ids)
         tasks: dict[uuid.UUID, Task] = {}
         with self._read():
             for chunk in _chunks(ids):
-                for task in self._load_tasks(f"id IN ({_placeholders(chunk)})", tuple(chunk)):
+                for task in self._load_tasks(f"id IN ({_placeholders(chunk)})", tuple(chunk), include_deleted):
                     tasks[task.id] = task
         return tasks
 
-    def list_tasks(self) -> list[Task]:
+    def list_tasks(self, *, include_deleted: bool = False) -> list[Task]:
         """Every task, ordered by (created_at, id) -- deterministic across reopen."""
         with self._read():
-            return self._load_tasks("1 = 1", ())
+            return self._load_tasks("1 = 1", (), include_deleted)
 
     def list_tasks_eligible_for_range(self, start_date: date_, end_date: date_) -> list[Task]:
-        """Tasks whose hard date rules allow some date in [start_date, end_date]; ordered by (created_at, id)."""
+        """Live tasks whose hard date rules allow some date in [start_date, end_date]; ordered by (created_at, id)."""
         with self._read():
             return self._load_tasks(
                 _ELIGIBLE_FOR_RANGE_WHERE, (start_date.isoformat(), end_date.isoformat(), start_date.isoformat())
             )
 
     def list_tasks_planned_in_range(
-        self, start_date: date_, end_date: date_, *, include_undated: bool = True
+        self, start_date: date_, end_date: date_, *, include_undated: bool = True, include_deleted: bool = False
     ) -> list[Task]:
         """
         Tasks whose planned date (required_date, else earliest preferred date)
@@ -256,55 +374,41 @@ class PlanningRepository:
         with self._read():
             if include_undated:
                 return self._load_tasks(
-                    _PLANNED_IN_RANGE_WHERE, (start_date.isoformat(), end_date.isoformat(), start_date.isoformat())
+                    _PLANNED_IN_RANGE_WHERE, (start_date.isoformat(), end_date.isoformat(), start_date.isoformat()),
+                    include_deleted,
                 )
-            return self._load_tasks(_DATED_IN_RANGE_WHERE, (start_date.isoformat(), end_date.isoformat()))
+            return self._load_tasks(_DATED_IN_RANGE_WHERE, (start_date.isoformat(), end_date.isoformat()), include_deleted)
 
-    def existing_task_ids(self, task_ids: Iterable[uuid.UUID]) -> set[uuid.UUID]:
-        return self._existing_ids("tasks", task_ids)
+    def existing_task_ids(self, task_ids: Iterable[uuid.UUID], *, include_deleted: bool = False) -> set[uuid.UUID]:
+        return self._existing_ids("tasks", task_ids, include_deleted)
 
-    def existing_project_ids(self, project_ids: Iterable[uuid.UUID]) -> set[uuid.UUID]:
-        return self._existing_ids("projects", project_ids)
+    def existing_project_ids(self, project_ids: Iterable[uuid.UUID], *, include_deleted: bool = False) -> set[uuid.UUID]:
+        return self._existing_ids("projects", project_ids, include_deleted)
 
     def dependents_of(self, task_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, set[uuid.UUID]]:
-        """For each given task id that others depend on: the set of dependent task ids."""
+        """For each given task id that live tasks depend on: the set of live dependent task ids."""
         ids = _ids(task_ids)
         dependents: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
         with self._read():
             for chunk in _chunks(ids):
                 rows = self._connection.execute(
-                    f"SELECT task_id, depends_on_task_id FROM task_dependencies "
-                    f"WHERE depends_on_task_id IN ({_placeholders(chunk)})",
+                    f"SELECT d.task_id, d.depends_on_task_id FROM task_dependencies AS d "
+                    f"JOIN tasks AS t ON t.id = d.task_id "
+                    f"WHERE t.deleted_at IS NULL AND d.depends_on_task_id IN ({_placeholders(chunk)})",
                     tuple(chunk),
                 ).fetchall()
                 for row in rows:
                     dependents[uuid.UUID(row["depends_on_task_id"])].add(uuid.UUID(row["task_id"]))
         return dict(dependents)
 
-    def delete_tasks(self, task_ids: Iterable[uuid.UUID]) -> int:
-        """
-        Delete tasks. Their own tags/preferred dates/dependency edges/
-        recurrence weekdays and their placements are removed by ON DELETE
-        CASCADE; execution history is never touched (no foreign key from
-        executions). Edges *to* a deleted task from a surviving task violate
-        the deferred foreign key and fail the enclosing transaction at
-        COMMIT -- callers check dependents_of first.
-        """
-        ids = _ids(task_ids)
-        deleted = 0
-        with self.transaction():
-            for chunk in _chunks(ids):
-                cursor = self._connection.execute(f"DELETE FROM tasks WHERE id IN ({_placeholders(chunk)})", tuple(chunk))
-                deleted += cursor.rowcount
-        return deleted
-
-    def _load_tasks(self, where_sql: str, params: tuple) -> list[Task]:
+    def _load_tasks(self, where_sql: str, params: tuple, include_deleted: bool = False) -> list[Task]:
         # Caller holds the lock. where_sql is always an internal constant.
-        rows = self._connection.execute(f"SELECT * FROM tasks WHERE {where_sql} ORDER BY created_at, id", params).fetchall()
+        where = f"{_live_clause(include_deleted)} AND ({where_sql})"
+        rows = self._connection.execute(f"SELECT * FROM tasks WHERE {where} ORDER BY created_at, id", params).fetchall()
         if not rows:
             return []
 
-        subquery = f"SELECT id FROM tasks WHERE {where_sql}"
+        subquery = f"SELECT id FROM tasks WHERE {where}"
         tags: dict[str, list[str]] = defaultdict(list)
         for child in self._connection.execute(
             f"SELECT task_id, tag FROM task_tags WHERE task_id IN ({subquery}) ORDER BY task_id, position", params
@@ -344,111 +448,287 @@ class PlanningRepository:
     # Fixed blocks
     # ------------------------------------------------------------------
 
-    def upsert_fixed_block(self, block: FixedBlock) -> None:
+    def insert_fixed_block(self, block: FixedBlock) -> None:
         with self.transaction():
-            self._connection.execute(_upsert_sql("fixed_blocks", _FIXED_BLOCK_COLUMNS), _fixed_block_to_row(block))
+            self._insert("fixed_blocks", _FIXED_BLOCK_COLUMNS, _fixed_block_to_row(block), "fixed block", block.id)
 
-    def get_fixed_blocks(self, block_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, FixedBlock]:
+    def update_fixed_block(self, block: FixedBlock, *, expected_version: int) -> bool:
+        with self.transaction():
+            return self._compare_and_update(
+                "fixed_blocks", _FIXED_BLOCK_COLUMNS, _fixed_block_to_row(block), expected_version, "fixed block", block.id
+            )
+
+    def soft_delete_fixed_block(self, block_id: uuid.UUID, *, deleted_at: datetime, expected_version: int | None) -> bool:
+        with self.transaction():
+            return self._soft_delete("fixed_blocks", block_id, deleted_at, expected_version)
+
+    def get_fixed_blocks(
+        self, block_ids: Iterable[uuid.UUID], *, include_deleted: bool = False
+    ) -> dict[uuid.UUID, FixedBlock]:
         blocks: dict[uuid.UUID, FixedBlock] = {}
         with self._read():
             for chunk in _chunks(_ids(block_ids)):
                 rows = self._connection.execute(
-                    f"SELECT * FROM fixed_blocks WHERE id IN ({_placeholders(chunk)})", tuple(chunk)
+                    f"SELECT * FROM fixed_blocks WHERE id IN ({_placeholders(chunk)}) AND {_live_clause(include_deleted)}",
+                    tuple(chunk),
                 ).fetchall()
                 for row in rows:
                     block = _row_to_fixed_block(row)
                     blocks[block.id] = block
         return blocks
 
-    def list_fixed_blocks(self, start_date: date_, end_date: date_) -> list[FixedBlock]:
+    def list_fixed_blocks(self, start_date: date_, end_date: date_, *, include_deleted: bool = False) -> list[FixedBlock]:
         """Blocks with planned_date in [start_date, end_date], ordered by (planned_date, start, id)."""
         with self._read():
             rows = self._connection.execute(
-                "SELECT * FROM fixed_blocks WHERE planned_date BETWEEN ? AND ? "
+                f"SELECT * FROM fixed_blocks WHERE planned_date BETWEEN ? AND ? AND {_live_clause(include_deleted)} "
                 "ORDER BY planned_date, planned_start_utc, id",
                 (start_date.isoformat(), end_date.isoformat()),
             ).fetchall()
         return [_row_to_fixed_block(row) for row in rows]
 
-    def delete_fixed_blocks(self, block_ids: Iterable[uuid.UUID]) -> int:
-        deleted = 0
-        with self.transaction():
-            for chunk in _chunks(_ids(block_ids)):
-                cursor = self._connection.execute(
-                    f"DELETE FROM fixed_blocks WHERE id IN ({_placeholders(chunk)})", tuple(chunk)
-                )
-                deleted += cursor.rowcount
-        return deleted
-
     # ------------------------------------------------------------------
     # Placements (ScheduledTask)
     # ------------------------------------------------------------------
 
-    def upsert_placement(self, placement: ScheduledTask) -> None:
+    def insert_placement(self, placement: ScheduledTask) -> None:
         with self.transaction():
-            try:
-                self._connection.execute(_upsert_sql("scheduled_tasks", _PLACEMENT_COLUMNS), _placement_to_row(placement))
-            except sqlite3.IntegrityError as error:
-                if EXECUTION_LINK_VIOLATION in str(error):
-                    raise InvalidEntityError(f"placement {placement.id}: {error}") from error
-                raise
+            self._insert("scheduled_tasks", _PLACEMENT_COLUMNS, _placement_to_row(placement), "placement", placement.id)
 
-    def get_placements(self, placement_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, ScheduledTask]:
+    def update_placement(self, placement: ScheduledTask, *, expected_version: int) -> bool:
+        with self.transaction():
+            return self._compare_and_update(
+                "scheduled_tasks", _PLACEMENT_COLUMNS, _placement_to_row(placement), expected_version,
+                "placement", placement.id,
+            )
+
+    def soft_delete_placement(
+        self, placement_id: uuid.UUID, *, deleted_at: datetime, expected_version: int | None
+    ) -> bool:
+        with self.transaction():
+            return self._soft_delete("scheduled_tasks", placement_id, deleted_at, expected_version)
+
+    def soft_delete_placements(self, placement_ids: Iterable[uuid.UUID], *, deleted_at: datetime) -> int:
+        """Tombstone live placements (derived output; no per-row precondition). Execution rows are untouched."""
+        deleted = 0
+        with self.transaction():
+            for placement_id in _ids(placement_ids):
+                deleted += int(self._soft_delete("scheduled_tasks", placement_id, deleted_at))
+        return deleted
+
+    def get_placements(
+        self, placement_ids: Iterable[uuid.UUID], *, include_deleted: bool = False
+    ) -> dict[uuid.UUID, ScheduledTask]:
         placements: dict[uuid.UUID, ScheduledTask] = {}
         with self._read():
             for chunk in _chunks(_ids(placement_ids)):
                 rows = self._connection.execute(
-                    f"SELECT * FROM scheduled_tasks WHERE id IN ({_placeholders(chunk)})", tuple(chunk)
+                    f"SELECT * FROM scheduled_tasks WHERE id IN ({_placeholders(chunk)}) "
+                    f"AND {_live_clause(include_deleted)}",
+                    tuple(chunk),
                 ).fetchall()
                 for row in rows:
                     placement = _row_to_placement(row)
                     placements[placement.id] = placement
         return placements
 
-    def list_placements(self, start_date: date_, end_date: date_) -> list[ScheduledTask]:
+    def list_placements(
+        self, start_date: date_, end_date: date_, *, include_deleted: bool = False
+    ) -> list[ScheduledTask]:
         """Placements with planned_date in [start_date, end_date], ordered by (planned_date, start, id)."""
         with self._read():
             rows = self._connection.execute(
-                "SELECT * FROM scheduled_tasks WHERE planned_date BETWEEN ? AND ? "
+                f"SELECT * FROM scheduled_tasks WHERE planned_date BETWEEN ? AND ? AND {_live_clause(include_deleted)} "
                 "ORDER BY planned_date, planned_start_utc, id",
                 (start_date.isoformat(), end_date.isoformat()),
             ).fetchall()
         return [_row_to_placement(row) for row in rows]
 
-    def delete_placements(self, placement_ids: Iterable[uuid.UUID]) -> int:
-        """Delete placements. Execution rows referencing them are untouched (historical identity)."""
-        deleted = 0
-        with self.transaction():
-            for chunk in _chunks(_ids(placement_ids)):
-                cursor = self._connection.execute(
-                    f"DELETE FROM scheduled_tasks WHERE id IN ({_placeholders(chunk)})", tuple(chunk)
-                )
-                deleted += cursor.rowcount
-        return deleted
+    def active_placements_for_tasks(self, task_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, list[ScheduledTask]]:
+        """Live placements of the given tasks, on any date, grouped by task; each list ordered by (date, start, id)."""
+        grouped: dict[uuid.UUID, list[ScheduledTask]] = defaultdict(list)
+        with self._read():
+            for chunk in _chunks(_ids(task_ids)):
+                rows = self._connection.execute(
+                    f"SELECT * FROM scheduled_tasks WHERE task_id IN ({_placeholders(chunk)}) AND {_LIVE} "
+                    "ORDER BY planned_date, planned_start_utc, id",
+                    tuple(chunk),
+                ).fetchall()
+                for row in rows:
+                    placement = _row_to_placement(row)
+                    grouped[placement.task_id].append(placement)
+        return dict(grouped)
 
     def placement_ids_with_history(self, placement_ids: Iterable[uuid.UUID]) -> set[uuid.UUID]:
         """The subset of placement ids that some execution row references."""
-        found: set[uuid.UUID] = set()
+        return set(self.placement_execution_statuses(placement_ids))
+
+    def placement_execution_statuses(self, placement_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, str]:
+        """{placement id: status} for the placements that execution history references."""
+        found: dict[uuid.UUID, str] = {}
         with self._read():
             for chunk in _chunks(_ids(placement_ids)):
                 rows = self._connection.execute(
-                    f"SELECT DISTINCT scheduled_task_id FROM executions "
+                    f"SELECT scheduled_task_id, status FROM executions "
                     f"WHERE scheduled_task_id IN ({_placeholders(chunk)})",
                     tuple(chunk),
                 ).fetchall()
-                found.update(uuid.UUID(row["scheduled_task_id"]) for row in rows)
+                found.update({uuid.UUID(row["scheduled_task_id"]): row["status"] for row in rows})
         return found
+
+    def execution_facts_for_tasks(self, task_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, list[ExecutionFact]]:
+        """Live executions of the given tasks (read-only; used to resolve external dependencies)."""
+        grouped: dict[uuid.UUID, list[ExecutionFact]] = defaultdict(list)
+        with self._read():
+            for chunk in _chunks(_ids(task_ids)):
+                rows = self._connection.execute(
+                    f"SELECT task_id, scheduled_task_id, status, actual_final_end_at, updated_at FROM executions "
+                    f"WHERE task_id IN ({_placeholders(chunk)}) AND {_LIVE} ORDER BY updated_at, id",
+                    tuple(chunk),
+                ).fetchall()
+                for row in rows:
+                    task_id = uuid.UUID(row["task_id"])
+                    grouped[task_id].append(
+                        ExecutionFact(
+                            task_id=task_id,
+                            scheduled_task_id=_uuid_or_none(row["scheduled_task_id"]),
+                            status=row["status"],
+                            finished_at=_datetime_or_none(row["actual_final_end_at"]),
+                            updated_at=row["updated_at"],
+                        )
+                    )
+        return dict(grouped)
+
+    # ------------------------------------------------------------------
+    # Preference layers
+    # ------------------------------------------------------------------
+
+    def insert_preference(self, record: PreferenceRecord) -> None:
+        with self.transaction():
+            self._insert("preference_overrides", _PREFERENCE_COLUMNS, _preference_to_row(record), "preference", record.id)
+
+    def update_preference(self, record: PreferenceRecord, *, expected_version: int) -> bool:
+        with self.transaction():
+            return self._compare_and_update(
+                "preference_overrides", _PREFERENCE_COLUMNS, _preference_to_row(record), expected_version,
+                "preference", record.id,
+            )
+
+    def soft_delete_preference(self, record_id: uuid.UUID, *, deleted_at: datetime, expected_version: int | None) -> bool:
+        with self.transaction():
+            return self._soft_delete("preference_overrides", record_id, deleted_at, expected_version)
+
+    def get_preference(self, scope: PreferenceScope, day: date_ | None = None) -> PreferenceRecord | None:
+        """
+        The live user-level record (day=None) or the live record for one date.
+        Preferences are device-wide: a layer owned by a signed-in account
+        (app/sync) is preferred over an ownerless one for the same scope.
+        """
+        with self._read():
+            row = self._connection.execute(
+                f"SELECT * FROM preference_overrides WHERE scope = ? AND scope_date IS ? AND {_LIVE} "
+                "ORDER BY user_id IS NULL, created_at, id LIMIT 1",
+                (scope.value, _iso(day)),
+            ).fetchone()
+        return _row_to_preference(row) if row is not None else None
+
+    def list_date_preferences(self, start_date: date_, end_date: date_) -> list[PreferenceRecord]:
+        """One live layer per date in the range (owned before ownerless, as in get_preference)."""
+        with self._read():
+            rows = self._connection.execute(
+                f"SELECT * FROM preference_overrides WHERE scope = 'date' AND scope_date BETWEEN ? AND ? "
+                f"AND {_LIVE} ORDER BY scope_date, user_id IS NULL, created_at, id",
+                (start_date.isoformat(), end_date.isoformat()),
+            ).fetchall()
+        by_date: dict[str, PreferenceRecord] = {}
+        for row in rows:
+            by_date.setdefault(row["scope_date"], _row_to_preference(row))
+        return list(by_date.values())
+
+    def get_preference_by_id(self, record_id: uuid.UUID, *, include_deleted: bool = False) -> PreferenceRecord | None:
+        with self._read():
+            row = self._connection.execute(
+                f"SELECT * FROM preference_overrides WHERE id = ? AND {_live_clause(include_deleted)}", (str(record_id),)
+            ).fetchone()
+        return _row_to_preference(row) if row is not None else None
+
+    # ------------------------------------------------------------------
+    # Schedule provenance
+    # ------------------------------------------------------------------
+
+    def insert_generation(self, record: GenerationRecord) -> None:
+        with self.transaction():
+            self._insert("schedule_generations", _GENERATION_COLUMNS, _generation_to_row(record), "generation", record.id)
+
+    def update_generation(self, record: GenerationRecord, *, expected_version: int) -> bool:
+        with self.transaction():
+            return self._compare_and_update(
+                "schedule_generations", _GENERATION_COLUMNS, _generation_to_row(record), expected_version,
+                "generation", record.id,
+            )
+
+    def soft_delete_generations(self, start_date: date_, end_date: date_, *, deleted_at: datetime) -> int:
+        with self.transaction():
+            ids = [record.id for record in self.list_generations(start_date, end_date)]
+            return sum(int(self._soft_delete("schedule_generations", record_id, deleted_at)) for record_id in ids)
+
+    def get_generation_by_id(self, record_id: uuid.UUID, *, include_deleted: bool = False) -> GenerationRecord | None:
+        with self._read():
+            row = self._connection.execute(
+                f"SELECT * FROM schedule_generations WHERE id = ? AND {_live_clause(include_deleted)}", (str(record_id),)
+            ).fetchone()
+        return _row_to_generation(row) if row is not None else None
+
+    def list_generations(self, start_date: date_, end_date: date_) -> list[GenerationRecord]:
+        """Live generation records dated in [start_date, end_date], by date."""
+        with self._read():
+            rows = self._connection.execute(
+                f"SELECT * FROM schedule_generations WHERE planned_date BETWEEN ? AND ? AND {_LIVE} "
+                "ORDER BY planned_date, id",
+                (start_date.isoformat(), end_date.isoformat()),
+            ).fetchall()
+        return [_row_to_generation(row) for row in rows]
+
+    # ------------------------------------------------------------------
+    # Synchronization (app/sync): storing server-validated records
+    # ------------------------------------------------------------------
+
+    def store_synced(self, entity_type: str, model) -> None:
+        """
+        Insert or overwrite one record exactly as given (tombstones included).
+        Only app/sync uses this, to apply a record the server already accepted,
+        and only when the device has no pending change of that record -- it is
+        not a way around the service's preconditions for local edits.
+        """
+        table, columns, to_row = {
+            "project": ("projects", _PROJECT_COLUMNS, _project_to_row),
+            "task": ("tasks", _TASK_COLUMNS, _task_to_row),
+            "fixed_block": ("fixed_blocks", _FIXED_BLOCK_COLUMNS, _fixed_block_to_row),
+            "placement": ("scheduled_tasks", _PLACEMENT_COLUMNS, _placement_to_row),
+            "preference": ("preference_overrides", _PREFERENCE_COLUMNS, _preference_to_row),
+            "schedule_generation": ("schedule_generations", _GENERATION_COLUMNS, _generation_to_row),
+        }[entity_type]
+        assignments = ", ".join(f"{column} = excluded.{column}" for column in columns if column != "id")
+        with self.transaction():
+            self._connection.execute(
+                f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({_placeholders(columns)}) "
+                f"ON CONFLICT(id) DO UPDATE SET {assignments}",
+                to_row(model),
+            )
+            if entity_type == "task":
+                self._write_task_children(model)
 
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
 
-    def _existing_ids(self, table: str, ids: Iterable[uuid.UUID]) -> set[uuid.UUID]:
+    def _existing_ids(self, table: str, ids: Iterable[uuid.UUID], include_deleted: bool) -> set[uuid.UUID]:
         found: set[uuid.UUID] = set()
         with self._read():
             for chunk in _chunks(_ids(ids)):
                 rows = self._connection.execute(
-                    f"SELECT id FROM {table} WHERE id IN ({_placeholders(chunk)})", tuple(chunk)
+                    f"SELECT id FROM {table} WHERE id IN ({_placeholders(chunk)}) AND {_live_clause(include_deleted)}",
+                    tuple(chunk),
                 ).fetchall()
                 found.update(uuid.UUID(row["id"]) for row in rows)
         return found
@@ -461,8 +741,8 @@ class PlanningRepository:
 
 def _project_to_row(project: Project) -> tuple:
     return (
-        str(project.id), str(project.user_id) if project.user_id else None, project.name, project.description,
-        project.created_at.isoformat(), project.updated_at.isoformat(), project.version,
+        str(project.id), _str_or_none(project.user_id), project.name, project.description,
+        project.created_at.isoformat(), project.updated_at.isoformat(), project.version, _iso(project.deleted_at),
     )
 
 
@@ -475,8 +755,8 @@ def _task_to_row(task: Task) -> tuple:
     recurrence = task.recurrence
     return (
         str(task.id),
-        str(task.user_id) if task.user_id else None,
-        str(task.project_id) if task.project_id else None,
+        _str_or_none(task.user_id),
+        _str_or_none(task.project_id),
         task.name,
         task.category,
         task.estimated_duration_minutes,
@@ -495,6 +775,7 @@ def _task_to_row(task: Task) -> tuple:
         task.created_at.isoformat(),
         task.updated_at.isoformat(),
         task.version,
+        _iso(task.deleted_at),
     )
 
 
@@ -536,15 +817,17 @@ def _row_to_task(
             "created_at": datetime.fromisoformat(row["created_at"]),
             "updated_at": datetime.fromisoformat(row["updated_at"]),
             "version": row["version"],
+            "deleted_at": _datetime_or_none(row["deleted_at"]),
         }
     )
 
 
 def _fixed_block_to_row(block: FixedBlock) -> tuple:
     return (
-        str(block.id), block.label, block.planned_date.isoformat(), block.timezone,
-        block.planned_start.isoformat(), block.planned_end.isoformat(),
+        str(block.id), _str_or_none(block.user_id), block.label, block.category, block.planned_date.isoformat(),
+        block.timezone, block.planned_start.isoformat(), block.planned_end.isoformat(),
         _utc_text(block.planned_start), _utc_text(block.planned_end),
+        block.created_at.isoformat(), block.updated_at.isoformat(), block.version, _iso(block.deleted_at),
     )
 
 
@@ -552,11 +835,17 @@ def _row_to_fixed_block(row: sqlite3.Row) -> FixedBlock:
     return FixedBlock.model_validate(
         {
             "id": uuid.UUID(row["id"]),
+            "user_id": _uuid_or_none(row["user_id"]),
             "label": row["label"],
+            "category": row["category"],
             "planned_date": date_.fromisoformat(row["planned_date"]),
             "timezone": row["timezone"],
             "planned_start": datetime.fromisoformat(row["planned_start"]),
             "planned_end": datetime.fromisoformat(row["planned_end"]),
+            "created_at": datetime.fromisoformat(row["created_at"]),
+            "updated_at": datetime.fromisoformat(row["updated_at"]),
+            "version": row["version"],
+            "deleted_at": _datetime_or_none(row["deleted_at"]),
         }
     )
 
@@ -570,11 +859,12 @@ def _placement_to_row(placement: ScheduledTask) -> tuple:
         ) from error
 
     return (
-        str(placement.id), str(placement.task_id), placement.planned_date.isoformat(), placement.timezone,
-        placement.planned_start.isoformat(), placement.planned_end.isoformat(),
+        str(placement.id), str(placement.task_id), _str_or_none(placement.user_id), placement.planned_date.isoformat(),
+        placement.timezone, placement.planned_start.isoformat(), placement.planned_end.isoformat(),
         _utc_text(placement.planned_start), _utc_text(placement.planned_end),
         placement.score, metadata,
         placement.created_at.isoformat(), placement.updated_at.isoformat(), placement.version,
+        _iso(placement.deleted_at),
     )
 
 
@@ -583,6 +873,7 @@ def _row_to_placement(row: sqlite3.Row) -> ScheduledTask:
         {
             "id": uuid.UUID(row["id"]),
             "task_id": uuid.UUID(row["task_id"]),
+            "user_id": _uuid_or_none(row["user_id"]),
             "planned_date": date_.fromisoformat(row["planned_date"]),
             "timezone": row["timezone"],
             "planned_start": datetime.fromisoformat(row["planned_start"]),
@@ -592,5 +883,43 @@ def _row_to_placement(row: sqlite3.Row) -> ScheduledTask:
             "created_at": datetime.fromisoformat(row["created_at"]),
             "updated_at": datetime.fromisoformat(row["updated_at"]),
             "version": row["version"],
+            "deleted_at": _datetime_or_none(row["deleted_at"]),
         }
     )
+
+
+def _preference_to_row(record: PreferenceRecord) -> tuple:
+    mode = record.overrides.optimizer_mode
+    return (
+        str(record.id), _str_or_none(record.user_id), record.scope.value, _iso(record.date),
+        mode.value if mode is not None else None, overrides_to_document(record.overrides),
+        record.created_at.isoformat(), record.updated_at.isoformat(), record.version, _iso(record.deleted_at),
+    )
+
+
+def _row_to_preference(row: sqlite3.Row) -> PreferenceRecord:
+    return PreferenceRecord(
+        id=uuid.UUID(row["id"]),
+        user_id=_uuid_or_none(row["user_id"]),
+        scope=PreferenceScope(row["scope"]),
+        date=_date_or_none(row["scope_date"]),
+        overrides=overrides_from_document(row["overrides"], row["optimizer_mode"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]),
+        version=row["version"],
+        deleted_at=_datetime_or_none(row["deleted_at"]),
+    )
+
+
+def _generation_to_row(record: GenerationRecord) -> tuple:
+    return (
+        str(record.id), _str_or_none(record.user_id), record.planned_date.isoformat(), record.timezone,
+        record.engine_mode.value, record.range_start.isoformat(), record.range_end.isoformat(), record.range_scope,
+        str(record.allocation_id), record.fingerprint, record.fingerprint_version, record.placements_digest,
+        record.placement_count, record.unscheduled_count, record.total_score, record.generated_at.isoformat(),
+        record.created_at.isoformat(), record.updated_at.isoformat(), record.version, _iso(record.deleted_at),
+    )
+
+
+def _row_to_generation(row: sqlite3.Row) -> GenerationRecord:
+    return GenerationRecord.model_validate(dict(row))

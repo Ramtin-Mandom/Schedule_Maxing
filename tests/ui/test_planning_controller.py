@@ -17,9 +17,10 @@ from app.execution.db import get_connection
 from app.execution.repository import ExecutionRepository
 from app.execution.service import ExecutionService
 from app.planning.application import PlanningService
-from app.planning.models import FixedBlock, Task
+from app.planning.models import FixedBlock, ScheduledTask, Task
 from app.planning.preferences import PreferenceOverrides, RewardPreferencesOverride
 from app.planning.repository import PlanningRepository
+from app.planning.provenance import StaleReason
 from app.planning.service import DayResultStatus
 from app.ui.planning_controller import PlanningController
 
@@ -68,7 +69,7 @@ def test_added_task_is_immediately_visible_via_get_and_list(controller: Planning
 def test_remove_task_clears_it(controller: PlanningController):
     task = make_task()
     controller.add_or_update_task(task)
-    controller.remove_task(task.id)
+    controller.remove_task(task.id, expected_version=task.version)
 
     assert controller.get_task(task.id).value is None
 
@@ -341,7 +342,7 @@ def test_failed_placement_save_leaves_day_state_and_stored_placements_unchanged(
     def fail(*args, **kwargs):
         raise RuntimeError("database is locked (injected)")
 
-    monkeypatch.setattr(controller._service, "replace_placements", fail)
+    monkeypatch.setattr(controller._service, "reschedule_range", fail)
     result = controller.generate_day(assigned_date)
 
     assert not result.ok
@@ -372,7 +373,7 @@ def test_deleting_a_task_others_depend_on_is_a_structured_failure(controller: Pl
                      dependency_ids=[dependency.id])
     assert controller.add_or_update_tasks([dependent, dependency]).ok
 
-    result = controller.remove_task(dependency.id)
+    result = controller.remove_task(dependency.id, expected_version=dependency.version)
 
     assert not result.ok
     assert "depend" in result.error
@@ -431,7 +432,7 @@ def test_failed_schedule_range_adopts_nothing(controller: PlanningController, mo
     def fail(*args, **kwargs):
         raise RuntimeError("injected")
 
-    monkeypatch.setattr(controller._service, "replace_placements", fail)
+    monkeypatch.setattr(controller._service, "reschedule_range", fail)
     result = controller.schedule_range(date(2024, 6, 3), date(2024, 6, 9), scope=RangeScope.ELIGIBLE)
 
     assert not result.ok
@@ -441,7 +442,7 @@ def test_failed_schedule_range_adopts_nothing(controller: PlanningController, mo
     assert controller.get_placements(assigned).value == saved
 
 
-def test_saved_placements_without_session_state_are_reported_stale(db_path, tmp_path) -> None:
+def test_an_unchanged_saved_schedule_is_still_current_after_reopen(db_path, tmp_path) -> None:
     first, connection = open_controller(db_path, tmp_path)
     task = make_task(duration=60)
     assigned_date, output = _generated_week(first, task)
@@ -450,8 +451,26 @@ def test_saved_placements_without_session_state_are_reported_stale(db_path, tmp_
     second, connection = open_controller(db_path, tmp_path)
     try:
         state = second.day_state(assigned_date).value
-        assert state.status == DayResultStatus.STALE
+        assert state.status == DayResultStatus.GENERATED and state.stale_reason is None
         assert state.result.placements == output.placements
         assert second.day_state(date(2024, 6, 20)).value.status == DayResultStatus.ALLOCATED
+
+        second.add_or_update_task(make_task("Another", duration=30))
+        assert second.day_state(assigned_date).value.stale_reason == StaleReason.INPUTS_CHANGED
     finally:
         connection.close()
+
+
+def test_placements_without_provenance_are_explicitly_stale(controller: PlanningController) -> None:
+    """Placements saved without a generation record (e.g. before schema v4) are never assumed current."""
+    task = make_task(duration=60)
+    controller.add_or_update_task(task)
+    day = date(2024, 6, 3)
+    controller._service.replace_placements(day, day, [ScheduledTask(
+        task_id=task.id, planned_date=day, timezone="UTC",
+        planned_start=datetime(2024, 6, 3, 9, tzinfo=timezone.utc), planned_end=datetime(2024, 6, 3, 10, tzinfo=timezone.utc),
+    )])
+
+    state = controller.day_state(day).value
+    assert state.status == DayResultStatus.STALE
+    assert state.stale_reason == StaleReason.NO_PROVENANCE

@@ -16,6 +16,14 @@ load_model_artifact never raises. A missing file, a corrupt pickle, or a
 schema/feature-column mismatch are all treated as "no usable model" and
 return None, so runtime prediction (app/productivity/ml_prediction.py) can
 always fall back safely to the median predictor.
+
+Earlier milestones saved the artifact under the checkout's data/ folder.
+When loading from the default location (no explicit data_dir, no
+SCHEDULE_MAXING_DATA_DIR override), load_model_artifact first adopts such
+an artifact into the per-user folder (app/productivity/
+ml_artifact_migration.py: idempotent, copy-only, never overwrites) and,
+if the per-user folder still has no artifact at all (e.g. it is not
+writable), falls back to reading the old location in place.
 """
 
 from __future__ import annotations
@@ -27,6 +35,7 @@ import sklearn
 from pydantic import BaseModel
 from sklearn.pipeline import Pipeline
 
+from app.productivity.ml_artifact_migration import migrate_default_ml_artifact
 from app.productivity.ml_evaluation import MLActivationDecision
 from app.productivity.ml_features import CATEGORICAL_COLUMNS, FEATURE_SCHEMA_VERSION, NUMERIC_COLUMNS
 from config import settings
@@ -75,9 +84,23 @@ def load_model_artifact(data_dir: Path | str | None = None) -> tuple[Pipeline, M
     """
     Load the persisted pipeline + metadata, or None if the artifact is
     missing, stale (schema/feature-column mismatch), or otherwise unusable.
-    Never raises.
+    Never raises. See the module docstring for the default-location
+    migration and read fallback.
     """
-    target_dir = Path(data_dir or settings.DATA_DIR)
+    if data_dir is not None or settings.DATA_DIR_OVERRIDDEN:
+        return _load_from(Path(data_dir or settings.DATA_DIR))
+
+    try:
+        migrate_default_ml_artifact()
+    except Exception:  # noqa: BLE001 - adoption is best-effort; loading must never raise
+        pass
+    target_dir = Path(settings.DATA_DIR)
+    if model_path(target_dir).exists() or metadata_path(target_dir).exists():
+        return _load_from(target_dir)
+    return _load_from(Path(settings.LEGACY_DATA_DIR))
+
+
+def _load_from(target_dir: Path) -> tuple[Pipeline, MLModelMetadata] | None:
     meta_file = metadata_path(target_dir)
 
     try:

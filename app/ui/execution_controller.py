@@ -80,24 +80,27 @@ class ExecutionController:
             )
         )
 
-    def start(self, execution_id: str) -> ControllerResult[TaskExecution]:
-        return self._call(lambda: self._service.start(execution_id))
+    # Transitions take the version the caller is showing as their
+    # precondition (see ExecutionService's "Preconditions" notes).
 
-    def pause(self, execution_id: str) -> ControllerResult[TaskExecution]:
-        return self._call(lambda: self._service.pause(execution_id))
+    def start(self, execution_id: str, *, expected_version: int | None = None) -> ControllerResult[TaskExecution]:
+        return self._call(lambda: self._service.start(execution_id, expected_version=expected_version))
 
-    def resume(self, execution_id: str) -> ControllerResult[TaskExecution]:
-        return self._call(lambda: self._service.resume(execution_id))
+    def pause(self, execution_id: str, *, expected_version: int | None = None) -> ControllerResult[TaskExecution]:
+        return self._call(lambda: self._service.pause(execution_id, expected_version=expected_version))
 
-    def complete(self, execution_id: str) -> ControllerResult[TaskExecution]:
-        return self._call(lambda: self._service.complete(execution_id))
+    def resume(self, execution_id: str, *, expected_version: int | None = None) -> ControllerResult[TaskExecution]:
+        return self._call(lambda: self._service.resume(execution_id, expected_version=expected_version))
 
-    def skip(self, execution_id: str) -> ControllerResult[TaskExecution]:
-        return self._call(lambda: self._service.skip(execution_id))
+    def complete(self, execution_id: str, *, expected_version: int | None = None) -> ControllerResult[TaskExecution]:
+        return self._call(lambda: self._service.complete(execution_id, expected_version=expected_version))
 
-    def cancel(self, execution_id: str) -> ControllerResult[TaskExecution]:
+    def skip(self, execution_id: str, *, expected_version: int | None = None) -> ControllerResult[TaskExecution]:
+        return self._call(lambda: self._service.skip(execution_id, expected_version=expected_version))
+
+    def cancel(self, execution_id: str, *, expected_version: int | None = None) -> ControllerResult[TaskExecution]:
         """Not yet wired to a UI control (see Task 6); exposed so callers/tests can exercise it."""
-        return self._call(lambda: self._service.cancel(execution_id))
+        return self._call(lambda: self._service.cancel(execution_id, expected_version=expected_version))
 
     def get_or_create_canonical_execution(
         self,
@@ -136,6 +139,7 @@ class ExecutionController:
         self,
         execution_id: str,
         *,
+        expected_version: int,
         focus_rating: int | None = None,
         energy_rating: int | None = None,
         interruption_count: int | None = None,
@@ -144,6 +148,7 @@ class ExecutionController:
         return self._call(
             lambda: self._service.record_feedback(
                 execution_id,
+                expected_version=expected_version,
                 focus_rating=focus_rating,
                 energy_rating=energy_rating,
                 interruption_count=interruption_count,
