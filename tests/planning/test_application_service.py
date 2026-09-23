@@ -66,7 +66,7 @@ def test_create_stores_exactly_as_given_and_rejects_duplicates(planning_service:
 
 def test_update_requires_existing_task(planning_service: PlanningService) -> None:
     with pytest.raises(EntityNotFoundError):
-        planning_service.update_task(make_task())
+        planning_service.update_task(make_task(), expected_version=1)
 
 
 def test_changed_save_bumps_version_and_updated_at_but_keeps_created_at(
@@ -75,7 +75,9 @@ def test_changed_save_bumps_version_and_updated_at_but_keeps_created_at(
     original = planning_service.save_task(make_task("Draft"))
     clock.advance(30)
 
-    updated = planning_service.save_task(original.model_copy(update={"name": "Final", "created_at": clock()}))
+    updated = planning_service.save_task(
+        original.model_copy(update={"name": "Final", "created_at": clock()}), expected_version=original.version
+    )
 
     assert updated.name == "Final"
     assert updated.version == original.version + 1
@@ -87,16 +89,18 @@ def test_unchanged_save_is_a_no_op(planning_service: PlanningService, clock: Fak
     original = planning_service.save_task(make_task())
     clock.advance(5)
 
-    again = planning_service.save_task(original)
+    again = planning_service.save_task(original, expected_version=original.version)
 
     assert again == original
     assert again.version == original.version
 
 
-def test_version_never_moves_backwards(planning_service: PlanningService) -> None:
+def test_version_carried_by_the_model_is_never_trusted(planning_service: PlanningService) -> None:
     stored = planning_service.save_task(make_task(version=5))
-    edited = planning_service.save_task(stored.model_copy(update={"name": "edited", "version": 1}))
-    assert edited.version == 6
+    edited = planning_service.save_task(stored.model_copy(update={"name": "edited", "version": 1}), expected_version=5)
+    assert edited.version == 6  # never backwards...
+    jumped = planning_service.save_task(edited.model_copy(update={"name": "again", "version": 99}), expected_version=6)
+    assert jumped.version == 7  # ...and a crafted version cannot jump ahead either
 
 
 def test_save_tasks_is_atomic_and_order_independent(planning_service: PlanningService) -> None:
@@ -115,16 +119,16 @@ def test_save_tasks_is_atomic_and_order_independent(planning_service: PlanningSe
 
 
 def test_multi_row_save_rolls_back_after_an_injected_failure(planning_service, planning_repository, monkeypatch) -> None:
-    original_upsert = planning_repository.upsert_task
+    original_insert = planning_repository.insert_task
     calls = {"count": 0}
 
     def fail_on_third(task):
         calls["count"] += 1
         if calls["count"] == 3:
             raise RuntimeError("disk full (injected)")
-        original_upsert(task)
+        original_insert(task)
 
-    monkeypatch.setattr(planning_repository, "upsert_task", fail_on_third)
+    monkeypatch.setattr(planning_repository, "insert_task", fail_on_third)
     with pytest.raises(RuntimeError, match="injected"):
         planning_service.save_tasks([make_task("A"), make_task("B"), make_task("C")])
 
@@ -165,11 +169,11 @@ def test_deleting_a_dependency_of_a_surviving_task_is_refused(planning_service: 
     planning_service.save_tasks([dependency, dependent])
 
     with pytest.raises(EntityInUseError) as info:
-        planning_service.delete_task(dependency.id)
+        planning_service.delete_task(dependency.id, expected_version=1)
     assert info.value.dependent_ids == [dependent.id]
     assert planning_service.get_task(dependency.id) is not None
 
-    assert planning_service.delete_tasks([dependency.id, dependent.id]) == 2
+    assert planning_service.delete_tasks({dependency.id: 1, dependent.id: 1}) == 2
     assert planning_service.list_tasks() == []
 
 
@@ -178,9 +182,9 @@ def test_deleting_a_dependent_removes_only_its_own_edges(planning_service: Plann
     dependent = make_task("Dependent", dependency_ids=[dependency.id])
     planning_service.save_tasks([dependency, dependent])
 
-    assert planning_service.delete_task(dependent.id) is True
+    assert planning_service.delete_task(dependent.id, expected_version=1) is True
     assert planning_service.get_task(dependency.id) is not None
-    assert planning_service.delete_task(dependent.id) is False  # already gone
+    assert planning_service.delete_task(dependent.id, expected_version=1) is False  # already gone
 
 
 def test_project_with_tasks_cannot_be_deleted(planning_service: PlanningService) -> None:
@@ -188,10 +192,10 @@ def test_project_with_tasks_cannot_be_deleted(planning_service: PlanningService)
     task = planning_service.save_task(make_task(project_id=project.id))
 
     with pytest.raises(EntityInUseError):
-        planning_service.delete_project(project.id)
+        planning_service.delete_project(project.id, expected_version=project.version)
 
-    planning_service.delete_task(task.id)
-    assert planning_service.delete_project(project.id) is True
+    planning_service.delete_task(task.id, expected_version=task.version)
+    assert planning_service.delete_project(project.id, expected_version=project.version) is True
 
 
 def test_deleting_a_task_never_touches_its_execution_history(
@@ -203,7 +207,7 @@ def test_deleting_a_task_never_touches_its_execution_history(
     execution_service.start(execution.id)
     execution_service.complete(execution.id)
 
-    planning_service.delete_task(task.id)
+    planning_service.delete_task(task.id, expected_version=task.version)
 
     assert planning_service.placements_for_date(MON) == []  # placements go with their task
     history = execution_service.get_execution(execution.id)  # history stays, identity intact
@@ -253,16 +257,16 @@ def test_failed_replacement_leaves_every_placement_unchanged(
     original = [make_placement(task, MON, 8), make_placement(task, MON, 10)]
     before = planning_service.replace_placements(MON, MON, original).placements
 
-    original_upsert = planning_repository.upsert_placement
+    original_insert = planning_repository.insert_placement
     calls = {"count": 0}
 
     def fail_on_second(placement):
         calls["count"] += 1
         if calls["count"] == 2:
             raise RuntimeError("injected")
-        original_upsert(placement)
+        original_insert(placement)
 
-    monkeypatch.setattr(planning_repository, "upsert_placement", fail_on_second)
+    monkeypatch.setattr(planning_repository, "insert_placement", fail_on_second)
     with pytest.raises(RuntimeError, match="injected"):
         planning_service.replace_placements(MON, MON, [make_placement(task, MON, 13), make_placement(task, MON, 15)])
 
@@ -320,9 +324,11 @@ def test_replacing_a_history_linked_placement_keeps_history_and_reports_it(
 
 def test_set_fixed_blocks_for_date_replaces_only_that_date(planning_service: PlanningService) -> None:
     tuesday_block = planning_service.save_fixed_block(make_block(TUE))
-    planning_service.set_fixed_blocks_for_date(MON, [make_block(MON, 8, "A"), make_block(MON, 12, "B")])
+    first = planning_service.set_fixed_blocks_for_date(MON, [make_block(MON, 8, "A"), make_block(MON, 12, "B")])
 
-    result = planning_service.set_fixed_blocks_for_date(MON, [make_block(MON, 18, "C")])
+    result = planning_service.set_fixed_blocks_for_date(
+        MON, [make_block(MON, 18, "C")], expected_versions={block.id: block.version for block in first}
+    )
 
     assert [block.label for block in result] == ["C"]
     assert planning_service.fixed_blocks_for_date(TUE) == [tuesday_block]
@@ -345,8 +351,8 @@ def test_set_fixed_blocks_for_date_scope_checks(planning_service: PlanningServic
 
 def test_delete_fixed_block(planning_service: PlanningService) -> None:
     block = planning_service.save_fixed_block(make_block(MON))
-    assert planning_service.delete_fixed_block(block.id) is True
-    assert planning_service.delete_fixed_block(block.id) is False
+    assert planning_service.delete_fixed_block(block.id, expected_version=block.version) is True
+    assert planning_service.delete_fixed_block(block.id, expected_version=block.version) is False
 
 
 # -----------------------------------------------------------------------------

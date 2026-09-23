@@ -49,6 +49,27 @@ runs inside a single ExecutionRepository.transaction() via @_atomic, so a
 failure at any step rolls back every earlier step of that operation. The
 repository's own per-call transactions nest inside it as savepoints and
 never commit the enclosing operation early.
+
+Versions (Milestone 3) -- the logical-mutation increment rule:
+    An execution's `version` advances by exactly 1 per *logical* mutation
+    -- start, pause, resume, complete, skip, cancel, record_feedback, and
+    delete_execution -- however many rows that mutation writes. Work
+    sessions belong to the execution aggregate: opening or closing one is
+    part of the mutation that does it, so it is covered by (and bumps) the
+    execution's version; a session never has a version of its own. Creation
+    stores version 1. The final write of every mutation is a
+    compare-and-update against the version the mutation started from, so
+    two interleaved mutations can never both succeed on the same version.
+
+Preconditions: every mutation accepts expected_version, the version the
+caller last read; if the stored execution is at another version (or was
+deleted), ExecutionVersionConflictError is raised and nothing -- status,
+sessions, feedback -- changes. record_feedback and delete_execution
+*require* it, because they overwrite/remove user data. For the state
+transitions it is optional: the transition table itself is checked against
+the stored status inside the same transaction, so a stale transition can
+never apply to a state it was not valid for; callers that display an
+execution (the desktop Execute tab) still pass the version they show.
 """
 
 from __future__ import annotations
@@ -61,7 +82,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.execution.db import get_connection
-from app.execution.errors import InvalidFeedbackError, InvalidTransitionError
+from app.execution.errors import ExecutionVersionConflictError, InvalidFeedbackError, InvalidTransitionError
+from app.execution.lifecycle import (  # noqa: F401 - re-exported for existing callers
+    TRANSITIONS as _TRANSITIONS,
+    compute_active_duration_minutes,
+    compute_start_delay_minutes,
+)
 from app.execution.models import ExecutionStatus, TaskExecution, WorkSession
 from app.execution.repository import ExecutionRepository
 from app.models import ScheduledTask
@@ -70,74 +96,6 @@ from app.planning.models import Task as CanonicalTask
 from app.planning.time import elapsed_minutes
 
 Clock = Callable[[], datetime]
-
-# Allowed status transitions, keyed by action name rather than by target
-# status alone: `start` and `resume` both land on IN_PROGRESS but from
-# different, non-overlapping source statuses, so the source set has to be
-# tracked per action, not just "is this target reachable from the current
-# status". This is the single place all six transition rules are defined.
-# completed, skipped, and cancelled are all terminal -- no action is listed
-# as reachable from any of them, so _transition below always rejects
-# attempts to leave a terminal status.
-_TRANSITIONS: dict[str, tuple[frozenset[ExecutionStatus], ExecutionStatus]] = {
-    "start": (frozenset({ExecutionStatus.SCHEDULED}), ExecutionStatus.IN_PROGRESS),
-    "pause": (frozenset({ExecutionStatus.IN_PROGRESS}), ExecutionStatus.PAUSED),
-    "resume": (frozenset({ExecutionStatus.PAUSED}), ExecutionStatus.IN_PROGRESS),
-    "complete": (
-        frozenset({ExecutionStatus.IN_PROGRESS, ExecutionStatus.PAUSED}),
-        ExecutionStatus.COMPLETED,
-    ),
-    "skip": (
-        frozenset({ExecutionStatus.SCHEDULED, ExecutionStatus.IN_PROGRESS, ExecutionStatus.PAUSED}),
-        ExecutionStatus.SKIPPED,
-    ),
-    "cancel": (
-        frozenset({ExecutionStatus.SCHEDULED, ExecutionStatus.IN_PROGRESS, ExecutionStatus.PAUSED}),
-        ExecutionStatus.CANCELLED,
-    ),
-}
-
-
-def compute_active_duration_minutes(sessions: list[WorkSession]) -> float:
-    """
-    Sum the duration of every *closed* work session, in minutes.
-
-    Open sessions (ended_at is None) are ignored, and gaps between sessions
-    (time spent paused) are never inside any session, so they are excluded
-    automatically rather than needing special-case handling.
-    """
-    total_minutes = 0.0
-
-    for session in sessions:
-        if session.ended_at is None:
-            continue
-
-        started_at = datetime.fromisoformat(session.started_at)
-        ended_at = datetime.fromisoformat(session.ended_at)
-        total_minutes += (ended_at - started_at).total_seconds() / 60
-
-    return round(total_minutes, 2)
-
-
-def compute_start_delay_minutes(first_started_at: str, planned_start: int) -> float:
-    """
-    Minutes between the planned start-of-day time and when work actually began.
-
-    Positive means the task was started later than planned; negative means
-    earlier. See the module docstring for why this compares time-of-day
-    rather than full timestamps: this app's planned_date is an abstract day
-    index, not a real calendar date, so only the time-of-day component of
-    planned_start is meaningfully comparable to a real clock reading.
-
-    The time-of-day is read directly from first_started_at's own recorded
-    timezone (UTC, for timestamps produced by the default clock) rather than
-    converted to the host machine's local timezone, so this calculation
-    depends only on its inputs and not on where it happens to run.
-    """
-    started_at = datetime.fromisoformat(first_started_at)
-    minutes_since_midnight = started_at.hour * 60 + started_at.minute + started_at.second / 60
-    return round(minutes_since_midnight - planned_start, 2)
-
 
 def _atomic(method):
     """Run an ExecutionService method as one repository transaction (see the module docstring)."""
@@ -388,7 +346,7 @@ class ExecutionService:
     # ------------------------------------------------------------------
 
     @_atomic
-    def start(self, execution_id: str) -> TaskExecution:
+    def start(self, execution_id: str, *, expected_version: int | None = None) -> TaskExecution:
         """
         scheduled -> in_progress. Opens a new work session.
 
@@ -398,33 +356,33 @@ class ExecutionService:
         begin" is meaningful regardless of which creation path produced the
         row).
         """
-        execution = self._transition(execution_id, "start")
+        original = self._load(execution_id, expected_version)
+        execution = self._transition(original, "start")
         self._repository.create_session(execution_id, self._now_iso())
 
         if execution.actual_first_start_at is None:
-            execution = execution.model_copy(
-                update={"actual_first_start_at": self._clock(), "updated_at": self._now_iso()}
-            )
-            execution = self._repository.update_execution(execution)
+            execution = execution.model_copy(update={"actual_first_start_at": self._clock()})
 
-        return execution
+        return self._commit(original, execution)
 
     @_atomic
-    def pause(self, execution_id: str) -> TaskExecution:
+    def pause(self, execution_id: str, *, expected_version: int | None = None) -> TaskExecution:
         """in_progress -> paused. Closes the currently-open work session."""
-        execution = self._transition(execution_id, "pause")
+        original = self._load(execution_id, expected_version)
+        execution = self._transition(original, "pause")
         self._close_open_session(execution_id)
-        return execution
+        return self._commit(original, execution)
 
     @_atomic
-    def resume(self, execution_id: str) -> TaskExecution:
+    def resume(self, execution_id: str, *, expected_version: int | None = None) -> TaskExecution:
         """paused -> in_progress. Opens a new work session."""
-        execution = self._transition(execution_id, "resume")
+        original = self._load(execution_id, expected_version)
+        execution = self._transition(original, "resume")
         self._repository.create_session(execution_id, self._now_iso())
-        return execution
+        return self._commit(original, execution)
 
     @_atomic
-    def complete(self, execution_id: str) -> TaskExecution:
+    def complete(self, execution_id: str, *, expected_version: int | None = None) -> TaskExecution:
         """
         (in_progress | paused) -> completed.
 
@@ -439,7 +397,8 @@ class ExecutionService:
         original time-of-day comparison via compute_start_delay_minutes,
         exactly as before.
         """
-        execution = self._transition(execution_id, "complete")
+        original = self._load(execution_id, expected_version)
+        execution = self._transition(original, "complete")
         self._close_open_session(execution_id)
 
         sessions = self._repository.list_sessions(execution_id)
@@ -467,35 +426,48 @@ class ExecutionService:
                 "duration_variance_minutes": variance,
                 "start_delay_minutes": start_delay,
                 "actual_final_end_at": self._clock(),
-                "updated_at": self._now_iso(),
             }
         )
-        return self._repository.update_execution(execution)
+        return self._commit(original, execution)
 
     @_atomic
-    def skip(self, execution_id: str) -> TaskExecution:
+    def skip(self, execution_id: str, *, expected_version: int | None = None) -> TaskExecution:
         """(scheduled | in_progress | paused) -> skipped. Closes any open session; no completion metrics are computed."""
-        execution = self._transition(execution_id, "skip")
+        original = self._load(execution_id, expected_version)
+        execution = self._transition(original, "skip")
         self._close_open_session(execution_id)
-        execution = execution.model_copy(
-            update={"actual_final_end_at": self._clock(), "updated_at": self._now_iso()}
-        )
-        return self._repository.update_execution(execution)
+        execution = execution.model_copy(update={"actual_final_end_at": self._clock()})
+        return self._commit(original, execution)
 
     @_atomic
-    def cancel(self, execution_id: str) -> TaskExecution:
+    def cancel(self, execution_id: str, *, expected_version: int | None = None) -> TaskExecution:
         """
         (scheduled | in_progress | paused) -> cancelled. Closes any open
         session; no completion metrics are computed, mirroring skip().
         cancelled is terminal: no action is allowed out of it, same as
         completed/skipped (see _TRANSITIONS).
         """
-        execution = self._transition(execution_id, "cancel")
+        original = self._load(execution_id, expected_version)
+        execution = self._transition(original, "cancel")
         self._close_open_session(execution_id)
-        execution = execution.model_copy(
-            update={"actual_final_end_at": self._clock(), "updated_at": self._now_iso()}
-        )
-        return self._repository.update_execution(execution)
+        execution = execution.model_copy(update={"actual_final_end_at": self._clock()})
+        return self._commit(original, execution)
+
+    @_atomic
+    def delete_execution(self, execution_id: str, *, expected_version: int) -> None:
+        """
+        Delete one execution as a tombstone (version + 1): it disappears
+        from every normal read and from analytics, while its row and work
+        sessions stay for history/synchronization. Its placement cannot get
+        a new execution afterwards (get_or_create raises
+        ExecutionDeletedError). Use reset_all_history for a full local purge.
+        """
+        self._load(execution_id, expected_version)
+        self._repository.soft_delete_execution(execution_id, expected_version=expected_version, deleted_at=self._clock())
+
+    def wire_id(self, execution_id: str) -> uuid.UUID:
+        """The execution's stable wire identity (see ExecutionRepository.wire_id)."""
+        return self._repository.wire_id(execution_id)
 
     # ------------------------------------------------------------------
     # Feedback
@@ -506,6 +478,7 @@ class ExecutionService:
         self,
         execution_id: str,
         *,
+        expected_version: int,
         focus_rating: int | None = None,
         energy_rating: int | None = None,
         interruption_count: int | None = None,
@@ -516,7 +489,9 @@ class ExecutionService:
         omitted (None) arguments leave the existing stored value untouched.
 
         Allowed regardless of the execution's current status. Raises
-        InvalidFeedbackError if a rating or interruption count is out of range.
+        InvalidFeedbackError if a rating or interruption count is out of range,
+        and ExecutionVersionConflictError if the execution is no longer at
+        expected_version (so newer feedback is never overwritten).
         """
         if focus_rating is not None and not 1 <= focus_rating <= 5:
             raise InvalidFeedbackError(f"focus_rating must be between 1 and 5, got {focus_rating}.")
@@ -527,8 +502,8 @@ class ExecutionService:
                 f"interruption_count must be zero or greater, got {interruption_count}."
             )
 
-        execution = self._repository.get_execution(execution_id)
-        updates: dict[str, object] = {"updated_at": self._now_iso()}
+        original = self._load(execution_id, expected_version)
+        updates: dict[str, object] = {}
         if focus_rating is not None:
             updates["focus_rating"] = focus_rating
         if energy_rating is not None:
@@ -538,8 +513,7 @@ class ExecutionService:
         if note is not None:
             updates["note"] = note
 
-        execution = execution.model_copy(update=updates)
-        return self._repository.update_execution(execution)
+        return self._commit(original, original.model_copy(update=updates))
 
     # ------------------------------------------------------------------
     # Reads
@@ -576,15 +550,26 @@ class ExecutionService:
     # Internals
     # ------------------------------------------------------------------
 
-    def _transition(self, execution_id: str, action: str) -> TaskExecution:
-        allowed_sources, target_status = _TRANSITIONS[action]
+    def _load(self, execution_id: str, expected_version: int | None) -> TaskExecution:
+        """The live execution a mutation starts from, checked against the caller's precondition."""
         execution = self._repository.get_execution(execution_id)
+        if expected_version is not None and execution.version != expected_version:
+            raise ExecutionVersionConflictError(
+                execution_id, expected_version=expected_version, current_version=execution.version
+            )
+        return execution
 
+    def _transition(self, execution: TaskExecution, action: str) -> TaskExecution:
+        """The execution with `action`'s status change applied (not yet written)."""
+        allowed_sources, target_status = _TRANSITIONS[action]
         if execution.status not in allowed_sources:
-            raise InvalidTransitionError(execution_id, execution.status, target_status)
+            raise InvalidTransitionError(execution.id, execution.status, target_status)
+        return execution.model_copy(update={"status": target_status})
 
-        execution = execution.model_copy(update={"status": target_status, "updated_at": self._now_iso()})
-        return self._repository.update_execution(execution)
+    def _commit(self, original: TaskExecution, updated: TaskExecution) -> TaskExecution:
+        """Write one logical mutation: version + 1 and updated_at, compared against the starting version."""
+        updated = updated.model_copy(update={"version": original.version + 1, "updated_at": self._now_iso()})
+        return self._repository.update_execution(updated, expected_version=original.version)
 
     def _close_open_session(self, execution_id: str) -> None:
         open_session = self._repository.get_open_session(execution_id)

@@ -36,9 +36,11 @@ def populate(service: PlanningService) -> tuple[Task, Task, FixedBlock, Schedule
         estimated_duration_minutes=45, priority=7, preferred_dates=[DAY],
         preferred_time_window=LocalTimeWindow(start_minute=613, end_minute=1440),
         deadline=datetime(2026, 3, 3, 17, 0, tzinfo=NY),
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),  # explicit: rows are ordered by created_at
     )
     dependent = Task(name="Review", category="study", estimated_duration_minutes=30, priority=5,
-                     preferred_dates=[DAY + timedelta(days=5)], dependency_ids=[awkward.id])
+                     preferred_dates=[DAY + timedelta(days=5)], dependency_ids=[awkward.id],
+                     created_at=datetime(2026, 1, 2, tzinfo=timezone.utc))
     service.save_tasks([awkward, dependent])
     block = service.save_fixed_block(FixedBlock(
         label="Lecture, room 2", planned_date=DAY, timezone="America/New_York",

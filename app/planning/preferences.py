@@ -12,7 +12,9 @@ calculate_task_score/calculate_schedule_score (untouched) can already be
 exercised against per-day canonical preferences today.
 
 Layering model (built-in defaults -> YAML template -> optional user-level
-in-memory overrides -> date-specific overrides):
+overrides -> date-specific overrides; since Milestone 3 the user and date
+layers are persisted as PreferenceRecords through PlanningService, while
+this module itself stays storage-free):
     resolve_day_preferences applies four layers in increasing precedence.
     Each layer is a PreferenceOverrides instance (or None, meaning "this
     layer contributes nothing"). For the two per-category dict fields
@@ -46,8 +48,11 @@ earlier optimization request that already captured its own DayPreferences.
 
 from __future__ import annotations
 
+import json
 import math
+import uuid
 from datetime import date as date_
+from datetime import datetime, timezone
 from enum import Enum
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -280,6 +285,70 @@ class PreferenceOverrides(BaseModel):
 
 
 # -----------------------------------------------------------------------------
+# Persisted override layers (Milestone 3)
+# -----------------------------------------------------------------------------
+
+
+class PreferenceScope(str, Enum):
+    #: The "user" layer: applies to every date unless a date layer says otherwise.
+    USER = "user"
+    #: A date layer: applies to exactly one calendar date.
+    DATE = "date"
+
+
+class PreferenceRecord(BaseModel):
+    """
+    One persisted override layer (see PlanningService's preference methods).
+    The YAML layer is never stored -- it is read from config/ -- so only the
+    user layer and date layers are records. `overrides` keeps the exact
+    absent/value/None semantics of PreferenceOverrides (the stored document
+    round-trips losslessly; see overrides_to_document/overrides_from_document).
+    """
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
+    user_id: uuid.UUID | None = None
+    scope: PreferenceScope
+    date: date_ | None = None
+    overrides: PreferenceOverrides
+
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    version: int = Field(default=1, gt=0)
+    deleted_at: datetime | None = None
+
+    @field_validator("created_at", "updated_at", "deleted_at")
+    @classmethod
+    def _utc(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            raise ValueError("timestamps must be aware datetimes (include a UTC offset)")
+        return value.astimezone(timezone.utc)
+
+    @model_validator(mode="after")
+    def _validate_scope(self) -> "PreferenceRecord":
+        if (self.scope == PreferenceScope.DATE) != (self.date is not None):
+            raise ValueError("a date-scoped preference record needs a date; a user-scoped one must not have one")
+        return self
+
+
+def overrides_to_document(overrides: PreferenceOverrides) -> str:
+    """
+    The stored JSON form of one layer, without optimizer_mode (a column of
+    its own). A category key with an explicit None is kept as JSON null, and
+    a reward/scalar field that is absent (None) stays null, so loading it
+    back reproduces exactly the same layer.
+    """
+    return json.dumps(overrides.model_dump(mode="json", exclude={"optimizer_mode"}), sort_keys=True, allow_nan=False)
+
+
+def overrides_from_document(document: str, optimizer_mode: str | None) -> PreferenceOverrides:
+    data = json.loads(document)
+    data["optimizer_mode"] = optimizer_mode
+    return PreferenceOverrides.model_validate(data)
+
+
+# -----------------------------------------------------------------------------
 # Fully resolved DayPreferences
 # -----------------------------------------------------------------------------
 
@@ -362,7 +431,7 @@ def resolve_day_preferences(
     precedence: built-in defaults -> yaml_overrides (the project's YAML
     reward-config template; see day_preferences_overrides_from_reward_settings
     to build this from an already-loaded RewardSettings) -> user_overrides
-    (optional in-memory, session-scoped overrides) -> date_overrides
+    (optional user-level overrides, persisted by PlanningService) -> date_overrides
     (overrides specific to exactly this `date`).
 
     Every call returns an entirely new, independent DayPreferences -- no

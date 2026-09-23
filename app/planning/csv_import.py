@@ -16,7 +16,8 @@ Conversion reuses the app.planning.compat contract unchanged:
     - start_time/end_time are local minutes from midnight (1440 = the next
       midnight) converted with compat.legacy_minutes_to_utc;
     - a flexible row becomes a Task with preferred_dates=[its date] and its
-      window as preferred_time_window; a fixed row becomes a FixedBlock;
+      window as preferred_time_window; a fixed row becomes a FixedBlock
+      whose category is the row's category ("fixed" when empty);
     - the `dependencies` field is interpreted by
       compat.resolve_legacy_dependency_field (semicolon lists, whole-field
       match that preserves hyphenated names, then an unambiguous hyphen
@@ -40,9 +41,10 @@ engine is minute-precise.
 
 Identity: legacy rows carry no ids. Every import mints a fresh UUID for
 each row, once; appending the same file twice therefore creates a second,
-distinct set of tasks. There is no identity-bearing CSV import format --
-the stored-data CSV export (app/planning/csv_export.py) is for reading and
-analysis, not a round-trip import.
+distinct set of tasks. The identity-preserving format is the canonical
+stored-planning CSV (app/planning/csv_export.py writes it,
+app/planning/csv_canonical.py imports it); callers tell the two apart by
+header (csv_canonical.is_canonical_csv).
 
 Modes (ImportMode):
     - APPEND adds every imported task and fixed block; nothing existing is
@@ -229,7 +231,10 @@ def _parse_row(row: dict[str, str], anchor_date: date_, timezone: str) -> FixedB
     if fixed_text == "true":
         try:
             start_utc, end_utc = legacy_minutes_to_utc(day, timezone, start, end)
-            return FixedBlock(label=name, planned_date=day, timezone=timezone, planned_start=start_utc, planned_end=end_utc)
+            return FixedBlock(
+                label=name, category=row.get("category") or "fixed", planned_date=day, timezone=timezone,
+                planned_start=start_utc, planned_end=end_utc,
+            )
         except ValueError as error:
             raise _RowError(f"fixed block {name!r}: {_message(error)}") from error
 

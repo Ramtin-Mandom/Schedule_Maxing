@@ -29,6 +29,16 @@ with --db-path -- and never imports anything implicitly.
         --db-path if one is given) and schedules it. Plain startup never adds
         sample data.
 
+    --import-csv also accepts a stored-planning CSV written by
+    --export-planning-csv (it has record ids): that file is merged by id
+    (app/planning/csv_canonical.py) instead -- unchanged records are
+    skipped, a record that differs from the saved one is refused unless
+    --allow-updates is given *and* its version matches the saved version.
+
+    --mode sets the Day Scheduler mode as the saved user preference (it is
+    kept for later runs and by the desktop app); without --mode the saved
+    preference, or the default precise_greedy, is used.
+
 Exports: --legacy-csv-out writes the original `time,task` 30-minute-block
 CSV (byte-for-byte compatible, lossy: shorter or off-grid intervals and ids
 cannot be represented); --exact-json-out writes the generated
@@ -49,8 +59,9 @@ from pathlib import Path
 from app.execution.db import get_connection, resolve_db_path
 from app.optimizer import _to_offset
 from app.planning.application import PlanningService, RangeScope
-from app.planning.csv_import import CsvImportError, ImportMode, parse_legacy_csv_file
-from app.planning.preferences import OptimizerMode, PreferenceOverrides
+from app.planning.csv_canonical import is_canonical_csv, parse_canonical_csv
+from app.planning.csv_import import CsvImportError, ImportMode, parse_legacy_csv_file, read_csv_text
+from app.planning.preferences import OptimizerMode
 from app.planning.repository import PlanningRepository
 from app.ui.planning_controller import PlanningController
 from config import settings
@@ -294,8 +305,14 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help=f"IANA timezone for imported/scheduled days (default: {settings.DEFAULT_TIMEZONE}).",
     )
     parser.add_argument(
-        "--mode", type=str, choices=[mode.value for mode in OptimizerMode], default=OptimizerMode.PRECISE_GREEDY.value,
-        help="Day Scheduler candidate mode (default: precise_greedy).",
+        "--mode", type=str, choices=[mode.value for mode in OptimizerMode], default=None,
+        help="Day Scheduler candidate mode, saved as your preference (default: the saved preference, else "
+        "precise_greedy).",
+    )
+    parser.add_argument(
+        "--allow-updates", action="store_true",
+        help="For a stored-planning CSV import: apply records that differ from the saved ones when their version "
+        "matches the saved version (otherwise such a file is refused).",
     )
     parser.add_argument(
         "--select-date", type=str, default=None,
@@ -343,11 +360,12 @@ def main(argv: list[str] | None = None) -> None:
     if csv_path is not None and not csv_path.exists():
         raise FileNotFoundError(f"CSV file not found: {csv_path}")
 
+    canonical = csv_path is not None and not args.demo and is_canonical_csv(read_csv_text(csv_path))
     if args.anchor_date is not None:
         anchor_date = _date_arg(args.anchor_date, "--anchor-date")
     elif args.demo:
         anchor_date = SAMPLE_ANCHOR_DATE
-    elif csv_path is not None:
+    elif csv_path is not None and not canonical:
         raise ValueError(
             "--anchor-date is required when importing a CSV -- this program never infers a calendar date "
             "for a legacy day index from today's date."
@@ -356,7 +374,7 @@ def main(argv: list[str] | None = None) -> None:
         anchor_date = None
 
     tz_name = args.timezone or (SAMPLE_TIMEZONE if args.demo else settings.DEFAULT_TIMEZONE)
-    mode = OptimizerMode(args.mode)
+    mode = OptimizerMode(args.mode) if args.mode is not None else None
     select_date = _date_arg(args.select_date, "--select-date")
     start_date = _date_arg(args.start_date, "--start-date")
     end_date = _date_arg(args.end_date, "--end-date")
@@ -366,11 +384,18 @@ def main(argv: list[str] | None = None) -> None:
     try:
         service = PlanningService(PlanningRepository(connection))
         controller = PlanningController(service=service, timezone=tz_name)
-        controller.set_user_overrides(PreferenceOverrides(optimizer_mode=mode))
         print(f"Database: {resolve_db_path(db_path)}")
+        if mode is not None:
+            saved_mode = controller.set_engine_mode(mode)
+            if not saved_mode.ok:
+                print(f"Could not save the scheduler mode: {saved_mode.error}")
+                raise SystemExit(1)
+            print(f"Scheduler mode {mode.value} saved as your preference.")
 
         imported = None
-        if csv_path is not None:
+        if csv_path is not None and canonical:
+            _import_canonical(controller, csv_path, ImportMode(args.import_mode), allow_updates=args.allow_updates)
+        elif csv_path is not None:
             imported = _import(controller, csv_path, anchor_date, tz_name, ImportMode(args.import_mode))
 
         if select_date is None and imported is not None:
@@ -457,6 +482,23 @@ def _import(controller: PlanningController, csv_path: Path, anchor_date: date_, 
             "execution history was kept."
         )
     return parsed
+
+
+def _import_canonical(controller: PlanningController, csv_path: Path, mode: ImportMode, *, allow_updates: bool) -> None:
+    print(f"Importing the stored-planning CSV {csv_path}, merged by record id (the anchor date does not apply).")
+    try:
+        parse_canonical_csv(read_csv_text(csv_path))  # report format problems with line numbers first
+    except CsvImportError as error:
+        print(error)
+        raise SystemExit(2) from error
+    applied = controller.import_csv_file(str(csv_path), anchor_date=date_.min, mode=mode, allow_updates=allow_updates)
+    if not applied.ok:
+        print(f"The CSV was not imported; nothing was saved: {applied.error}")
+        raise SystemExit(2)
+    result = applied.value
+    for label, counts in (("Created", result.created), ("Updated", result.updated), ("Deleted", result.deleted),
+                          ("Unchanged", result.unchanged)):
+        print(f"{label}: " + ", ".join(f"{count} {kind}(s)" for kind, count in counts.items()))
 
 
 def _export_planning(controller: PlanningController, path: Path, start_date, end_date) -> None:

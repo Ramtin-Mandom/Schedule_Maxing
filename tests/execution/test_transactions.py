@@ -118,16 +118,12 @@ def test_complete_rolls_back_session_close_and_transition_if_the_final_write_fai
     clocked_service.start(execution.id)
     clock.advance(30)
 
-    original_update = repository.update_execution
-    calls = {"count": 0}
+    def fail_final_write(updated, *, expected_version):
+        # complete() writes the execution once, at the end, after the
+        # transition was computed and the open session was closed.
+        raise InjectedFailure
 
-    def fail_on_second_update(updated):
-        calls["count"] += 1
-        if calls["count"] == 2:  # after the transition and the session close
-            raise InjectedFailure
-        return original_update(updated)
-
-    monkeypatch.setattr(repository, "update_execution", fail_on_second_update)
+    monkeypatch.setattr(repository, "update_execution", fail_final_write)
     with pytest.raises(InjectedFailure):
         clocked_service.complete(execution.id)
 
