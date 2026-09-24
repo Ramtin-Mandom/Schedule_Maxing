@@ -82,6 +82,10 @@ state), sync_outbox (materialized operations with stable op ids) and
 sync_conflicts. The execution link trigger is recreated once more so pulled
 history is validated by the server, not re-checked locally.
 
+Version 6 (Milestone 4, the local web profile): sync_accounts.last_synced_at
+(the last successful synchronization, shown by the sync status) and
+local_settings (non-secret settings such as the backend URL). Additive.
+
 Execution <-> planning links (the legacy compatibility strategy):
     executions.task_id / scheduled_task_id are *historical identity*: they
     record which task/placement an execution was created for, alongside the
@@ -887,6 +891,15 @@ _V5_STATEMENTS: tuple[str, ...] = (
 )
 
 
+# Version 6 (Milestone 4, the local web profile -- app/web): the time of each
+# account's last successful synchronization, and non-secret local settings
+# (the configured backend URL). Additive only; credentials are never stored.
+_V6_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE sync_accounts ADD COLUMN last_synced_at TEXT",
+    "CREATE TABLE IF NOT EXISTS local_settings (name TEXT PRIMARY KEY, value TEXT NOT NULL)",
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     (
         1,
@@ -942,6 +955,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     (3, _V3_PLANNING_STATEMENTS),
     (4, _migrate_v3_to_v4),
     (5, _V5_STATEMENTS),
+    (6, _V6_STATEMENTS),
 )
 
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1][0]

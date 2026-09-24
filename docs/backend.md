@@ -7,7 +7,8 @@ desktop's records, as described in [sync-contract.md](sync-contract.md).
 The desktop app never imports the backend and keeps working offline without
 any backend setting. The backend in turn imports only the pure canonical
 models (`app/planning/models.py`, `preferences.py`, `provenance.py`,
-`app/execution/models.py`, `lifecycle.py`). It never imports Tk, the local
+`fixed_block_rules.py`, `app/execution/models.py`,
+`lifecycle.py`) and the reward-settings loader the YAML template needs. It never imports Tk, the local
 SQLite layer, pandas, or scikit-learn. A test checks this.
 
 ## Package choices
@@ -22,6 +23,7 @@ All packages are maintained and support Python 3.10 (the CI version):
 | Migrations | Alembic | Versioned migration scripts in `backend/migrations/versions` |
 | Password hashing | argon2-cffi | Argon2id with a random salt per hash; hashes are upgraded automatically on login |
 | Access tokens | PyJWT | HS256 only, with every required claim verified |
+| Preference template | PyYAML, tzdata | Server-side preference resolution reads `config/task_preference.yaml` like the desktop; tzdata supplies IANA zones where the host has none |
 
 The server-only dependencies are listed in `requirements-backend.txt`, which
 has no desktop packages. `requirements.txt`, used for development and CI,
@@ -41,6 +43,11 @@ The backend reads its settings only from environment variables. See
   - `JWT_AUDIENCE`
   - `ACCESS_TOKEN_TTL_MINUTES` (1–1440, default 60)
   - `API_MAX_PAGE_SIZE` (default 500)
+  - `BROWSER_SESSION_TTL_MINUTES` (5–43200, default 720)
+  - `BROWSER_COOKIE_SECURE` (default `true`; `false` only for plain-http
+    local development)
+  - `ALLOWED_ORIGINS` (comma-separated extra origins whose cookie
+    requests are accepted, e.g. a separate dev frontend)
 
 If a setting is missing or invalid, startup fails with `BackendConfigError`.
 The error names the problem settings, never their values. Nothing logs
@@ -66,8 +73,17 @@ Use `--factory` so that importing the module never reads configuration.
 
 ## API summary
 
-All endpoints except `/health`, `/ready`, `/auth/register`, and
-`/auth/login` need an `Authorization: Bearer <access token>` header.
+The web UI's scheduling operations (snapshot, preferences view, allocation
+preview, generation, reset, canonical CSV) and browser sessions are
+documented in [web-api.md](web-api.md). They run the desktop's own planning
+code -- `PlanningService` and `app/planning/workflow.py` -- over the server
+tables through `backend/planning_repository.py`, whose writes all go
+through the `Mutator` and the change log below.
+
+All endpoints except `/health`, `/ready`, `/auth/register`, `/auth/login`,
+the `/auth/browser/*` session endpoints and `/planning/capabilities` need
+either an `Authorization: Bearer <access token>` header or a browser
+session cookie (with `X-CSRF-Token` on unsafe requests; see web-api.md).
 
 **Accounts**
 
@@ -136,7 +152,8 @@ Every error has the same shape:
 | `404 not_found` | The record doesn't exist, **or it belongs to another user**. The two cases are indistinguishable. |
 | `409 version_conflict` or `409 deleted` | A stale `base_version`, or the target is a tombstone. The body includes `supplied_version`, `current_version`, and the caller's own `current` record or tombstone. |
 | `409` | `already_exists`, `in_use`, `invalid_transition`, `account_exists` |
-| `422` | `validation_error` or `invalid_reference`. References to another user's records are rejected the same way as references to records that don't exist. |
+| `422` | `validation_error` or `invalid_reference`. References to another user's records are rejected the same way as references to records that don't exist. A fixed block that breaks a write invariant is a `validation_error` with a `reason` (`sub_minute_precision`, `date_mismatch`, `outside_day_window`, `unsupported_day_window`, `invalid_interval`). |
+| `409 fixed_block_overlap` | The fixed block overlaps another live block of the caller; `conflicting` is that block (never `current`, which always means the record itself). |
 | `401 unauthenticated` | Missing or bad credentials. The response includes `WWW-Authenticate: Bearer`. |
 
 ## Data model, ownership, and concurrency
@@ -162,6 +179,17 @@ Every error has the same shape:
     be deleted;
   - deleting a task tombstones its live placements;
   - execution history never cascades.
+- **Fixed-block invariants.** Creating or updating a fixed block checks,
+  under the user's change-log lock, the rules in
+  `app/planning/fixed_block_rules.py`: a whole-minute interval that starts
+  on its date in its timezone, inside that date's effective day window
+  (`backend/preferences.py`: template -> the user's user layer -> the user's
+  date layer), and no overlap with another live block of the user (the
+  edited block excluded). Sync push uses the same path, so a pushed block
+  cannot bypass them. An update that keeps the interval unchanged is not
+  re-judged, so older blocks are never rewritten. Concurrent overlapping
+  writes serialize on the lock: at most one succeeds (checked on real
+  PostgreSQL in `tests/backend/test_postgres.py`).
 
 ### The shared mutation path and change ordering
 

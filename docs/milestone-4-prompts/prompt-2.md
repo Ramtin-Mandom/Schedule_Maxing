@@ -1,0 +1,19 @@
+# Prompt 2 — Accounts, local-data connection, synchronization and conflicts
+
+Implement the real account and sync UI after the web foundation. Use existing application endpoints and SyncService integration; no fake authentication or frontend sync algorithm.
+
+Read AGENTS.md, CLAUDE.md, README.md, docs/web-api.md, sync docs and relevant frontend/backend/tests. Inspect all prior prompts' actual changes and use current code as truth. Preserve functioning features. Implement only this prompt, add/update tests, run relevant checks, fix regressions, update documentation, avoid unrelated refactoring, and report files, architecture choices, tests, commands/results and limitations.
+
+Build registration, login, logout, active-account identity and profile loading with validation, field errors, loading/disabled states, retry and session-expiry handling. Follow backend email/username/password contracts. Passwords and access tokens must not be saved to browser storage or URLs. Logout invalidates the browser session, clears account query state, and leaves persisted planning data intact. Handle both authenticated hosted use and explicit ownerless local/offline workspace use; do not force an online login to use the local profile.
+
+Offer backend connection configuration only where the local service supports it. Validate/persist nonsecret settings through the service, show connectivity status, and safely end the prior connection/session before switching backends. Do not expose arbitrary backend switching for a fixed hosted deployment.
+
+After local sign-in, show the service's unassociated-data preview when such data exists. Explain record counts, owner/association scope and conflicts. Provide separate confirm and cancel actions. Login, opening the dialog, or dismissing it must not mutate ownership or upload data. Confirm calls the actual association endpoint; stale previews must refresh. Existing records owned by another account never become claimable.
+
+Display compact sync state: connectivity, pending count when available, last successful sync, running status, conflicts and useful error/auth-required text. Add Sync now with duplicate-request prevention. Refresh affected queries after synchronization. Durable state comes from the service, not component memory. Distinguish a stopped local API from an unavailable remote backend; local offline editing must still work in the latter case.
+
+Provide a conflict list and accessible detail view. Show labelled local/remote values, modification/version information when available, deletion markers and service reason. Present only allowed Keep local and Accept remote actions; no Merge unless the service truly supports it. Explain why Keep local is unavailable for a remote tombstone or scope collision. Protect current edits, provide feedback/retry, and refresh the conflict and affected schedule/freshness queries after resolution.
+
+In hosted-only mode, show actual server persistence/connectivity and guidance for connecting existing local data through the local web app. Do not show imaginary local pending changes or label a simple query refetch as synchronization. Keep the local sync workflow readily discoverable and documented.
+
+Acceptance: registration/login/profile/logout work against real endpoints; expiry clears stale identity without deleting data; account A/B data never flashes across switching; cancelling association changes nothing; confirmed association preserves IDs and syncs through the existing service; offline edits survive local restart; conflict decisions use allowed service operations and persist. Test duplicate submissions, backend 401/409/422/5xx, network failure, account switch during requests, deleted conflicts and successful retry. Use component/integration tests plus in-process backend tests, not external production services. Run frontend test/lint/typecheck/build and relevant Python tests; update usage docs.

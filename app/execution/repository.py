@@ -25,6 +25,14 @@ Link violations raised by the database's v3 triggers (see app/execution/
 db.py, "Execution <-> planning links") are translated into
 ExecutionLinkError.
 
+Owner scope (Milestone 4 preflight, app/planning/scope.py): constructed with
+`owner=OwnerScope(...)` (or via scoped()), every read, update, tombstone and
+the history purge is restricted to that owner's executions, another owner's
+execution behaves exactly like a missing one, and creating an execution for
+another owner is refused (ExecutionError). Without an owner the repository
+is device-wide, as the desktop has always used it; the sync-only methods
+(store_synced, set_wire_id, local_id_for_wire, wire_id) stay device-wide.
+
 Milestone 3 (schema v4): update_execution is an atomic compare-and-update
 (`WHERE id = ? AND version = ? AND deleted_at IS NULL`) -- a stale write
 raises ExecutionVersionConflictError and changes nothing. Deletion of one
@@ -50,6 +58,7 @@ from app.execution.errors import (
     ExecutionVersionConflictError,
 )
 from app.execution.models import ExecutionStatus, TaskExecution, WorkSession
+from app.planning.scope import OwnerScope
 
 _EXECUTION_COLUMNS = (
     "id",
@@ -96,8 +105,9 @@ def _is_uuid(value: str) -> bool:
 class ExecutionRepository:
     """CRUD access to executions and their work sessions."""
 
-    def __init__(self, connection: sqlite3.Connection) -> None:
+    def __init__(self, connection: sqlite3.Connection, *, owner: OwnerScope | None = None) -> None:
         self._connection = connection
+        self._owner = owner
         # The desktop UI shares one connection between the Tk main thread and
         # background worker threads (app.ui.background.run_in_background).
         # sqlite3 connections aren't safe under unsynchronized concurrent
@@ -105,6 +115,27 @@ class ExecutionRepository:
         # (see app.execution.db) while touching self._connection. A plain
         # sqlite3.Connection (not from get_connection) gets a private state.
         self._state = transaction_state_for(connection) or TransactionState()
+
+    @property
+    def owner(self) -> OwnerScope | None:
+        return self._owner
+
+    def scoped(self, owner: OwnerScope) -> "ExecutionRepository":
+        """A repository on the same connection (and lock/transaction state), restricted to `owner`."""
+        scoped = ExecutionRepository.__new__(ExecutionRepository)
+        scoped._connection, scoped._state, scoped._owner = self._connection, self._state, owner
+        return scoped
+
+    def _owner_sql(self, column: str = "user_id") -> tuple[str, tuple]:
+        if self._owner is None:
+            return "", ()
+        return f" AND {column} IS ?", (self._owner.sql_value,)
+
+    def _require_owner(self, execution: TaskExecution) -> None:
+        if self._owner is not None and not self._owner.admits(execution.user_id):
+            raise ExecutionError(
+                f"Execution {execution.id} belongs to another owner; it cannot be written in {self._owner.describe()}."
+            )
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
@@ -123,6 +154,7 @@ class ExecutionRepository:
 
     def create_execution(self, execution: TaskExecution) -> TaskExecution:
         """Insert a brand-new execution row. Raises sqlite3.IntegrityError on a duplicate id."""
+        self._require_owner(execution)
         values = _execution_to_row(execution)
         placeholders = ", ".join("?" for _ in _EXECUTION_COLUMNS)
         columns = ", ".join(_EXECUTION_COLUMNS)
@@ -188,11 +220,13 @@ class ExecutionRepository:
             raise ValueError("get_or_create_by_scheduled_task_id requires execution.scheduled_task_id to be set")
 
         scheduled_task_id = str(execution.scheduled_task_id)
+        self._require_owner(execution)
+        owner_sql, owner_params = self._owner_sql()
 
         with self.transaction():
             existing = self._connection.execute(
-                "SELECT * FROM executions WHERE scheduled_task_id = ?",
-                (scheduled_task_id,),
+                f"SELECT * FROM executions WHERE scheduled_task_id = ?{owner_sql}",
+                (scheduled_task_id, *owner_params),
             ).fetchone()
             if existing is not None:
                 if existing["deleted_at"] is not None:
@@ -232,17 +266,19 @@ class ExecutionRepository:
         deleted. The caller sets the new version (see ExecutionService's
         logical-mutation rule); this method stores it verbatim.
         """
+        self._require_owner(execution)
         assignments = ", ".join(f"{column} = ?" for column in _EXECUTION_COLUMNS if column != "id")
         values = [
             value
             for column, value in zip(_EXECUTION_COLUMNS, _execution_to_row(execution))
             if column != "id"
         ]
-        values.extend([execution.id, expected_version])
+        owner_sql, owner_params = self._owner_sql()
+        values.extend([execution.id, expected_version, *owner_params])
 
         with self.transaction(), _translate_link_errors():
             cursor = self._connection.execute(
-                f"UPDATE executions SET {assignments} WHERE id = ? AND version = ? AND deleted_at IS NULL",
+                f"UPDATE executions SET {assignments} WHERE id = ? AND version = ? AND deleted_at IS NULL{owner_sql}",
                 values,
             )
             if cursor.rowcount == 0:
@@ -253,18 +289,20 @@ class ExecutionRepository:
     def soft_delete_execution(self, execution_id: str, *, expected_version: int, deleted_at: datetime) -> None:
         """Tombstone a live execution at `expected_version` (version + 1). Its work sessions are kept."""
         stamp = deleted_at.astimezone(timezone.utc).isoformat()
+        owner_sql, owner_params = self._owner_sql()
         with self.transaction():
             cursor = self._connection.execute(
                 "UPDATE executions SET deleted_at = ?, updated_at = ?, version = version + 1 "
-                "WHERE id = ? AND version = ? AND deleted_at IS NULL",
-                (stamp, stamp, execution_id, expected_version),
+                f"WHERE id = ? AND version = ? AND deleted_at IS NULL{owner_sql}",
+                (stamp, stamp, execution_id, expected_version, *owner_params),
             )
             if cursor.rowcount == 0:
                 self._raise_precondition_failure(execution_id, expected_version)
 
     def _raise_precondition_failure(self, execution_id: str, expected_version: int) -> None:
+        owner_sql, owner_params = self._owner_sql()
         row = self._connection.execute(
-            "SELECT version, deleted_at FROM executions WHERE id = ?", (execution_id,)
+            f"SELECT version, deleted_at FROM executions WHERE id = ?{owner_sql}", (execution_id, *owner_params)
         ).fetchone()
         if row is None:
             raise ExecutionNotFoundError(execution_id)
@@ -276,10 +314,11 @@ class ExecutionRepository:
     def get_execution(self, execution_id: str, *, include_deleted: bool = False) -> TaskExecution:
         """Raises ExecutionNotFoundError if no such (live, unless include_deleted) execution exists."""
         live = "" if include_deleted else " AND deleted_at IS NULL"
+        owner_sql, owner_params = self._owner_sql()
         with self._read():
             row = self._connection.execute(
-                f"SELECT * FROM executions WHERE id = ?{live}",
-                (execution_id,),
+                f"SELECT * FROM executions WHERE id = ?{live}{owner_sql}",
+                (execution_id, *owner_params),
             ).fetchone()
 
         if row is None:
@@ -289,24 +328,26 @@ class ExecutionRepository:
 
     def find_by_scheduled_task_id(self, scheduled_task_id: str) -> TaskExecution | None:
         """The live execution recorded for a placement id, if any (lookup only, never creates)."""
+        owner_sql, owner_params = self._owner_sql()
         with self._read():
             row = self._connection.execute(
-                "SELECT * FROM executions WHERE scheduled_task_id = ? AND deleted_at IS NULL",
-                (scheduled_task_id,),
+                f"SELECT * FROM executions WHERE scheduled_task_id = ? AND deleted_at IS NULL{owner_sql}",
+                (scheduled_task_id, *owner_params),
             ).fetchone()
         return _row_to_execution(row) if row is not None else None
 
     def list_executions(self, status: ExecutionStatus | None = None) -> list[TaskExecution]:
         """Return all live executions, optionally filtered by status, oldest first."""
+        owner_sql, owner_params = self._owner_sql()
         with self._read():
             if status is None:
                 rows = self._connection.execute(
-                    "SELECT * FROM executions WHERE deleted_at IS NULL ORDER BY created_at"
+                    f"SELECT * FROM executions WHERE deleted_at IS NULL{owner_sql} ORDER BY created_at", owner_params
                 ).fetchall()
             else:
                 rows = self._connection.execute(
-                    "SELECT * FROM executions WHERE status = ? AND deleted_at IS NULL ORDER BY created_at",
-                    (status.value,),
+                    f"SELECT * FROM executions WHERE status = ? AND deleted_at IS NULL{owner_sql} ORDER BY created_at",
+                    (status.value, *owner_params),
                 ).fetchall()
 
         return [_row_to_execution(row) for row in rows]
@@ -321,10 +362,12 @@ class ExecutionRepository:
         ExecutionService.reset_all_history) are expected to gate it behind
         a user confirmation; this method itself performs no confirmation.
         It is a local purge, not a synchronizable deletion (see
-        docs/sync-contract.md); deleting one execution is a tombstone.
+        docs/sync-contract.md); deleting one execution is a tombstone. A
+        scoped repository purges only its owner's executions.
         """
+        owner_sql, owner_params = self._owner_sql()
         with self.transaction():
-            cursor = self._connection.execute("DELETE FROM executions")
+            cursor = self._connection.execute(f"DELETE FROM executions WHERE 1 = 1{owner_sql}", owner_params)
             return cursor.rowcount
 
     # ------------------------------------------------------------------
@@ -363,20 +406,24 @@ class ExecutionRepository:
 
     def get_open_session(self, execution_id: str) -> WorkSession | None:
         """Return the currently-open session for this execution, if any."""
+        owner_sql, owner_params = self._owner_sql("e.user_id")
         with self._read():
             row = self._connection.execute(
-                "SELECT * FROM work_sessions WHERE execution_id = ? AND ended_at IS NULL "
-                "ORDER BY started_at DESC LIMIT 1",
-                (execution_id,),
+                "SELECT ws.* FROM work_sessions AS ws JOIN executions AS e ON e.id = ws.execution_id "
+                f"WHERE ws.execution_id = ? AND ws.ended_at IS NULL{owner_sql} "
+                "ORDER BY ws.started_at DESC LIMIT 1",
+                (execution_id, *owner_params),
             ).fetchone()
         return _row_to_session(row) if row is not None else None
 
     def list_sessions(self, execution_id: str) -> list[WorkSession]:
         """Return all sessions for an execution, in chronological order."""
+        owner_sql, owner_params = self._owner_sql("e.user_id")
         with self._read():
             rows = self._connection.execute(
-                "SELECT * FROM work_sessions WHERE execution_id = ? ORDER BY started_at",
-                (execution_id,),
+                "SELECT ws.* FROM work_sessions AS ws JOIN executions AS e ON e.id = ws.execution_id "
+                f"WHERE ws.execution_id = ?{owner_sql} ORDER BY ws.started_at",
+                (execution_id, *owner_params),
             ).fetchall()
         return [_row_to_session(row) for row in rows]
 
@@ -428,14 +475,16 @@ class ExecutionRepository:
         snapshots remain the record of what was planned; nothing is
         fabricated for them.
         """
+        owner_sql, owner_params = self._owner_sql("e.user_id")
         with self._read():
             rows = self._connection.execute(
-                "SELECT e.* FROM executions AS e WHERE e.deleted_at IS NULL AND ("
+                f"SELECT e.* FROM executions AS e WHERE e.deleted_at IS NULL{owner_sql} AND ("
                 "(e.task_id IS NOT NULL AND NOT EXISTS "
                 "(SELECT 1 FROM tasks AS t WHERE t.id = e.task_id AND t.deleted_at IS NULL)) "
                 "OR (e.scheduled_task_id IS NOT NULL AND NOT EXISTS "
                 "(SELECT 1 FROM scheduled_tasks AS s WHERE s.id = e.scheduled_task_id AND s.deleted_at IS NULL))) "
-                "ORDER BY e.created_at, e.id"
+                "ORDER BY e.created_at, e.id",
+                owner_params,
             ).fetchall()
         return [_row_to_execution(row) for row in rows]
 

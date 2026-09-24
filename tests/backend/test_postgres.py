@@ -200,3 +200,27 @@ def test_a_later_cursor_can_never_skip_an_earlier_uncommitted_change(pg_engine) 
                                     .where(models.ChangeLogEntry.user_id == user_id)
                                     .order_by(models.ChangeLogEntry.seq)))
     assert committed_seqs() == [1, 2] and names == ["A", "B"]
+
+
+def test_concurrent_overlapping_fixed_blocks_cannot_both_be_created(pg_app) -> None:
+    """The overlap check runs under the user's change-log row lock, so racing writers serialize on it."""
+    with TestClient(pg_app) as client:
+        register(client, "blocks@example.com")
+        headers = login_headers(client, "blocks@example.com")
+    results: list[int] = []
+
+    def attempt(index: int) -> None:
+        with TestClient(pg_app) as client:
+            results.append(client.post("/fixed-blocks", headers=headers, json={
+                "label": f"Block {index}", "planned_date": "2026-03-02", "timezone": "UTC",
+                "planned_start": f"2026-03-02T09:{index:02d}:00Z", "planned_end": "2026-03-02T11:00:00Z",
+            }).status_code)
+
+    threads = [threading.Thread(target=attempt, args=(index,)) for index in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+    assert sorted(results) == [201] + [409] * 7
+    with TestClient(pg_app) as client:
+        assert len(client.get("/fixed-blocks", headers=headers).json()["items"]) == 1

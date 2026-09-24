@@ -66,18 +66,31 @@ can never be reused by a create.
       task_id/scheduled_task_id and snapshot (see app/execution/db.py,
       "Execution <-> planning links"). PlacementReplacement.
       removed_with_history_ids reports such placements so a UI can say so.
-    - Dependency cycles and overlapping fixed blocks are stored as given by
-      the single-record API: detecting them is the PERT/constraint layers'
-      job (allocation and the day scheduler already report them), not the
-      store's. The bulk importers reject them.
+    - Dependency cycles are stored as given by the single-record API:
+      detecting them is the PERT layer's job (allocation and the day
+      scheduler report them). The bulk importers reject them.
+    - Fixed blocks are scheduling inputs with hard invariants (Milestone 4
+      preflight, app/planning/fixed_block_rules.py): every write that stores
+      a live block -- create, update, set_fixed_blocks_for_date and both
+      importers -- checks, inside the writing transaction, that it is a
+      positive whole-minute interval that starts on its planned_date in its
+      timezone, lies inside that date's effective day window (resolved by
+      resolve_preferences, the same layers scheduling uses), and overlaps no
+      other live block of the same owner (the edited record excluded). A
+      refused write changes nothing, change capture included. An update that
+      keeps a block's interval unchanged is not re-judged, so blocks stored
+      before these rules can still be relabelled without being rewritten.
 
 Date-range task eligibility (tasks_for_range / load_range), derived from
 app.planning.allocation._feasible_dates_for_task's hard date rules so a
 range query never hides a task allocation could place there:
     - required_date set: eligible iff start <= required_date <= end;
-    - else deadline set: eligible iff the deadline's UTC calendar date is
-      >= start (some date in range is on/before the deadline);
+    - else deadline set: eligible iff the deadline instant is not before the
+      first instant of `start` in the planning timezone (`timezone_name`),
+      i.e. its *local* date is >= start -- never its UTC calendar date;
     - else: always eligible (a floating task).
+This is a coarse filter; allocation's per-date check and the day engine's
+intraday deadline constraint stay authoritative.
 Recurrence is model-only (no expansion): a recurring template is treated
 exactly like any other task. Placements and preferred_dates never affect
 eligibility (preferred_dates only rank dates). A dependency outside the
@@ -95,6 +108,15 @@ that are eligible for it. Unlike ELIGIBLE, a task planned for another week
 does not appear in (or get allocated into) this week just because it has
 no hard date constraint. ELIGIBLE remains the default for load_range.
 
+reset_preview / reset_range (Milestone 4) is the web workflow's explicit,
+confirmed reset of a date range; see reset_preview for exactly what it
+touches. clear_range keeps the desktop's older scopes unchanged.
+
+Owner scope (app/planning/scope.py): PlanningService.scoped(owner) is the
+same service restricted to one owner -- reads, preferences, provenance,
+reset and imports see and write only that owner's records. The service
+built on an unscoped repository is the legacy device-wide one.
+
 clear_range(start, end, include_planning_data=...) is the "reset" scope:
 it always deletes the placements (and schedule provenance) dated in the
 range; with include_planning_data it also deletes the fixed blocks dated in
@@ -108,6 +130,8 @@ record content, so it takes no per-record precondition.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
@@ -119,6 +143,7 @@ from pathlib import Path
 
 from app.execution.db import get_connection
 from app.pert import has_cycle_by_id
+from app.planning import fixed_block_rules
 from app.planning.errors import (
     DuplicateEntityError,
     EntityInUseError,
@@ -143,9 +168,18 @@ from app.planning.models import (
     compute_total_score,
 )
 from app.planning.occurrence import HISTORY_PROTECTED_STATUSES, occurrence_key
-from app.planning.preferences import OptimizerMode, PreferenceOverrides, PreferenceRecord, PreferenceScope
+from app.planning.preferences import (
+    DayPreferences,
+    OptimizerMode,
+    PreferenceOverrides,
+    PreferenceRecord,
+    PreferenceScope,
+    default_preference_template,
+    resolve_day_preferences,
+)
 from app.planning.provenance import GenerationRecord, placements_digest
 from app.planning.repository import PlanningRepository
+from app.planning.scope import OwnerScope
 
 Clock = Callable[[], datetime]
 
@@ -259,6 +293,64 @@ class RangeClearResult:
 
 
 @dataclass(frozen=True)
+class ResetPreview:
+    """What reset_range would tombstone (see PlanningService.reset_preview); nothing has been written."""
+
+    start_date: date_
+    end_date: date_
+    #: Live placements dated in the range.
+    placement_ids: list[uuid.UUID]
+    #: The range's schedule (provenance) records.
+    generation_ids: list[uuid.UUID]
+    fixed_block_ids: list[uuid.UUID]
+    #: Non-recurring tasks whose planned date lies in the range.
+    task_ids: list[uuid.UUID]
+    #: Per-date preference layers of the range's dates (their dates then inherit again).
+    date_preference_ids: list[uuid.UUID]
+    #: Live placements dated *outside* the range that belong to the deleted tasks (disclosed cascade).
+    cascade_placement_ids: list[uuid.UUID]
+    #: Deleted placements (in range or cascaded) that execution history references; the history is kept.
+    placements_with_history_ids: list[uuid.UUID]
+    #: Deleted tasks that have execution history; the history is kept.
+    tasks_with_history_ids: list[uuid.UUID]
+    #: Recurring templates planned in the range: kept; only their placements in the range are removed.
+    protected_recurring_task_ids: list[uuid.UUID]
+    #: Task to be deleted -> live tasks outside the reset that depend on it. Non-empty: the reset is refused.
+    blocking_dependents: dict[uuid.UUID, list[uuid.UUID]]
+    #: Identifies exactly these records at these versions; reset_range requires it as the confirmation.
+    token: str
+
+    @property
+    def counts(self) -> dict[str, int]:
+        return {
+            "placements": len(self.placement_ids),
+            "cascade_placements": len(self.cascade_placement_ids),
+            "schedule_generations": len(self.generation_ids),
+            "fixed_blocks": len(self.fixed_block_ids),
+            "tasks": len(self.task_ids),
+            "date_preferences": len(self.date_preference_ids),
+        }
+
+    @property
+    def blocked(self) -> bool:
+        return bool(self.blocking_dependents)
+
+    @property
+    def has_cascade(self) -> bool:
+        return bool(self.cascade_placement_ids)
+
+
+@dataclass(frozen=True)
+class ResetResult:
+    start_date: date_
+    end_date: date_
+    #: Tombstoned records per kind (same keys as ResetPreview.counts).
+    deleted: dict[str, int]
+    placements_with_history_ids: list[uuid.UUID]
+    protected_recurring_task_ids: list[uuid.UUID]
+
+
+@dataclass(frozen=True)
 class RecordBatch:
     """Identity-bearing records to merge in one transaction (see apply_record_batch)."""
 
@@ -286,16 +378,107 @@ _KINDS = {
 }
 
 
+#: preference_template default: the project's YAML template (app.planning.preferences.default_preference_template).
+PROJECT_TEMPLATE = object()
+
+
 class PlanningService:
-    def __init__(self, repository: PlanningRepository, clock: Clock = _utcnow) -> None:
+    def __init__(
+        self,
+        repository: PlanningRepository,
+        clock: Clock = _utcnow,
+        *,
+        preference_template: PreferenceOverrides | None | object = PROJECT_TEMPLATE,
+    ) -> None:
         self._repository = repository
         self._clock = clock
+        self._template = preference_template
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
         """Group several service calls into one atomic unit of work."""
         with self._repository.transaction():
             yield
+
+    # ------------------------------------------------------------------
+    # Owner scope
+    # ------------------------------------------------------------------
+
+    @property
+    def owner_scope(self) -> OwnerScope | None:
+        """The owner this service is restricted to, or None for the legacy device-wide service."""
+        return self._repository.owner
+
+    def scoped(self, owner: OwnerScope) -> "PlanningService":
+        """This service restricted to `owner` (same connection, clock and preference template)."""
+        if not isinstance(owner, OwnerScope):
+            raise TypeError("scoped() needs an OwnerScope (OwnerScope.account(user_id) or OwnerScope.ownerless())")
+        return PlanningService(self._repository.scoped(owner), self._clock, preference_template=self._template)
+
+    def _new_record_owner(self) -> uuid.UUID | None:
+        """The owner of a record the service itself creates (a preference layer, a schedule record)."""
+        scope = self._repository.owner
+        return scope.user_id if scope is not None else None
+
+    def _stamp_owner(self, model):
+        """Records from an owner-less source (a legacy CSV) belong to the scope that imports them."""
+        scope = self._repository.owner
+        if scope is None or model.user_id is not None:
+            return model
+        return model.model_copy(update={"user_id": scope.user_id})
+
+    # ------------------------------------------------------------------
+    # Effective preferences (the layers scheduling resolves)
+    # ------------------------------------------------------------------
+
+    def preference_template(self) -> PreferenceOverrides | None:
+        """The YAML template layer this service resolves with (an independent copy)."""
+        if self._template is PROJECT_TEMPLATE:
+            return default_preference_template()
+        return self._template.model_copy(deep=True) if self._template is not None else None
+
+    def resolve_preferences(
+        self,
+        dates: Iterable[date_],
+        timezone_name: str,
+        *,
+        template: PreferenceOverrides | None | object = PROJECT_TEMPLATE,
+    ) -> dict[date_, DayPreferences]:
+        """
+        Each date's effective preferences: built-in defaults -> the YAML
+        template (this service's unless `template` is given) -> the stored
+        user layer -> that date's stored layer (in this service's scope).
+        """
+        dates = sorted(set(dates))
+        if not dates:
+            return {}
+        layer = self.preference_template() if template is PROJECT_TEMPLATE else template
+        with self._repository.transaction():
+            user = self._repository.get_preference(PreferenceScope.USER)
+            by_date = {record.date: record for record in self._repository.list_date_preferences(dates[0], dates[-1])}
+        return {
+            day: resolve_day_preferences(
+                date=day, timezone=timezone_name,
+                yaml_overrides=layer,
+                user_overrides=user.overrides if user is not None else None,
+                date_overrides=by_date[day].overrides if day in by_date else None,
+            )
+            for day in dates
+        }
+
+    # ------------------------------------------------------------------
+    # Fixed-block invariants (app/planning/fixed_block_rules.py)
+    # ------------------------------------------------------------------
+
+    def _check_fixed_block(self, block: FixedBlock, *, stored: FixedBlock | None = None) -> None:
+        """Caller holds a repository transaction. Raise FixedBlockRuleViolation unless `block` may be stored live."""
+        if stored is not None and not fixed_block_rules.interval_changed(stored, block):
+            return  # the interval is not being written: historical blocks are neither re-judged nor rewritten
+        preferences = self.resolve_preferences([block.planned_date], block.timezone)[block.planned_date]
+        fixed_block_rules.check_interval(block, preferences)
+        fixed_block_rules.check_no_overlap(
+            block, self._repository.list_fixed_blocks(*fixed_block_rules.neighborhood(block.planned_date))
+        )
 
     # ------------------------------------------------------------------
     # Preconditions
@@ -361,18 +544,25 @@ class PlanningService:
     def list_tasks(self, *, include_deleted: bool = False) -> list[Task]:
         return self._repository.list_tasks(include_deleted=include_deleted)
 
-    def tasks_for_range(self, start_date: date_, end_date: date_) -> list[Task]:
-        """Tasks eligible for [start_date, end_date] (see the module docstring)."""
+    def tasks_for_range(self, start_date: date_, end_date: date_, *, timezone_name: str = "UTC") -> list[Task]:
+        """Tasks eligible for [start_date, end_date] planned in `timezone_name` (see the module docstring)."""
         _require_range(start_date, end_date)
-        return self._repository.list_tasks_eligible_for_range(start_date, end_date)
+        return self._repository.list_tasks_eligible_for_range(start_date, end_date, timezone_name=timezone_name)
 
     def tasks_planned_in_range(
-        self, start_date: date_, end_date: date_, *, include_undated: bool = True, include_deleted: bool = False
+        self,
+        start_date: date_,
+        end_date: date_,
+        *,
+        include_undated: bool = True,
+        include_deleted: bool = False,
+        timezone_name: str = "UTC",
     ) -> list[Task]:
-        """Tasks in RangeScope.PLANNED for the range (or only dated ones)."""
+        """Tasks in RangeScope.PLANNED for the range (or only dated ones), planned in `timezone_name`."""
         _require_range(start_date, end_date)
         return self._repository.list_tasks_planned_in_range(
-            start_date, end_date, include_undated=include_undated, include_deleted=include_deleted
+            start_date, end_date, include_undated=include_undated, include_deleted=include_deleted,
+            timezone_name=timezone_name,
         )
 
     def delete_task(self, task_id: uuid.UUID, *, expected_version: int) -> bool:
@@ -486,9 +676,11 @@ class PlanningService:
     # ------------------------------------------------------------------
 
     def create_fixed_block(self, block: FixedBlock) -> FixedBlock:
+        """Store a new fixed block if it satisfies the fixed-block invariants (else FixedBlockRuleViolation)."""
         if block.deleted_at is not None:
             raise InvalidEntityError("a fixed block cannot be created already deleted; use delete_fixed_block.")
         with self._repository.transaction():
+            self._check_fixed_block(block)
             self._repository.insert_fixed_block(block)
             return self._repository.get_fixed_blocks([block.id])[block.id]
 
@@ -497,7 +689,8 @@ class PlanningService:
         with self._repository.transaction():
             return self._update_fixed_block(block, expected_version)
 
-    def _update_fixed_block(self, block: FixedBlock, expected_version: int) -> FixedBlock:
+    def _update_fixed_block(self, block: FixedBlock, expected_version: int, *, check: bool = True) -> FixedBlock:
+        # check=False: the caller validates the final state itself (set_fixed_blocks_for_date).
         if block.deleted_at is not None:
             raise InvalidEntityError("use delete_fixed_block to delete a fixed block.")
         stored = self._repository.get_fixed_blocks([block.id]).get(block.id)
@@ -507,6 +700,8 @@ class PlanningService:
             raise InvalidEntityError(f"fixed block {block.id}: its owner (user_id) cannot be changed by an update.")
         if _same_content(stored, block):
             return stored
+        if check:
+            self._check_fixed_block(block, stored=stored)
         to_store = block.model_copy(
             update={"created_at": stored.created_at, "updated_at": self._clock(), "version": expected_version + 1}
         )
@@ -586,12 +781,19 @@ class PlanningService:
                 self._repository.soft_delete_fixed_block(block_id, deleted_at=now, expected_version=current[block_id].version)
             for block in blocks:
                 if block.id in current:
-                    self._update_fixed_block(block, current[block.id].version)
+                    self._update_fixed_block(block, current[block.id].version, check=False)
                 else:
                     if block.deleted_at is not None:
                         raise InvalidEntityError("a fixed block cannot be created already deleted.")
                     self._repository.insert_fixed_block(block)
+            # The day's blocks are judged as a whole, after the writes (a swap of two blocks is valid);
+            # any violation rolls every write of this call back.
+            for block in blocks:
+                self._check_fixed_block(block, stored=current.get(block.id))
             return self._repository.list_fixed_blocks(day, day)
+
+    def get_fixed_block(self, block_id: uuid.UUID, *, include_deleted: bool = False) -> FixedBlock | None:
+        return self._repository.get_fixed_blocks([block_id], include_deleted=include_deleted).get(block_id)
 
     def fixed_blocks_for_date(self, day: date_) -> list[FixedBlock]:
         return self._repository.list_fixed_blocks(day, day)
@@ -780,7 +982,7 @@ class PlanningService:
                 )
                 previous = existing.get(day)
                 if previous is None:
-                    record = GenerationRecord(**fields, created_at=now, updated_at=now)
+                    record = GenerationRecord(**fields, user_id=self._new_record_owner(), created_at=now, updated_at=now)
                     self._repository.insert_generation(record)
                 else:
                     record = previous.model_copy(update={**fields, "updated_at": now, "version": previous.version + 1})
@@ -801,6 +1003,14 @@ class PlanningService:
 
     def placements_for_date(self, day: date_) -> list[ScheduledTask]:
         return self._repository.list_placements(day, day)
+
+    def active_placements_for_tasks(self, task_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, list[ScheduledTask]]:
+        """Live placements of the given tasks on any date, grouped by task (in this service's scope)."""
+        return self._repository.active_placements_for_tasks(task_ids)
+
+    def placement_execution_statuses(self, placement_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, str]:
+        """{placement id: execution status} for the placements that execution history references."""
+        return self._repository.placement_execution_statuses(placement_ids)
 
     def placements_for_range(self, start_date: date_, end_date: date_) -> dict[date_, list[ScheduledTask]]:
         _require_range(start_date, end_date)
@@ -842,6 +1052,13 @@ class PlanningService:
         """The persisted user-level layer (between YAML and the date layers), if any."""
         return self._repository.get_preference(PreferenceScope.USER)
 
+    def preference_layers(self, *, include_deleted: bool = False) -> list[PreferenceRecord]:
+        """Every stored layer (the user layer and every date layer), by (scope, date, id)."""
+        return self._repository.list_preference_records(include_deleted=include_deleted)
+
+    def get_preference_layer(self, record_id: uuid.UUID, *, include_deleted: bool = False) -> PreferenceRecord | None:
+        return self._repository.get_preference_by_id(record_id, include_deleted=include_deleted)
+
     def date_preferences(self, day: date_) -> PreferenceRecord | None:
         return self._repository.get_preference(PreferenceScope.DATE, day)
 
@@ -882,7 +1099,10 @@ class PlanningService:
                         "their version to change them.",
                     )
                 now = self._clock()
-                record = PreferenceRecord(scope=scope, date=day, overrides=overrides, created_at=now, updated_at=now)
+                record = PreferenceRecord(
+                    user_id=self._new_record_owner(), scope=scope, date=day, overrides=overrides,
+                    created_at=now, updated_at=now,
+                )
                 self._repository.insert_preference(record)
                 return self._repository.get_preference(scope, day)
 
@@ -920,15 +1140,24 @@ class PlanningService:
     # ------------------------------------------------------------------
 
     def load_range(
-        self, start_date: date_, end_date: date_, *, scope: RangeScope = RangeScope.ELIGIBLE
+        self,
+        start_date: date_,
+        end_date: date_,
+        *,
+        scope: RangeScope = RangeScope.ELIGIBLE,
+        timezone_name: str = "UTC",
     ) -> PlanningRange:
-        """One consistent snapshot of the range's tasks (per `scope`), fixed blocks, and placements."""
+        """
+        One consistent snapshot of the range's tasks (per `scope`, with
+        deadlines judged in the planning timezone `timezone_name`), fixed
+        blocks, and placements.
+        """
         _require_range(start_date, end_date)
         with self._repository.transaction():
             if scope == RangeScope.PLANNED:
-                tasks = self._repository.list_tasks_planned_in_range(start_date, end_date)
+                tasks = self._repository.list_tasks_planned_in_range(start_date, end_date, timezone_name=timezone_name)
             else:
-                tasks = self._repository.list_tasks_eligible_for_range(start_date, end_date)
+                tasks = self._repository.list_tasks_eligible_for_range(start_date, end_date, timezone_name=timezone_name)
             fixed_blocks = self._repository.list_fixed_blocks(start_date, end_date)
             placements = self._repository.list_placements(start_date, end_date)
 
@@ -1005,6 +1234,152 @@ class PlanningService:
                 placements_with_history=len(history),
             )
 
+    def reset_preview(self, start_date: date_, end_date: date_) -> ResetPreview:
+        """
+        What reset_range(start_date, end_date) would do, read in one
+        consistent snapshot (nothing is written). It tombstones, in this
+        service's scope:
+
+            - the live placements dated in the range and its schedule
+              (generation) records;
+            - the fixed blocks dated in the range;
+            - the non-recurring tasks whose planned date lies in the range
+              (required_date, else earliest preferred date) -- together with
+              their live placements dated *outside* the range, which the
+              preview discloses separately (cascade_placement_ids) so they
+              are confirmed, not silently lost;
+            - the per-date preference layers of the range's dates, so those
+              dates inherit the user layer and template again.
+
+        It never touches undated (backlog) tasks, tasks planned on other
+        dates, projects, the user preference layer, or execution history
+        (executions keep their historical links and snapshots). A recurring
+        template planned in the range is protected: only its placements in
+        the range are removed, never the template, since deleting it would
+        remove every other date too. A task to be deleted that a live task
+        outside the reset still depends on makes the reset refuse
+        (blocking_dependents); reset_range then rolls everything back.
+
+        `token` identifies exactly the previewed records and their versions.
+        reset_range requires it, so the reset applies only what was
+        previewed and confirmed.
+        """
+        _require_range(start_date, end_date)
+        with self._repository.transaction():
+            return self._reset_plan(start_date, end_date)
+
+    def reset_range(self, start_date: date_, end_date: date_, *, confirmation: str) -> ResetResult:
+        """
+        Apply the reset described by reset_preview in one transaction, only if
+        `confirmation` is the token of a preview of exactly the records (and
+        versions) that are stored now -- otherwise VersionConflictError and
+        nothing changes. Every deletion is a versioned tombstone that change
+        capture records for synchronization. If any step is refused (e.g. a
+        live task outside the reset depends on a task inside it,
+        EntityInUseError), the whole reset rolls back, preference layers
+        included.
+        """
+        _require_range(start_date, end_date)
+        with self._repository.transaction():
+            plan = self._reset_plan(start_date, end_date)
+            if confirmation != plan.token:
+                raise VersionConflictError(
+                    "reset", f"{start_date}..{end_date}", expected_version=None, current_version=None,
+                    message=f"The records of {start_date} .. {end_date} changed since the reset was previewed. "
+                    "Nothing was deleted; review the new preview and confirm again.",
+                )
+            now = self._clock()
+            for record in self._repository.list_date_preference_records(start_date, end_date):
+                if not self._repository.soft_delete_preference(record.id, deleted_at=now, expected_version=record.version):
+                    raise VersionConflictError(
+                        "preference", record.id, expected_version=record.version, current_version=None
+                    )
+            generations = self._repository.soft_delete_generations(start_date, end_date, deleted_at=now)
+            placements = self._repository.soft_delete_placements(
+                [*plan.placement_ids, *plan.cascade_placement_ids], deleted_at=now
+            )
+            blocks = self._repository.get_fixed_blocks(plan.fixed_block_ids)
+            for block in blocks.values():
+                if not self._repository.soft_delete_fixed_block(block.id, deleted_at=now, expected_version=block.version):
+                    self._check_version("fixed_block", block.id, block.version)
+            tasks = self._repository.get_tasks(plan.task_ids)
+            deleted_tasks = self._delete_tasks({task.id: task.version for task in tasks.values()})
+            return ResetResult(
+                start_date=start_date,
+                end_date=end_date,
+                deleted={
+                    "placements": placements - len(plan.cascade_placement_ids),
+                    "cascade_placements": len(plan.cascade_placement_ids),
+                    "schedule_generations": generations,
+                    "fixed_blocks": len(blocks),
+                    "tasks": deleted_tasks,
+                    "date_preferences": len(plan.date_preference_ids),
+                },
+                placements_with_history_ids=plan.placements_with_history_ids,
+                protected_recurring_task_ids=plan.protected_recurring_task_ids,
+            )
+
+    def _reset_plan(self, start_date: date_, end_date: date_) -> ResetPreview:
+        # Caller holds a repository transaction.
+        placements = self._repository.list_placements(start_date, end_date)
+        generations = self._repository.list_generations(start_date, end_date)
+        blocks = self._repository.list_fixed_blocks(start_date, end_date)
+        preferences = self._repository.list_date_preference_records(start_date, end_date)
+        dated = self._repository.list_tasks_planned_in_range(start_date, end_date, include_undated=False)
+        tasks = [task for task in dated if task.recurrence is None]
+        protected = [task.id for task in dated if task.recurrence is not None]
+        task_ids = {task.id for task in tasks}
+
+        cascade = [
+            placement
+            for group in self._repository.active_placements_for_tasks(task_ids).values()
+            for placement in group
+            if not start_date <= placement.planned_date <= end_date
+        ]
+        blocking = {
+            dependency: sorted(dependents - task_ids, key=str)
+            for dependency, dependents in self._repository.dependents_of(task_ids).items()
+            if dependents - task_ids
+        }
+        with_history = self._repository.placement_ids_with_history(
+            placement.id for placement in [*placements, *cascade]
+        )
+        tasks_with_history = set(self._repository.execution_facts_for_tasks(task_ids))
+
+        affected = sorted(
+            [("placement", str(p.id), p.version) for p in [*placements, *cascade]]
+            + [("schedule_generation", str(g.id), g.version) for g in generations]
+            + [("fixed_block", str(b.id), b.version) for b in blocks]
+            + [("task", str(t.id), t.version) for t in tasks]
+            + [("preference", str(r.id), r.version) for r in preferences]
+        )
+        scope = self._repository.owner
+        token = hashlib.sha256(
+            json.dumps(
+                {
+                    "range": [start_date.isoformat(), end_date.isoformat()],
+                    "scope": "device" if scope is None else scope.sql_value,
+                    "records": affected,
+                },
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        return ResetPreview(
+            start_date=start_date,
+            end_date=end_date,
+            placement_ids=[placement.id for placement in placements],
+            generation_ids=[record.id for record in generations],
+            fixed_block_ids=[block.id for block in blocks],
+            task_ids=[task.id for task in tasks],
+            date_preference_ids=[record.id for record in preferences],
+            cascade_placement_ids=[placement.id for placement in cascade],
+            placements_with_history_ids=sorted(with_history, key=str),
+            tasks_with_history_ids=sorted(tasks_with_history, key=str),
+            protected_recurring_task_ids=protected,
+            blocking_dependents=blocking,
+            token=token,
+        )
+
     # ------------------------------------------------------------------
     # Bulk import
     # ------------------------------------------------------------------
@@ -1020,13 +1395,15 @@ class PlanningService:
         Write a validated legacy import in one transaction: optionally clear
         `replace_range` first (clear_range with planning data), then create
         every task and fixed block. New entities only -- an id that is
-        already stored is a DuplicateEntityError, and a fixed block that
-        overlaps a stored block on its date (after any clearing) is an
-        InvalidEntityError. Any failure rolls back everything, including
-        the clearing.
+        already stored is a DuplicateEntityError, and every fixed block must
+        satisfy the fixed-block invariants against what is stored after any
+        clearing, earlier blocks of the same import included
+        (FixedBlockRuleViolation, an InvalidEntityError). Any failure rolls
+        back everything, including the clearing. A legacy CSV carries no
+        owner: in a scoped service its records belong to the importing scope.
         """
-        tasks = list(tasks)
-        fixed_blocks = list(fixed_blocks)
+        tasks = [self._stamp_owner(task) for task in tasks]
+        fixed_blocks = [self._stamp_owner(block) for block in fixed_blocks]
         with self._repository.transaction():
             cleared = None
             if replace_range is not None:
@@ -1040,12 +1417,7 @@ class PlanningService:
                 raise DuplicateEntityError("fixed block", uuid.UUID(sorted(existing_blocks)[0]))
 
             for block in fixed_blocks:
-                for stored in self._repository.list_fixed_blocks(block.planned_date, block.planned_date):
-                    if block.planned_start < stored.planned_end and stored.planned_start < block.planned_end:
-                        raise InvalidEntityError(
-                            f"fixed block {block.label!r} overlaps the saved fixed block {stored.label!r} "
-                            f"on {block.planned_date}."
-                        )
+                self._check_fixed_block(block)
                 self._repository.insert_fixed_block(block)
 
             saved_tasks = self._write_tasks(tasks, {}) if tasks else []
@@ -1104,6 +1476,12 @@ class PlanningService:
         if len(owners) > 1:
             raise InvalidEntityError("the batch mixes records of different owners (user_id); import them separately.")
         owner = next(iter(owners), None)
+        scope = self._repository.owner
+        if scope is not None and owners and not scope.admits(owner):
+            raise ScopeError(
+                f"the batch's records belong to {OwnerScope(owner).describe()}, not {scope.describe()}; "
+                "they cannot be imported here."
+            )
 
         counts = {name: dict.fromkeys(records, 0) for name in ("created", "updated", "deleted", "unchanged")}
         with self._repository.transaction():
@@ -1282,6 +1660,12 @@ class PlanningService:
 
         if plans["task"] and has_cycle_by_id({task.id: task for task in self._repository.list_tasks()}):
             raise InvalidEntityError("the batch would create a dependency cycle among the stored tasks.")
+
+        # Fixed-block invariants for every live block the batch creates or whose interval it changes
+        # (tombstones and unchanged records are history, stored as they are).
+        for action, block, stored in plans["fixed_block"]:
+            if action in ("insert", "update") and block.deleted_at is None:
+                self._check_fixed_block(block, stored=stored)
 
         for day in sorted(touched_dates):
             ordered = sorted(self._repository.list_fixed_blocks(day, day), key=lambda block: block.planned_start)

@@ -178,6 +178,41 @@ class LocalDayWindow:
 
         return start_dt.astimezone(timezone.utc), end_dt.astimezone(timezone.utc)
 
+    def endpoint_instants(self) -> tuple[datetime, datetime]:
+        """
+        Resolve each endpoint on its own, as aware UTC instants, for
+        *containment* checks (is this interval inside the window?). Unlike
+        to_utc_instants, an offset transition between the endpoints is
+        allowed here, because nothing is measured in elapsed local minutes;
+        an ambiguous or nonexistent endpoint still raises
+        AmbiguousLocalTimeError. Scheduling inside the window still needs
+        to_utc_instants (and its explicit DST refusal).
+        """
+        tz = ZoneInfo(self.tz_name)
+        end_day = self.day + timedelta(days=self.end_day_offset)
+        end_minute = 0 if self.end_day_offset == 1 else self.end_minute
+        start_dt = _local_datetime(self.day, self.start_minute, tz)
+        end_dt = _local_datetime(end_day, end_minute, tz)
+        return start_dt.astimezone(timezone.utc), end_dt.astimezone(timezone.utc)
+
+
+def local_date_of(instant: datetime, tz_name: str) -> date:
+    """The calendar date `instant` falls on in `tz_name` -- always well defined, DST dates included."""
+    return to_utc(instant).astimezone(ZoneInfo(tz_name)).date()
+
+
+def local_day_start_utc(day: date, tz_name: str) -> datetime:
+    """
+    The first instant whose local date (in `tz_name`) is `day`, in UTC.
+
+    Local midnight with fold=0 is exactly that instant: an ambiguous
+    midnight (a fall-back repeating 00:00) resolves to its first
+    occurrence, and a nonexistent one (a spring-forward gap at midnight)
+    resolves, per PEP 495, with the offset in force before the transition,
+    which is the transition instant itself.
+    """
+    return datetime.combine(day, time(0), tzinfo=ZoneInfo(tz_name)).astimezone(timezone.utc)
+
 
 def _local_datetime(day: date, minute_of_day: int, tz: ZoneInfo) -> datetime:
     hour, minute = divmod(minute_of_day, 60)

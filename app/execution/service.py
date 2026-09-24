@@ -93,6 +93,7 @@ from app.execution.repository import ExecutionRepository
 from app.models import ScheduledTask
 from app.planning.models import ScheduledTask as CanonicalScheduledTask
 from app.planning.models import Task as CanonicalTask
+from app.planning.scope import OwnerScope
 from app.planning.time import elapsed_minutes
 
 Clock = Callable[[], datetime]
@@ -114,6 +115,17 @@ class ExecutionService:
     def __init__(self, repository: ExecutionRepository, clock: Clock = lambda: datetime.now(timezone.utc)) -> None:
         self._repository = repository
         self._clock = clock
+
+    @property
+    def owner_scope(self) -> OwnerScope | None:
+        """The owner this service is restricted to, or None for the legacy device-wide service."""
+        return self._repository.owner
+
+    def scoped(self, owner: OwnerScope) -> "ExecutionService":
+        """This service restricted to `owner`'s executions (see app/planning/scope.py)."""
+        if not isinstance(owner, OwnerScope):
+            raise TypeError("scoped() needs an OwnerScope")
+        return ExecutionService(self._repository.scoped(owner), self._clock)
 
     # ------------------------------------------------------------------
     # Creation
