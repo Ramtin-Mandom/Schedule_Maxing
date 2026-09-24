@@ -73,6 +73,7 @@ from dataclasses import dataclass
 from datetime import date as date_
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TextIO
 
 from app.planning.application import PlanningService, task_planned_date
 from app.planning.models import FixedBlock, Project, ScheduledTask, Task
@@ -108,13 +109,36 @@ def export_planning_csv(
     start_date: date_ | None = None,
     end_date: date_ | None = None,
     include_deleted: bool = False,
+    timezone_name: str = "UTC",
 ) -> PlanningExportResult:
     """
     Write stored planning data to `path`. With a date range: the tasks
-    planned in it (RangeScope.PLANNED, undated tasks included), the projects
+    planned in it (RangeScope.PLANNED, undated tasks included -- their
+    deadlines judged in the planning timezone `timezone_name`), the projects
     they reference, and the fixed blocks and placements dated in it; without
-    one: everything stored. include_deleted also writes tombstones.
+    one: everything stored. include_deleted also writes tombstones. The
+    service's owner scope, if any, bounds what is exported.
     """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("w", newline="", encoding="utf-8") as file:
+        counts = write_planning_csv(
+            service, file, start_date=start_date, end_date=end_date, include_deleted=include_deleted,
+            timezone_name=timezone_name,
+        )
+    return PlanningExportResult(path=target, **counts)
+
+
+def write_planning_csv(
+    service: PlanningService,
+    file: TextIO,
+    *,
+    start_date: date_ | None = None,
+    end_date: date_ | None = None,
+    include_deleted: bool = False,
+    timezone_name: str = "UTC",
+) -> dict[str, int]:
+    """export_planning_csv's content, written to an open text stream (e.g. an HTTP response); returns the counts."""
     if (start_date is None) != (end_date is None):
         raise ValueError("pass both start_date and end_date, or neither")
 
@@ -125,7 +149,9 @@ def export_planning_csv(
             blocks = service.list_fixed_blocks(include_deleted=include_deleted)
             placements = service.list_placements(include_deleted=include_deleted)
         else:
-            tasks = service.tasks_planned_in_range(start_date, end_date, include_deleted=include_deleted)
+            tasks = service.tasks_planned_in_range(
+                start_date, end_date, include_deleted=include_deleted, timezone_name=timezone_name
+            )
             referenced = {task.project_id for task in tasks if task.project_id is not None}
             projects = [
                 project for project in service.list_projects(include_deleted=include_deleted) if project.id in referenced
@@ -134,23 +160,17 @@ def export_planning_csv(
             placements = service.list_placements(start_date, end_date, include_deleted=include_deleted)
         placement_tasks = service.get_tasks_including_deleted(placement.task_id for placement in placements)
 
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with target.open("w", newline="", encoding="utf-8") as file:
-        writer = csv.DictWriter(file, fieldnames=COLUMNS)
-        writer.writeheader()
-        for project in projects:
-            writer.writerow(_project_row(project))
-        for task in tasks:
-            writer.writerow(_task_row(task))
-        for block in blocks:
-            writer.writerow(_block_row(block))
-        for placement in placements:
-            writer.writerow(_placement_row(placement, placement_tasks.get(placement.task_id)))
-
-    return PlanningExportResult(
-        path=target, tasks=len(tasks), fixed_blocks=len(blocks), placements=len(placements), projects=len(projects)
-    )
+    writer = csv.DictWriter(file, fieldnames=COLUMNS)
+    writer.writeheader()
+    for project in projects:
+        writer.writerow(_project_row(project))
+    for task in tasks:
+        writer.writerow(_task_row(task))
+    for block in blocks:
+        writer.writerow(_block_row(block))
+    for placement in placements:
+        writer.writerow(_placement_row(placement, placement_tasks.get(placement.task_id)))
+    return {"tasks": len(tasks), "fixed_blocks": len(blocks), "placements": len(placements), "projects": len(projects)}
 
 
 def _utc(value: datetime) -> str:

@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from tests.backend.conftest import (
+    block_payload,
     create,
     editable,
     execution_payload,
@@ -56,6 +57,9 @@ def test_the_same_client_id_is_independent_per_user(client, alice, bob, alices_r
     body = {k: v for k, v in editable(bobs[path]).items() if k not in ("base_version", "sessions")}
     if path == "executions":
         body = execution_payload(historical_reference=True)
+    if path == "fixed-blocks":  # a copy of bob's own block would overlap it; the next day does not
+        body = block_payload(planned_date="2026-03-03", planned_start="2026-03-03T00:00:00Z",
+                             planned_end="2026-03-03T07:00:00Z")
     response = client.post(f"/{path}", json={**body, "id": record["id"]}, headers=bob)
     if path in ("preferences", "schedule-generations"):  # bob already has one for this scope/date
         assert response.status_code == 409 and response.json()["error"]["current"]["id"] != record["id"]

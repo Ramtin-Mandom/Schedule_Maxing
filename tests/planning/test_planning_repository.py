@@ -368,7 +368,8 @@ def test_task_eligibility_query(planning_repository: PlanningRepository) -> None
     pinned_outside = minimal_task(name="pinned outside", required_date=date(2024, 6, 10))
     deadline_on_start = minimal_task(name="deadline on start", deadline=datetime(2024, 6, 3, 0, 0, tzinfo=timezone.utc))
     deadline_before = minimal_task(name="deadline before", deadline=datetime(2024, 6, 2, 23, 59, tzinfo=timezone.utc))
-    # 2024-06-02 20:30 in New York is 2024-06-03 00:30 UTC: allocation compares the UTC date.
+    # 2024-06-02 20:30 in New York is 2024-06-03 00:30 UTC: eligible in the (default) UTC planning timezone,
+    # where it falls on the range's first date (see tests/planning/test_deadline_timezones.py for other zones).
     deadline_offset = minimal_task(name="deadline offset", deadline=datetime(2024, 6, 2, 20, 30, tzinfo=NY))
     # required_date governs even when a deadline would also allow the range.
     pinned_outside_with_deadline = minimal_task(

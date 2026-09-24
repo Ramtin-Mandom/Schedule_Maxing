@@ -10,6 +10,7 @@ Dialogs are replaced by recorders so nothing blocks.
 
 from __future__ import annotations
 
+import gc
 import time
 import tkinter as tk
 from datetime import date
@@ -88,6 +89,10 @@ def pump(app, until=lambda: True, timeout: float = 10.0) -> None:
 
 def close_app(app) -> None:
     app._on_close()
+    # Collect the closed window's Tk objects (fonts, images) now, on the Tk thread. Left for later, a
+    # garbage collection on another thread (e.g. a TestClient's event loop) would call into Tcl from the
+    # wrong thread and block.
+    gc.collect()
 
 
 def fill_form(page, *, name: str, day: str = "1", fixed: bool = False, start="480", end="720", duration="60") -> None:

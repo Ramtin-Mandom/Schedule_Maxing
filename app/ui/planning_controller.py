@@ -66,14 +66,14 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import date as date_
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from app.execution.db import get_connection
 from app.optimizer import MandatoryTaskSchedulingError
-from app.planning.allocation import AllocationResult, allocate_tasks, month_dates, week_dates
+from app.planning import workflow
+from app.planning.allocation import AllocationResult, month_dates, week_dates
 from app.planning.application import (
     BatchApplyResult,
-    GenerationProvenance,
     ImportApplyResult,
     PlacementReplacement,
     PlanningRange,
@@ -85,12 +85,6 @@ from app.planning.csv_canonical import is_canonical_csv, parse_canonical_csv_fil
 from app.planning.csv_export import PlanningExportResult, export_planning_csv
 from app.planning.csv_import import ImportMode, ParsedImport, read_csv_text, parse_legacy_csv_file
 from app.planning.errors import PlanningError, VersionConflictError
-from app.planning.external_dependencies import (
-    ExternalDependency,
-    allocation_dates,
-    explain_unallocated,
-    satisfaction_instants,
-)
 from app.planning.models import DayScheduleOutput, FixedBlock, ScheduledTask, Task, TaskRegistry
 from app.planning.preferences import (
     DayPreferences,
@@ -98,12 +92,11 @@ from app.planning.preferences import (
     PreferenceOverrides,
     PreferenceRecord,
     day_preferences_overrides_from_reward_settings,
-    resolve_day_preferences,
 )
-from app.planning.provenance import classify_generation, inputs_fingerprint, placements_digest
 from app.planning.repository import PlanningRepository
-from app.planning.service import DayResultStatus, SelectedDayState, generate_selected_day, initial_state
+from app.planning.service import DayResultStatus, SelectedDayState, initial_state
 from app.reward import load_reward_settings
+from app.planning.workflow import SchedulingInputs
 from app.ui.background import ControllerResult
 
 
@@ -116,19 +109,6 @@ class RangeScheduleResult:
     replacement: PlacementReplacement
     #: Active placements outside the range that this run superseded (removed).
     superseded_ids: list[uuid.UUID] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class _SchedulingInputs:
-    """One consistent snapshot of everything a range generation reads, plus its fingerprint."""
-
-    start_date: date_
-    end_date: date_
-    scope: RangeScope
-    planning_range: PlanningRange
-    preferences_by_date: dict[date_, DayPreferences]
-    external: dict[uuid.UUID, ExternalDependency]
-    fingerprint: str
 
 
 def _scheduling_failure_message(selected_date: date_, error: MandatoryTaskSchedulingError) -> str:
@@ -164,7 +144,7 @@ class PlanningController:
         # config/task_preference.yaml without recreating the controller.
         self._yaml_overrides = day_preferences_overrides_from_reward_settings(load_reward_settings(project_root=project_root))
         self._allocation: AllocationResult | None = None
-        self._allocation_inputs: _SchedulingInputs | None = None
+        self._allocation_inputs: SchedulingInputs | None = None
 
     def close(self) -> None:
         """Close the private in-memory database, if this controller opened one."""
@@ -258,8 +238,10 @@ class PlanningController:
     def load_range(
         self, start_date: date_, end_date: date_, *, scope: RangeScope = RangeScope.ELIGIBLE
     ) -> ControllerResult[PlanningRange]:
-        """The range's tasks (per `scope`), fixed blocks, and stored placements (a snapshot)."""
-        return self._call(lambda: self._service.load_range(start_date, end_date, scope=scope))
+        """The range's tasks (per `scope`, deadlines judged in this controller's timezone), fixed blocks, and placements."""
+        return self._call(
+            lambda: self._service.load_range(start_date, end_date, scope=scope, timezone_name=self._timezone)
+        )
 
     def apply_import(self, parsed: ParsedImport, mode: ImportMode) -> ControllerResult[ImportApplyResult]:
         """Write a validated legacy CSV import in one transaction (see app/planning/csv_import.py for the modes)."""
@@ -318,7 +300,8 @@ class PlanningController:
         """Write the stored-planning CSV (read-only; see app/planning/csv_export.py)."""
         return self._call(
             lambda: export_planning_csv(
-                self._service, path, start_date=start_date, end_date=end_date, include_deleted=include_deleted
+                self._service, path, start_date=start_date, end_date=end_date, include_deleted=include_deleted,
+                timezone_name=self._timezone,
             )
         )
 
@@ -435,17 +418,8 @@ class PlanningController:
         return self._call(lambda: self._resolve_range([day])[day])
 
     def _resolve_range(self, dates: list[date_]) -> dict[date_, DayPreferences]:
-        user = self._service.user_preferences()
-        by_date = self._service.date_preferences_for_range(min(dates), max(dates))
-        return {
-            day: resolve_day_preferences(
-                date=day, timezone=self._timezone,
-                yaml_overrides=self._yaml_overrides,
-                user_overrides=user.overrides if user is not None else None,
-                date_overrides=by_date[day].overrides if day in by_date else None,
-            )
-            for day in dates
-        }
+        # The service's resolution (the same one its fixed-block validation uses), with this controller's YAML layer.
+        return self._service.resolve_preferences(dates, self._timezone, template=self._yaml_overrides)
 
     # ------------------------------------------------------------------
     # Allocation (Week / Month) -- never calls the Day Scheduler
@@ -456,41 +430,18 @@ class PlanningController:
     ) -> ControllerResult[AllocationResult]:
         def op() -> AllocationResult:
             inputs = self._scheduling_inputs(start_date, end_date, scope)
-            result = self._allocate(inputs)
+            result = workflow.allocate(inputs)
             self._allocation, self._allocation_inputs = result, inputs
             return result
 
         return self._call(op)
 
-    def _scheduling_inputs(self, start_date: date_, end_date: date_, scope: RangeScope) -> _SchedulingInputs:
+    def _scheduling_inputs(self, start_date: date_, end_date: date_, scope: RangeScope) -> SchedulingInputs:
         """Everything a generation of [start_date, end_date] reads, as one consistent snapshot."""
-        dates = _range_dates(start_date, end_date)
-        with self._service.transaction():
-            planning_range = self._service.load_range(start_date, end_date, scope=scope)
-            preferences_by_date = self._resolve_range(dates)
-            external = self._service.external_dependencies(
-                planning_range.tasks.tasks.values(), start_date, end_date, self._timezone
-            )
-        fingerprint = inputs_fingerprint(
-            start_date=start_date, end_date=end_date, scope=scope.value, timezone_name=self._timezone,
-            tasks=planning_range.tasks.tasks.values(),
-            fixed_blocks=[block for day in dates for block in planning_range.fixed_blocks_by_date[day]],
-            preferences_by_date=preferences_by_date, external_dependencies=external,
+        return workflow.read_inputs(
+            self._service, start_date, end_date, scope=scope, timezone_name=self._timezone,
+            template=self._yaml_overrides,
         )
-        return _SchedulingInputs(
-            start_date=start_date, end_date=end_date, scope=scope, planning_range=planning_range,
-            preferences_by_date=preferences_by_date, external=external, fingerprint=fingerprint,
-        )
-
-    def _allocate(self, inputs: _SchedulingInputs) -> AllocationResult:
-        planning_range = inputs.planning_range
-        result = allocate_tasks(
-            start_date=inputs.start_date, end_date=inputs.end_date, tasks=planning_range.tasks,
-            task_ids=planning_range.task_ids, preferences_by_date=inputs.preferences_by_date,
-            fixed_blocks_by_date=planning_range.fixed_blocks_by_date,
-            external_dependency_dates=allocation_dates(inputs.external),
-        )
-        return explain_unallocated(result, planning_range.tasks.tasks, inputs.external)
 
     def allocate_week(self, start_date: date_) -> ControllerResult[AllocationResult]:
         dates = week_dates(start_date)
@@ -514,14 +465,12 @@ class PlanningController:
             allocation, inputs = self._allocation, self._allocation_inputs
             if not inputs.start_date <= selected_date <= inputs.end_date:
                 raise RuntimeError(f"{selected_date} is outside the allocated range {inputs.start_date} .. {inputs.end_date}.")
-
-            output, expected = self._generate(allocation, inputs, selected_date)
-            # Save first (placements + provenance, atomically); only then is it the day's result.
-            self._service.reschedule_range(
-                selected_date, selected_date, {selected_date: output},
-                expected_versions=expected, provenance=self._provenance(allocation, inputs, [selected_date]),
+            # Saved first (placements + provenance, atomically, after re-checking the inputs); only then is it
+            # the day's result.
+            outcome = workflow.generate_from(
+                self._service, allocation, inputs, [selected_date], template=self._yaml_overrides
             )
-            return output
+            return outcome.outputs[selected_date]
 
         return self._generation_call(op, lambda: selected_date)
 
@@ -535,60 +484,21 @@ class PlanningController:
         transaction. On any failure nothing is saved; the previously
         committed schedule stays.
         """
-        current_date = start_date
 
         def op() -> RangeScheduleResult:
-            nonlocal current_date
             inputs = self._scheduling_inputs(start_date, end_date, scope)
-            allocation = self._allocate(inputs)
-
-            outputs: dict[date_, DayScheduleOutput] = {}
-            expected: dict[uuid.UUID, int] = {}
-            for current_date in _range_dates(start_date, end_date):
-                outputs[current_date], previous_versions = self._generate(allocation, inputs, current_date)
-                expected.update(previous_versions)
-
-            result = self._service.reschedule_range(
-                start_date, end_date, outputs, expected_versions=expected,
-                provenance=self._provenance(allocation, inputs, list(outputs)),
+            allocation = workflow.allocate(inputs)
+            outcome = workflow.generate_from(
+                self._service, allocation, inputs, _range_dates(start_date, end_date), template=self._yaml_overrides
             )
             # Committed: only now does the new allocation become the current one.
             self._allocation, self._allocation_inputs = allocation, inputs
             return RangeScheduleResult(
-                allocation=allocation, outputs=outputs, replacement=result.replacement,
-                superseded_ids=result.superseded_ids,
+                allocation=allocation, outputs=outcome.outputs, replacement=outcome.reschedule.replacement,
+                superseded_ids=outcome.reschedule.superseded_ids,
             )
 
-        return self._generation_call(op, lambda: current_date)
-
-    def _generate(
-        self, allocation: AllocationResult, inputs: _SchedulingInputs, selected_date: date_
-    ) -> tuple[DayScheduleOutput, dict[uuid.UUID, int]]:
-        """Generate one date; also return the stored placements it replaces, {id: version} (the save's precondition)."""
-        preferences = inputs.preferences_by_date[selected_date]
-        previous_result = self._service.stored_day_output(selected_date, preferences.timezone)
-        output, _ = generate_selected_day(
-            allocation, selected_date, inputs.planning_range.tasks, {selected_date: preferences},
-            {selected_date: inputs.planning_range.fixed_blocks_by_date[selected_date]},
-            previous_result=previous_result,
-            external_dependency_satisfaction=satisfaction_instants(inputs.external),
-        )
-        previous = {placement.id: placement.version for placement in previous_result.placements} if previous_result else {}
-        return output, previous
-
-    def _provenance(
-        self, allocation: AllocationResult, inputs: _SchedulingInputs, dates: list[date_]
-    ) -> GenerationProvenance:
-        return GenerationProvenance(
-            allocation_id=allocation.id,
-            range_start=inputs.start_date,
-            range_end=inputs.end_date,
-            range_scope=inputs.scope.value,
-            fingerprint=inputs.fingerprint,
-            timezone=self._timezone,
-            engine_modes={day: inputs.preferences_by_date[day].optimizer_mode for day in dates},
-            generated_at=datetime.now(timezone.utc),
-        )
+        return self._generation_call(op, lambda: start_date)
 
     def day_state(self, day: date_) -> ControllerResult[SelectedDayState]:
         """The persisted state of one date (see the module docstring)."""
@@ -599,46 +509,24 @@ class PlanningController:
         return self._call(lambda: self._day_states(dates))
 
     def _day_states(self, dates: list[date_]) -> dict[date_, SelectedDayState]:
-        if not dates:
-            return {}
-        start, end = min(dates), max(dates)
-        records = self._service.generation_records(start, end)
-        placements_by_date = self._service.placements_for_range(start, end)
-        fingerprints: dict[tuple, str | None] = {}
         states: dict[date_, SelectedDayState] = {}
-
+        freshness = workflow.day_freshness(self._service, dates, self._timezone, template=self._yaml_overrides)
         for day in dates:
-            record = records.get(day)
-            placements = placements_by_date[day]
-            current_fingerprint = None
-            if record is not None:
-                key = (record.range_start, record.range_end, record.range_scope)
-                if key not in fingerprints:
-                    try:
-                        fingerprints[key] = self._scheduling_inputs(
-                            record.range_start, record.range_end, RangeScope(record.range_scope)
-                        ).fingerprint
-                    except (PlanningError, ValueError):
-                        fingerprints[key] = None  # the recorded inputs can no longer be recomputed
-                current_fingerprint = fingerprints[key]
-
-            is_current, reason = classify_generation(
-                record, has_placements=bool(placements), current_fingerprint=current_fingerprint,
-                current_placements_digest=placements_digest(placements),
-            )
-            if is_current is None:
+            state = freshness[day]
+            if state.status == workflow.Freshness.NONE:
                 states[day] = initial_state(day)
                 continue
+            record = state.record
             timezone_name = record.timezone if record is not None else self._timezone
             result = self._service.stored_day_output(day, timezone_name) or DayScheduleOutput(
                 date=day, timezone=timezone_name
             )
             states[day] = SelectedDayState(
                 date=day,
-                status=DayResultStatus.GENERATED if is_current else DayResultStatus.STALE,
+                status=DayResultStatus.GENERATED if state.status == workflow.Freshness.CURRENT else DayResultStatus.STALE,
                 result=result,
                 generated_from_allocation_id=record.allocation_id if record is not None else None,
-                stale_reason=reason,
+                stale_reason=state.stale_reason,
             )
         return states
 
@@ -666,7 +554,9 @@ class PlanningController:
             # successfully) -- surfaced through the same ControllerResult
             # channel as any other failure, with the per-task reasons
             # preserved in the message rather than swallowed.
-            return ControllerResult.failure(_scheduling_failure_message(current_date(), error))
+            return ControllerResult.failure(
+                _scheduling_failure_message(getattr(error, "failed_date", None) or current_date(), error)
+            )
         except PlanningError as error:
             return ControllerResult.failure(str(error))
         except Exception as error:  # noqa: BLE001 - last-resort safety net

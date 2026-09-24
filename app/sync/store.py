@@ -4,7 +4,8 @@ app/sync/store.py
 SQL for the synchronization tables of schema v5 (app/execution/db.py):
 sync_accounts, sync_dirty, sync_shadows, sync_outbox, sync_conflicts, and
 the sync_control flag that suppresses change capture while pulled records
-are applied. Business rules live in app/sync/engine.py.
+are applied -- plus, from schema v6, the last successful sync time and the
+non-secret local_settings. Business rules live in app/sync/engine.py.
 
 Every method joins the caller's transaction (the connection's shared lock
 and savepoints, app.execution.db.transaction), so the engine can make "apply
@@ -23,7 +24,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from app.execution.db import TransactionState, locked, transaction, transaction_state_for
+from app.execution.db import SYNC_TABLES, TransactionState, locked, transaction, transaction_state_for
 
 
 def _now() -> str:
@@ -43,6 +44,8 @@ class Account:
     pull_cursor: int
     active: bool
     associated_at: str | None
+    #: When a sync of this account last completed successfully (schema v6); None if never.
+    last_synced_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -149,7 +152,7 @@ class SyncStore:
         if row is None:
             return None
         return Account(row["account_key"], row["backend_url"], row["user_id"], row["email"], row["pull_cursor"],
-                       bool(row["active"]), row["associated_at"])
+                       bool(row["active"]), row["associated_at"], row["last_synced_at"])
 
     def set_active(self, key: str | None) -> None:
         """At most one account is active: records created locally while it is active are owned by it."""
@@ -161,6 +164,40 @@ class SyncStore:
     def mark_associated(self, key: str) -> None:
         with self.transaction():
             self._execute("UPDATE sync_accounts SET associated_at = ? WHERE account_key = ?", (_now(), key))
+
+    def set_last_synced(self, key: str, at: str) -> None:
+        with self.transaction():
+            self._execute("UPDATE sync_accounts SET last_synced_at = ? WHERE account_key = ?", (at, key))
+
+    def pending_records(self, key: str, user_id: str) -> set[tuple[str, str]]:
+        """
+        (entity type, local id) of every record of the account still waiting for the server: a dirty record it
+        owns, or one with outbox operations. A record that is both is counted once.
+        """
+        pending: set[tuple[str, str]] = set()
+        with self._read():
+            for entity_type, table in SYNC_TABLES:
+                rows = self._execute(
+                    f"SELECT d.entity_id FROM sync_dirty AS d JOIN {table} AS t ON t.id = d.entity_id "
+                    "WHERE d.entity_type = ? AND t.user_id = ?", (entity_type, user_id),
+                ).fetchall()
+                pending.update((entity_type, row["entity_id"]) for row in rows)
+            rows = self._execute("SELECT DISTINCT entity_type, local_id FROM sync_outbox WHERE account_key = ?", (key,))
+            pending.update((row["entity_type"], row["local_id"]) for row in rows.fetchall())
+        return pending
+
+    def setting(self, name: str) -> str | None:
+        with self._read():
+            row = self._execute("SELECT value FROM local_settings WHERE name = ?", (name,)).fetchone()
+        return row["value"] if row is not None else None
+
+    def set_setting(self, name: str, value: str | None) -> None:
+        with self.transaction():
+            if value is None:
+                self._execute("DELETE FROM local_settings WHERE name = ?", (name,))
+            else:
+                self._execute("INSERT INTO local_settings (name, value) VALUES (?, ?) "
+                              "ON CONFLICT(name) DO UPDATE SET value = excluded.value", (name, value))
 
     def set_cursor(self, key: str, cursor: int) -> None:
         self._execute("UPDATE sync_accounts SET pull_cursor = ? WHERE account_key = ?", (cursor, key))
