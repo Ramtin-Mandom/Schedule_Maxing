@@ -69,11 +69,11 @@ from app.planning.errors import (
 from app.planning.fixed_block_rules import FixedBlockRuleViolation
 from app.planning.models import FixedBlock, Project, ScheduledTask, Task
 from app.planning.preferences import (
+    ENGINE_DESCRIPTIONS,
     DayPreferences,
     OptimizerMode,
     PreferenceOverrides,
     PreferenceRecord,
-    resolve_day_preferences,
 )
 from app.planning.time import AmbiguousLocalTimeError, UnsupportedSchedulingWindowError, validate_timezone
 from backend.errors import ApiError
@@ -82,10 +82,8 @@ from backend.resources import FixedBlockOut, PlacementOut, PreferenceOut, Projec
 #: The largest canonical CSV one upload may carry.
 MAX_CSV_BYTES = 5 * 1024 * 1024
 
-ENGINES = {
-    OptimizerMode.PRECISE_GREEDY: "Places each task at the best-scoring minute; the protected greedy baseline.",
-    OptimizerMode.ADHD_FRIENDLY: "Starts tasks over 30 minutes on quarter hours and rewards filling short gaps.",
-}
+#: The engine catalog (shared with the desktop: app.planning.preferences.ENGINE_DESCRIPTIONS).
+ENGINES = ENGINE_DESCRIPTIONS
 
 
 @dataclass(frozen=True)
@@ -484,43 +482,34 @@ def snapshot(service: PlanningService, query: RangeIn) -> SnapshotOut:
 
 
 def preferences(service: PlanningService, query: RangeIn) -> PreferencesOut:
-    dates = workflow.range_dates(query.start_date, query.end_date)
-    template = service.preference_template()
-    user = service.user_preferences()
-    layers = service.date_preferences_for_range(query.start_date, query.end_date)
-    effective = service.resolve_preferences(dates, query.timezone)
+    views = workflow.preference_views(service, query.start_date, query.end_date, query.timezone)
     days = [
-        DayPreferenceViewOut(
-            date=day, effective=effective[day],
-            inherited=resolve_day_preferences(date=day, timezone=query.timezone, yaml_overrides=template,
-                                              user_overrides=user.overrides if user else None),
-            date_layer_id=layers[day].id if day in layers else None,
-        )
-        for day in dates
+        DayPreferenceViewOut(date=view.date, effective=view.effective, inherited=view.inherited,
+                             date_layer_id=view.date_layer.id if view.date_layer else None)
+        for view in views.days.values()
     ]
     return PreferencesOut(
-        timezone=query.timezone, template=template or PreferenceOverrides(),
-        user_layer=preference_out(user) if user else None,
-        date_layers=[preference_out(layers[day]) for day in sorted(layers)], days=days,
-        engines=[EngineOut(mode=mode, description=text) for mode, text in ENGINES.items()],
+        timezone=query.timezone, template=views.template or PreferenceOverrides(),
+        user_layer=preference_out(views.user_layer) if views.user_layer else None,
+        date_layers=[preference_out(view.date_layer) for view in views.days.values() if view.date_layer],
+        days=days, engines=[EngineOut(mode=mode, description=text) for mode, text in ENGINES.items()],
     )
 
 
 def allocation_preview(service: PlanningService, query: RangeIn) -> AllocationPreviewOut:
-    inputs = workflow.read_inputs(service, query.start_date, query.end_date, scope=RangeScope(query.scope),
-                                  timezone_name=query.timezone)
-    allocation = workflow.allocate(inputs)
-    freshness = workflow.day_freshness(service, workflow.range_dates(query.start_date, query.end_date), query.timezone)
+    preview = workflow.preview_allocation(service, query.start_date, query.end_date, scope=RangeScope(query.scope),
+                                          timezone_name=query.timezone)
+    allocation = preview.allocation
     return AllocationPreviewOut(
         start_date=query.start_date, end_date=query.end_date, timezone=query.timezone, scope=query.scope,
-        fingerprint=inputs.fingerprint,
+        fingerprint=preview.fingerprint,
         assignments=[AssignmentOut(task_id=task_id, date=day) for task_id, day in
                      sorted(allocation.assignments.items(), key=lambda item: (item[1], str(item[0])))],
         unallocated=_unallocated(allocation),
         capacity=[CapacityOut(date=day, remaining_minutes=minutes)
                   for day, minutes in sorted(allocation.capacity_remaining.items())],
         diagnostics=[diagnostic.message for diagnostic in allocation.diagnostics],
-        days=[day_state_out(state) for state in freshness.values()],
+        days=[day_state_out(state) for state in preview.freshness.values()],
     )
 
 
@@ -569,22 +558,13 @@ def _csv_text(content: bytes) -> str:
     return text
 
 
-class _DryRun(Exception):
-    def __init__(self, result) -> None:
-        self.result = result
-
-
 def import_csv(service: PlanningService, content: bytes, *, allow_updates: bool, apply: bool) -> CsvResultOut:
     """Parse and validate the whole file, then apply it in one transaction -- or, for a preview, roll it back."""
     batch = parse_canonical_csv(_csv_text(content))
     if apply:
         result = service.apply_record_batch(batch, allow_updates=allow_updates)
     else:
-        try:
-            with service.transaction():
-                raise _DryRun(service.apply_record_batch(batch, allow_updates=allow_updates))
-        except _DryRun as dry_run:
-            result = dry_run.result
+        result = service.preview_record_batch(batch, allow_updates=allow_updates)
     return CsvResultOut(applied=apply, format_version=FORMAT_VERSION, created=result.created, updated=result.updated,
                         deleted=result.deleted, unchanged=result.unchanged)
 

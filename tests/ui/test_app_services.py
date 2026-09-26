@@ -143,6 +143,36 @@ class FakeWidget:
             callback()
 
 
+def test_timed_out_shutdown_keeps_database_available_until_workers_finish(tmp_path):
+    services = open_services(tmp_path / "late.db", tmp_path)
+    assert services.registry.begin()
+    try:
+        assert services.close(timeout=0) is False
+        assert not services.closed
+        assert services.connection.execute("SELECT 1").fetchone()[0] == 1
+        # This models a network worker writing after its response arrives.
+        assert services.planning_controller.list_tasks().ok
+    finally:
+        services.registry.end()
+        assert services.close(timeout=1)
+
+
+def test_unexpected_worker_failure_is_delivered_and_clears_active_count():
+    registry = WorkerRegistry()
+    widget = FakeWidget()
+    delivered = []
+
+    def fail():
+        raise RuntimeError("operation failed")
+
+    assert run_in_background(widget, fail, delivered.append, registry=registry)
+    _wait_idle(registry)
+    widget.run_pending()
+    assert registry.active == 0
+    assert len(delivered) == 1 and not delivered[0].ok
+    assert "operation failed" in delivered[0].error
+
+
 def _wait_idle(registry: WorkerRegistry) -> None:
     deadline = datetime.now() + timedelta(seconds=5)
     while registry.active and datetime.now() < deadline:

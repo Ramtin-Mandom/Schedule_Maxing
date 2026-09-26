@@ -50,7 +50,7 @@ class DurationSuggestionWidget(ctk.CTkFrame):
         get_context: Callable[[], SuggestionContext | None],
         apply_duration: Callable[[int], None],
     ) -> None:
-        super().__init__(parent, fg_color="#F8FAFC", corner_radius=12)
+        super().__init__(parent, fg_color=theme.SUBTLE_BG, corner_radius=12)
         self._controller = productivity_controller
         self._get_context = get_context
         self._apply_duration = apply_duration
@@ -64,8 +64,8 @@ class DurationSuggestionWidget(ctk.CTkFrame):
             self,
             text="Suggest duration from history",
             height=30,
-            fg_color="#E2E8F0",
-            hover_color="#CBD5E1",
+            fg_color=theme.SECONDARY_BG,
+            hover_color=theme.SECONDARY_HOVER,
             text_color=theme.TEXT_PRIMARY,
             command=self._request_suggestion,
         )

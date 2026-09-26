@@ -222,8 +222,10 @@ python -m app.web --data-dir DIR --timezone Europe/Berlin [--port 8765] [--backe
 
 - Serves `127.0.0.1:<port>` only (the launcher refuses any non-loopback
   address). `--db-path FILE` instead of `--data-dir`; without either it opens
-  the desktop app's own database (run one of the two at a time). It runs fully
-  offline without a backend.
+  the desktop app's own database. The desktop app and this service never use
+  one database at the same time: whichever starts second is refused
+  (`app/execution/instance_lock.py`, [desktop-web-boundaries.md](desktop-web-boundaries.md)).
+  It runs fully offline without a backend.
 - It prints a one-time link `http://127.0.0.1:<port>/#bootstrap=<code>`. The
   page reads the code from the URL fragment (never sent to a server) and calls
   `POST /local/session {bootstrap_code}`, which sets the HttpOnly

@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import threading
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date as date_
 from datetime import timedelta
@@ -80,13 +81,16 @@ from app.planning.application import (
     PlanningService,
     RangeClearResult,
     RangeScope,
+    ResetPreview,
+    ResetResult,
 )
 from app.planning.csv_canonical import is_canonical_csv, parse_canonical_csv_file
 from app.planning.csv_export import PlanningExportResult, export_planning_csv
 from app.planning.csv_import import ImportMode, ParsedImport, read_csv_text, parse_legacy_csv_file
 from app.planning.errors import PlanningError, VersionConflictError
-from app.planning.models import DayScheduleOutput, FixedBlock, ScheduledTask, Task, TaskRegistry
+from app.planning.models import DayScheduleOutput, FixedBlock, Project, ScheduledTask, Task, TaskRegistry
 from app.planning.preferences import (
+    ENGINE_DESCRIPTIONS,
     DayPreferences,
     OptimizerMode,
     PreferenceOverrides,
@@ -94,9 +98,17 @@ from app.planning.preferences import (
     day_preferences_overrides_from_reward_settings,
 )
 from app.planning.repository import PlanningRepository
+from app.planning.scope import OwnerScope
 from app.planning.service import DayResultStatus, SelectedDayState, initial_state
 from app.reward import load_reward_settings
-from app.planning.workflow import SchedulingInputs
+from app.planning.workflow import (
+    AllocationPreview,
+    DayFreshness,
+    GenerationMode,
+    GenerationOutcome,
+    PreferenceViews,
+    SchedulingInputs,
+)
 from app.ui.background import ControllerResult
 
 
@@ -146,6 +158,11 @@ class PlanningController:
         self._allocation: AllocationResult | None = None
         self._allocation_inputs: SchedulingInputs | None = None
 
+    @property
+    def owner_scope(self) -> OwnerScope | None:
+        """The workspace this controller works in (None: the legacy device-wide service)."""
+        return self._service.owner_scope
+
     def close(self) -> None:
         """Close the private in-memory database, if this controller opened one."""
         if self._owned_connection is not None:
@@ -160,7 +177,8 @@ class PlanningController:
         """Create (no expected_version) or update one task; the value is the stored snapshot."""
 
         def op() -> Task:
-            saved = self._service.save_task(task, expected_version=expected_version)
+            new = task if expected_version is not None else self._owned(task)
+            saved = self._service.save_task(new, expected_version=expected_version)
             self._invalidate_generated_results()
             return saved
 
@@ -172,7 +190,9 @@ class PlanningController:
         """Save several tasks atomically (all or none); ids in expected_versions are updates."""
 
         def op() -> list[Task]:
-            saved = self._service.save_tasks(tasks, expected_versions=expected_versions)
+            updates = expected_versions or {}
+            owned = [task if task.id in updates else self._owned(task) for task in tasks]
+            saved = self._service.save_tasks(owned, expected_versions=expected_versions)
             self._invalidate_generated_results()
             return saved
 
@@ -194,6 +214,29 @@ class PlanningController:
     def list_tasks(self) -> ControllerResult[list[Task]]:
         return self._call(self._service.list_tasks)
 
+    def list_projects(self, *, include_deleted: bool = False) -> ControllerResult[list[Project]]:
+        """The workspace's projects (live ones, or with include_deleted also the deleted ones)."""
+        return self._call(lambda: self._service.list_projects(include_deleted=include_deleted))
+
+    def get_project(self, project_id: uuid.UUID) -> ControllerResult[Project | None]:
+        return self._call(lambda: self._service.get_project(project_id))
+
+    def create_project(self, project: Project) -> ControllerResult[Project]:
+        """Create a project; in an account workspace it belongs to that account."""
+        return self._call(lambda: self._service.create_project(self._owned(project)))
+
+    def update_project(self, project: Project, *, expected_version: int) -> ControllerResult[Project]:
+        """Rename / re-describe a project; a change made elsewhere since `expected_version` is refused."""
+        return self._call(lambda: self._service.update_project(project, expected_version=expected_version))
+
+    def delete_project(self, project_id: uuid.UUID, *, expected_version: int) -> ControllerResult[bool]:
+        """
+        Delete an empty project. One that live tasks still belong to is
+        refused (EntityInUseError, with their ids); nothing is cascaded --
+        move or clear those tasks' project first. There is no archive.
+        """
+        return self._call(lambda: self._service.delete_project(project_id, expected_version=expected_version))
+
     # ------------------------------------------------------------------
     # Fixed blocks
     # ------------------------------------------------------------------
@@ -204,7 +247,9 @@ class PlanningController:
         """Make `day`'s blocks exactly `blocks`; expected_versions must cover every block stored on `day`."""
 
         def op() -> None:
-            self._service.set_fixed_blocks_for_date(day, blocks, expected_versions=expected_versions)
+            updates = expected_versions or {}
+            owned = [block if block.id in updates else self._owned(block) for block in blocks]
+            self._service.set_fixed_blocks_for_date(day, owned, expected_versions=expected_versions)
             self._invalidate_generated_results()
 
         return self._call(op)
@@ -216,7 +261,8 @@ class PlanningController:
         """Create (no expected_version) or edit one fixed block (its date may change)."""
 
         def op() -> FixedBlock:
-            saved = self._service.save_fixed_block(block, expected_version=expected_version)
+            new = block if expected_version is not None else self._owned(block)
+            saved = self._service.save_fixed_block(new, expected_version=expected_version)
             self._invalidate_generated_results()
             return saved
 
@@ -317,6 +363,75 @@ class PlanningController:
 
         return self._call(op)
 
+    def preview_csv_file(self, path: str, *, allow_updates: bool = False) -> ControllerResult[BatchApplyResult]:
+        """
+        What importing a canonical planning CSV (format v2, with record ids)
+        would create/update/delete/leave unchanged -- validated against what is
+        stored, exactly like the import, but nothing is written. A legacy
+        schedule CSV has no preview here (import_csv_file checks it whole).
+        """
+        try:
+            text = read_csv_text(path)
+        except (OSError, UnicodeDecodeError) as error:
+            return ControllerResult.failure(f"Could not read {path}: {error}", error)
+        if not is_canonical_csv(text):
+            return ControllerResult.failure(
+                "This is not a stored-planning CSV with record ids (format version 2); only those can be previewed."
+            )
+        try:
+            batch = parse_canonical_csv_file(path)
+        except PlanningError as error:
+            return ControllerResult.failure(str(error), error)
+        return self._call(lambda: self._service.preview_record_batch(batch, allow_updates=allow_updates))
+
+    def reset_preview(self, start_date: date_, end_date: date_) -> ControllerResult[ResetPreview]:
+        """
+        What reset_range would delete for [start_date, end_date] (tasks,
+        blocks, placements, generation records, date preference layers, and
+        disclosed cascades outside the range), plus the token that confirms
+        exactly this preview. Writes nothing.
+        """
+        return self._call(lambda: self._service.reset_preview(start_date, end_date))
+
+    def reset_range(self, start_date: date_, end_date: date_, *, confirmation: str) -> ControllerResult[ResetResult]:
+        """
+        Apply a previewed reset atomically (see PlanningService.reset_range):
+        user defaults and execution history are kept; a refused or changed
+        preview changes nothing. The legacy clear_range keeps its older scopes.
+        """
+
+        def op() -> ResetResult:
+            result = self._service.reset_range(start_date, end_date, confirmation=confirmation)
+            self._invalidate_generated_results()
+            return result
+
+        return self._call(op)
+
+    def active_placement_dates(self, task_ids: list[uuid.UUID]) -> ControllerResult[dict[uuid.UUID, list[date_]]]:
+        """For each task: the dates of its live saved placements (anywhere), earliest first."""
+
+        def op() -> dict[uuid.UUID, list[date_]]:
+            groups = self._service.active_placements_for_tasks(task_ids)
+            return {task_id: sorted({p.planned_date for p in groups.get(task_id, [])}) for task_id in task_ids}
+
+        return self._call(op)
+
+    def placements_for_tasks(self, task_ids: list[uuid.UUID]) -> ControllerResult[dict[uuid.UUID, list[ScheduledTask]]]:
+        """For each task: its live saved placements (any date), in time order."""
+
+        def op() -> dict[uuid.UUID, list[ScheduledTask]]:
+            groups = self._service.active_placements_for_tasks(task_ids)
+            return {task_id: sorted(groups.get(task_id, []), key=lambda p: (p.planned_start, str(p.id)))
+                    for task_id in task_ids}
+
+        return self._call(op)
+
+    def inputs_fingerprint(
+        self, start_date: date_, end_date: date_, *, scope: RangeScope = RangeScope.PLANNED
+    ) -> ControllerResult[str]:
+        """The fingerprint of the persisted inputs of a range (compare with a preview's to see whether it is stale)."""
+        return self._call(lambda: self._scheduling_inputs(start_date, end_date, scope).fingerprint)
+
     def get_placements(self, day: date_) -> ControllerResult[list[ScheduledTask]]:
         """The stored (last generated and saved) placements for one date."""
         return self._call(lambda: self._service.placements_for_date(day))
@@ -399,6 +514,49 @@ class PlanningController:
 
         return self._call(op)
 
+    def update_date_overrides(
+        self,
+        day: date_,
+        change: Callable[[PreferenceOverrides], PreferenceOverrides],
+        *,
+        expected_version: int | None,
+    ) -> ControllerResult[PreferenceRecord | None]:
+        """
+        Change part of one date's stored layer in one transaction: `change`
+        gets the stored overrides (empty when the date has no layer) and
+        returns the new ones, so every field it leaves alone -- and the user
+        layer -- is kept. expected_version is the layer version the caller
+        read (None: it had no layer); anything else stored now is a
+        VersionConflictError and nothing changes. A layer left empty is
+        deleted, so the date simply inherits again. The value is the saved
+        record, or None when the date no longer has a layer.
+        """
+
+        def op() -> PreferenceRecord | None:
+            with self._service.transaction():
+                stored = self._service.date_preferences(day)
+                stored_version = stored.version if stored is not None else None
+                if stored_version != expected_version:
+                    raise VersionConflictError(
+                        "preference", stored.id if stored is not None else f"date {day}",
+                        expected_version=expected_version, current_version=stored_version,
+                        message=f"The preferences of {day} changed elsewhere since they were shown; "
+                        "nothing was saved. Review them again.",
+                    )
+                updated = change(stored.overrides if stored is not None else PreferenceOverrides())
+                if updated == PreferenceOverrides():
+                    if stored is not None:
+                        self._service.delete_date_preferences(day, expected_version=stored.version)
+                    saved = None
+                elif stored is not None and updated == stored.overrides:
+                    saved = stored
+                else:
+                    saved = self._service.save_date_preferences(day, updated, expected_version=stored_version)
+            self._invalidate_generated_results()
+            return saved
+
+        return self._call(op)
+
     def _delete_preference_layer(self, day: date_ | None, expected_version: int | None) -> None:
         stored = self._service.user_preferences() if day is None else self._service.date_preferences(day)
         if stored is None:
@@ -413,6 +571,17 @@ class PlanningController:
             self._service.delete_user_preferences(expected_version=expected_version)
         else:
             self._service.delete_date_preferences(day, expected_version=expected_version)
+
+    def preference_views(self, start_date: date_, end_date: date_) -> ControllerResult[PreferenceViews]:
+        """Each date's effective and inherited preferences, with the stored user/date layers (and their versions)."""
+        return self._call(lambda: workflow.preference_views(
+            self._service, start_date, end_date, self._timezone, template=self._yaml_overrides
+        ))
+
+    @staticmethod
+    def engine_descriptions() -> dict[OptimizerMode, str]:
+        """The supported day engines and what each does (the same catalog the web APIs publish)."""
+        return dict(ENGINE_DESCRIPTIONS)
 
     def resolve_preferences(self, day: date_) -> ControllerResult[DayPreferences]:
         return self._call(lambda: self._resolve_range([day])[day])
@@ -453,6 +622,21 @@ class PlanningController:
 
     def current_allocation(self) -> ControllerResult[AllocationResult | None]:
         return self._call(lambda: self._allocation)
+
+    def preview_allocation(
+        self, start_date: date_, end_date: date_, *, scope: RangeScope = RangeScope.PLANNED
+    ) -> ControllerResult[AllocationPreview]:
+        """
+        A stateless allocation preview of persisted inputs (assignments,
+        unallocated reasons, remaining capacity, per-date freshness) and the
+        inputs' fingerprint. Nothing is saved or kept in memory; pass the
+        fingerprint to generate(expected_fingerprint=...) to generate exactly
+        what was previewed.
+        """
+        return self._call(lambda: workflow.preview_allocation(
+            self._service, start_date, end_date, scope=scope, timezone_name=self._timezone,
+            template=self._yaml_overrides,
+        ))
 
     # ------------------------------------------------------------------
     # Selected-day generation -- calls the Day Scheduler exactly once
@@ -499,6 +683,56 @@ class PlanningController:
             )
 
         return self._generation_call(op, lambda: start_date)
+
+    def generate(
+        self,
+        start_date: date_,
+        end_date: date_,
+        *,
+        generate_start: date_ | None = None,
+        generate_end: date_ | None = None,
+        scope: RangeScope = RangeScope.PLANNED,
+        mode: GenerationMode = GenerationMode.FULL,
+        protect_history: bool = True,
+        expected_fingerprint: str | None = None,
+        preserve_on_empty: bool = False,
+    ) -> ControllerResult[GenerationOutcome]:
+        """
+        The shared generation workflow (app/planning/workflow.py -- the same
+        one the web APIs run): allocate [start_date, end_date] from persisted
+        inputs and generate [generate_start, generate_end] (default: all).
+
+            - already current -> outcome.status == "already_current"; nothing
+              is written (no id, version, timestamp, provenance or sync change);
+            - mode=INCREMENTAL keeps every saved placement that still fits and
+              schedules only new work around it; a kept placement that no
+              longer fits fails with cause RegenerationRequiredError (its
+              .problems say which and why) -- regenerate explicitly with FULL;
+            - protect_history (default) never moves or duplicates work whose
+              execution started or finished;
+            - inputs changed meanwhile (or since the preview whose fingerprint
+              is passed) -> cause StaleInputsError; the old schedule stays;
+            - preserve_on_empty: a run that would place nothing while saved
+              placements exist returns "nothing_placed" and writes nothing.
+
+        schedule_range/generate_day keep the legacy desktop behavior unchanged.
+        """
+
+        def op() -> GenerationOutcome:
+            return workflow.generate(
+                self._service, range_start=start_date, range_end=end_date, generate_start=generate_start,
+                generate_end=generate_end, scope=scope, timezone_name=self._timezone, mode=mode,
+                protect_history=protect_history, expected_fingerprint=expected_fingerprint,
+                template=self._yaml_overrides, preserve_on_empty=preserve_on_empty,
+            )
+
+        return self._generation_call(op, lambda: generate_start or start_date)
+
+    def day_freshness(self, dates: list[date_]) -> ControllerResult[dict[date_, DayFreshness]]:
+        """Per date: CURRENT / STALE (with its StaleReason) / NONE, plus the saved generation record and placements."""
+        return self._call(lambda: workflow.day_freshness(
+            self._service, dates, self._timezone, template=self._yaml_overrides
+        ))
 
     def day_state(self, day: date_) -> ControllerResult[SelectedDayState]:
         """The persisted state of one date (see the module docstring)."""
@@ -555,18 +789,25 @@ class PlanningController:
             # channel as any other failure, with the per-task reasons
             # preserved in the message rather than swallowed.
             return ControllerResult.failure(
-                _scheduling_failure_message(getattr(error, "failed_date", None) or current_date(), error)
+                _scheduling_failure_message(getattr(error, "failed_date", None) or current_date(), error), error
             )
         except PlanningError as error:
-            return ControllerResult.failure(str(error))
+            return ControllerResult.failure(str(error), error)
         except Exception as error:  # noqa: BLE001 - last-resort safety net
-            return ControllerResult.failure(f"Unexpected error: {error}")
+            return ControllerResult.failure(f"Unexpected error: {error}", error)
 
     def _call(self, operation):
         try:
             with self._lock:
                 return ControllerResult.success(operation())
         except PlanningError as error:
-            return ControllerResult.failure(str(error))
+            return ControllerResult.failure(str(error), error)
         except Exception as error:  # noqa: BLE001 - last-resort safety net
-            return ControllerResult.failure(f"Unexpected error: {error}")
+            return ControllerResult.failure(f"Unexpected error: {error}", error)
+
+    def _owned(self, record):
+        """A new record created in an account workspace belongs to that account (never claimed later implicitly)."""
+        scope = self._service.owner_scope
+        if scope is None or scope.is_ownerless or record.user_id is not None:
+            return record
+        return record.model_copy(update={"user_id": scope.user_id})

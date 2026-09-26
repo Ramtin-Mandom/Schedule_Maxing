@@ -38,9 +38,12 @@ imported "sleep" or the legacy default "fixed"), the form shows the
 fallback "other"; leaving it at "other" keeps the stored category rather
 than silently replacing it.
 
-Form validation keeps the legacy desktop form's rules (30-minute grid,
-1-10 priority, required tag, no overlapping fixed blocks on a date); the
-schedulers' own rules are untouched.
+The desktop form (Milestone 4) saves through blank_draft/editor_options/
+draft_for/save_draft/delete_description with app/ui/task_form_model.py's
+minute-precise rules (docs/desktop-task-form.md). submit_task_form and
+form_state_for remain for existing headless callers and keep the legacy
+form's rules (30-minute grid, 1-10 priority, required tag); the schedulers'
+own rules are untouched either way.
 """
 
 from __future__ import annotations
@@ -57,10 +60,23 @@ from app.planning.csv_export import PlanningExportResult
 from app.planning.csv_import import ImportMode
 from app.planning.compat import legacy_day_to_date, legacy_minutes_to_utc
 from app.planning.models import FixedBlock, LocalTimeWindow, ScheduledTask, Task
+from app.planning.fixed_block_rules import FixedBlockRuleViolation
 from app.planning.service import DayResultStatus
-from app.planning.time import local_minutes, minutes_to_hhmm, validate_timezone
+from app.planning.time import local_minutes, validate_timezone
 from app.ui.background import ControllerResult
 from app.ui.planning_controller import PlanningController
+from app.ui.task_form_model import (
+    Choice,
+    EditorOptions,
+    FormErrors,
+    TaskDraft,
+    build_block,
+    build_task,
+    categories_for,
+    draft_from_block,
+    draft_from_task,
+)
+from app.ui.time_fields import format_clock
 from config.settings import TIME_SLOT_MINUTES
 
 MINUTES_PER_DAY = 24 * 60
@@ -181,7 +197,8 @@ class ScheduleRun:
 
 
 def format_window(start_minute: int, end_minute: int) -> str:
-    return f"{minutes_to_hhmm(start_minute)} - {minutes_to_hhmm(end_minute)}"
+    """0..1440 minutes as readable local times, e.g. "9:00 AM – 10:30 AM"."""
+    return f"{format_clock(start_minute)} – {format_clock(end_minute)}"
 
 
 def day_label(day: date_) -> str:
@@ -287,6 +304,136 @@ class SchedulePageController:
             return ControllerResult.success(FormState(ref=ref, values=values, dependency_ids=[]))
         except _Failure as failure:
             return ControllerResult.failure(failure.message)
+
+    # ------------------------------------------------------------------
+    # The reusable task form (app/ui/task_form_model.py)
+    # ------------------------------------------------------------------
+
+    def blank_draft(self, kind: str = "task") -> TaskDraft:
+        """An empty form for this page: dated on the page's (first) date."""
+        return TaskDraft(kind=kind, date=self._anchor.isoformat())
+
+    def editor_options(self, editing: RowRef | None = None, *, category: str | None = None,
+                       project_id: uuid.UUID | None = None) -> ControllerResult[EditorOptions]:
+        """
+        The form's choices in this workspace: categories (a stored unknown
+        one kept), tasks that can be dependencies (never the edited task;
+        labels include the date, and a short id where names still collide)
+        and projects -- all kept by id.
+        """
+        try:
+            tasks = [task for task in self._unwrap(self._planning.list_tasks())
+                     if not (editing is not None and editing.kind == "task" and task.id == editing.id)]
+            labels = {task.id: self._task_display(task) for task in tasks}
+            counts: dict[str, int] = {}
+            for label in labels.values():
+                counts[label] = counts.get(label, 0) + 1
+            dependencies = sorted(
+                (Choice(task.id, labels[task.id] if counts[labels[task.id]] == 1 else f"{labels[task.id]} #{str(task.id)[:4]}")
+                 for task in tasks),
+                key=lambda choice: choice.label.lower(),
+            )
+            live = self._unwrap(self._planning.list_projects())
+            names: dict[str, int] = {}
+            for project in live:
+                names[project.name] = names.get(project.name, 0) + 1
+            projects = sorted(
+                (Choice(project.id, project.name if names[project.name] == 1 else f"{project.name} #{str(project.id)[:4]}")
+                 for project in live),
+                key=lambda choice: choice.label.lower())
+            if project_id is not None and project_id not in {project.id for project in live}:
+                # A reference to a deleted/unknown project is shown as it is, never silently cleared on save.
+                deleted = {p.id: p for p in self._unwrap(self._planning.list_projects(include_deleted=True))}
+                gone = deleted.get(project_id)
+                label = (f"{gone.name} (deleted project)" if gone is not None
+                         else f"Unknown project {str(project_id)[:8]}")
+                projects.insert(0, Choice(project_id, label))
+            return ControllerResult.success(EditorOptions(
+                timezone=self.timezone, categories=categories_for(category), dependencies=dependencies,
+                projects=projects,
+            ))
+        except _Failure as failure:
+            return ControllerResult.failure(failure.message)
+
+    def draft_for(self, ref: RowRef) -> ControllerResult[TaskDraft]:
+        """The stored values of one row as a form draft (for editing)."""
+        try:
+            if ref.kind == "task":
+                task = self._unwrap(self._planning.get_task(ref.id))
+                if task is None:
+                    raise _Failure("That task no longer exists.")
+                return ControllerResult.success(draft_from_task(task, self.timezone))
+            return ControllerResult.success(draft_from_block(self._find_block(ref.id)))
+        except _Failure as failure:
+            return ControllerResult.failure(failure.message)
+
+    def save_draft(self, draft: TaskDraft, *, editing: RowRef | None = None) -> ControllerResult[PageSnapshot]:
+        """
+        Create (editing=None) or update one task/fixed block from the form.
+        Edits start from the stored record and pass the version the row was
+        drawn with, so a change made elsewhere meanwhile is reported, not
+        overwritten. On any failure nothing is saved; the error's cause is
+        FormErrors (field -> message) where a field is to blame, and the
+        committed state is re-read.
+        """
+        try:
+            expected_version = self._precondition(editing)
+            if editing is not None and editing.kind != ("task" if draft.kind == "task" else "block"):
+                raise InvalidFormError("A task cannot become a fixed block (or the other way round) by editing; "
+                                       "remove it and add the other kind.")
+            if draft.kind == "block":
+                stored = self._find_block(editing.id) if editing is not None else None
+                block = build_block(draft, timezone_name=self.timezone, existing=stored)
+                result = self._planning.save_fixed_block(block, expected_version=expected_version)
+                if not result.ok:
+                    raise _FormFailure(self._block_refusal(result), result.cause)
+            else:
+                stored = None
+                if editing is not None:
+                    stored = self._unwrap(self._planning.get_task(editing.id))
+                    if stored is None:
+                        raise _Failure("That task no longer exists.")
+                task = build_task(draft, timezone_name=self.timezone, existing=stored)
+                result = self._planning.add_or_update_task(task, expected_version=expected_version)
+                if not result.ok:
+                    raise _FormFailure(result.error or "The task could not be saved.", result.cause)
+        except FormErrors as errors:
+            failed = self._fail_with_reload("; ".join(errors.errors.values()))
+            return ControllerResult(ok=False, value=failed.value, error=failed.error, cause=errors)
+        except _FormFailure as failure:
+            failed = self._fail_with_reload(failure.message)
+            return ControllerResult(ok=False, value=failed.value, error=failed.error, cause=failure.cause)
+        except (InvalidFormError, _Failure) as error:
+            return self._fail_with_reload(str(error))
+        return self.load()
+
+    def delete_description(self, ref: RowRef) -> ControllerResult[str]:
+        """What removing a row does, in words, for the confirmation."""
+        try:
+            if ref.kind == "task":
+                task = self._unwrap(self._planning.get_task(ref.id))
+                if task is None:
+                    raise _Failure("That task no longer exists.")
+                return ControllerResult.success(
+                    f"Remove the task \u201c{self._task_display(task)}\u201d? Its saved schedule entries are removed too. "
+                    "Execution history (work sessions, feedback) is kept."
+                )
+            block = self._find_block(ref.id)
+            return ControllerResult.success(
+                f"Remove the fixed block \u201c{block.label}\u201d on {day_label(block.planned_date)}?")
+        except _Failure as failure:
+            return ControllerResult.failure(failure.message)
+
+    def _block_refusal(self, result: ControllerResult) -> str:
+        """A fixed-block refusal in local times, naming the block it collides with."""
+        cause = result.cause
+        other = getattr(cause, "conflicting", None)
+        if isinstance(cause, FixedBlockRuleViolation) and cause.code == "overlap" and other is not None:
+            start = local_minutes(other.planned_start, other.planned_date, other.timezone)
+            end = local_minutes(other.planned_end, other.planned_date, other.timezone)
+            return (f"This time overlaps the fixed block \u201c{other.label}\u201d ({format_clock(start)} \u2013 "
+                    f"{format_clock(end)} on {day_label(other.planned_date)}). Choose another time.")
+        return result.error or "The fixed block could not be saved."
 
     def describe_tasks(self, task_ids: list[uuid.UUID]) -> ControllerResult[list[str]]:
         """Display labels ("name (date)") for dependency ids, in the given order."""
@@ -473,7 +620,9 @@ class SchedulePageController:
                     ref=RowRef("block", block.id, block.version), date=day, day_label=day_label(day), name=block.label,
                     type_label="fixed", time_text=format_window(start_minute, end_minute),
                 )))
-                canvas.append(CanvasItem(self._day_index(day), block.label, "fixed", start_minute, end_minute, "fixed"))
+                # The block's own category (an unknown imported one included) picks its color; mode says it is fixed.
+                canvas.append(CanvasItem(self._day_index(day), block.label, block.category, start_minute, end_minute,
+                                         "fixed"))
 
         placed_task_ids = {p.task_id for p in placements}
         for placement in placements:
@@ -730,6 +879,14 @@ class _Failure(Exception):
     def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
+
+
+class _FormFailure(_Failure):
+    """A save the service refused; `cause` is its structured error (e.g. the overlapping block)."""
+
+    def __init__(self, message: str, cause: BaseException | None) -> None:
+        super().__init__(message)
+        self.cause = cause
 
 
 def _parse_int(value: str, field_name: str) -> int:

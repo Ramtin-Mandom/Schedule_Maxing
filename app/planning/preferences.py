@@ -82,6 +82,22 @@ class OptimizerMode(str, Enum):
     ADHD_FRIENDLY = "adhd_friendly"
 
 
+#: What each day engine does, in words any client can show (desktop controllers, the web APIs).
+ENGINE_DESCRIPTIONS: dict[OptimizerMode, str] = {
+    OptimizerMode.PRECISE_GREEDY: "Places each task at the best-scoring minute; the protected greedy baseline.",
+    OptimizerMode.ADHD_FRIENDLY: "Starts tasks over 30 minutes on quarter hours and rewards filling short gaps.",
+}
+
+#: The engine a date uses when no stored layer chooses one (resolve_day_preferences' own default).
+DEFAULT_OPTIMIZER_MODE = OptimizerMode.PRECISE_GREEDY
+
+#: Short human names of the day engines, for any client's engine choice (one place for future modes).
+ENGINE_LABELS: dict[OptimizerMode, str] = {
+    OptimizerMode.PRECISE_GREEDY: "Normal",
+    OptimizerMode.ADHD_FRIENDLY: "ADHD friendly",
+}
+
+
 # -----------------------------------------------------------------------------
 # Day window
 # -----------------------------------------------------------------------------
@@ -445,7 +461,7 @@ def resolve_day_preferences(
     day_window = _WHOLE_DAY_WINDOW
     category_multipliers: dict[str, float] = {}
     category_preferred_windows: dict[str, LocalTimeWindow] = {}
-    optimizer_mode = OptimizerMode.PRECISE_GREEDY
+    optimizer_mode = DEFAULT_OPTIMIZER_MODE
     reward = RewardPreferences()
 
     for layer in (yaml_overrides, user_overrides, date_overrides):

@@ -20,14 +20,46 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
 
+      - name: Install virtual desktop
+        run: sudo apt-get update && sudo apt-get install -y xvfb xauth python3-tk
+
       - name: Run tests
-        run: python -m pytest
+        run: xvfb-run -a python -m pytest
 
       - name: Check compilation
         run: python -m compileall .
 
       - name: Run Ruff
         run: python -m ruff check .
+
+  desktop-only:
+    # The desktop app without any optional web/server package (docs/desktop-web-boundaries.md):
+    # only requirements-desktop.txt is installed, and every suite that needs no backend runs.
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Install desktop dependencies only
+        run: python -m pip install -r requirements-desktop.txt pytest
+
+      - name: Install virtual desktop
+        run: sudo apt-get update && sudo apt-get install -y xvfb xauth python3-tk
+
+      - name: Web/server packages are absent
+        run: >-
+          python -c "import importlib.util, sys;
+          found = [m for m in ('fastapi', 'starlette', 'uvicorn', 'sqlalchemy', 'alembic', 'psycopg', 'jwt', 'argon2', 'httpx')
+          if importlib.util.find_spec(m)]; sys.exit(f'unexpected web packages: {found}' if found else 0)"
+
+      - name: Desktop, planning, execution, productivity and CLI tests
+        run: xvfb-run -a python -m pytest --ignore=tests/backend --ignore=tests/sync --ignore=tests/web
 
   postgres:
     # The backend and sync suites against a real, throwaway PostgreSQL

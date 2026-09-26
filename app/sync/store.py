@@ -27,6 +27,10 @@ from typing import Any
 from app.execution.db import SYNC_TABLES, TransactionState, locked, transaction, transaction_state_for
 
 
+#: local_settings key of the backend this device synchronizes with (a URL, never a credential).
+BACKEND_URL_SETTING = "backend_url"
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -153,6 +157,12 @@ class SyncStore:
             return None
         return Account(row["account_key"], row["backend_url"], row["user_id"], row["email"], row["pull_cursor"],
                        bool(row["active"]), row["associated_at"], row["last_synced_at"])
+
+    def active_account(self) -> Account | None:
+        """The account marked active on this device (it persists across restarts until sign-out or a switch)."""
+        with self._read():
+            row = self._execute("SELECT account_key FROM sync_accounts WHERE active = 1").fetchone()
+        return self.account(row["account_key"]) if row is not None else None
 
     def set_active(self, key: str | None) -> None:
         """At most one account is active: records created locally while it is active are owned by it."""

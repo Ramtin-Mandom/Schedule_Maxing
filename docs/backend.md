@@ -26,8 +26,9 @@ All packages are maintained and support Python 3.10 (the CI version):
 | Preference template | PyYAML, tzdata | Server-side preference resolution reads `config/task_preference.yaml` like the desktop; tzdata supplies IANA zones where the host has none |
 
 The server-only dependencies are listed in `requirements-backend.txt`, which
-has no desktop packages. `requirements.txt`, used for development and CI,
-includes it so the backend tests run everywhere.
+has no desktop packages; the desktop-only ones are in
+`requirements-desktop.txt`, which has no server packages. `requirements.txt`,
+used for development and CI, includes both so every test runs everywhere.
 
 ## Configuration
 

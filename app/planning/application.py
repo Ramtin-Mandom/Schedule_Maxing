@@ -382,6 +382,14 @@ _KINDS = {
 PROJECT_TEMPLATE = object()
 
 
+class _PreviewRollback(Exception):
+    """Carries a preview's result out of the transaction it rolls back (PlanningService.preview_record_batch)."""
+
+    def __init__(self, result: BatchApplyResult) -> None:
+        super().__init__("preview")
+        self.result = result
+
+
 class PlanningService:
     def __init__(
         self,
@@ -1428,6 +1436,18 @@ class PlanningService:
                 replaced_range=replace_range,
                 cleared=cleared,
             )
+
+    def preview_record_batch(self, batch: RecordBatch, *, allow_updates: bool = False) -> BatchApplyResult:
+        """
+        What apply_record_batch would do -- or the error it would raise --
+        without writing anything: the batch is applied and validated in a
+        transaction that is always rolled back (change capture included).
+        """
+        try:
+            with self.transaction():
+                raise _PreviewRollback(self.apply_record_batch(batch, allow_updates=allow_updates))
+        except _PreviewRollback as rollback:
+            return rollback.result
 
     def apply_record_batch(self, batch: RecordBatch, *, allow_updates: bool = False) -> BatchApplyResult:
         """
