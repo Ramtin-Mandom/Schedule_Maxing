@@ -8,5 +8,7 @@ PyYAML>=6.0.0
 customtkinter>=5.2.2
 pandas>=2.0.0
 scikit-learn>=1.4.0
+# Imported directly by productivity model persistence.
+joblib>=1.2.0
 # IANA time zones (zoneinfo) where the host has no time zone database, e.g. Windows.
 tzdata>=2024.1
