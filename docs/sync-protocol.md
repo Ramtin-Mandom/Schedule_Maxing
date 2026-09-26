@@ -51,8 +51,12 @@ mix.
   reactivates it.
 - **Push and pull are owner-scoped.** A push sends only records owned by the
   current account. A pull stores records as that account's.
-- **Local display is device-wide.** The desktop shows every local record
-  whatever its owner. Filtering the view by account is a later UI concern.
+- **Local work happens in one workspace** (Milestone 4,
+  `SyncService.workspace_scope()`): the account selected in this session,
+  else the account active on this device, else the ownerless records. The
+  desktop and the local web service show, generate, export and reset only
+  that workspace's records; records created in an account workspace are the
+  account's. See [desktop-web-boundaries.md](desktop-web-boundaries.md).
 
 ## Local change capture
 

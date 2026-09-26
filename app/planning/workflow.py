@@ -18,6 +18,9 @@ and identified by their fingerprint, never kept in a process.
 Reading inputs (read_inputs): one consistent snapshot of a range's tasks
 (per RangeScope, deadlines judged in the planning timezone), fixed blocks,
 effective preferences and external dependencies, plus their fingerprint.
+preview_allocation allocates such a snapshot without saving anything;
+preference_views shows each date's effective and inherited preferences with
+the stored layers they come from.
 
 Generation (generate) for a contiguous run of dates inside an allocation
 range, in one of two modes:
@@ -58,6 +61,14 @@ and provenance written together. A failure anywhere leaves the previous
 schedule exactly as it was. A MandatoryTaskSchedulingError from the engine
 is raised unchanged, with its per-task reasons.
 
+preserve_on_empty (opt-in; the desktop Day page uses it): when a run would
+place nothing at all on any generated date -- no work was allocated there,
+or none of it fits -- while those dates still have saved placements, it
+returns "nothing_placed" (with the run's genuine unscheduled reasons) and
+writes nothing, so the previous schedule stays exactly as it was instead of
+being replaced by an empty one. Without it (the default) such a run saves
+the empty result, as before.
+
 Freshness (day_freshness): per date, CURRENT / STALE (with a StaleReason) /
 NONE, recomputed from the persisted record, the recorded range's inputs and
 the saved placements. The record keeps only the *count* of unscheduled
@@ -94,7 +105,13 @@ from app.planning.external_dependencies import (
 )
 from app.planning.models import DayScheduleOutput, FixedBlock, ScheduledTask, Task, TaskRegistry, compute_total_score
 from app.planning.occurrence import HISTORY_PROTECTED_STATUSES
-from app.planning.preferences import DayPreferences, OptimizerMode
+from app.planning.preferences import (
+    DayPreferences,
+    OptimizerMode,
+    PreferenceOverrides,
+    PreferenceRecord,
+    resolve_day_preferences,
+)
 from app.planning.provenance import GenerationRecord, StaleReason, classify_generation, inputs_fingerprint, placements_digest
 from app.planning.service import generate_selected_day
 from app.planning.time import AmbiguousLocalTimeError, UnsupportedSchedulingWindowError
@@ -144,6 +161,40 @@ class DayFreshness:
 
 
 @dataclass(frozen=True)
+class AllocationPreview:
+    """An allocation computed from persisted inputs (nothing saved), with the fingerprint that identifies them."""
+
+    inputs: SchedulingInputs
+    allocation: AllocationResult
+    freshness: dict[date_, DayFreshness]
+
+    @property
+    def fingerprint(self) -> str:
+        return self.inputs.fingerprint
+
+
+@dataclass(frozen=True)
+class DayPreferenceView:
+    date: date_
+    #: What scheduling uses on this date: defaults -> template -> user layer -> date layer.
+    effective: DayPreferences
+    #: What the date would use without its own layer (defaults -> template -> user layer).
+    inherited: DayPreferences
+    #: The date's own stored layer, if it has one.
+    date_layer: PreferenceRecord | None
+
+
+@dataclass(frozen=True)
+class PreferenceViews:
+    """Every layer of a range's preferences, as one consistent read."""
+
+    timezone_name: str
+    template: PreferenceOverrides | None
+    user_layer: PreferenceRecord | None
+    days: dict[date_, DayPreferenceView]
+
+
+@dataclass(frozen=True)
 class PlacementProblem:
     """Why a placement that would be kept no longer fits the current inputs."""
 
@@ -156,7 +207,7 @@ class PlacementProblem:
 
 @dataclass(frozen=True)
 class GenerationOutcome:
-    #: "generated", or "already_current" (nothing was written).
+    #: "generated", "already_current" or (preserve_on_empty) "nothing_placed"; the latter two wrote nothing.
     status: str
     mode: GenerationMode
     inputs: SchedulingInputs
@@ -224,6 +275,51 @@ def allocate(inputs: SchedulingInputs) -> AllocationResult:
     return explain_unallocated(result, planning_range.tasks.tasks, inputs.external)
 
 
+def preview_allocation(
+    service: PlanningService,
+    start_date: date_,
+    end_date: date_,
+    *,
+    scope: RangeScope,
+    timezone_name: str,
+    template: object = PROJECT_TEMPLATE,
+) -> AllocationPreview:
+    """Allocate a range from persisted inputs (never generates or saves placements); see generate's expected_fingerprint."""
+    check_range(start_date, end_date)
+    inputs = read_inputs(service, start_date, end_date, scope=scope, timezone_name=timezone_name, template=template)
+    allocation = allocate(inputs)
+    freshness = day_freshness(service, range_dates(start_date, end_date), timezone_name, template=template)
+    return AllocationPreview(inputs=inputs, allocation=allocation, freshness=freshness)
+
+
+def preference_views(
+    service: PlanningService,
+    start_date: date_,
+    end_date: date_,
+    timezone_name: str,
+    *,
+    template: object = PROJECT_TEMPLATE,
+) -> PreferenceViews:
+    """Effective and inherited preferences of each date, with the stored layers they come from."""
+    check_range(start_date, end_date)
+    dates = range_dates(start_date, end_date)
+    layer = service.preference_template() if template is PROJECT_TEMPLATE else template
+    with service.transaction():
+        user = service.user_preferences()
+        by_date = service.date_preferences_for_range(start_date, end_date)
+        effective = service.resolve_preferences(dates, timezone_name, template=layer)
+    days = {
+        day: DayPreferenceView(
+            date=day, effective=effective[day],
+            inherited=resolve_day_preferences(date=day, timezone=timezone_name, yaml_overrides=layer,
+                                              user_overrides=user.overrides if user is not None else None),
+            date_layer=by_date.get(day),
+        )
+        for day in dates
+    }
+    return PreferenceViews(timezone_name=timezone_name, template=layer, user_layer=user, days=days)
+
+
 def day_freshness(
     service: PlanningService, dates: Iterable[date_], timezone_name: str, *, template: object = PROJECT_TEMPLATE
 ) -> dict[date_, DayFreshness]:
@@ -278,6 +374,7 @@ def generate(
     expected_fingerprint: str | None = None,
     template: object = PROJECT_TEMPLATE,
     clock=None,
+    preserve_on_empty: bool = False,
 ) -> GenerationOutcome:
     """
     Allocate [range_start, range_end] from persisted inputs and generate
@@ -306,7 +403,8 @@ def generate(
         return GenerationOutcome(status="already_current", mode=mode, inputs=inputs, allocation=allocation, outputs=outputs)
 
     return generate_from(
-        service, allocation, inputs, dates, mode=mode, protect_history=protect_history, template=template, clock=clock
+        service, allocation, inputs, dates, mode=mode, protect_history=protect_history, template=template, clock=clock,
+        preserve_on_empty=preserve_on_empty,
     )
 
 
@@ -320,6 +418,7 @@ def generate_from(
     protect_history: bool = False,
     template: object = PROJECT_TEMPLATE,
     clock=None,
+    preserve_on_empty: bool = False,
 ) -> GenerationOutcome:
     """Generate `dates` (contiguous, inside the inputs' range) from a given allocation and save them (see generate)."""
     outputs: dict[date_, DayScheduleOutput] = {}
@@ -336,6 +435,11 @@ def generate_from(
         outputs[day] = output
         expected.update({placement.id: placement.version for placement in stored})
         kept[day] = kept_ids
+
+    if preserve_on_empty and expected and not any(output.placements for output in outputs.values()):
+        # Nothing new to show and saved work would be wiped: keep the previous schedule untouched.
+        return GenerationOutcome(status="nothing_placed", mode=mode, inputs=inputs, allocation=allocation,
+                                 outputs=outputs, kept_ids=kept)
 
     now = (clock or _utcnow)()
     provenance = GenerationProvenance(

@@ -77,8 +77,8 @@ class FeedbackDialog(ctk.CTkToplevel):
         ctk.CTkButton(
             button_bar,
             text="Skip",
-            fg_color="#E2E8F0",
-            hover_color="#CBD5E1",
+            fg_color=theme.SECONDARY_BG,
+            hover_color=theme.SECONDARY_HOVER,
             text_color=theme.TEXT_PRIMARY,
             command=self._skip,
         ).grid(row=0, column=0, sticky="ew", padx=(0, 6))

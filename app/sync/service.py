@@ -59,12 +59,14 @@ from __future__ import annotations
 
 import logging
 import threading
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from app.planning.scope import OwnerScope
 from app.sync.engine import AssociationPreview, SyncEngine
-from app.sync.store import Account, Conflict
+from app.sync.store import BACKEND_URL_SETTING, Account, Conflict
 from app.sync.transport import AuthenticationError, ProtocolError, SyncTransport, TransportError
 
 logger = logging.getLogger(__name__)
@@ -95,12 +97,16 @@ class SyncStatus:
     auth_required: bool
     account: Account | None
     in_progress: bool
-    #: Records of the account waiting for the server (dirty or queued, each once); None without an account.
+    #: Records of the workspace account waiting for the server (dirty or queued, each once); None without one.
     pending: int | None
     conflicts: int
     last_successful_sync_at: str | None
     last_report: SyncReport
     last_error: str | None
+    #: The account whose records local work uses (workspace_account()): the selected one, else the device's
+    #: active one. Pending, conflicts and the last successful sync are its -- durable, so they are known after a
+    #: restart before anyone signs in again.
+    workspace_account: Account | None = None
 
 
 def _utcnow() -> datetime:
@@ -153,6 +159,29 @@ class SyncService:
         with self._state_lock:
             return self._engine.store.account(self._account_key) if self._account_key else None
 
+    def workspace_scope(self) -> OwnerScope:
+        """
+        Whose records local work (a desktop view, a local web request) sees
+        and creates -- one rule for every client of this database:
+
+            1. the account selected in this session (signed in, or signed in
+               and asked to sign in again);
+            2. otherwise the account marked active on this device -- an
+               associated account stays active across restarts until
+               sign-out, and the database stamps new records with it, so
+               work continues in its scope offline;
+            3. otherwise the ownerless local workspace.
+
+        Other accounts' records are never visible in it, and ownerless records
+        are only ever claimed by the explicit associate_local_data step.
+        """
+        account = self.workspace_account()
+        return OwnerScope.account(uuid.UUID(account.user_id)) if account is not None else OwnerScope.ownerless()
+
+    def workspace_account(self) -> Account | None:
+        """The account whose workspace workspace_scope() is (None: the ownerless local workspace)."""
+        return self.account or self._engine.store.active_account()
+
     @property
     def signed_in(self) -> bool:
         with self._state_lock:
@@ -171,6 +200,13 @@ class SyncService:
             self.backend_reachable, self.backend_checked_at = None, None
             self.consecutive_failures = 0
             self.last_report = SyncReport("inert")
+
+    def remembered_backend_url(self) -> str | None:
+        """The backend address saved on this device (local_settings; never a credential)."""
+        return self._engine.store.setting(BACKEND_URL_SETTING)
+
+    def remember_backend_url(self, url: str | None) -> None:
+        self._engine.store.set_setting(BACKEND_URL_SETTING, url)
 
     def sign_in(self, email: str, password: str) -> Account:
         transport = self._transport
@@ -360,6 +396,7 @@ class SyncService:
             transport, token, key = self._transport, self._token, self._account_key
         store = self._engine.store
         account = store.account(key) if key else None
+        durable = account or store.active_account()
         report = self.last_report
         return SyncStatus(
             configured=transport is not None,
@@ -367,11 +404,12 @@ class SyncService:
             backend_reachable=self.backend_reachable, backend_checked_at=self.backend_checked_at,
             signed_in=token is not None, auth_required=account is not None and token is None, account=account,
             in_progress=self._sync_lock.locked(),
-            pending=len(store.pending_records(account.account_key, account.user_id)) if account else None,
-            conflicts=len(store.conflicts(account.account_key, "open")) if account else 0,
-            last_successful_sync_at=account.last_synced_at if account else None,
+            pending=len(store.pending_records(durable.account_key, durable.user_id)) if durable else None,
+            conflicts=len(store.conflicts(durable.account_key, "open")) if durable else 0,
+            last_successful_sync_at=durable.last_synced_at if durable else None,
             last_report=report,
             last_error=report.message if report.status in ("offline", "auth_required", "error") else None,
+            workspace_account=durable,
         )
 
     def _finish(self, report: SyncReport) -> SyncReport:

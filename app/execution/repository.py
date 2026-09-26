@@ -30,7 +30,7 @@ Owner scope (Milestone 4 preflight, app/planning/scope.py): constructed with
 the history purge is restricted to that owner's executions, another owner's
 execution behaves exactly like a missing one, and creating an execution for
 another owner is refused (ExecutionError). Without an owner the repository
-is device-wide, as the desktop has always used it; the sync-only methods
+is device-wide (the CLI and sync; the desktop scopes it since Milestone 4); the sync-only methods
 (store_synced, set_wire_id, local_id_for_wire, wire_id) stay device-wide.
 
 Milestone 3 (schema v4): update_execution is an atomic compare-and-update

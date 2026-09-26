@@ -55,6 +55,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.execution.db import get_connection, transaction_state_for
+from app.execution.instance_lock import acquire_instance_lock
 from app.execution.repository import ExecutionRepository
 from app.execution.service import ExecutionService
 from app.planning.application import PlanningService
@@ -63,7 +64,7 @@ from app.planning.scope import OwnerScope
 from app.planning.time import validate_timezone
 from app.sync.engine import AssociationError, ConflictResolutionError
 from app.sync.service import SyncService, SyncStatus
-from app.sync.store import Account, Conflict
+from app.sync.store import BACKEND_URL_SETTING, Account, Conflict, SyncStore
 from app.sync.transport import AuthenticationError, HttpTransport, ProtocolError, SyncTransport, TransportError
 from app.web.local_session import LocalGuard
 from app.web.records import build_records_router
@@ -81,7 +82,8 @@ from backend.security import MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH
 
 logger = logging.getLogger(__name__)
 
-BACKEND_URL_SETTING = "backend_url"
+#: How this process names itself in the database lock (shown to a second process that is refused).
+LOCK_HOLDER = "the local web service"
 #: Paths that belong to the API: never answered with the frontend's index.html.
 API_PREFIXES = ("planning", "local", "projects", "tasks", "fixed-blocks", "preferences", "docs", "openapi.json", "redoc")
 
@@ -138,35 +140,56 @@ class LocalRuntime:
         self.config = config
         self.clock = clock
         self.transport_factory = transport_factory
-        self.connection = get_connection(config.db_path)
+        # One process per database: the desktop app and this service never share its sync session (instance_lock.py).
+        self.instance_lock = acquire_instance_lock(config.db_path, LOCK_HOLDER)
+        try:
+            self.connection = get_connection(config.db_path)
+        except BaseException:
+            if self.instance_lock is not None:
+                self.instance_lock.release()
+            raise
         try:
             self.planning = PlanningService(PlanningRepository(self.connection), clock)
             self.executions = ExecutionService(ExecutionRepository(self.connection), clock)
             self.backend_error: str | None = None
-            self.sync = SyncService(self.connection, None, clock=clock, interval=config.sync_interval)
-            url = config.backend_url or self.sync._engine.store.setting(BACKEND_URL_SETTING)
-            if url:
-                self._use_backend(url, persist=config.backend_url is not None)
+            url = config.backend_url or SyncStore(self.connection).setting(BACKEND_URL_SETTING)  # before the service
+            # Starting with the configured backend is not a backend switch: like the desktop app, it keeps the
+            # device's active account (and so the workspace; SyncService.workspace_scope). set_backend switches.
+            self.sync = SyncService(self.connection, self._transport_for(url), clock=clock,
+                                    interval=config.sync_interval)
+            if self.sync.configured:
+                if config.backend_url is not None:
+                    self.sync.remember_backend_url(url)
+                if config.background_sync:
+                    self.sync.start()
         except BaseException:
             self.connection.close()
+            if self.instance_lock is not None:
+                self.instance_lock.release()
             raise
         self.work = _Work()
         self.closed = False
 
+    def _transport_for(self, url: str | None) -> SyncTransport | None:
+        """The transport for a configured URL, or None (offline) -- an invalid URL never prevents local use."""
+        if not url:
+            return None
+        try:
+            return self.transport_factory(url)
+        except ValueError as error:
+            self.backend_error = str(error)
+            logger.warning("Ignoring an invalid backend URL; synchronization is off.")
+            return None
+
     def _use_backend(self, url: str | None, *, persist: bool) -> None:
-        transport = None
-        if url:
-            try:
-                transport = self.transport_factory(url)
-            except ValueError as error:
-                self.backend_error = str(error)
-                logger.warning("Ignoring an invalid backend URL; synchronization is off.")
-                self.sync.set_transport(None)
-                return
         self.backend_error = None
+        transport = self._transport_for(url)
+        if url and transport is None:
+            self.sync.set_transport(None)
+            return
         self.sync.set_transport(transport)
         if persist:
-            self.sync._engine.store.set_setting(BACKEND_URL_SETTING, url)
+            self.sync.remember_backend_url(url)
         if self.config.background_sync and not getattr(self, "closed", False):
             self.sync.start()  # a no-op without a backend or when the loop already runs
 
@@ -179,8 +202,8 @@ class LocalRuntime:
         self._use_backend(url, persist=True)
 
     def scope(self) -> OwnerScope:
-        account = self.sync.account
-        return OwnerScope.account(uuid.UUID(account.user_id)) if account is not None else OwnerScope.ownerless()
+        # The same workspace rule as the desktop app (SyncService.workspace_scope).
+        return self.sync.workspace_scope()
 
     def close(self) -> bool:
         if self.closed:
@@ -189,12 +212,18 @@ class LocalRuntime:
         stopped = self.sync.stop(timeout=timeout)
         idle = self.work.wait_idle(timeout)
         state = transaction_state_for(self.connection)
-        acquired = state.lock.acquire(timeout=timeout) if state is not None else False
+        acquired = state.lock.acquire(timeout=timeout) if state is not None else True
+        if not acquired:
+            # Never close SQLite under a running transaction; process exit ends it (see AppServices.close).
+            logger.warning("A database transaction is still running; the database was not closed.")
+            return False
         try:
             self.connection.close()
         finally:
-            if acquired:
+            if state is not None:
                 state.lock.release()
+            if self.instance_lock is not None:
+                self.instance_lock.release()
         self.closed = True
         return stopped and idle
 
@@ -371,9 +400,16 @@ def _account_out(account: Account | None, status: SyncStatus) -> AccountOut | No
 
 
 def _workspace(runtime: LocalRuntime) -> WorkspaceOut:
+    """The workspace requests work in now (runtime.scope()): the selected account, the device's active one, or none."""
     status = runtime.sync.status()
-    account = _account_out(status.account, status)
-    return WorkspaceOut(scope="account" if account else "ownerless", account=account, timezone=runtime.config.timezone)
+    account = runtime.sync.workspace_account()
+    if account is not None and (status.account is None or status.account.account_key != account.account_key):
+        # The device's active account, not selected in this session: its records, offline until signed in.
+        out = AccountOut(user_id=uuid.UUID(account.user_id), email=account.email, backend_url=account.backend_url,
+                         associated=account.associated_at is not None, signed_in=False, auth_required=True)
+    else:
+        out = _account_out(account, status)
+    return WorkspaceOut(scope="account" if out else "ownerless", account=out, timezone=runtime.config.timezone)
 
 
 def _backend(runtime: LocalRuntime, status: SyncStatus) -> BackendStatusOut:

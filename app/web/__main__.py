@@ -9,8 +9,8 @@ app uses unless told otherwise -- and serves the local API on a loopback
 address only. It prints a one-time link; open it in the browser to start the
 session (the code travels in the URL fragment, which is never sent to a
 server). Stop it with Ctrl+C: it waits for work in progress, then closes the
-database. Run the desktop app and this service on the same database only one
-at a time.
+database. The desktop app and this service never use the same database at
+the same time: whichever starts second is refused (app/execution/instance_lock.py).
 """
 
 from __future__ import annotations
@@ -62,7 +62,13 @@ def main(argv: list[str] | None = None) -> int:
         db_path=db_path, timezone=args.timezone or settings.DEFAULT_TIMEZONE, host=args.host, port=args.port,
         backend_url=args.backend_url, static_dir=args.static_dir,
     )
-    app = create_local_app(config)
+    from app.execution.instance_lock import DatabaseInUseError
+
+    try:
+        app = create_local_app(config)
+    except DatabaseInUseError as error:
+        print(f"Schedule Maxing local service: {error}", file=sys.stderr)
+        return 1
     host = f"[{args.host}]" if ":" in args.host else args.host
     print(f"Schedule Maxing local service: database {db_path}")
     print(f"Open this link once to start your session: http://{host}:{args.port}/#bootstrap={config.bootstrap_code}")

@@ -37,7 +37,7 @@ class _StatTile(ctk.CTkFrame):
     """Small labeled stat card, styled independently of app.py's StatPill to avoid importing app.py."""
 
     def __init__(self, parent: tk.Widget, label: str) -> None:
-        super().__init__(parent, fg_color="#FFFFFF", corner_radius=14, border_color=theme.CARD_BORDER, border_width=1)
+        super().__init__(parent, fg_color=theme.CARD_BG, corner_radius=14, border_color=theme.CARD_BORDER, border_width=1)
         self.value_label = ctk.CTkLabel(
             self, text="--", font=ctk.CTkFont(size=18, weight="bold"), text_color=theme.TEXT_PRIMARY
         )
@@ -84,7 +84,7 @@ class ProductivityPage(ctk.CTkFrame):
         self.range_label.pack(anchor="w", pady=(2, 0))
 
     def _build_filters(self) -> None:
-        card = ctk.CTkFrame(self, fg_color="#FFFFFF", corner_radius=16, border_color=theme.CARD_BORDER, border_width=1)
+        card = ctk.CTkFrame(self, fg_color=theme.CARD_BG, corner_radius=16, border_color=theme.CARD_BORDER, border_width=1)
         card.grid(row=1, column=0, sticky="ew", padx=20, pady=(6, 12))
         for column in range(6):
             card.columnconfigure(column, weight=1)
@@ -108,7 +108,7 @@ class ProductivityPage(ctk.CTkFrame):
             command=self.refresh,
         ).pack(fill="x", pady=(0, 4))
         ctk.CTkButton(
-            button_column, text="Clear", height=28, fg_color="#E2E8F0", hover_color="#CBD5E1",
+            button_column, text="Clear", height=28, fg_color=theme.SECONDARY_BG, hover_color=theme.SECONDARY_HOVER,
             text_color=theme.TEXT_PRIMARY, command=self._clear_filters,
         ).pack(fill="x")
 
@@ -159,7 +159,7 @@ class ProductivityPage(ctk.CTkFrame):
         self.completion_rate_chart.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
     def _chart_card(self, parent: tk.Widget, title: str) -> ctk.CTkFrame:
-        card = ctk.CTkFrame(parent, fg_color="#FFFFFF", corner_radius=16, border_color=theme.CARD_BORDER, border_width=1)
+        card = ctk.CTkFrame(parent, fg_color=theme.CARD_BG, corner_radius=16, border_color=theme.CARD_BORDER, border_width=1)
         ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=13, weight="bold"), text_color=theme.TEXT_PRIMARY).pack(
             anchor="w", padx=14, pady=(12, 6)
         )
@@ -192,7 +192,7 @@ class ProductivityPage(ctk.CTkFrame):
         self.insights_label.pack(anchor="w", padx=14, pady=(0, 12), fill="x")
 
     def _text_card(self, parent: tk.Widget, title: str) -> ctk.CTkFrame:
-        card = ctk.CTkFrame(parent, fg_color="#FFFFFF", corner_radius=16, border_color=theme.CARD_BORDER, border_width=1)
+        card = ctk.CTkFrame(parent, fg_color=theme.CARD_BG, corner_radius=16, border_color=theme.CARD_BORDER, border_width=1)
         ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=13, weight="bold"), text_color=theme.TEXT_PRIMARY).pack(
             anchor="w", padx=14, pady=(12, 6)
         )
@@ -202,7 +202,7 @@ class ProductivityPage(ctk.CTkFrame):
         # Deliberately visually separated (its own bordered card, warning-toned header) from the
         # rest of the page's normal navigation/filtering flow, per the requirement that any
         # reset/delete control stay separate from normal navigation.
-        card = ctk.CTkFrame(self, fg_color="#FFFFFF", corner_radius=16, border_color=theme.CARD_BORDER, border_width=1)
+        card = ctk.CTkFrame(self, fg_color=theme.CARD_BG, corner_radius=16, border_color=theme.CARD_BORDER, border_width=1)
         card.grid(row=5, column=0, sticky="ew", padx=20, pady=(0, 20))
         card.columnconfigure((0, 1, 2), weight=1)
 
@@ -215,11 +215,11 @@ class ProductivityPage(ctk.CTkFrame):
         ).grid(row=1, column=0, columnspan=3, sticky="w", padx=14, pady=(0, 10))
 
         ctk.CTkButton(
-            card, text="Export history (CSV)", height=32, fg_color="#334155", hover_color="#1E293B",
+            card, text="Export history (CSV)", height=32, fg_color=theme.NEUTRAL_BG, hover_color=theme.NEUTRAL_HOVER,
             command=lambda: self._export_history("csv"),
         ).grid(row=2, column=0, sticky="ew", padx=(14, 6), pady=(0, 14))
         ctk.CTkButton(
-            card, text="Export history (JSON)", height=32, fg_color="#334155", hover_color="#1E293B",
+            card, text="Export history (JSON)", height=32, fg_color=theme.NEUTRAL_BG, hover_color=theme.NEUTRAL_HOVER,
             command=lambda: self._export_history("json"),
         ).grid(row=2, column=1, sticky="ew", padx=6, pady=(0, 14))
         ctk.CTkButton(
@@ -230,6 +230,11 @@ class ProductivityPage(ctk.CTkFrame):
     # ------------------------------------------------------------------
     # Refresh
     # ------------------------------------------------------------------
+
+    def on_appearance_changed(self) -> None:
+        """Repaint the (raw Tk) charts in the new light/dark appearance."""
+        self.planned_vs_actual_chart.redraw()
+        self.completion_rate_chart.redraw()
 
     def refresh(self) -> None:
         filters = self._current_filters()

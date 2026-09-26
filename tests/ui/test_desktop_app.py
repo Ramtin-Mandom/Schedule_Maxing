@@ -13,7 +13,7 @@ from __future__ import annotations
 import gc
 import time
 import tkinter as tk
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -24,7 +24,6 @@ from app.execution.service import ExecutionService
 from app.planning.application import PlanningService
 from app.planning.repository import PlanningRepository
 from app.ui import background
-from app.ui.schedule_page_controller import ResetScope
 
 
 def _display_available() -> bool:
@@ -46,15 +45,22 @@ class Dialogs:
         self.errors: list[str] = []
         self.infos: list[str] = []
         self.confirm = True
+        #: Messages of the design-system confirmations (app.ui.components.ask_confirm) the Day page asked.
+        self.confirms: list[str] = []
 
     def install(self, monkeypatch) -> None:
         import app.app as app_module
+        import app.ui.calendar_page as calendar_module
+        import app.ui.day_page as day_module
         import app.ui.execution_panel as panel_module
 
         for module in (app_module, panel_module):
             monkeypatch.setattr(module.messagebox, "showerror", lambda title, message, **_: self.errors.append(message))
             monkeypatch.setattr(module.messagebox, "showinfo", lambda title, message, **_: self.infos.append(message))
             monkeypatch.setattr(module.messagebox, "askyesno", lambda title, message, **_: self.confirm)
+        for module in (day_module, calendar_module):
+            monkeypatch.setattr(module, "ask_confirm", lambda parent, *, message, **_: (
+                self.confirms.append(message), self.confirm)[1])
 
 
 @pytest.fixture
@@ -96,18 +102,23 @@ def close_app(app) -> None:
 
 
 def fill_form(page, *, name: str, day: str = "1", fixed: bool = False, start="480", end="720", duration="60") -> None:
+    """Fill the task editor like a user: day N of the page, times in minutes turned into typed h:mm AM/PM text."""
+    from app.ui.time_fields import format_clock
+
     form = page.form
-    form.fixed_var.set("True" if fixed else "False")
-    form._sync_fixed_fields()
-    form.name_var.set(name)
-    form.day_var.set(day)
-    form.category_var.set("study")
-    form.tag_var.set("tag")
-    form.start_var.set(start)
-    form.end_var.set(end)
-    if not fixed:
-        form.duration_var.set(duration)
-        form.priority_var.set("5")
+    form.set_kind("block" if fixed else "task")
+    form.name_field.variable.set(name)
+    form.category_select.variable.set("study")
+    form.date_field.variable.set((page.page_controller.anchor_date + timedelta(days=int(day) - 1)).isoformat())
+    if fixed:
+        form.start_field.variable.set(format_clock(int(start)))
+        form.end_field.variable.set(format_clock(int(end)))
+    else:
+        form.duration_field.variable.set(duration)
+        form.priority_select.variable.set("5")
+        form.window_start.variable.set(format_clock(int(start)))
+        form.window_end.variable.set(format_clock(int(end)))
+        form.tag_input.set_tags(["tag"])
 
 
 def tree_names(page) -> list[str]:
@@ -145,8 +156,8 @@ def test_create_edit_delete_schedule_execute_close_reopen_reset(tmp_path: Path, 
     tuesday_task = next(t for t in stored_tasks(db_path) if t.preferred_dates == [date(2024, 6, 4)])
     week.added_tasks_panel.tree.selection_set(f"task:{tuesday_task.id}")
     week.edit_selected_task()
-    assert week.form.submit_button.cget("text") == "Save Changes"
-    week.form.name_var.set("Review")
+    assert week.form.submit_button.cget("text") == "Save changes"
+    week.form.name_field.variable.set("Review")
     week.form.submit_button.invoke()
     assert sorted(tree_names(week)) == ["Lecture", "Review", "Study"]
     assert {t.id: t.name for t in stored_tasks(db_path)}[tuesday_task.id] == "Review"
@@ -156,17 +167,24 @@ def test_create_edit_delete_schedule_execute_close_reopen_reset(tmp_path: Path, 
     week.remove_selected_task()
     assert sorted(tree_names(week)) == ["Lecture", "Study"]
 
-    # Make Schedule runs in the background, saves, then redraws from SQLite.
-    week.make_schedule_button.invoke()
-    pump(app, until=lambda: not week._busy)
+    # Scheduling happens on Day: Open Day, Make Schedule (in the background), then Execute there.
+    week.select_date(date(2024, 6, 3))
+    week.open_day_button.invoke()
+    day = app.pages["day"]
+    assert app.shell.current == "day" and day.page_controller.anchor_date == date(2024, 6, 3)
+    day.make_schedule_button.invoke()
+    pump(app, until=lambda: not day._busy)
     assert dialogs.errors == []
-    assert "current" in week.status_label.cget("text")
-    panel = week.execution_panel
+    assert day.freshness_badge.cget("text") == "Current"
+    panel = day.execution_panel
     pump(app, until=lambda: "loading" not in panel.status_label.cget("text"))
     assert panel.status_label.cget("text").endswith("Not started")
 
     panel._action_buttons["start"].invoke()
     pump(app, until=lambda: "In progress" in panel.status_label.cget("text"))
+    day.back_button.invoke()
+    assert app.shell.current == "week"
+    assert week.snapshot.day(date(2024, 6, 3)).freshness_label == "Current"
     close_app(app)
     assert app.services.closed
 
@@ -176,14 +194,17 @@ def test_create_edit_delete_schedule_execute_close_reopen_reset(tmp_path: Path, 
         week = app.pages["week"]
         assert sorted(tree_names(week)) == ["Lecture", "Study"]
         # Restored with its persisted provenance: nothing it depends on changed, so it is still current.
-        assert "current" in week.status_label.cget("text")
-        panel = week.execution_panel
+        assert week.snapshot.day(date(2024, 6, 3)).freshness_label == "Current"
+        day = app.pages["day"]
+        day.open_date(date(2024, 6, 3))
+        panel = day.execution_panel
         pump(app, until=lambda: "In progress" in panel.status_label.cget("text"))
 
-        week.confirm_reset(ResetScope.SCHEDULE)
-        assert dialogs.errors == []
-        assert "No saved schedule" in week.status_label.cget("text")
-        assert sorted(tree_names(week)) == ["Lecture", "Study"]
+        # Reset Week: previewed and confirmed; execution history is kept.
+        week.reset_button.invoke()
+        assert "Reset the week of Mon Jun 3" in dialogs.confirms[-1]
+        assert dialogs.errors == [] and tree_names(week) == []
+        assert week.snapshot.day(date(2024, 6, 3)).items == []
     finally:
         close_app(app)
 
@@ -199,17 +220,20 @@ def test_invalid_input_shows_an_error_and_saves_nothing(tmp_path: Path, dialogs:
     app = open_app(tmp_path / "desktop.db", tmp_path)
     try:
         day = app.pages["day"]
-        fill_form(day, name="Bad", duration="45")
+        fill_form(day, name="Bad", duration="0")
+        day.form.window_start.variable.set("25:00")
         day.form.submit_button.invoke()
-        assert dialogs.errors and "multiple of 30" in dialogs.errors[-1]
+        assert day.form.duration_field.error == "A task takes at least 1 minute."  # shown next to its field
+        assert "hour goes from 0 to 23" in day.form.window_start.error
+        assert day.form.notice.text.startswith("Error:")
         assert tree_names(day) == []
-        assert day.form.name_var.get() == "Bad"  # the user's input is kept for correction
+        assert day.form.name_field.get() == "Bad"  # the user's input is kept for correction
     finally:
         close_app(app)
 
 
 def test_csv_upload_and_export_go_through_the_saved_data_boundary(tmp_path: Path, dialogs: Dialogs, monkeypatch) -> None:
-    import app.app as app_module
+    import app.ui.day_page as day_module
 
     db_path = tmp_path / "desktop.db"
     good = tmp_path / "good.csv"
@@ -226,32 +250,33 @@ def test_csv_upload_and_export_go_through_the_saved_data_boundary(tmp_path: Path
         encoding="utf-8",
     )
     chosen = {"file": str(good), "mode": "append"}
-    monkeypatch.setattr(app_module.filedialog, "askopenfilename", lambda **_: chosen["file"])
-    monkeypatch.setattr(app_module.filedialog, "asksaveasfilename", lambda **_: str(tmp_path / "export.csv"))
-    monkeypatch.setattr(
-        app_module, "ChoiceDialog", lambda parent, *, on_choose, **_: on_choose(chosen["mode"])
-    )
+    monkeypatch.setattr(day_module.filedialog, "askopenfilename", lambda **_: chosen["file"])
+    monkeypatch.setattr(day_module.filedialog, "asksaveasfilename", lambda **_: str(tmp_path / "export.csv"))
+    monkeypatch.setattr(day_module, "ChoiceDialog", lambda parent, *, on_choose, **_: on_choose(chosen["mode"]))
 
     app = open_app(db_path, tmp_path)
     try:
+        day = app.pages["day"]
         week = app.pages["week"]
-        week.upload_button.invoke()
-        assert dialogs.errors == [] and "Imported 2 task(s) and 1 fixed block(s)" in dialogs.infos[-1]
-        assert sorted(tree_names(week)) == ["Lecture", "Read", "Summarise"]
+        day.import_button.invoke()  # a legacy file: imported only after the explicit choice and confirmation
+        assert dialogs.errors == [] and "Imported 2 task(s) and 1 fixed block(s)" in day.notice.text
+        assert sorted(tree_names(day)) == ["Lecture", "Read"]
+        week.reload()
+        assert sorted(tree_names(week)) == ["Lecture", "Read", "Summarise"]  # the other dates see it too
 
         chosen["file"] = str(bad)
-        week.upload_button.invoke()
-        assert "Missing" in dialogs.errors[-1] and "nothing was saved" in dialogs.errors[-1]
+        day.import_button.invoke()
+        assert "Missing" in day.notice.text and "nothing was saved" in day.notice.text
+        week.reload()
         assert sorted(tree_names(week)) == ["Lecture", "Read", "Summarise"]  # unchanged, re-read
 
         chosen["file"], chosen["mode"] = str(good), "replace"
-        week.upload_button.invoke()
-        assert "replacing 2024-06-03 to 2024-06-04" in dialogs.infos[-1]
-        assert sorted(tree_names(week)) == ["Lecture", "Read", "Summarise"]
+        day.import_button.invoke()
+        assert "replacing 2024-06-05 to 2024-06-06" in day.notice.text
         assert len(stored_tasks(db_path)) == 2  # replaced, not duplicated
 
-        week.export_csv()
-        assert "Exported 2 task(s), 1 fixed block(s)" in dialogs.infos[-1]
+        day.export_button.invoke()
+        assert "Exported 1 task(s), 1 fixed block(s)" in day.notice.text
         assert (tmp_path / "export.csv").read_text(encoding="utf-8").startswith("record_type,id,task_id,date")
     finally:
         close_app(app)

@@ -214,6 +214,18 @@ def local_day_start_utc(day: date, tz_name: str) -> datetime:
     return datetime.combine(day, time(0), tzinfo=ZoneInfo(tz_name)).astimezone(timezone.utc)
 
 
+def local_instant(day: date, minute_of_day: int, tz_name: str) -> datetime:
+    """
+    The aware UTC instant of a wall-clock time (`minute_of_day`, 0..1439) on
+    `day` in `tz_name`. Raises AmbiguousLocalTimeError for a time repeated by
+    a daylight-saving fall-back or skipped by a spring-forward gap, instead
+    of silently picking one.
+    """
+    if not 0 <= minute_of_day < MINUTES_PER_DAY:
+        raise ValueError(f"minute_of_day must be within [0, {MINUTES_PER_DAY}); got {minute_of_day}")
+    return _local_datetime(day, minute_of_day, validate_timezone(tz_name)).astimezone(timezone.utc)
+
+
 def _local_datetime(day: date, minute_of_day: int, tz: ZoneInfo) -> datetime:
     hour, minute = divmod(minute_of_day, 60)
     naive = datetime.combine(day, time(hour=hour, minute=minute))

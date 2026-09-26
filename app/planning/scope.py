@@ -6,10 +6,11 @@ preflight).
 
 The local SQLite database can hold records of several owners at once:
 ownerless records created offline (user_id NULL) and records owned by each
-account that has signed in on this device (docs/sync-protocol.md). The
-desktop app reads and writes *device-wide* -- every owner at once -- and
-keeps doing so: a repository or service constructed without a scope is the
-legacy device-wide one.
+account that has signed in on this device (docs/sync-protocol.md). A
+repository or service constructed without a scope is the legacy
+device-wide one (every owner at once), which the CLI and the sync engine
+use; the desktop app and the local web service work in one scope, chosen by
+SyncService.workspace_scope() (docs/desktop-web-boundaries.md).
 
 An OwnerScope restricts a repository/service to exactly one owner:
 
@@ -24,7 +25,7 @@ by owner, refuses to write a record of another owner, and treats a record
 of another owner exactly like a record that does not exist. New web
 request handling must always construct a scoped service
 (PlanningService.scoped / ExecutionService.scoped); the device-wide default
-exists only for the legacy desktop and CLI callers.
+exists only for the CLI, sync and migration code.
 """
 
 from __future__ import annotations
