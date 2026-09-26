@@ -48,6 +48,7 @@ earlier optimization request that already captured its own DayPreferences.
 
 from __future__ import annotations
 
+import functools
 import json
 import math
 import uuid
@@ -59,7 +60,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.planning.models import LocalTimeWindow
 from app.planning.time import MINUTES_PER_DAY, LocalDayWindow, UnsupportedSchedulingWindowError, validate_timezone
-from app.reward import RewardSettings
+from app.reward import RewardSettings, load_reward_settings
 
 # -----------------------------------------------------------------------------
 # Optimizer mode
@@ -79,6 +80,22 @@ class OptimizerMode(str, Enum):
 
     PRECISE_GREEDY = "precise_greedy"
     ADHD_FRIENDLY = "adhd_friendly"
+
+
+#: What each day engine does, in words any client can show (desktop controllers, the web APIs).
+ENGINE_DESCRIPTIONS: dict[OptimizerMode, str] = {
+    OptimizerMode.PRECISE_GREEDY: "Places each task at the best-scoring minute; the protected greedy baseline.",
+    OptimizerMode.ADHD_FRIENDLY: "Starts tasks over 30 minutes on quarter hours and rewards filling short gaps.",
+}
+
+#: The engine a date uses when no stored layer chooses one (resolve_day_preferences' own default).
+DEFAULT_OPTIMIZER_MODE = OptimizerMode.PRECISE_GREEDY
+
+#: Short human names of the day engines, for any client's engine choice (one place for future modes).
+ENGINE_LABELS: dict[OptimizerMode, str] = {
+    OptimizerMode.PRECISE_GREEDY: "Normal",
+    OptimizerMode.ADHD_FRIENDLY: "ADHD friendly",
+}
 
 
 # -----------------------------------------------------------------------------
@@ -444,7 +461,7 @@ def resolve_day_preferences(
     day_window = _WHOLE_DAY_WINDOW
     category_multipliers: dict[str, float] = {}
     category_preferred_windows: dict[str, LocalTimeWindow] = {}
-    optimizer_mode = OptimizerMode.PRECISE_GREEDY
+    optimizer_mode = DEFAULT_OPTIMIZER_MODE
     reward = RewardPreferences()
 
     for layer in (yaml_overrides, user_overrides, date_overrides):
@@ -469,6 +486,23 @@ def resolve_day_preferences(
         optimizer_mode=optimizer_mode,
         reward=reward,
     )
+
+
+@functools.lru_cache(maxsize=8)
+def _cached_template(project_root: str | None) -> PreferenceOverrides:
+    return day_preferences_overrides_from_reward_settings(load_reward_settings(project_root=project_root))
+
+
+def default_preference_template(project_root: str | None = None) -> PreferenceOverrides:
+    """
+    The YAML template layer (config/task_preference.yaml, found exactly as
+    app.reward.load_reward_settings finds it) as a PreferenceOverrides layer:
+    the layer resolve_day_preferences takes as yaml_overrides. Loaded once
+    per project root and returned as an independent copy, so callers --
+    the planning service's write-time validation and the server's -- resolve
+    a date exactly the way scheduling does without re-reading the file.
+    """
+    return _cached_template(None if project_root is None else str(project_root)).model_copy(deep=True)
 
 
 def day_preferences_overrides_from_reward_settings(settings: RewardSettings) -> PreferenceOverrides:

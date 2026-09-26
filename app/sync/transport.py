@@ -38,7 +38,13 @@ class AuthenticationError(Exception):
 
 
 class ProtocolError(Exception):
-    """The server refused the whole request (4xx other than 401)."""
+    """The server refused the whole request (4xx other than 401). `code`/`body` carry the server's error, if any."""
+
+    def __init__(self, message: str, *, status: int | None = None, code: str | None = None, body: dict | None = None):
+        super().__init__(message)
+        self.status = status
+        self.code = code
+        self.body = body or {}
 
 
 @dataclass(frozen=True)
@@ -64,6 +70,17 @@ class SyncTransport(Protocol):
 
     def pull(self, token: str, after: int, limit: int) -> PullPage: ...
 
+    # Public account operations (the local web profile, app/web): registration, the profile, and a
+    # reachability probe. Each returns the server's JSON document.
+
+    def register(self, email: str, password: str, username: str | None, display_name: str | None) -> dict: ...
+
+    def profile(self, token: str) -> dict: ...
+
+    def update_profile(self, token: str, base_version: int, display_name: str | None) -> dict: ...
+
+    def health(self) -> dict: ...
+
 
 def _classify(status: int, body: dict | None) -> Exception:
     code = ((body or {}).get("error") or {}).get("code", "")
@@ -71,7 +88,8 @@ def _classify(status: int, body: dict | None) -> Exception:
         return AuthenticationError("The backend refused the credentials or the session has expired.")
     if status >= 500 or status in (408, 429):
         return TransportError(f"The backend is unavailable (HTTP {status}).")
-    return ProtocolError(f"The backend refused the request (HTTP {status} {code}).".replace(" )", ")"))
+    return ProtocolError(f"The backend refused the request (HTTP {status} {code}).".replace(" )", ")"),
+                         status=status, code=code or None, body=(body or {}).get("error"))
 
 
 def login_via(request, email: str, password: str) -> LoginResult:
@@ -79,6 +97,27 @@ def login_via(request, email: str, password: str) -> LoginResult:
     token = request("POST", "/auth/login", None, {"email": email, "password": password})["access_token"]
     profile = request("GET", "/me", token, None)
     return LoginResult(token=token, user_id=profile["id"], email=profile["email"])
+
+
+def register_via(request, email: str, password: str, username: str | None, display_name: str | None) -> dict:
+    body = {"email": email, "password": password}
+    if username:
+        body["username"] = username
+    if display_name:
+        body["display_name"] = display_name
+    return request("POST", "/auth/register", None, body)
+
+
+def profile_via(request, token: str) -> dict:
+    return request("GET", "/me", token, None)
+
+
+def update_profile_via(request, token: str, base_version: int, display_name: str | None) -> dict:
+    return request("PATCH", "/me", token, {"base_version": base_version, "display_name": display_name})
+
+
+def health_via(request) -> dict:
+    return request("GET", "/health", None, None)
 
 
 def pull_via(request, token: str, after: int, limit: int) -> PullPage:
@@ -123,3 +162,15 @@ class HttpTransport:
 
     def pull(self, token: str, after: int, limit: int) -> PullPage:
         return pull_via(self._request, token, after, limit)
+
+    def register(self, email: str, password: str, username: str | None, display_name: str | None) -> dict:
+        return register_via(self._request, email, password, username, display_name)
+
+    def profile(self, token: str) -> dict:
+        return profile_via(self._request, token)
+
+    def update_profile(self, token: str, base_version: int, display_name: str | None) -> dict:
+        return update_profile_via(self._request, token, base_version, display_name)
+
+    def health(self) -> dict:
+        return health_via(self._request)

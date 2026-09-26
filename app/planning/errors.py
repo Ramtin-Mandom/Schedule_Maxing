@@ -63,6 +63,41 @@ class InvalidEntityError(PlanningError):
     optimization_metadata)."""
 
 
+class StaleInputsError(PlanningError):
+    """
+    A generation (or a preview it was based on) read scheduling inputs that
+    have changed since: the inputs fingerprint recomputed now differs from
+    the one it expected. Nothing was saved; the previous schedule stands.
+    """
+
+    def __init__(self, expected: str, current: str, message: str | None = None) -> None:
+        self.expected = expected
+        self.current = current
+        super().__init__(
+            message
+            or "The tasks, fixed blocks, preferences or dependencies of this range changed since they were read. "
+            "Nothing was saved; preview the range again."
+        )
+
+
+class RegenerationRequiredError(PlanningError):
+    """
+    Placements that an incremental generation (or protected history) would
+    keep are no longer compatible with the current inputs; `problems` says
+    which and why. Nothing was saved -- an explicit (full) regeneration is
+    needed, which never happens implicitly.
+    """
+
+    def __init__(self, problems: list, message: str | None = None) -> None:
+        self.problems = list(problems)
+        super().__init__(
+            message
+            or "Some saved placements no longer fit the current inputs, so they cannot be kept: "
+            + "; ".join(f"{problem.placement_id} ({problem.reason})" for problem in self.problems)
+            + ". Nothing was saved; regenerate explicitly to replace them."
+        )
+
+
 class VersionConflictError(PlanningError):
     """
     Raised when a write's precondition does not hold: the caller's

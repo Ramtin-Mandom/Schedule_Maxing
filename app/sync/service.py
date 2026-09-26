@@ -40,18 +40,33 @@ Background: start() runs sync_now() every `interval` seconds (or after the
 backoff delay) on a daemon thread; wake() triggers a run early; stop()
 ends it and waits for an in-progress run, and is called by
 AppServices.close() before the database is closed.
+
+Account switches never interleave with a sync (Milestone 4, the local web
+profile): sign_in, sign_out, set_transport and association wait for a
+running sync, so a sync's pushes, pulls and acknowledgements always belong
+to the account (and backend) it started with; a 401 drops only the token
+that sync used. status() reports what a UI needs without guessing: backend
+reachability (from the last request or probe), whether sign-in is needed,
+a running sync, pending records (dirty or queued, each counted once),
+open conflicts, the last successful sync (persisted, schema v6) and the
+last error. The public account operations (register, profile,
+update_profile, check_connectivity) go through the transport, and
+association can be previewed and confirmed exactly (association_preview /
+associate_local_data(confirmation=...)).
 """
 
 from __future__ import annotations
 
 import logging
 import threading
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from app.sync.engine import SyncEngine
-from app.sync.store import Account, Conflict
+from app.planning.scope import OwnerScope
+from app.sync.engine import AssociationPreview, SyncEngine
+from app.sync.store import BACKEND_URL_SETTING, Account, Conflict
 from app.sync.transport import AuthenticationError, ProtocolError, SyncTransport, TransportError
 
 logger = logging.getLogger(__name__)
@@ -68,6 +83,30 @@ class SyncReport:
     pulled: int = 0
     conflicts: int = 0
     message: str = ""
+
+
+@dataclass(frozen=True)
+class SyncStatus:
+    configured: bool
+    backend_url: str | None
+    #: True/False from the last request or probe that reached (or failed to reach) the backend; None if unknown.
+    backend_reachable: bool | None
+    backend_checked_at: str | None
+    signed_in: bool
+    #: An account is selected but its token was refused or dropped: sign in again.
+    auth_required: bool
+    account: Account | None
+    in_progress: bool
+    #: Records of the workspace account waiting for the server (dirty or queued, each once); None without one.
+    pending: int | None
+    conflicts: int
+    last_successful_sync_at: str | None
+    last_report: SyncReport
+    last_error: str | None
+    #: The account whose records local work uses (workspace_account()): the selected one, else the device's
+    #: active one. Pending, conflicts and the last successful sync are its -- durable, so they are known after a
+    #: restart before anyone signs in again.
+    workspace_account: Account | None = None
 
 
 def _utcnow() -> datetime:
@@ -100,6 +139,9 @@ class SyncService:
         self._state_lock = threading.RLock()
         self.consecutive_failures = 0
         self.last_report = SyncReport("inert")
+        self._clock = clock
+        self.backend_reachable: bool | None = None
+        self.backend_checked_at: str | None = None
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._thread: threading.Thread | None = None
@@ -117,20 +159,68 @@ class SyncService:
         with self._state_lock:
             return self._engine.store.account(self._account_key) if self._account_key else None
 
+    def workspace_scope(self) -> OwnerScope:
+        """
+        Whose records local work (a desktop view, a local web request) sees
+        and creates -- one rule for every client of this database:
+
+            1. the account selected in this session (signed in, or signed in
+               and asked to sign in again);
+            2. otherwise the account marked active on this device -- an
+               associated account stays active across restarts until
+               sign-out, and the database stamps new records with it, so
+               work continues in its scope offline;
+            3. otherwise the ownerless local workspace.
+
+        Other accounts' records are never visible in it, and ownerless records
+        are only ever claimed by the explicit associate_local_data step.
+        """
+        account = self.workspace_account()
+        return OwnerScope.account(uuid.UUID(account.user_id)) if account is not None else OwnerScope.ownerless()
+
+    def workspace_account(self) -> Account | None:
+        """The account whose workspace workspace_scope() is (None: the ownerless local workspace)."""
+        return self.account or self._engine.store.active_account()
+
     @property
     def signed_in(self) -> bool:
         with self._state_lock:
             return self._token is not None
 
+    @property
+    def transport(self) -> SyncTransport | None:
+        return self._transport
+
+    def set_transport(self, transport: SyncTransport | None) -> None:
+        """Switch backends: the current session ends first (after any running sync); nothing local changes."""
+        with self._sync_lock, self._state_lock:
+            self._token, self._account_key = None, None
+            self._engine.store.set_active(None)
+            self._transport = transport
+            self.backend_reachable, self.backend_checked_at = None, None
+            self.consecutive_failures = 0
+            self.last_report = SyncReport("inert")
+
+    def remembered_backend_url(self) -> str | None:
+        """The backend address saved on this device (local_settings; never a credential)."""
+        return self._engine.store.setting(BACKEND_URL_SETTING)
+
+    def remember_backend_url(self, url: str | None) -> None:
+        self._engine.store.set_setting(BACKEND_URL_SETTING, url)
+
     def sign_in(self, email: str, password: str) -> Account:
-        if self._transport is None:
+        transport = self._transport
+        if transport is None:
             raise RuntimeError("No backend is configured (set SCHEDULE_MAXING_BACKEND_URL).")
-        result = self._transport.login(email, password)
+        result = self._reaching(lambda: transport.login(email, password))  # the network call holds no lock
         store = self._engine.store
-        account = store.upsert_account(self._transport.base_url, result.user_id, result.email)
-        store.set_active(account.account_key if account.associated_at else None)
-        with self._state_lock:
+        with self._sync_lock, self._state_lock:  # never switch accounts under a running sync
+            if transport is not self._transport:
+                raise RuntimeError("The backend was changed while signing in; sign in again.")
+            account = store.upsert_account(transport.base_url, result.user_id, result.email)
+            store.set_active(account.account_key if account.associated_at else None)
             self._token, self._account_key = result.token, account.account_key
+            self.last_report = SyncReport("inert")
         return store.account(account.account_key)
 
     def sign_out(self) -> None:
@@ -138,11 +228,85 @@ class SyncService:
             self._token, self._account_key = None, None
             self._engine.store.set_active(None)
 
-    def associate_local_data(self) -> dict[str, int]:
-        """Explicitly claim this device's ownerless records for the signed-in account (see SyncEngine)."""
+    def associate_local_data(self, confirmation: str | None = None) -> dict[str, int]:
+        """
+        Explicitly claim this device's ownerless records for the signed-in
+        account (see SyncEngine). With `confirmation` -- an
+        association_preview() token -- only exactly the previewed records.
+        """
         account = self._require_account()
         with self._sync_lock:
-            return self._engine.associate_local_data(account)
+            return self._engine.associate_local_data(account, confirmation=confirmation)
+
+    def association_preview(self) -> AssociationPreview:
+        """What associate_local_data would claim; writes nothing."""
+        return self._engine.association_preview(self._require_account())
+
+    # ------------------------------------------------------------------
+    # Public account operations (through the transport; the token stays here)
+    # ------------------------------------------------------------------
+
+    def register(self, email: str, password: str, *, username: str | None = None,
+                 display_name: str | None = None) -> dict:
+        transport = self._require_transport()
+        return self._reaching(lambda: transport.register(email, password, username, display_name))
+
+    def profile(self) -> dict:
+        transport, token = self._require_session()
+        return self._authorized(token, lambda: transport.profile(token))
+
+    def update_profile(self, base_version: int, display_name: str | None) -> dict:
+        transport, token = self._require_session()
+        return self._authorized(token, lambda: transport.update_profile(token, base_version, display_name))
+
+    def check_connectivity(self) -> bool:
+        """Probe the backend's liveness endpoint; records and returns whether it answered."""
+        transport = self._require_transport()
+        try:
+            self._reaching(transport.health)
+        except (TransportError, ProtocolError, AuthenticationError):
+            return False
+        return True
+
+    def _require_transport(self) -> SyncTransport:
+        if self._transport is None:
+            raise RuntimeError("No backend is configured.")
+        return self._transport
+
+    def _require_session(self) -> tuple[SyncTransport, str]:
+        with self._state_lock:
+            transport, token = self._transport, self._token
+        if transport is None or token is None:
+            raise RuntimeError("Sign in to an account first.")
+        return transport, token
+
+    def _reaching(self, call):
+        """Run a network call, recording whether the backend was reachable."""
+        try:
+            result = call()
+        except TransportError:
+            self._reachable(False)
+            raise
+        except (AuthenticationError, ProtocolError):
+            self._reachable(True)
+            raise
+        self._reachable(True)
+        return result
+
+    def _reachable(self, reachable: bool) -> None:
+        self.backend_reachable, self.backend_checked_at = reachable, self._clock().isoformat()
+
+    def _authorized(self, token: str, call):
+        try:
+            return self._reaching(call)
+        except AuthenticationError:
+            self._drop_token(token)
+            raise
+
+    def _drop_token(self, token: str) -> None:
+        with self._state_lock:
+            if self._token == token:  # never the token of an account signed in since
+                self._token = None
 
     def _require_account(self) -> Account:
         account = self.account
@@ -162,6 +326,10 @@ class SyncService:
         conflict = self._engine.store.conflict(conflict_id)
         account = self.account
         return conflict if conflict and account and conflict.account_key == account.account_key else None
+
+    def conflict_actions(self, conflict: Conflict) -> dict[str, str | None]:
+        """{choice: None if allowed, else the reason it is not} for an open conflict."""
+        return self._engine.allowed_resolutions(conflict)
 
     def resolve_conflict(self, conflict_id: str, choice: str) -> Conflict:
         account = self.account
@@ -206,18 +374,43 @@ class SyncService:
                 if batch:
                     self._engine.store.record_attempt([op.op_id for op in batch], str(error))
                 self.consecutive_failures += 1
+                self._reachable(False)
                 return self._finish(SyncReport("offline", pushed, pulled, conflicts, str(error)))
             except AuthenticationError as error:
-                with self._state_lock:
-                    self._token = None
+                self._drop_token(token)
+                self._reachable(True)
                 return self._finish(SyncReport("auth_required", pushed, pulled, conflicts, str(error)))
             except ProtocolError as error:
                 if batch:
                     self._engine.store.block_ops([op.op_id for op in batch], str(error))
                 self.consecutive_failures += 1
+                self._reachable(True)
                 return self._finish(SyncReport("error", pushed, pulled, conflicts, str(error)))
             self.consecutive_failures = 0
+            self._reachable(True)
+            self._engine.store.set_last_synced(key, self._clock().isoformat())
             return self._finish(SyncReport("ok", pushed, pulled, conflicts))
+
+    def status(self) -> SyncStatus:
+        with self._state_lock:
+            transport, token, key = self._transport, self._token, self._account_key
+        store = self._engine.store
+        account = store.account(key) if key else None
+        durable = account or store.active_account()
+        report = self.last_report
+        return SyncStatus(
+            configured=transport is not None,
+            backend_url=transport.base_url if transport is not None else None,
+            backend_reachable=self.backend_reachable, backend_checked_at=self.backend_checked_at,
+            signed_in=token is not None, auth_required=account is not None and token is None, account=account,
+            in_progress=self._sync_lock.locked(),
+            pending=len(store.pending_records(durable.account_key, durable.user_id)) if durable else None,
+            conflicts=len(store.conflicts(durable.account_key, "open")) if durable else 0,
+            last_successful_sync_at=durable.last_synced_at if durable else None,
+            last_report=report,
+            last_error=report.message if report.status in ("offline", "auth_required", "error") else None,
+            workspace_account=durable,
+        )
 
     def _finish(self, report: SyncReport) -> SyncReport:
         self.last_report = report

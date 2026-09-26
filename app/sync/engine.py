@@ -60,6 +60,8 @@ Every decision is kept on the conflict row (resolution, resolved_at).
 
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -71,6 +73,47 @@ from app.planning.repository import PlanningRepository
 from app.sync.mapping import ENTITY_ORDER, DivergedHistory, LocalRecord, LocalRecords, execution_changes
 from app.sync.store import Account, Conflict, SyncStore
 from app.sync.transport import PullPage
+
+
+#: Ownerless live layers/records whose scope a live record of the account already holds (parameter: user id).
+_PREFERENCE_COLLISIONS = (
+    "SELECT mine.id FROM preference_overrides AS mine JOIN preference_overrides AS theirs "
+    "ON theirs.scope = mine.scope AND theirs.scope_date IS mine.scope_date "
+    "WHERE mine.user_id IS NULL AND theirs.user_id = ? AND mine.deleted_at IS NULL AND theirs.deleted_at IS NULL"
+)
+_GENERATION_COLLISIONS = (
+    "SELECT mine.id, mine.planned_date FROM schedule_generations AS mine JOIN schedule_generations AS theirs "
+    "ON theirs.planned_date = mine.planned_date WHERE mine.user_id IS NULL AND theirs.user_id = ? "
+    "AND mine.deleted_at IS NULL AND theirs.deleted_at IS NULL"
+)
+
+
+class AssociationError(Exception):
+    """The previewed association cannot be applied (it changed since the preview, or it has problems)."""
+
+    def __init__(self, message: str, *, code: str, preview: "AssociationPreview | None" = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.preview = preview
+
+
+@dataclass(frozen=True)
+class AssociationPreview:
+    """What associate_local_data would claim for the account; nothing has been written."""
+
+    account_key: str
+    #: Ownerless records per entity type that would become the account's (tombstones included).
+    counts: dict[str, int]
+    #: The same, live records only.
+    live_counts: dict[str, int]
+    #: Records that cannot be claimed as they are (e.g. a preference layer for a scope the account already has).
+    problems: list[dict]
+    #: Identifies exactly these records at these versions; pass it back to confirm.
+    token: str
+
+    @property
+    def total(self) -> int:
+        return sum(self.counts.values())
 
 
 class ConflictResolutionError(Exception):
@@ -106,17 +149,61 @@ class SyncEngine:
     # Ownerless local data
     # ------------------------------------------------------------------
 
-    def associate_local_data(self, account: Account) -> dict[str, int]:
+    def association_preview(self, account: Account) -> AssociationPreview:
+        """
+        What the claim step would do, read in one snapshot: how many ownerless
+        records of each type it would assign to `account`, and the ones that
+        cannot be claimed as they are -- an ownerless preference layer or
+        schedule record for a scope (the user layer, a date) the account
+        already has a live record for would break that scope's uniqueness.
+        Records owned by any account are never part of it.
+        """
+        counts: dict[str, int] = {}
+        live: dict[str, int] = {}
+        identity: list = []
+        problems: list[dict] = []
+        with self.store.transaction():
+            for entity_type, table in SYNC_TABLES:
+                rows = self._connection.execute(
+                    f"SELECT id, version, deleted_at FROM {table} WHERE user_id IS NULL ORDER BY id"
+                ).fetchall()
+                counts[entity_type] = len(rows)
+                live[entity_type] = sum(1 for row in rows if row["deleted_at"] is None)
+                identity.extend((entity_type, row["id"], row["version"]) for row in rows)
+            for row in self._connection.execute(_PREFERENCE_COLLISIONS, (account.user_id,)).fetchall():
+                problems.append({"entity_type": "preference", "id": row["id"], "code": "scope_taken",
+                                 "message": "The account already has preferences for this scope (the user layer or "
+                                            "this date); delete one of the two layers first."})
+            for row in self._connection.execute(_GENERATION_COLLISIONS, (account.user_id,)).fetchall():
+                problems.append({"entity_type": "schedule_generation", "id": row["id"], "code": "scope_taken",
+                                 "message": f"The account already has a saved schedule record for {row[1]}; "
+                                            "reset that date in one of the two workspaces first."})
+        token = hashlib.sha256(json.dumps([account.account_key, identity], separators=(",", ":")).encode()).hexdigest()
+        return AssociationPreview(account.account_key, counts, live, problems, token)
+
+    def associate_local_data(self, account: Account, *, confirmation: str | None = None) -> dict[str, int]:
         """
         The explicit claim step: every ownerless local record becomes the
         account's (one logical mutation each: version + 1), and the account
         becomes active so later local records are owned by it too. Records of
         other accounts are untouched. The claimed records are then pushed by
         the next sync. Nothing calls this implicitly (not even signing in).
+
+        With `confirmation` (an association_preview token) it applies only if
+        the ownerless records are still exactly the previewed ones, and never
+        when the preview has problems (AssociationError; nothing changes).
         """
         now = self._clock().isoformat()
         counts: dict[str, int] = {}
         with self.store.transaction():
+            if confirmation is not None:
+                preview = self.association_preview(account)
+                if preview.token != confirmation:
+                    raise AssociationError("The local records changed since the preview; review it again.",
+                                           code="preview_changed", preview=preview)
+                if preview.problems:
+                    raise AssociationError("Some local records cannot be associated as they are.",
+                                           code="association_blocked", preview=preview)
             for entity_type, table in SYNC_TABLES:
                 cursor = self._connection.execute(
                     f"UPDATE {table} SET user_id = ?, version = version + 1, updated_at = ? WHERE user_id IS NULL",
@@ -373,6 +460,24 @@ class SyncEngine:
 
     def conflicts(self, account: Account, status: str | None = "open") -> list[Conflict]:
         return self.store.conflicts(account.account_key, status)
+
+    def allowed_resolutions(self, conflict: Conflict) -> dict[str, str | None]:
+        """
+        {choice: None if allowed, else why not} for an open conflict -- the
+        same rules resolve() enforces, so a UI offers only what will work.
+        There is no merge.
+        """
+        remote = conflict.remote_record
+        collision = remote is not None and (
+            remote["id"] != conflict.entity_id
+            or self.records.local_id_for(conflict.entity_type, remote) != conflict.local_id
+        )
+        keep_local = None
+        if remote is not None and remote.get("deleted_at") is not None:
+            keep_local = "The record was deleted on the server; keeping the local version would bring it back."
+        elif collision:
+            keep_local = "Another record owns this scope on the server."
+        return {"accept_remote": None, "keep_local": keep_local}
 
     def resolve(self, account: Account, conflict_id: str, choice: str) -> Conflict:
         conflict = self.store.conflict(conflict_id)

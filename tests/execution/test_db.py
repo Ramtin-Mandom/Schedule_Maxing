@@ -34,6 +34,8 @@ EXPECTED_TABLES = {
     "sync_shadows",
     "sync_outbox",
     "sync_conflicts",
+    # v6 (local web profile)
+    "local_settings",
 }
 
 

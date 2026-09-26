@@ -1,0 +1,17 @@
+# Prompt 4 — Week Schedule and real calendar Month
+
+Implement Week and Month after the complete Day page, reusing its forms, task cards, category/time components and API hooks.
+
+Read AGENTS.md, CLAUDE.md, README.md, docs/web-api.md and relevant frontend/date/allocation/service/tests. Inspect actual prior-prompt work; do not assume requested features exist. Use the current repo as truth, preserve working behavior, implement only this scope, add/update tests, run checks, fix regressions, update docs, avoid unrelated refactors, and report files, architecture choices, tests, commands/results and limitations.
+
+Week defaults to the current calendar week in the planning timezone, with an explicit documented Monday start matching current desktop behavior. Render seven real dates, weekday/date headers, chronological scheduled work with a time axis, usable vertical/horizontal scrolling, and consistent fixed/flexible category colors. Unscheduled or only allocated tasks must be visually distinct and must not imply invented start times. Muted past-day styling retains readable contrast and text/status, and never deletes data.
+
+A single click/keyboard action selects a date. Provide an explicit Open Day action; optional double click is only a shortcut. Day entered from Week offers Back to Week and restores week, selected date and useful scroll context via router state/URL. Reuse the task form to create work for the selected date and refresh affected views. No separate Week Make Schedule is required: route to the actual Day workflow. Reset Week uses a server preview/confirmation with real range semantics, cascades and atomicity; never seven uncoordinated deletes.
+
+Month is the actual calendar month with correct leading/trailing weekday alignment and 28/29/30/31 days. Default to current month, show its name prominently, and offer all months of the current year in an accessible dropdown. Handle a year change without stale options. Out-of-month cells are clearly distinguished. Preserve past data and optionally mute past month choices without disabling access.
+
+Each day is selectable/openable accessibly; preserve Month return context. Display real persisted dates. Within generated dates, summaries follow actual chronological intervals; before generation, show input/creation order or explicit allocation status without fake chronology. Truncate long summaries with a discoverable overflow count. Selecting a task must not accidentally trigger destructive actions or open the wrong day.
+
+Use bounded range API queries, including all pages where required, and account/backend/range-aware cache keys. Edits, sync, CSV, reset and preference changes invalidate affected calendar/freshness data. Do not fetch one unbounded global collection or silently drop records after the first pagination page. Handle loading, empty, unavailable and stale states while navigating quickly; late responses cannot repaint the wrong month/account.
+
+Acceptance tests include February with 28 days, leap February with 29, 30/31-day months, weekday alignment, December/January week transitions, current-year month options, timezone-local today, past-state styling, chronological ordering, select/Open Day/Back context, selected-date task creation, scoped reset and cancellation, fixed-category colors, pagination and network errors. Resize across phone/tablet/desktop widths and keyboard-navigate the date controls. Run frontend tests/lint/typecheck/build and relevant backend range tests. Update README/help only where workflow changed.

@@ -17,6 +17,11 @@ Optional (with defaults):
     JWT_AUDIENCE                    "schedule-maxing-api"
     ACCESS_TOKEN_TTL_MINUTES        60 (1..1440)
     API_MAX_PAGE_SIZE               500 (the default page size is 100)
+    BROWSER_SESSION_TTL_MINUTES     720 (5..43200): lifetime of a browser (cookie) session
+    BROWSER_COOKIE_SECURE           "true"; "false" only for plain-http local development
+    ALLOWED_ORIGINS                 extra origins (comma-separated, e.g. a dev frontend) whose
+                                    cookie-authenticated requests are accepted besides the
+                                    server's own origin
 """
 
 from __future__ import annotations
@@ -44,6 +49,9 @@ class BackendSettings:
     access_token_ttl_minutes: int = 60
     max_page_size: int = 500
     default_page_size: int = 100
+    browser_session_ttl_minutes: int = 720
+    browser_cookie_secure: bool = True
+    allowed_origins: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         problems = []
@@ -53,6 +61,10 @@ class BackendSettings:
             problems.append(f"JWT_SECRET is required and must be at least {MIN_SECRET_LENGTH} characters")
         if not 1 <= self.access_token_ttl_minutes <= 1440:
             problems.append("ACCESS_TOKEN_TTL_MINUTES must be between 1 and 1440")
+        if not 5 <= self.browser_session_ttl_minutes <= 43200:
+            problems.append("BROWSER_SESSION_TTL_MINUTES must be between 5 and 43200")
+        if any(not origin.startswith(("http://", "https://")) or origin.endswith("/") for origin in self.allowed_origins):
+            problems.append("ALLOWED_ORIGINS must list origins like https://app.example.com (no path or trailing slash)")
         if not 1 <= self.default_page_size <= self.max_page_size:
             problems.append("API_MAX_PAGE_SIZE must be at least the default page size (100)")
         if problems:
@@ -86,4 +98,9 @@ def load_settings(environ: Mapping[str, str] | None = None) -> BackendSettings:
         jwt_audience=environ.get("JWT_AUDIENCE", "").strip() or "schedule-maxing-api",
         access_token_ttl_minutes=integer("ACCESS_TOKEN_TTL_MINUTES", 60),
         max_page_size=integer("API_MAX_PAGE_SIZE", 500),
+        browser_session_ttl_minutes=integer("BROWSER_SESSION_TTL_MINUTES", 720),
+        browser_cookie_secure=environ.get("BROWSER_COOKIE_SECURE", "true").strip().lower() not in ("false", "0", "no"),
+        allowed_origins=tuple(
+            origin.strip() for origin in environ.get("ALLOWED_ORIGINS", "").split(",") if origin.strip()
+        ),
     )

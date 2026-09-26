@@ -375,3 +375,26 @@ class SyncOperation(Base):
     __table_args__ = (
         CheckConstraint("status IN ('applied', 'conflict', 'rejected')", name="ck_sync_operations_status"),
     )
+
+
+class BrowserSession(Base):
+    """
+    A signed-in browser (backend/browser_sessions.py). The browser holds a
+    random session token only in an HttpOnly cookie; the server stores its
+    SHA-256 digest, never the token. Logout sets revoked_at, so the cookie
+    stops working at once even before it expires.
+    """
+
+    __tablename__ = "browser_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("expires_at > created_at", name="ck_browser_sessions_expiry"),
+        Index("ix_browser_sessions_user", "user_id"),
+    )

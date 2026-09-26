@@ -89,6 +89,20 @@ sent as a server precondition.
 - A batch import (canonical CSV, and later a sync pull) must have a single
   owner, and that owner must match every stored record the batch touches
   or references.
+- **Owner scopes (Milestone 4 preflight, `app/planning/scope.py`).** A
+  `PlanningService`/`ExecutionService` (and their repositories) can be
+  restricted to one owner with `.scoped(OwnerScope.account(user_id))` or
+  `.scoped(OwnerScope.ownerless())`. A scoped service reads, resolves
+  preferences, judges freshness, resets, exports and imports only that
+  owner's records; another owner's record behaves exactly like a missing
+  one, and writing a record for another owner is a `ScopeError`. Records the
+  service creates itself (preference layers, schedule records) get the
+  scope's owner, and a legacy CSV (which carries no owner) is imported into
+  the importing scope; a canonical CSV whose owner differs is refused. The
+  ownerless scope is separate: it never sees account records, and it refuses
+  a create that the v5 owner trigger would re-stamp for an active account.
+  Unscoped services stay device-wide for the desktop and CLI; web request
+  handling must always use a scoped service.
 
 ## 5. Versions and preconditions
 
@@ -146,6 +160,26 @@ sent as a server precondition.
 - Execution history never cascades: deleting or replacing a task or
   placement leaves its executions and their snapshots untouched.
 
+### Confirmed range reset (Milestone 4 preflight)
+
+`PlanningService.reset_preview(start, end)` lists, without writing, what a
+reset of the range would tombstone in the service's scope: the placements
+and schedule records dated in it, its fixed blocks, the non-recurring tasks
+planned in it (required date, else earliest preferred date), their live
+placements dated *outside* the range (the disclosed cascade), and the
+range's per-date preference layers. It also reports the affected placements
+and tasks that execution history references (the history is kept), the
+recurring templates it protects (only their placements in the range go),
+and any live task outside the reset that depends on a task inside it
+(`blocking_dependents`). `reset_range(start, end, confirmation=token)`
+applies exactly the previewed records -- `token` is a digest of their ids
+and versions, so a change since the preview is a `VersionConflictError` --
+in one transaction, as ordinary versioned tombstones that change capture
+records. A refusal at any step (e.g. a new dependent) rolls back everything,
+preference deletions included. Undated tasks, projects, the user layer and
+execution history are never touched. `clear_range` keeps the desktop's two
+older scopes.
+
 ## 7. Legacy and historical data
 
 - **Ownerless offline records.** `user_id IS NULL`. See section 4. Nothing
@@ -193,6 +227,27 @@ After a restart, a date is:
 Records are saved in the same transaction as the placements. Because the
 fingerprint includes the device's YAML layer, a record received from
 another device only counts as current if the inputs really match.
+
+## 8a. Fixed-block write invariants (Milestone 4 preflight)
+
+A fixed block is a hard scheduling input, so every write that stores a live
+block checks, inside its transaction (`app/planning/fixed_block_rules.py`):
+a positive, whole-minute interval; it starts on its `planned_date` in its
+own `timezone`; it lies inside that date's effective day window (built-in
+defaults -> YAML template -> user layer -> date layer, the resolution
+scheduling uses); and it overlaps no other live block of the same owner
+(the edited block excluded; blocks dated the day before and after are
+compared too). Adjacent blocks are valid. This covers `PlanningService`
+creates/updates/`set_fixed_blocks_for_date`, the legacy and canonical CSV
+imports, and on the server the REST endpoints and sync push (one Mutator,
+under the user's change-log lock). A refused write changes nothing,
+including `sync_dirty` and the server change log.
+
+Historical semantics are kept explicitly, never rounded or rewritten: a
+tombstone, an unchanged record in a canonical import, an update that leaves
+the interval (date, timezone, start, end) as it was, and a record pulled
+from the server (already validated there) are not re-judged. Changing
+preferences never invalidates stored blocks; generation reports such a date.
 
 ## 9. Rescheduling and occurrence identity
 
@@ -249,9 +304,17 @@ Implemented later in Milestone 3:
 - server versions, held per account in `sync_shadows` alongside the local
   revision.
 
+Since then (Milestone 4): the local web profile serves synchronization,
+association and conflict resolution to the web UI (`app/web`,
+[web-api.md](web-api.md#local-profile)); schema v6 adds
+`sync_accounts.last_synced_at` and `local_settings`.
+
 Still not implemented:
 
-- a sync or conflict-resolution UI;
+- a sync or conflict-resolution screen in the desktop app;
 - recurrence expansion;
+- scheduling across a DST change (a date whose day window spans one is
+  still refused by the day engine; fixed blocks on it are checked by their
+  endpoints only);
 - preference or provenance records in the CSV. Preferences are a per-user
   configuration, and provenance can be recomputed.
