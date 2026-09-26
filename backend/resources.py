@@ -14,6 +14,14 @@ the caller's user scope only:
     task         project_id / dependency_ids must be live records of the user;
                  delete refused while live tasks depend on it; deleting it
                  tombstones its live placements (each logged)
+    fixed block  the fixed-block invariants of app/planning/fixed_block_rules.py:
+                 a positive whole-minute interval that starts on its
+                 planned_date in its timezone and lies inside that date's
+                 effective day window (backend/preferences.py) -- else 422
+                 validation_error with a `reason` -- and no overlap with
+                 another live block of the user -- else 409
+                 fixed_block_overlap with the `conflicting` block. An update
+                 that keeps the interval unchanged is not re-judged.
     placement    task_id must be a live task of the user; it cannot move to
                  another task once execution history references it
     preference   one live layer per scope ("user" or one date); scope is fixed
@@ -34,6 +42,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.planning import fixed_block_rules
 from app.planning.models import FixedBlock as CanonicalFixedBlock
 from app.planning.models import LocalTimeWindow, RecurrenceSpec
 from app.planning.models import ScheduledTask as CanonicalPlacement
@@ -42,6 +51,7 @@ from app.planning.preferences import OptimizerMode, PreferenceOverrides, overrid
 from app.planning.provenance import GenerationRecord
 from backend import models
 from backend.errors import ApiError, invalid_reference
+from backend.preferences import effective_day_preferences
 
 # -----------------------------------------------------------------------------
 # Schemas
@@ -408,6 +418,47 @@ def _block_content(_session, _user_id, row) -> dict:
     return {name: getattr(row, name) for name in FixedBlockFields.model_fields}
 
 
+def _canonical_block(row) -> CanonicalFixedBlock:
+    return CanonicalFixedBlock(
+        id=row.id, user_id=row.user_id, **{name: getattr(row, name) for name in FixedBlockFields.model_fields}
+    )
+
+
+def _block_validate(session, user_id, payload: FixedBlockFields, existing) -> None:
+    """
+    The fixed-block write invariants (app/planning/fixed_block_rules.py) for
+    a create or an update, REST and sync alike: this runs inside the
+    Mutator, after the user's change-log lock is taken, so two concurrent
+    writes of the same user cannot both pass the overlap check. An update
+    that keeps the interval unchanged is not re-judged (historical blocks).
+    """
+    block = CanonicalFixedBlock(
+        id=existing.id if existing is not None else getattr(payload, "id", None) or uuid.uuid4(),
+        user_id=user_id, **payload.model_dump(include=set(FixedBlockFields.model_fields)),
+    )
+    if existing is not None and not fixed_block_rules.interval_changed(_canonical_block(existing), block):
+        return
+    preferences = effective_day_preferences(session, user_id, [block.planned_date], block.timezone)[block.planned_date]
+    try:
+        fixed_block_rules.check_interval(block, preferences)
+    except fixed_block_rules.FixedBlockRuleViolation as error:
+        raise ApiError(422, "validation_error", str(error), reason=error.code) from None
+    first, last = fixed_block_rules.neighborhood(block.planned_date)
+    nearby = session.scalars(
+        select(models.FixedBlock).where(
+            models.FixedBlock.user_id == user_id, models.FixedBlock.deleted_at.is_(None),
+            models.FixedBlock.planned_date >= first, models.FixedBlock.planned_date <= last,
+        )
+    )
+    other = fixed_block_rules.find_overlap(block, [_canonical_block(row) for row in nearby])
+    if other is not None:
+        raise ApiError(
+            409, "fixed_block_overlap",
+            f"The fixed block overlaps your fixed block {other.label!r} on {other.planned_date}.",
+            conflicting=FIXED_BLOCKS.serialize(session, user_id, session.get(models.FixedBlock, (user_id, other.id))),
+        )
+
+
 def _generic_assign(schema: type[BaseModel]):
     def assign(_session, _user_id, row, payload) -> None:
         for name, value in _fields(payload, schema).items():
@@ -510,7 +561,7 @@ TASKS = ResourceSpec(
 )
 FIXED_BLOCKS = ResourceSpec(
     "fixed-blocks", "fixed_block", "fixed block", models.FixedBlock, FixedBlockCreate, FixedBlockUpdate, FixedBlockOut,
-    content=_block_content, assign=_generic_assign(FixedBlockFields),
+    content=_block_content, assign=_generic_assign(FixedBlockFields), validate=_block_validate,
 )
 PLACEMENTS = ResourceSpec(
     "placements", "placement", "placement", models.Placement, PlacementCreate, PlacementUpdate, PlacementOut,

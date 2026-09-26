@@ -1,11 +1,9 @@
-pandas>=2.0.0
+# Development/CI: the desktop runtime, test and lint tools, and (via -r) the
+# optional backend/web server so the full test suite runs locally and in CI.
+-r requirements-desktop.txt
 python-dotenv>=1.0.0
-PyYAML>=6.0.0
 pytest>=8.0.0
-pydantic>=2.10.0
-customtkinter>=5.2.2
 ruff>=0.16.0
-scikit-learn>=1.4.0
 
 # Backend (server) dependencies, so the full test suite runs locally and in CI.
 -r requirements-backend.txt

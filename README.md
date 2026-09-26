@@ -1,5 +1,11 @@
 # Schedule Maxing
 
+The native desktop UI includes Day, Week, Month, Project Schedule and Allocation Planning.
+See [Projects and Allocation Planning](docs/desktop-projects-allocation.md) for date-only
+previews, selected-day scheduling, project assignment and display filters.
+The optional web/server adapters remain independently launched components; desktop
+workflows call shared Python services directly ([boundaries](docs/desktop-web-boundaries.md)).
+
 A Python schedule optimization project that builds daily, weekly, and monthly schedules from user-defined tasks. The app supports fixed tasks, flexible tasks, preferred time windows, task dependencies, reward-based scoring, CSV input/output, and a CustomTkinter desktop interface.
 
 The main idea of this project is to combine **hard scheduling constraints** with a **reward function**. Hard constraints decide whether a task placement is allowed, while the reward function decides how good a valid placement is. The optimizer then searches for strong task placements and returns a final schedule with scheduled and unscheduled tasks.
@@ -103,6 +109,7 @@ Since Milestone 2, the desktop app and the CLI keep all planning data (tasks, fi
 ├── README.md
 ├── pyproject.toml            # Ruff configuration (py310, line-length 130, E/F) and the `postgres` pytest marker
 ├── requirements.txt          # development/CI: desktop, tests, and (via -r) the backend
+├── requirements-desktop.txt  # desktop-only runtime (no web/server packages)
 └── requirements-backend.txt  # server-only dependencies (what the backend deployment installs)
 ```
 
@@ -437,6 +444,10 @@ This keeps the scheduler flexible while still supporting real prerequisite relat
 
 ### 1. Create and activate a virtual environment
 
+Use Python **3.10 or newer** with Tk support. The final desktop verification also
+runs on Python 3.12. If an existing virtual environment refers to a removed Python
+installation, create a fresh environment with an installed supported Python.
+
 ```bash
 python -m venv .venv
 ```
@@ -457,18 +468,19 @@ source .venv/bin/activate
 
 ### 2. Install dependencies
 
+For development and the full test suite (desktop, test tools, and the optional backend/web server):
+
 ```bash
 pip install -r requirements.txt
 ```
 
-The current dependencies include:
+To run only the desktop app and CLI (no web server, database server, or browser packages):
 
-- `pandas`
-- `python-dotenv`
-- `PyYAML`
-- `pytest`
-- `pydantic`
-- `customtkinter`
+```bash
+pip install -r requirements-desktop.txt
+```
+
+The desktop runtime needs `pydantic`, `PyYAML`, `customtkinter`, `pandas`, `scikit-learn`, and `tzdata` (time zones on Windows). See [docs/desktop-web-boundaries.md](docs/desktop-web-boundaries.md) for how the desktop and the optional web components are kept apart.
 
 ---
 
@@ -522,7 +534,19 @@ python -m app.app
 
 This opens the schedule optimizer, loads everything saved in the application database, and shows the Day page for today. Every change is saved immediately. **Make Schedule** saves the generated schedule. The **Execute** tab lists the saved schedule's flexible tasks for Start/Pause/Resume/Complete/Skip. The **Productivity** page shows the analytics (see [Task Execution Tracking & Productivity Insights](#task-execution-tracking--productivity-insights-local-only) below).
 
-If the database cannot be opened (for example, the folder is not writable), the app shows the error and the database path instead of the scheduler. Nothing can be edited that could not be saved.
+The left sidebar starts collapsed; open it with the ☰ button (keyboard: Tab, then Enter) or **Ctrl+B**, and jump between pages with **Ctrl+1…9**. The layout adapts to the window width (three columns, schedule plus a side panel, or one panel at a time), and **Settings** switches between light and dark and changes the interface size; both are remembered in `ui_settings.json` beside the database. Details: [docs/desktop-layout.md](docs/desktop-layout.md).
+
+The **Account** page connects to an optional backend: register, sign in and out, associate this device's records with your account (only after you confirm a preview), see pending changes, conflicts and the last successful sync (also in the status bar above every page), run **Sync now**, and decide conflicts. Scheduling never needs an account or internet. Details and recovery steps: [docs/desktop-accounts.md](docs/desktop-accounts.md).
+
+Tasks and fixed blocks are entered with one reusable form on Day, Week and Month: minute-precise times shown as h:mm AM/PM (type `10:13` or step with the arrow keys), free durations such as `13 min` or `1 h 13 min`, tags added with Enter, and optional preferred windows, deadlines, projects and dependencies. Field meanings and time limitations: [docs/desktop-task-form.md](docs/desktop-task-form.md).
+
+The **Day Schedule** opens on today's date in the planning timezone. It shows a horizontal timeline with every fixed block (in its category's color) and scheduled task at its exact minutes, the free time inside the scheduling window, and the tasks not yet scheduled. The **Engine** choice beside **Make Schedule** picks **Normal** (tasks may start at any minute) or **ADHD friendly** (tasks over 30 minutes start on the quarter hour) for that date only. Make Schedule keeps saved work that still fits, and an unchanged day is not regenerated. **Day Preferences**, **Import/Export CSV** (canonical format v2, previewed first) and a previewed **Reset Day** complete the page. Details: [docs/desktop-day.md](docs/desktop-day.md).
+
+**Week** and **Month** are real calendar views (Monday-first weeks; true 28/29/30/31-day months with a month choice for the current year). They show fixed blocks and scheduled work at their actual times and unscheduled tasks in entry order, and they mute past days without hiding them. Select a day and **Open Day** to schedule it; **Back** returns to the same week or month. Details: [docs/desktop-calendar.md](docs/desktop-calendar.md).
+
+If the database cannot be opened (for example, the folder is not writable, or the same database is already open in another Schedule Maxing process such as a second window or `python -m app.web`), the app shows the error and the database path instead of the scheduler. Nothing can be edited that could not be saved.
+
+The desktop app needs no internet, backend, or cloud credentials; it starts no server and opens no network port. It works in one workspace: the ownerless local records, or the records of the account active on this device (see [docs/desktop-web-boundaries.md](docs/desktop-web-boundaries.md)).
 
 Times you enter are wall-clock minutes in the planning timezone: `UTC` unless you set `SCHEDULE_MAXING_TIMEZONE` (e.g. `SCHEDULE_MAXING_TIMEZONE=America/Toronto`). Set it to your own zone so start-delay statistics compare against real local times.
 
@@ -798,7 +822,7 @@ Schema version 3 (`app/execution/db.py`, same file and migration chain as execut
 - **Transactions**: connections run in autocommit mode and `transaction()` owns every transaction. The outermost call begins/commits; nested calls (a repository method inside a service operation) are savepoints that can never commit early. Each `ExecutionService` mutation (e.g. start = status change + new session + first-start time) is one transaction. A per-connection re-entrant lock, shared by every repository on that connection, is held for a whole transaction, so background-thread work cannot interleave with it.
 - **Execution ↔ planning links**: `executions.task_id`/`scheduled_task_id` are historical identity, not cascading foreign keys. Rows from before v3 keep their ids even though their tasks/placements were never persisted: nothing is fabricated and no date is guessed. Newly created executions must reference a persisted task (and a persisted placement of that same task), enforced by triggers. Once written, those ids are immutable.
 - **Deletion/replacement**: deleting a task that another task still depends on, or a project that still has tasks, is refused. Deleting a task removes its placements too. Since Milestone 3, deletions are tombstones (see the next section). `replace_placements(start, end, ...)` only touches placements dated inside that range, and refuses to move one from outside it. Execution history is never deleted, changed, or used to block an edit. A removed history-linked placement is reported back, and its executions keep their ids and planned snapshot.
-- **Range eligibility** follows allocation's own hard date rules. A task with `required_date` is eligible only when that date is inside the range. Otherwise, a task with a deadline is eligible when the deadline's UTC date is on or after the range start. Every other task is eligible. The order is `(created_at, id)`.
+- **Range eligibility** follows allocation's own hard date rules. A task with `required_date` is eligible only when that date is inside the range. Otherwise, a task with a deadline is eligible when the deadline is not before the first instant of the range's start date in the planning timezone (its *local* date, never its UTC date; Milestone 4 preflight). Every other task is eligible. The order is `(created_at, id)`.
 
 ### Sync-ready local records (Milestone 3)
 
@@ -819,13 +843,32 @@ Schema version 4 prepares the local store for a later synchronization milestone.
 - **Make Schedule cleans up moved tasks.** If a run places a task that still has an older placement on another date, that older placement is removed. Placements of other tasks and other dates of a recurring task are left alone. So is any placement whose execution has started or finished. See `app/planning/occurrence.py`.
 - **Dependencies outside the range.** Make Schedule now checks dependencies that fall outside the scheduled dates against saved data. A dependency counts as done if it was completed, or if it has a generated placement before the range. A skipped, cancelled, pending, or missing dependency blocks its dependent, and the reason names which of these it was. See `app/planning/external_dependencies.py`.
 
+### Milestone 4 preflight: domain repairs for the web UI
+
+- **Fixed blocks are validated when written**, locally and on the server (REST and sync push alike): a block must be a whole-minute interval that starts on its date in its own timezone, lie inside that date's effective day window (built-in defaults -> YAML template -> user layer -> date layer, exactly as scheduling resolves it), and not overlap another live block of the same owner. Blocks may touch (10:00-10:13 then 10:13-11:00 is fine). A refused write changes nothing, change capture included, and concurrent writers cannot both pass the overlap check. Blocks stored before these rules are never rounded or rewritten; they can still be relabelled. See `app/planning/fixed_block_rules.py`.
+- **Deadlines use the planning date's own timezone.** Range eligibility and allocation compare a deadline with each date's local day (and the day window's start), never with the deadline's UTC calendar date; the day engine's intraday deadline check remains the final word. A task due 08:00 in Tokyo on the 23rd is now allocated to Tokyo's 23rd.
+- **Confirmed range reset** (`PlanningService.reset_preview` / `reset_range`): previews exactly what a reset of a date range removes -- its placements, schedule records, fixed blocks, non-recurring tasks planned in it (and, disclosed separately, their placements on other dates), and its per-date preference layers -- then applies only that previewed set, atomically, when given the preview's token. Undated tasks, projects, the user preference layer, recurring templates, and execution history are kept. The desktop's two older reset scopes are unchanged.
+- **Owner scopes** (`app/planning/scope.py`): `PlanningService.scoped(...)` / `ExecutionService.scoped(...)` restrict every read and write -- tasks, projects, references, fixed blocks, placements, preferences, schedule records, executions, reset, CSV import/export -- to one account or to the ownerless local workspace. The CLI stays device-wide; the desktop works in one workspace (see below).
+
+### Desktop and web boundaries (Milestone 4)
+
+The desktop app shares one engine and one set of domain services with the optional web components but never goes through them: widgets call controllers, controllers call the shared services, and nothing web-related is imported or started (`tests/test_desktop_isolation.py` proves this with the web packages made unimportable and all network use refused). Each desktop session works in one explicit workspace -- the ownerless local records, or the account selected or active on the device -- so records of different owners are never mixed; signing in never claims ownerless records. The desktop app and the local web service never open the same database at the same time (the second is refused). Module map, launch commands, concurrency, compatibility results and the controller contracts for the desktop UI rebuild: [docs/desktop-web-boundaries.md](docs/desktop-web-boundaries.md).
+
+### Local web profile (Milestone 4)
+
+`python -m app.web --data-dir DIR --timezone ZONE` (optional; needs `requirements.txt`) serves the same web API over this device's SQLite database on 127.0.0.1 only, offline-first, with the existing sync client behind `/local/...` endpoints (backend configuration, register/sign-in/profile/sign-out, explicit association preview and confirmation, sync status, Sync now, conflicts). It prints a one-time link that starts the browser session; cloud tokens never leave the process. Details: [docs/web-api.md](docs/web-api.md#local-profile).
+
+### Web application API (Milestone 4)
+
+The backend also serves the web UI's scheduling API -- range snapshots with per-date freshness, the preferences view, allocation previews, full or incremental generation, confirmed resets and canonical CSV import/export -- plus browser sessions (HttpOnly cookie + CSRF token) next to the existing bearer tokens. Every operation runs the same Python planning code the desktop runs (`app/planning/workflow.py` over `PlanningService`), on PostgreSQL through `backend/planning_repository.py`. The desktop controller now delegates to that same workflow; its legacy Make Schedule behavior is unchanged, and it also exposes the incremental/no-op generation, previews and confirmed reset directly (no HTTP). Contract and start commands: [docs/web-api.md](docs/web-api.md).
+
 ### Server backend (Milestone 3)
 
-`backend/` is a separate FastAPI + PostgreSQL service with accounts and user-scoped, versioned copies of the local records. It supports registration and login (Argon2 password hashes, HS256 JWTs), create/read/update/delete for every record type, version checks that reject stale edits with 409, soft deletion, and a per-user change feed in commit order. The desktop app does not use or need it. Setup, API, the concurrency and change-ordering design, and PostgreSQL test instructions are in [docs/backend.md](docs/backend.md). Server dependencies are in `requirements-backend.txt`, and configuration placeholders are in `.env.example`.
+`backend/` is a separate FastAPI + PostgreSQL service with accounts and user-scoped, versioned copies of the local records. It supports registration and login (Argon2 password hashes, HS256 JWTs), create/read/update/delete for every record type, version checks that reject stale edits with 409, soft deletion, and a per-user change feed in commit order. The desktop uses it only for optional cloud synchronization. Setup, API, the concurrency and change-ordering design, and PostgreSQL test instructions are in [docs/backend.md](docs/backend.md). Server dependencies are in `requirements-backend.txt`, and configuration placeholders are in `.env.example`.
 
 ### Offline-first synchronization (Milestone 3)
 
-`app/sync/` synchronizes the local SQLite store with the backend. The desktop stays fully offline unless `SCHEDULE_MAXING_BACKEND_URL` is set **and** an account signs in through `SyncService`. There is no sync or conflict screen yet; that is service-level API for a later UI. How it works:
+`app/sync/` synchronizes the local SQLite store with the backend. Configure its address on Account or through `SCHEDULE_MAXING_BACKEND_URL`, then sign in to enable sync. Account provides explicit local-data association, Sync now, status and conflict resolution. Access tokens stay in memory and expire after 60 minutes by default (`ACCESS_TOKEN_TTL_MINUTES` on the server); sign in again when required. Local work remains available offline. How it works:
 
 - **Change capture.** Every local change is recorded in the same SQLite transaction by database triggers.
 - **Push.** Changes are pushed as idempotent operations (stable op ids, so a lost response is safely retried). Each is based on the last server version this device acknowledged.
@@ -835,9 +878,9 @@ Schema version 4 prepares the local store for a later synchronization milestone.
 
 Protocol details: [docs/sync-protocol.md](docs/sync-protocol.md).
 
-### Model-only scope: recurrence and projects
+### Projects and recurrence
 
-`RecurrenceSpec` and `Project` are persisted with their tasks, but remain data models only — there is no recurrence-expansion engine and no project-management service or UI.
+Project Schedule manages persisted projects and task assignments; calendar and allocation filters display a project's work. `RecurrenceSpec` is persisted but has no automatic recurrence expansion. See [Projects and Allocation](docs/desktop-projects-allocation.md).
 
 ### Saved data: SQLite, import, export, reset, and backups (Milestone 2)
 
@@ -894,7 +937,7 @@ Protocol details: [docs/sync-protocol.md](docs/sync-protocol.md).
 - Legacy executions (created before Milestone 2, or through `ExecutionService.create_execution`) are still identified by their planned snapshot, and their weekday statistics use when the record was created. Desktop executions are now canonical: identified by task/placement id, with real planned dates.
 - The planning timezone defaults to `UTC` (Python's standard library cannot reliably detect your IANA zone on Windows); set `SCHEDULE_MAXING_TIMEZONE`.
 - A schedule counts as out of date when anything in its date range changes, even a change that would not move any of its placements.
-- Synchronization is service-level only. There is no sign-in, sync-status, or conflict screen: sign-in, association, `sync_now()`, and conflict resolution are `SyncService` calls (see [docs/render-deployment.md](docs/render-deployment.md#connecting-a-desktop)). The desktop shows every local record whatever its owner. The access token is kept in memory only, so after a restart you sign in again.
+- The desktop Account page provides sign-in, explicit local-data association, sync status and conflict resolution. Each workspace shows only its owner's records. The access token stays in memory, so sign in again after restarting to resume sync; the active workspace remains available offline. See [desktop accounts](docs/desktop-accounts.md).
 - `keep_local` cannot be used against a record deleted on the server; only `accept_remote` is offered. Recreating such a record under a new id is not automated. Local execution history that the server cannot express as lifecycle actions (sessions that differ from the server's) is reported as a `diverged_history` rejection and must be resolved with `accept_remote`.
 - The backend has no account deletion, password reset, email verification, token refresh, or rate limiting. Tombstones and the change log are never compacted.
 - A local "Reset local history" is synchronized as deletion of the signed-in account's synchronized executions.
@@ -902,16 +945,20 @@ Protocol details: [docs/sync-protocol.md](docs/sync-protocol.md).
 - The ML duration predictor is evidence-gated and, on a typical personal-scale history, is expected to stay disabled (the stock test fixture's 19 completed tasks are well below its default 40/25/10 sample thresholds) — this is by design, not a defect. It is not wired into the desktop UI; use `python -m app.productivity.predictor_comparison_cli` to evaluate and, if it qualifies, persist it.
 - The event-based candidate search's rounding-aware tie-breaking (see "Exact event-based candidate search" above) relies on the real, rounded `calculate_task_score` staying monotonic across an analytically-derived region; this holds exactly for real-number arithmetic and is validated empirically (fuzz-tested and differentially tested against an independent exhaustive reference across tens of thousands of scenarios, with zero mismatches found) rather than machine-checked for every possible floating-point evaluation order at astronomically extreme weight magnitudes.
 
-### Deferred to Milestone 4 (desktop presentation)
+### Milestone 4 desktop presentation
 
-These are known gaps in the desktop UI. The data and services behind them exist; only the controls or views are missing.
+The desktop UI now uses the shared services directly, with the optional web API kept separate.
 
-- **Month page:** it shows 30 days from its start date, not a true calendar month.
-- **Desktop form:** it keeps the legacy 30-minute grid, although CSV imports and the engine are minute-precise. There are no minute-precise time controls yet.
-- **Fixed-block colors:** fixed blocks store a category (kept through CSV and sync), but the desktop draws all of them in the "fixed" color. There is no category or colour control.
-- **Engine mode and per-date preferences:** both are persisted and synchronized, but set only through `PlanningController` or the CLI `--mode`. There are no desktop controls.
-- **Sync:** there is no visual sync status or conflict-resolution screen.
-- **Reward Config page:** it changes only the legacy Greedy Optimizer v1's runtime settings, while the desktop scheduler reads `config/task_preference.yaml`. That presentation and its legacy-only runtime behavior are unchanged on purpose. Resolving this belongs to a UI milestone, not to an optimizer change.
+- **Calendars:** a Monday-first Week and a true Month calendar open selected dates on Day and preserve navigation context.
+- **Task form:** minute-precise times/durations, multiple tags, project/dependency choices and fixed-block validation before saving.
+- **Day:** category-colored timeline, backlog, free gaps, current/stale status, explicit incremental generation and confirmed regeneration/reset.
+- **Engines:** Normal and ADHD friendly are beside Make Schedule. Day Preferences override persisted defaults without changing other dates.
+- **Projects / Allocation:** project CRUD and assignments, display filters, date-only capacity previews and selected-date generation.
+- **Sync:** native account/association/status/conflict screens; offline work remains available.
+- **Settings:** native controls edit persisted scheduling defaults and the default engine, with date overrides in Day Preferences. The legacy runtime reward screen is no longer exposed. See [desktop Settings](docs/desktop-settings.md).
+
+No npm build or browser is needed. Render deployment applies to the optional cloud
+backend. [Completion and verification](docs/milestone-4-completion.md) records the final checks and limitations.
 
 ---
 
@@ -962,8 +1009,7 @@ Possible next steps:
 - Feed productivity-derived duration predictions back into the optimizer as an opt-in input (currently the suggestion is shown but never applied automatically).
 - Add a real calendar-date mapping for the abstract day-index schedule model in the *legacy* pipeline (largely superseded by the canonical layer's real `datetime.date`, but the legacy `app/models.py` path itself still uses abstract day indexes).
 - If real usage history grows enough to clear the ML activation gate, surface the comparison result (and, once it wins honestly, the ML suggestion itself) in the desktop UI's duration-suggestion widget alongside the median predictor.
-- The Milestone 4 desktop items listed under [Current Limitations](#deferred-to-milestone-4-desktop-presentation), and a dedicated Week/Month allocation view (the pages currently allocate and generate in one step).
-- Implement recurrence-template expansion and a real project-management service on top of the existing `RecurrenceSpec`/`Project` models.
+- Implement recurrence-template expansion and project archiving; project CRUD, assignment and the separate Allocation Planning view are already available.
 
 ---
 
@@ -973,7 +1019,7 @@ The project has these parts:
 
 - **Scheduling:** the original Milestone 0 greedy engine (the frozen baseline), and a canonical, UUID-identity-based day engine with `precise_greedy`/`adhd_friendly` modes and week/month task-to-date allocation.
 - **Persistence (Milestone 2):** a local SQLite store for all planning data and execution history, behind a transactional service boundary.
-- **Desktop app:** reads and writes that store directly, with real dates, id-based selection, CSV import/export, scoped resets, and restart-safe execution tracking.
+- **Desktop app (Milestone 4):** reads and writes that store directly, with Day/Week/Month calendars, project management, Allocation Planning, both engines, default/date preferences, account/sync/conflict controls, CSV import/export, scoped resets, and restart-safe execution tracking.
 - **CLI:** the same persistence-backed pipeline.
 - **Sync-ready local records (Milestone 3):**
   - every local record has an owner, a version, and a deletion marker;
@@ -984,4 +1030,4 @@ The project has these parts:
 - **Offline-first sync (Milestone 3):** retries are safe, conflicts are stored and resolved explicitly, and your existing local data is uploaded only after the explicit association step. See [docs/sync-protocol.md](docs/sync-protocol.md).
 - **Also:** reward-based optimization, PERT-style dependency handling (name- and id-based), personal productivity analytics, and an evidence-gated experimental ML duration predictor.
 
-Everything is covered by an automated test suite (`python -m pytest`, which needs no server, Docker, or PostgreSQL). Real PostgreSQL verification is optional and explicit: see [docs/backend.md](docs/backend.md#tests). The next major improvements are the Milestone 4 desktop controls (sign-in, sync status, conflicts, engine mode and per-date preferences, fixed-block categories), a separate allocation view, recurrence expansion, and a real project-management service.
+Automated coverage includes native desktop workflows (`python -m pytest`, which needs no external server, Docker, or PostgreSQL; native widget tests require a display). Real PostgreSQL verification is optional and explicit: see [docs/backend.md](docs/backend.md#tests). Remaining roadmap items include recurrence expansion and project archiving. See [Milestone 4 verification](docs/milestone-4-completion.md) for recorded checks and limitations.

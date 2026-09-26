@@ -7,8 +7,10 @@ Milestone 3 connects the desktop's local SQLite records
 - **Server side:** `backend/sync.py` handles pushes; `GET /changes` serves
   pulls.
 - **Desktop side:** the `app/sync/` package.
-- **User interface:** there is no sync or conflict screen yet. The service
-  API below is what a later milestone's UI will call.
+- **User interface:** the local web profile (`app/web`, Milestone 4) exposes
+  this service over loopback HTTP for the web UI (`/local/...`, see
+  [web-api.md](web-api.md#local-profile)); the desktop still has no sync
+  screen.
 
 ## Inert by default
 
@@ -49,8 +51,12 @@ mix.
   reactivates it.
 - **Push and pull are owner-scoped.** A push sends only records owned by the
   current account. A pull stores records as that account's.
-- **Local display is device-wide.** The desktop shows every local record
-  whatever its owner. Filtering the view by account is a later UI concern.
+- **Local work happens in one workspace** (Milestone 4,
+  `SyncService.workspace_scope()`): the account selected in this session,
+  else the account active on this device, else the ownerless records. The
+  desktop and the local web service show, generate, export and reset only
+  that workspace's records; records created in an account workspace are the
+  account's. See [desktop-web-boundaries.md](desktop-web-boundaries.md).
 
 ## Local change capture
 
@@ -223,6 +229,24 @@ retried automatically; everything else continues.
 
 Every decision is kept on the conflict row: `resolution` (the choice, the
 time, and the base and remote versions) and `resolved_at`.
+
+## Status, association preview, and account switches (Milestone 4)
+
+- `SyncService.status()` reports backend reachability (from the last request
+  or `/health` probe), sign-in state (`auth_required` when the account is
+  selected but its token was refused), a running sync, `pending` (the
+  account's dirty or queued records, each counted once), open conflicts, the
+  last successful sync (`sync_accounts.last_synced_at`, schema v6) and the
+  last error.
+- `association_preview()` lists what association would claim and any record
+  that cannot be claimed as it is (an ownerless preference layer or schedule
+  record for a scope the account already holds).
+  `associate_local_data(confirmation=token)` applies exactly that preview.
+- `sign_in`, `sign_out`, `set_transport` (switching backends) and association
+  wait for a running sync, so a sync always finishes for the account and
+  backend it started with; a 401 drops only the token that sync used.
+- `conflict_actions(conflict)` says which resolutions will work and why the
+  others would be refused.
 
 ## Failures and background operation
 

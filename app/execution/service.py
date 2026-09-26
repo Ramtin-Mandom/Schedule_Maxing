@@ -93,6 +93,7 @@ from app.execution.repository import ExecutionRepository
 from app.models import ScheduledTask
 from app.planning.models import ScheduledTask as CanonicalScheduledTask
 from app.planning.models import Task as CanonicalTask
+from app.planning.scope import OwnerScope
 from app.planning.time import elapsed_minutes
 
 Clock = Callable[[], datetime]
@@ -114,6 +115,24 @@ class ExecutionService:
     def __init__(self, repository: ExecutionRepository, clock: Clock = lambda: datetime.now(timezone.utc)) -> None:
         self._repository = repository
         self._clock = clock
+
+    @property
+    def owner_scope(self) -> OwnerScope | None:
+        """The owner this service is restricted to, or None for the legacy device-wide service."""
+        return self._repository.owner
+
+    def _new_record_owner(self, user_id: uuid.UUID | None) -> uuid.UUID | None:
+        """The owner of an execution this service creates: the given one, else an account scope's own."""
+        scope = self._repository.owner
+        if user_id is not None or scope is None:
+            return user_id
+        return scope.user_id
+
+    def scoped(self, owner: OwnerScope) -> "ExecutionService":
+        """This service restricted to `owner`'s executions (see app/planning/scope.py)."""
+        if not isinstance(owner, OwnerScope):
+            raise TypeError("scoped() needs an OwnerScope")
+        return ExecutionService(self._repository.scoped(owner), self._clock)
 
     # ------------------------------------------------------------------
     # Creation
@@ -147,6 +166,7 @@ class ExecutionService:
             status=ExecutionStatus.SCHEDULED,
             created_at=now,
             updated_at=now,
+            user_id=self._new_record_owner(None),
         )
         return self._repository.create_execution(execution)
 
@@ -337,7 +357,7 @@ class ExecutionService:
             created_at=now_iso,
             updated_at=now_iso,
             task_id=task.id,
-            user_id=user_id,
+            user_id=self._new_record_owner(user_id),
             **canonical_kwargs,
         )
 

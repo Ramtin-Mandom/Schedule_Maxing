@@ -38,7 +38,12 @@ from pydantic import BaseModel, Field
 from app.pert import compute_required_closure, has_cycle_by_id
 from app.planning.models import FixedBlock, Task, TaskRegistry
 from app.planning.preferences import DayPreferences
-from app.planning.time import MINUTES_PER_DAY
+from app.planning.time import (
+    MINUTES_PER_DAY,
+    AmbiguousLocalTimeError,
+    UnsupportedSchedulingWindowError,
+    local_date_of,
+)
 
 
 def week_dates(start_date: date_) -> list[date_]:
@@ -197,10 +202,31 @@ def _rank_candidate_dates(
     return sorted(candidate_dates, key=sort_key)
 
 
+def _deadline_allows(task: Task, day: date_, preferences: DayPreferences) -> bool:
+    """
+    A coarse, necessary condition for placing `task` on `day` before its
+    deadline, judged in that date's own planning timezone (never the
+    deadline's UTC calendar date): the deadline's local date is not before
+    `day`, and the deadline leaves at least the task's duration after the
+    day window starts. Meeting it proves nothing -- the day engine's
+    intraday deadline constraint stays authoritative. When the window's
+    start is itself ambiguous or nonexistent local time (DST), only the date
+    rule applies; the day engine refuses such a window explicitly.
+    """
+    if local_date_of(task.deadline, preferences.timezone) < day:
+        return False
+    try:
+        window_start, _ = preferences.to_local_day_window().endpoint_instants()
+    except (AmbiguousLocalTimeError, UnsupportedSchedulingWindowError):
+        return True
+    return window_start + timedelta(minutes=task.estimated_duration_minutes) <= task.deadline
+
+
 def _feasible_dates_for_task(
     task: Task,
     all_dates: list[date_],
     capacity_remaining: dict[date_, int],
+    preferences_by_date: dict[date_, DayPreferences],
 ) -> tuple[list[date_], bool]:
     """
     Returns (feasible_dates, capacity_was_the_only_blocker). The second
@@ -212,8 +238,7 @@ def _feasible_dates_for_task(
     if task.required_date is not None:
         candidates = [task.required_date] if task.required_date in all_dates else []
     elif task.deadline is not None:
-        deadline_date = task.deadline.astimezone(timezone.utc).date()
-        candidates = [d for d in all_dates if d <= deadline_date]
+        candidates = [d for d in all_dates if _deadline_allows(task, d, preferences_by_date[d])]
     else:
         candidates = list(all_dates)
 
@@ -243,7 +268,9 @@ def allocate_tasks(
     dependency_ids, in dependency-safe topological order) before the
     optional tier (remaining tasks, ordered by priority descending then id
     for a deterministic tie-break). Every date, for every task, must
-    respect: enough remaining free capacity; required_date/deadline;
+    respect: enough remaining free capacity; required_date/deadline (a
+    deadline judged in each date's own planning timezone, see
+    _deadline_allows);
     dependencies assigned to a date no later than this task's own
     (same-date is allowed); a dependency assigned to a *later* date, left
     unallocated, or referencing unresolved external context blocks this
@@ -334,7 +361,7 @@ def allocate_tasks(
             return
 
         candidate_dates = [d for d in all_dates if lower_bound is None or d >= lower_bound]
-        feasible, capacity_only = _feasible_dates_for_task(task, candidate_dates, capacity_remaining)
+        feasible, capacity_only = _feasible_dates_for_task(task, candidate_dates, capacity_remaining, preferences_by_date)
 
         if not feasible:
             if task.required_date is not None and task.required_date not in all_dates:
@@ -345,11 +372,16 @@ def allocate_tasks(
                         required=required, proven_infeasible=True,
                     )
                 )
-            elif task.deadline is not None and not candidate_dates:
+            elif task.deadline is not None and not any(
+                _deadline_allows(task, day, preferences_by_date[day]) for day in candidate_dates
+            ):
                 unallocated.append(
                     UnallocatedEntry(
                         task_id=task_id, reason_code=AllocationReasonCode.DEADLINE_INFEASIBLE,
-                        explanation="no date on or before this task's deadline lies at/after its dependency lower bound.",
+                        explanation=(
+                            f"no date at/after its dependency lower bound leaves {task.estimated_duration_minutes} "
+                            f"minutes before its deadline ({task.deadline.isoformat()}) in the planning timezone."
+                        ),
                         required=required, proven_infeasible=True,
                     )
                 )

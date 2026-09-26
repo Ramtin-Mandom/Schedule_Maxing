@@ -2,7 +2,9 @@
 backend/api.py
 
 HTTP routes. Every protected route depends on `current_user_id`, which
-derives the user exclusively from a verified access token, and every query
+derives the user exclusively from a verified access token (Authorization:
+Bearer) or a live browser session cookie (backend/browser_sessions.py, with
+its CSRF and origin checks), and every query
 below is filtered by that user id -- collections, single reads, mutations,
 nested relationships, and the change log. A record of another user is
 indistinguishable from one that does not exist (404).
@@ -22,12 +24,12 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, FastAPI, Query, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 from sqlalchemy import select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from backend import models
+from backend import browser_sessions, models
 from backend.database import session_scope
 from backend.errors import ApiError, not_found, unauthenticated, version_conflict
 from backend.executions import ACTIONS, EXECUTIONS, ActionIn, ExecutionCreate, ExecutionOut, FeedbackIn
@@ -72,6 +74,11 @@ def current_user_id(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     session: Session = Depends(get_session),
 ) -> uuid.UUID:
+    if credentials is None and request.cookies.get(browser_sessions.COOKIE_NAME):
+        user_id = browser_sessions.authenticate(request, session, request.app.state.clock())
+        if session.get(models.User, user_id) is None:
+            raise unauthenticated("You are signed out. Sign in again.")
+        return user_id
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise unauthenticated()
     try:
@@ -195,13 +202,7 @@ def register(payload: RegisterIn, session: Session = Depends(get_session), now: 
     return _user_out(user)
 
 
-@auth.post("/auth/login", response_model=TokenOut, summary="Exchange credentials for an access token.")
-def login(
-    payload: LoginIn,
-    request: Request,
-    session: Session = Depends(get_session),
-    now: datetime = Depends(server_now),
-) -> dict:
+def _check_credentials(payload: LoginIn, session: Session) -> models.User:
     column = models.User.email if payload.email is not None else models.User.username
     user = session.scalars(select(models.User).where(
         column == normalize_identifier(payload.email or payload.username)
@@ -212,8 +213,74 @@ def login(
         session.execute(update(models.User).where(models.User.id == user.id)
                         .values(password_hash=hash_password(payload.password)))
         session.commit()
+    return user
+
+
+@auth.post("/auth/login", response_model=TokenOut, summary="Exchange credentials for an access token.")
+def login(
+    payload: LoginIn,
+    request: Request,
+    session: Session = Depends(get_session),
+    now: datetime = Depends(server_now),
+) -> dict:
+    user = _check_credentials(payload, session)
     issued = issue_access_token(user.id, request.app.state.settings, now)
     return {"access_token": issued.token, "expires_in": issued.expires_in, "expires_at": issued.expires_at}
+
+
+class BrowserSessionOut(BaseModel):
+    authenticated: bool
+    user: UserOut | None = None
+    #: Send back as X-CSRF-Token on every unsafe request. Keep it in memory only (never in storage or a URL).
+    csrf_token: str | None = None
+    expires_at: datetime | None = None
+
+
+@auth.post("/auth/browser/login", response_model=BrowserSessionOut,
+           summary="Sign a browser in: sets the HttpOnly session cookie and returns the CSRF token.")
+def browser_login(
+    payload: LoginIn,
+    request: Request,
+    response: Response,
+    session: Session = Depends(get_session),
+    now: datetime = Depends(server_now),
+) -> dict:
+    settings = request.app.state.settings
+    user = _check_credentials(payload, session)
+    token, row = browser_sessions.start_session(session, user.id, settings, now)
+    browser_sessions.set_cookie(response, token, row, settings, now)
+    return {"authenticated": True, "user": _user_out(user), "expires_at": row.expires_at,
+            "csrf_token": browser_sessions.csrf_token_for(token, settings)}
+
+
+@auth.get("/auth/browser/session", response_model=BrowserSessionOut,
+          summary="The browser's session (never a 401: `authenticated` says whether it is signed in).")
+def browser_session(request: Request, session: Session = Depends(get_session), now: datetime = Depends(server_now)) -> dict:
+    token = request.cookies.get(browser_sessions.COOKIE_NAME)
+    try:
+        row = browser_sessions.live_session(session, token, now)
+    except ApiError:
+        return {"authenticated": False}
+    user = session.get(models.User, row.user_id)
+    if user is None:
+        return {"authenticated": False}
+    return {"authenticated": True, "user": _user_out(user), "expires_at": row.expires_at,
+            "csrf_token": browser_sessions.csrf_token_for(token, request.app.state.settings)}
+
+
+@auth.post("/auth/browser/logout", status_code=204, response_class=Response,
+           summary="Sign the browser out: revokes the session on the server and clears the cookie.")
+def browser_logout(request: Request, session: Session = Depends(get_session), now: datetime = Depends(server_now)) -> Response:
+    settings = request.app.state.settings
+    token = request.cookies.get(browser_sessions.COOKIE_NAME)
+    response = Response(status_code=204)
+    row = browser_sessions.find_session(session, token) if token else None
+    if row is not None and row.revoked_at is None:
+        browser_sessions.check_request(request, token, settings)
+        row.revoked_at = now
+        session.commit()
+    browser_sessions.clear_cookie(response, settings)
+    return response
 
 
 @auth.get("/me", response_model=UserOut, summary="The authenticated account.")
@@ -247,6 +314,20 @@ def update_me(
 class Page(BaseModel):
     items: list[dict[str, Any]]
     next_cursor: str | None = None
+
+
+_PAGES: dict[type, type[BaseModel]] = {}
+
+
+def page_model(out_schema: type[BaseModel]) -> type[BaseModel]:
+    """A typed page of `out_schema` records (e.g. TaskOutPage), so the OpenAPI schema names every item's shape."""
+    if out_schema not in _PAGES:
+        _PAGES[out_schema] = create_model(
+            f"{out_schema.__name__}Page",
+            items=(list[out_schema], ...),
+            next_cursor=(str | None, Field(default=None, description="Pass as `cursor` for the next page.")),
+        )
+    return _PAGES[out_schema]
 
 
 def _encode_cursor(record_id: uuid.UUID) -> str:
@@ -343,7 +424,8 @@ def _crud_router(spec: ResourceSpec) -> APIRouter:
             return mutator.delete(spec, record_id, base_version)
 
     name = spec.entity_type
-    router.add_api_route("", list_records, methods=["GET"], response_model=Page, operation_id=f"list_{name}")
+    router.add_api_route("", list_records, methods=["GET"], response_model=page_model(out_schema),
+                         operation_id=f"list_{name}")
     router.add_api_route("/{record_id}", read_record, methods=["GET"], response_model=out_schema,
                          operation_id=f"read_{name}")
     router.add_api_route("", create_record, methods=["POST"], status_code=201, response_model=out_schema,
@@ -358,7 +440,7 @@ def _crud_router(spec: ResourceSpec) -> APIRouter:
 executions = APIRouter(prefix="/executions", tags=["executions"])
 
 
-@executions.get("", response_model=Page, operation_id="list_execution")
+@executions.get("", response_model=page_model(ExecutionOut), operation_id="list_execution")
 def list_executions(
     request: Request,
     limit: int | None = Query(default=None),

@@ -28,8 +28,12 @@ from app.sync.transport import (
     PullPage,
     TransportError,
     _classify,
+    health_via,
     login_via,
+    profile_via,
     pull_via,
+    register_via,
+    update_profile_via,
 )
 from app.ui.planning_controller import PlanningController
 from backend.app import create_app
@@ -67,6 +71,18 @@ class InProcessTransport:
 
     def pull(self, token: str, after: int, limit: int) -> PullPage:
         return pull_via(self._request, token, after, limit)
+
+    def register(self, email: str, password: str, username=None, display_name=None) -> dict:
+        return register_via(self._request, email, password, username, display_name)
+
+    def profile(self, token: str) -> dict:
+        return profile_via(self._request, token)
+
+    def update_profile(self, token: str, base_version: int, display_name) -> dict:
+        return update_profile_via(self._request, token, base_version, display_name)
+
+    def health(self) -> dict:
+        return health_via(self._request)
 
 
 class FlakyTransport(InProcessTransport):

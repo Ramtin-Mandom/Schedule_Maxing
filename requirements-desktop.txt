@@ -1,0 +1,12 @@
+# Desktop runtime dependencies only (python -m app.app, python -m app.main):
+# no web server, browser, PostgreSQL or backend packages. A desktop-only install:
+#     python -m pip install -r requirements-desktop.txt
+# Synchronization with a cloud backend uses the standard library's urllib, so
+# it needs nothing extra. docs/desktop-web-boundaries.md explains the split.
+pydantic>=2.10.0
+PyYAML>=6.0.0
+customtkinter>=5.2.2
+pandas>=2.0.0
+scikit-learn>=1.4.0
+# IANA time zones (zoneinfo) where the host has no time zone database, e.g. Windows.
+tzdata>=2024.1

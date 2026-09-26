@@ -35,6 +35,18 @@ Reads return live records only unless include_deleted=True is passed.
 Every read returns freshly constructed model instances, so mutating a
 returned model never changes stored state (or another caller's copy).
 
+Owner scope (Milestone 4 preflight, app/planning/scope.py): constructed
+with `owner=OwnerScope(...)` (or via scoped()), every read, existence check,
+compare-and-update and soft delete is restricted to that owner -- a record
+of another owner behaves exactly like one that does not exist -- and an
+insert or update of a record owned by anyone else raises ScopeError. Without
+an owner the repository is device-wide (every owner), as the desktop and CLI
+have always used it. store_synced is sync-only and stays device-wide.
+
+Task eligibility for a date range compares a deadline with the *start of
+the range's first local date* in the planning timezone (timezone_name),
+never with its UTC calendar date.
+
 Transactions: each write method is atomic on its own; inside
 PlanningRepository.transaction() (or any enclosing app.execution.db
 transaction on the same connection, e.g. a service operation spanning
@@ -56,7 +68,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.execution.db import EXECUTION_LINK_VIOLATION, TransactionState, locked, transaction, transaction_state_for
-from app.planning.errors import DuplicateEntityError, InvalidEntityError
+from app.planning.errors import DuplicateEntityError, InvalidEntityError, ScopeError
 from app.planning.external_dependencies import ExecutionFact
 from app.planning.models import FixedBlock, Project, ScheduledTask, Task
 from app.planning.preferences import (
@@ -66,6 +78,8 @@ from app.planning.preferences import (
     overrides_to_document,
 )
 from app.planning.provenance import GenerationRecord
+from app.planning.scope import OwnerScope
+from app.planning.time import local_day_start_utc
 
 # SQLite's historical default limit on bound variables is 999; stay well below.
 _IN_CHUNK = 500
@@ -109,10 +123,10 @@ _GENERATION_COLUMNS = (
 # Deterministic task eligibility for an inclusive date range, mirroring
 # app.planning.allocation._feasible_dates_for_task's hard date rules (see
 # app/planning/application.py for the documented semantics). Parameters:
-# (start, end, start).
+# (start, end, UTC text of the first instant of the local start date).
 _ELIGIBLE_FOR_RANGE_WHERE = (
     "(required_date IS NOT NULL AND required_date BETWEEN ? AND ?) "
-    "OR (required_date IS NULL AND (deadline_utc IS NULL OR substr(deadline_utc, 1, 10) >= ?))"
+    "OR (required_date IS NULL AND (deadline_utc IS NULL OR deadline_utc >= ?))"
 )
 
 
@@ -125,10 +139,10 @@ _PLANNED_DATE_SQL = (
 )
 
 # Tasks planned inside an inclusive range, plus undated tasks eligible for it.
-# Parameters: (start, end, start).
+# Parameters: (start, end, UTC text of the first instant of the local start date).
 _PLANNED_IN_RANGE_WHERE = (
     f"({_PLANNED_DATE_SQL} BETWEEN ? AND ?) "
-    f"OR ({_PLANNED_DATE_SQL} IS NULL AND (deadline_utc IS NULL OR substr(deadline_utc, 1, 10) >= ?))"
+    f"OR ({_PLANNED_DATE_SQL} IS NULL AND (deadline_utc IS NULL OR deadline_utc >= ?))"
 )
 
 # Only dated tasks whose planned date is inside the range. Parameters: (start, end).
@@ -180,9 +194,48 @@ def _live_clause(include_deleted: bool) -> str:
 class PlanningRepository:
     """Row mapping and queries for persisted canonical planning entities."""
 
-    def __init__(self, connection: sqlite3.Connection) -> None:
+    def __init__(self, connection: sqlite3.Connection, *, owner: OwnerScope | None = None) -> None:
         self._connection = connection
         self._state = transaction_state_for(connection) or TransactionState()
+        self._owner = owner
+
+    @property
+    def owner(self) -> OwnerScope | None:
+        """The owner scope, or None for the legacy device-wide repository."""
+        return self._owner
+
+    def scoped(self, owner: OwnerScope) -> "PlanningRepository":
+        """A repository on the same connection (and lock/transaction state), restricted to `owner`."""
+        scoped = PlanningRepository.__new__(PlanningRepository)
+        scoped._connection, scoped._state, scoped._owner = self._connection, self._state, owner
+        return scoped
+
+    def _owner_sql(self, column: str = "user_id") -> tuple[str, tuple]:
+        """(" AND <column> IS ?", (owner,)) for a scoped repository, ("", ()) for a device-wide one."""
+        if self._owner is None:
+            return "", ()
+        return f" AND {column} IS ?", (self._owner.sql_value,)
+
+    def _require_owner(self, kind: str, entity_id: object, user_id: object) -> None:
+        if self._owner is not None and not self._owner.admits(user_id):
+            raise ScopeError(
+                f"{kind} {entity_id} belongs to another owner; it cannot be written in {self._owner.describe()}."
+            )
+
+    def _confirm_ownerless_insert(self, table: str, kind: str, entity_id: object) -> None:
+        """
+        In the ownerless scope, refuse an insert that the v5 owner trigger
+        re-stamped for the account active on this device: the ownerless
+        workspace never creates account-owned records implicitly.
+        """
+        if self._owner is None or not self._owner.is_ownerless:
+            return
+        row = self._connection.execute(f"SELECT user_id FROM {table} WHERE id = ?", (str(entity_id),)).fetchone()
+        if row is not None and row["user_id"] is not None:
+            raise ScopeError(
+                f"{kind} {entity_id} could not be created as an ownerless record: an account is active on this "
+                "device, so new records belong to it. Work in that account's scope instead."
+            )
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
@@ -200,6 +253,7 @@ class PlanningRepository:
     # ------------------------------------------------------------------
 
     def _insert(self, table: str, columns: Sequence[str], row: tuple, kind: str, entity_id: object) -> None:
+        self._require_owner(kind, entity_id, _row_owner(columns, row))
         sql = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({_placeholders(columns)})"
         try:
             self._connection.execute(sql, row)
@@ -210,16 +264,19 @@ class PlanningRepository:
             if EXECUTION_LINK_VIOLATION in message:
                 raise InvalidEntityError(f"{kind} {entity_id}: {message}") from error
             raise
+        self._confirm_ownerless_insert(table, kind, entity_id)
 
     def _compare_and_update(
         self, table: str, columns: Sequence[str], row: tuple, expected_version: int, kind: str, entity_id: object
     ) -> bool:
+        self._require_owner(kind, entity_id, _row_owner(columns, row))
         assignments = ", ".join(f"{column} = ?" for column in columns if column != "id")
         values = [value for column, value in zip(columns, row) if column != "id"]
+        owner_sql, owner_params = self._owner_sql()
         try:
             cursor = self._connection.execute(
-                f"UPDATE {table} SET {assignments} WHERE id = ? AND version = ? AND {_LIVE}",
-                (*values, str(entity_id), expected_version),
+                f"UPDATE {table} SET {assignments} WHERE id = ? AND version = ? AND {_LIVE}{owner_sql}",
+                (*values, str(entity_id), expected_version, *owner_params),
             )
         except sqlite3.IntegrityError as error:
             if EXECUTION_LINK_VIOLATION in str(error):
@@ -232,23 +289,29 @@ class PlanningRepository:
     ) -> bool:
         stamp = deleted_at.astimezone(timezone.utc).isoformat()
         guard = "" if expected_version is None else " AND version = ?"
-        params: tuple = (stamp, stamp, str(entity_id)) + (() if expected_version is None else (expected_version,))
+        owner_sql, owner_params = self._owner_sql()
+        params: tuple = (
+            (stamp, stamp, str(entity_id)) + (() if expected_version is None else (expected_version,)) + owner_params
+        )
         cursor = self._connection.execute(
-            f"UPDATE {table} SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ? AND {_LIVE}{guard}",
+            f"UPDATE {table} SET deleted_at = ?, updated_at = ?, version = version + 1 "
+            f"WHERE id = ? AND {_LIVE}{guard}{owner_sql}",
             params,
         )
         return cursor.rowcount == 1
 
     def record_states(self, table: str, ids: Iterable[object]) -> dict[str, tuple[int, bool]]:
-        """{id: (version, is_deleted)} for every stored row (live or tombstoned) among `ids`."""
+        """{id: (version, is_deleted)} for every stored row (live or tombstoned) among `ids` (in scope)."""
         if table not in {"projects", "tasks", "fixed_blocks", "scheduled_tasks", "preference_overrides",
                          "schedule_generations"}:
             raise ValueError(f"unknown table {table!r}")
+        owner_sql, owner_params = self._owner_sql()
         found: dict[str, tuple[int, bool]] = {}
         with self._read():
             for chunk in _chunks(list(dict.fromkeys(str(value) for value in ids))):
                 rows = self._connection.execute(
-                    f"SELECT id, version, deleted_at FROM {table} WHERE id IN ({_placeholders(chunk)})", tuple(chunk)
+                    f"SELECT id, version, deleted_at FROM {table} WHERE id IN ({_placeholders(chunk)}){owner_sql}",
+                    (*chunk, *owner_params),
                 ).fetchall()
                 found.update({row["id"]: (row["version"], row["deleted_at"] is not None) for row in rows})
         return found
@@ -272,24 +335,30 @@ class PlanningRepository:
             return self._soft_delete("projects", project_id, deleted_at, expected_version)
 
     def get_project(self, project_id: uuid.UUID, *, include_deleted: bool = False) -> Project | None:
+        owner_sql, owner_params = self._owner_sql()
         with self._read():
             row = self._connection.execute(
-                f"SELECT * FROM projects WHERE id = ? AND {_live_clause(include_deleted)}", (str(project_id),)
+                f"SELECT * FROM projects WHERE id = ? AND {_live_clause(include_deleted)}{owner_sql}",
+                (str(project_id), *owner_params),
             ).fetchone()
         return _row_to_project(row) if row is not None else None
 
     def list_projects(self, *, include_deleted: bool = False) -> list[Project]:
+        owner_sql, owner_params = self._owner_sql()
         with self._read():
             rows = self._connection.execute(
-                f"SELECT * FROM projects WHERE {_live_clause(include_deleted)} ORDER BY created_at, id"
+                f"SELECT * FROM projects WHERE {_live_clause(include_deleted)}{owner_sql} ORDER BY created_at, id",
+                owner_params,
             ).fetchall()
         return [_row_to_project(row) for row in rows]
 
     def task_ids_for_project(self, project_id: uuid.UUID) -> list[uuid.UUID]:
         """Live tasks that belong to the project."""
+        owner_sql, owner_params = self._owner_sql()
         with self._read():
             rows = self._connection.execute(
-                f"SELECT id FROM tasks WHERE project_id = ? AND {_LIVE} ORDER BY id", (str(project_id),)
+                f"SELECT id FROM tasks WHERE project_id = ? AND {_LIVE}{owner_sql} ORDER BY id",
+                (str(project_id), *owner_params),
             ).fetchall()
         return [uuid.UUID(row["id"]) for row in rows]
 
@@ -356,25 +425,41 @@ class PlanningRepository:
         with self._read():
             return self._load_tasks("1 = 1", (), include_deleted)
 
-    def list_tasks_eligible_for_range(self, start_date: date_, end_date: date_) -> list[Task]:
-        """Live tasks whose hard date rules allow some date in [start_date, end_date]; ordered by (created_at, id)."""
+    def list_tasks_eligible_for_range(
+        self, start_date: date_, end_date: date_, *, timezone_name: str = "UTC"
+    ) -> list[Task]:
+        """
+        Live tasks whose hard date rules allow some date in [start_date,
+        end_date] planned in `timezone_name`; ordered by (created_at, id). A
+        deadline qualifies when it is not before the first instant of
+        start_date in that timezone.
+        """
         with self._read():
             return self._load_tasks(
-                _ELIGIBLE_FOR_RANGE_WHERE, (start_date.isoformat(), end_date.isoformat(), start_date.isoformat())
+                _ELIGIBLE_FOR_RANGE_WHERE,
+                (start_date.isoformat(), end_date.isoformat(), _range_start_text(start_date, timezone_name)),
             )
 
     def list_tasks_planned_in_range(
-        self, start_date: date_, end_date: date_, *, include_undated: bool = True, include_deleted: bool = False
+        self,
+        start_date: date_,
+        end_date: date_,
+        *,
+        include_undated: bool = True,
+        include_deleted: bool = False,
+        timezone_name: str = "UTC",
     ) -> list[Task]:
         """
         Tasks whose planned date (required_date, else earliest preferred date)
         is in [start_date, end_date]; with include_undated, also undated tasks
-        eligible for the range. Ordered by (created_at, id).
+        eligible for the range (deadline judged as in
+        list_tasks_eligible_for_range). Ordered by (created_at, id).
         """
         with self._read():
             if include_undated:
                 return self._load_tasks(
-                    _PLANNED_IN_RANGE_WHERE, (start_date.isoformat(), end_date.isoformat(), start_date.isoformat()),
+                    _PLANNED_IN_RANGE_WHERE,
+                    (start_date.isoformat(), end_date.isoformat(), _range_start_text(start_date, timezone_name)),
                     include_deleted,
                 )
             return self._load_tasks(_DATED_IN_RANGE_WHERE, (start_date.isoformat(), end_date.isoformat()), include_deleted)
@@ -388,14 +473,15 @@ class PlanningRepository:
     def dependents_of(self, task_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, set[uuid.UUID]]:
         """For each given task id that live tasks depend on: the set of live dependent task ids."""
         ids = _ids(task_ids)
+        owner_sql, owner_params = self._owner_sql("t.user_id")
         dependents: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
         with self._read():
             for chunk in _chunks(ids):
                 rows = self._connection.execute(
                     f"SELECT d.task_id, d.depends_on_task_id FROM task_dependencies AS d "
                     f"JOIN tasks AS t ON t.id = d.task_id "
-                    f"WHERE t.deleted_at IS NULL AND d.depends_on_task_id IN ({_placeholders(chunk)})",
-                    tuple(chunk),
+                    f"WHERE t.deleted_at IS NULL AND d.depends_on_task_id IN ({_placeholders(chunk)}){owner_sql}",
+                    (*chunk, *owner_params),
                 ).fetchall()
                 for row in rows:
                     dependents[uuid.UUID(row["depends_on_task_id"])].add(uuid.UUID(row["task_id"]))
@@ -403,7 +489,9 @@ class PlanningRepository:
 
     def _load_tasks(self, where_sql: str, params: tuple, include_deleted: bool = False) -> list[Task]:
         # Caller holds the lock. where_sql is always an internal constant.
-        where = f"{_live_clause(include_deleted)} AND ({where_sql})"
+        owner_sql, owner_params = self._owner_sql()
+        where = f"{_live_clause(include_deleted)} AND ({where_sql}){owner_sql}"
+        params = (*params, *owner_params)
         rows = self._connection.execute(f"SELECT * FROM tasks WHERE {where} ORDER BY created_at, id", params).fetchall()
         if not rows:
             return []
@@ -466,11 +554,13 @@ class PlanningRepository:
         self, block_ids: Iterable[uuid.UUID], *, include_deleted: bool = False
     ) -> dict[uuid.UUID, FixedBlock]:
         blocks: dict[uuid.UUID, FixedBlock] = {}
+        owner_sql, owner_params = self._owner_sql()
         with self._read():
             for chunk in _chunks(_ids(block_ids)):
                 rows = self._connection.execute(
-                    f"SELECT * FROM fixed_blocks WHERE id IN ({_placeholders(chunk)}) AND {_live_clause(include_deleted)}",
-                    tuple(chunk),
+                    f"SELECT * FROM fixed_blocks WHERE id IN ({_placeholders(chunk)}) "
+                    f"AND {_live_clause(include_deleted)}{owner_sql}",
+                    (*chunk, *owner_params),
                 ).fetchall()
                 for row in rows:
                     block = _row_to_fixed_block(row)
@@ -479,11 +569,12 @@ class PlanningRepository:
 
     def list_fixed_blocks(self, start_date: date_, end_date: date_, *, include_deleted: bool = False) -> list[FixedBlock]:
         """Blocks with planned_date in [start_date, end_date], ordered by (planned_date, start, id)."""
+        owner_sql, owner_params = self._owner_sql()
         with self._read():
             rows = self._connection.execute(
-                f"SELECT * FROM fixed_blocks WHERE planned_date BETWEEN ? AND ? AND {_live_clause(include_deleted)} "
-                "ORDER BY planned_date, planned_start_utc, id",
-                (start_date.isoformat(), end_date.isoformat()),
+                f"SELECT * FROM fixed_blocks WHERE planned_date BETWEEN ? AND ? AND {_live_clause(include_deleted)}"
+                f"{owner_sql} ORDER BY planned_date, planned_start_utc, id",
+                (start_date.isoformat(), end_date.isoformat(), *owner_params),
             ).fetchall()
         return [_row_to_fixed_block(row) for row in rows]
 
@@ -520,12 +611,13 @@ class PlanningRepository:
         self, placement_ids: Iterable[uuid.UUID], *, include_deleted: bool = False
     ) -> dict[uuid.UUID, ScheduledTask]:
         placements: dict[uuid.UUID, ScheduledTask] = {}
+        owner_sql, owner_params = self._owner_sql()
         with self._read():
             for chunk in _chunks(_ids(placement_ids)):
                 rows = self._connection.execute(
                     f"SELECT * FROM scheduled_tasks WHERE id IN ({_placeholders(chunk)}) "
-                    f"AND {_live_clause(include_deleted)}",
-                    tuple(chunk),
+                    f"AND {_live_clause(include_deleted)}{owner_sql}",
+                    (*chunk, *owner_params),
                 ).fetchall()
                 for row in rows:
                     placement = _row_to_placement(row)
@@ -536,23 +628,25 @@ class PlanningRepository:
         self, start_date: date_, end_date: date_, *, include_deleted: bool = False
     ) -> list[ScheduledTask]:
         """Placements with planned_date in [start_date, end_date], ordered by (planned_date, start, id)."""
+        owner_sql, owner_params = self._owner_sql()
         with self._read():
             rows = self._connection.execute(
-                f"SELECT * FROM scheduled_tasks WHERE planned_date BETWEEN ? AND ? AND {_live_clause(include_deleted)} "
-                "ORDER BY planned_date, planned_start_utc, id",
-                (start_date.isoformat(), end_date.isoformat()),
+                f"SELECT * FROM scheduled_tasks WHERE planned_date BETWEEN ? AND ? AND {_live_clause(include_deleted)}"
+                f"{owner_sql} ORDER BY planned_date, planned_start_utc, id",
+                (start_date.isoformat(), end_date.isoformat(), *owner_params),
             ).fetchall()
         return [_row_to_placement(row) for row in rows]
 
     def active_placements_for_tasks(self, task_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, list[ScheduledTask]]:
         """Live placements of the given tasks, on any date, grouped by task; each list ordered by (date, start, id)."""
         grouped: dict[uuid.UUID, list[ScheduledTask]] = defaultdict(list)
+        owner_sql, owner_params = self._owner_sql()
         with self._read():
             for chunk in _chunks(_ids(task_ids)):
                 rows = self._connection.execute(
-                    f"SELECT * FROM scheduled_tasks WHERE task_id IN ({_placeholders(chunk)}) AND {_LIVE} "
+                    f"SELECT * FROM scheduled_tasks WHERE task_id IN ({_placeholders(chunk)}) AND {_LIVE}{owner_sql} "
                     "ORDER BY planned_date, planned_start_utc, id",
-                    tuple(chunk),
+                    (*chunk, *owner_params),
                 ).fetchall()
                 for row in rows:
                     placement = _row_to_placement(row)
@@ -566,12 +660,13 @@ class PlanningRepository:
     def placement_execution_statuses(self, placement_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, str]:
         """{placement id: status} for the placements that execution history references."""
         found: dict[uuid.UUID, str] = {}
+        owner_sql, owner_params = self._owner_sql()
         with self._read():
             for chunk in _chunks(_ids(placement_ids)):
                 rows = self._connection.execute(
                     f"SELECT scheduled_task_id, status FROM executions "
-                    f"WHERE scheduled_task_id IN ({_placeholders(chunk)})",
-                    tuple(chunk),
+                    f"WHERE scheduled_task_id IN ({_placeholders(chunk)}){owner_sql}",
+                    (*chunk, *owner_params),
                 ).fetchall()
                 found.update({uuid.UUID(row["scheduled_task_id"]): row["status"] for row in rows})
         return found
@@ -579,12 +674,13 @@ class PlanningRepository:
     def execution_facts_for_tasks(self, task_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, list[ExecutionFact]]:
         """Live executions of the given tasks (read-only; used to resolve external dependencies)."""
         grouped: dict[uuid.UUID, list[ExecutionFact]] = defaultdict(list)
+        owner_sql, owner_params = self._owner_sql()
         with self._read():
             for chunk in _chunks(_ids(task_ids)):
                 rows = self._connection.execute(
                     f"SELECT task_id, scheduled_task_id, status, actual_final_end_at, updated_at FROM executions "
-                    f"WHERE task_id IN ({_placeholders(chunk)}) AND {_LIVE} ORDER BY updated_at, id",
-                    tuple(chunk),
+                    f"WHERE task_id IN ({_placeholders(chunk)}) AND {_LIVE}{owner_sql} ORDER BY updated_at, id",
+                    (*chunk, *owner_params),
                 ).fetchall()
                 for row in rows:
                     task_id = uuid.UUID(row["task_id"])
@@ -621,34 +717,61 @@ class PlanningRepository:
     def get_preference(self, scope: PreferenceScope, day: date_ | None = None) -> PreferenceRecord | None:
         """
         The live user-level record (day=None) or the live record for one date.
-        Preferences are device-wide: a layer owned by a signed-in account
-        (app/sync) is preferred over an ownerless one for the same scope.
+        Device-wide, a layer owned by a signed-in account (app/sync) is
+        preferred over an ownerless one for the same scope; a scoped
+        repository sees only its owner's layer.
         """
+        owner_sql, owner_params = self._owner_sql()
         with self._read():
             row = self._connection.execute(
-                f"SELECT * FROM preference_overrides WHERE scope = ? AND scope_date IS ? AND {_LIVE} "
+                f"SELECT * FROM preference_overrides WHERE scope = ? AND scope_date IS ? AND {_LIVE}{owner_sql} "
                 "ORDER BY user_id IS NULL, created_at, id LIMIT 1",
-                (scope.value, _iso(day)),
+                (scope.value, _iso(day), *owner_params),
             ).fetchone()
         return _row_to_preference(row) if row is not None else None
 
     def list_date_preferences(self, start_date: date_, end_date: date_) -> list[PreferenceRecord]:
         """One live layer per date in the range (owned before ownerless, as in get_preference)."""
+        owner_sql, owner_params = self._owner_sql()
         with self._read():
             rows = self._connection.execute(
                 f"SELECT * FROM preference_overrides WHERE scope = 'date' AND scope_date BETWEEN ? AND ? "
-                f"AND {_LIVE} ORDER BY scope_date, user_id IS NULL, created_at, id",
-                (start_date.isoformat(), end_date.isoformat()),
+                f"AND {_LIVE}{owner_sql} ORDER BY scope_date, user_id IS NULL, created_at, id",
+                (start_date.isoformat(), end_date.isoformat(), *owner_params),
             ).fetchall()
         by_date: dict[str, PreferenceRecord] = {}
         for row in rows:
             by_date.setdefault(row["scope_date"], _row_to_preference(row))
         return list(by_date.values())
 
+    def list_preference_records(self, *, include_deleted: bool = False) -> list[PreferenceRecord]:
+        """Every layer in scope (user and date layers), ordered by (scope, date, id)."""
+        owner_sql, owner_params = self._owner_sql()
+        with self._read():
+            rows = self._connection.execute(
+                f"SELECT * FROM preference_overrides WHERE {_live_clause(include_deleted)}{owner_sql} "
+                "ORDER BY scope DESC, scope_date, id",
+                owner_params,
+            ).fetchall()
+        return [_row_to_preference(row) for row in rows]
+
+    def list_date_preference_records(self, start_date: date_, end_date: date_) -> list[PreferenceRecord]:
+        """Every live date layer in the range (in scope), one per owner and date; by (date, id)."""
+        owner_sql, owner_params = self._owner_sql()
+        with self._read():
+            rows = self._connection.execute(
+                f"SELECT * FROM preference_overrides WHERE scope = 'date' AND scope_date BETWEEN ? AND ? "
+                f"AND {_LIVE}{owner_sql} ORDER BY scope_date, id",
+                (start_date.isoformat(), end_date.isoformat(), *owner_params),
+            ).fetchall()
+        return [_row_to_preference(row) for row in rows]
+
     def get_preference_by_id(self, record_id: uuid.UUID, *, include_deleted: bool = False) -> PreferenceRecord | None:
+        owner_sql, owner_params = self._owner_sql()
         with self._read():
             row = self._connection.execute(
-                f"SELECT * FROM preference_overrides WHERE id = ? AND {_live_clause(include_deleted)}", (str(record_id),)
+                f"SELECT * FROM preference_overrides WHERE id = ? AND {_live_clause(include_deleted)}{owner_sql}",
+                (str(record_id), *owner_params),
             ).fetchone()
         return _row_to_preference(row) if row is not None else None
 
@@ -673,19 +796,22 @@ class PlanningRepository:
             return sum(int(self._soft_delete("schedule_generations", record_id, deleted_at)) for record_id in ids)
 
     def get_generation_by_id(self, record_id: uuid.UUID, *, include_deleted: bool = False) -> GenerationRecord | None:
+        owner_sql, owner_params = self._owner_sql()
         with self._read():
             row = self._connection.execute(
-                f"SELECT * FROM schedule_generations WHERE id = ? AND {_live_clause(include_deleted)}", (str(record_id),)
+                f"SELECT * FROM schedule_generations WHERE id = ? AND {_live_clause(include_deleted)}{owner_sql}",
+                (str(record_id), *owner_params),
             ).fetchone()
         return _row_to_generation(row) if row is not None else None
 
     def list_generations(self, start_date: date_, end_date: date_) -> list[GenerationRecord]:
         """Live generation records dated in [start_date, end_date], by date."""
+        owner_sql, owner_params = self._owner_sql()
         with self._read():
             rows = self._connection.execute(
-                f"SELECT * FROM schedule_generations WHERE planned_date BETWEEN ? AND ? AND {_LIVE} "
+                f"SELECT * FROM schedule_generations WHERE planned_date BETWEEN ? AND ? AND {_LIVE}{owner_sql} "
                 "ORDER BY planned_date, id",
-                (start_date.isoformat(), end_date.isoformat()),
+                (start_date.isoformat(), end_date.isoformat(), *owner_params),
             ).fetchall()
         return [_row_to_generation(row) for row in rows]
 
@@ -724,14 +850,26 @@ class PlanningRepository:
 
     def _existing_ids(self, table: str, ids: Iterable[uuid.UUID], include_deleted: bool) -> set[uuid.UUID]:
         found: set[uuid.UUID] = set()
+        owner_sql, owner_params = self._owner_sql()
         with self._read():
             for chunk in _chunks(_ids(ids)):
                 rows = self._connection.execute(
-                    f"SELECT id FROM {table} WHERE id IN ({_placeholders(chunk)}) AND {_live_clause(include_deleted)}",
-                    tuple(chunk),
+                    f"SELECT id FROM {table} WHERE id IN ({_placeholders(chunk)}) "
+                    f"AND {_live_clause(include_deleted)}{owner_sql}",
+                    (*chunk, *owner_params),
                 ).fetchall()
                 found.update(uuid.UUID(row["id"]) for row in rows)
         return found
+
+
+def _range_start_text(start_date: date_, timezone_name: str) -> str:
+    """The first instant of `start_date` in the planning timezone, as deadline_utc-comparable text."""
+    return _utc_text(local_day_start_utc(start_date, timezone_name))
+
+
+def _row_owner(columns: Sequence[str], row: tuple) -> uuid.UUID | None:
+    value = row[columns.index("user_id")]
+    return uuid.UUID(value) if value is not None else None
 
 
 # -----------------------------------------------------------------------------

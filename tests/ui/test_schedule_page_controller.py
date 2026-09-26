@@ -112,7 +112,7 @@ def test_adding_a_fixed_block_uses_the_page_date_and_timezone(db_path, tmp_path)
         assert block.planned_end == datetime(2024, 6, 4, 13, tzinfo=timezone.utc)
         assert block.timezone == "America/New_York"
         [row] = ok(session.page.load()).rows
-        assert row.time_text == "08:00 - 09:00"
+        assert row.time_text == "8:00 AM – 9:00 AM"
     finally:
         session.close()
 
