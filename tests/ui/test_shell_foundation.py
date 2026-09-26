@@ -14,6 +14,7 @@ import pytest
 
 from app.ui import theme
 from app.ui.background import ControllerResult, WorkerRegistry, run_in_background
+from app.ui.components import ContextMenu, MenuItem
 from app.ui.layout import BoundedAnimation, Coalescer
 from app.ui.shell_state import (
     DEFAULT_PAGE,
@@ -27,6 +28,41 @@ from app.ui.shell_state import (
 )
 from app.ui.ui_settings import SCALES, UISettings, UISettingsStore, settings_path_for
 from tests.ui.test_app_services import FakeWidget, _wait_idle
+
+
+@pytest.mark.parametrize("system, menu_key", [("win32", "<App>"), ("x11", "<Menu>"), ("aqua", None)])
+def test_context_menu_uses_platform_key_and_keeps_keyboard_access(system, menu_key):
+    class Widget:
+        def __init__(self):
+            self.tk = self
+            self.bindings = {}
+
+        def call(self, *args):
+            assert args == ("tk", "windowingsystem")
+            return system
+
+        def bind(self, sequence, callback, add):
+            assert sequence in {"<Button-3>", "<Shift-F10>", menu_key}
+            assert add == "+"
+            self.bindings[sequence] = callback
+
+        def winfo_rootx(self):
+            return 100
+
+        def winfo_rooty(self):
+            return 200
+
+    widget = Widget()
+    menu = ContextMenu(widget)
+    calls = []
+    items = [MenuItem("Edit", lambda: None)]
+    menu.popup = lambda entries, x, y: calls.append((entries, x, y))
+    menu.attach(widget, lambda event: items if event is None else [])
+    expected = {"<Button-3>", "<Shift-F10>"} | ({menu_key} if menu_key else set())
+    assert set(widget.bindings) == expected
+    for key in expected - {"<Button-3>"}:
+        assert widget.bindings[key](None) == "break"
+        assert calls[-1] == (items, 124, 224)
 
 # -----------------------------------------------------------------------------
 # Theme

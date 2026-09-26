@@ -461,7 +461,12 @@ class ContextMenu:
 
         widget.bind("<Button-3>", by_mouse, add="+")
         widget.bind("<Shift-F10>", by_keyboard, add="+")
-        widget.bind("<App>", by_keyboard, add="+")
+        # Tk key symbols differ by windowing system. Aqua has no dedicated
+        # menu key; Shift+F10 remains available on every platform.
+        system = widget.tk.call("tk", "windowingsystem")
+        menu_key = {"win32": "<App>", "x11": "<Menu>"}.get(system)
+        if menu_key is not None:
+            widget.bind(menu_key, by_keyboard, add="+")
 
 
 # -----------------------------------------------------------------------------
