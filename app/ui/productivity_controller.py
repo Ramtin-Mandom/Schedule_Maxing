@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.execution.errors import ExecutionError
 from app.execution.exporters import export_executions_to_csv, export_executions_to_json
 from app.productivity.buckets import TimeBucket
 from app.productivity.filters import ObservationFilters
@@ -95,5 +96,7 @@ class ProductivityController:
     def _call(self, operation):
         try:
             return ControllerResult.success(operation())
+        except ExecutionError as error:  # includes direct-storage failures (app/persistence/errors.py): safe messages
+            return ControllerResult.failure(str(error), error)
         except Exception as error:  # noqa: BLE001 - last-resort safety net so DB/unexpected errors never crash the UI
-            return ControllerResult.failure(f"Unexpected error: {error}")
+            return ControllerResult.failure(f"Unexpected error: {error}", error)

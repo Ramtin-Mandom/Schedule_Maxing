@@ -3,9 +3,8 @@ backend/security.py
 
 Password hashing and access tokens, built only on maintained libraries:
 
-    - argon2-cffi's PasswordHasher (Argon2id, library-default parameters,
-      per-hash random salt). Only the encoded hash is stored; hashes are
-      transparently upgraded on login when the library's parameters change.
+    - argon2-cffi's PasswordHasher (Argon2id): backend/passwords.py, re-exported
+      here for the HTTP API's existing imports.
     - PyJWT for HS256 access tokens. Verification pins the algorithm list to
       JWT_ALGORITHM (so "none" or an asymmetric-algorithm confusion is
       impossible), requires exp/iat/nbf/sub/iss/aud/jti/typ, and checks
@@ -17,46 +16,24 @@ Nothing here logs or returns a password, a hash, or a token.
 
 from __future__ import annotations
 
-import unicodedata
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 import jwt
-from argon2 import PasswordHasher
-from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 
+# Password hashing and identifiers live in backend/passwords.py (no JWT dependency); re-exported here.
+from backend.passwords import (  # noqa: F401
+    MAX_PASSWORD_LENGTH,
+    MIN_PASSWORD_LENGTH,
+    hash_password,
+    needs_rehash,
+    normalize_identifier,
+    verify_password,
+)
 from backend.settings import JWT_ALGORITHM, BackendSettings
 
-_hasher = PasswordHasher()
-
-#: A valid hash of a random password, verified against when an account does
-#: not exist, so an unknown email and a wrong password take similar time.
-_DUMMY_HASH = _hasher.hash(uuid.uuid4().hex)
-
-MIN_PASSWORD_LENGTH = 8
-MAX_PASSWORD_LENGTH = 1024
 TOKEN_TYPE = "access"
-
-
-def normalize_identifier(value: str) -> str:
-    """Canonical form of an email/username for uniqueness and lookup: NFKC, trimmed, lower-cased."""
-    return unicodedata.normalize("NFKC", value).strip().casefold()
-
-
-def hash_password(password: str) -> str:
-    return _hasher.hash(password)
-
-
-def verify_password(password: str, password_hash: str | None) -> bool:
-    try:
-        return _hasher.verify(password_hash or _DUMMY_HASH, password) and password_hash is not None
-    except (VerifyMismatchError, VerificationError, InvalidHashError):
-        return False
-
-
-def needs_rehash(password_hash: str) -> bool:
-    return _hasher.check_needs_rehash(password_hash)
 
 
 class TokenError(Exception):

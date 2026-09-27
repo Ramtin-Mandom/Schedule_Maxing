@@ -25,7 +25,9 @@ All packages are maintained and support Python 3.10 (the CI version):
 | Access tokens | PyJWT | HS256 only, with every required claim verified |
 | Preference template | PyYAML, tzdata | Server-side preference resolution reads `config/task_preference.yaml` like the desktop; tzdata supplies IANA zones where the host has none |
 
-The server-only dependencies are listed in `requirements-backend.txt`, which
+The server-only dependencies are listed in `requirements-backend.txt` (which
+includes `requirements-database.txt`, the database packages shared with the
+optional direct desktop mode, [direct-postgres.md](direct-postgres.md)), and it
 has no desktop packages; the desktop-only ones are in
 `requirements-desktop.txt`, which has no server packages. `requirements.txt`,
 used for development and CI, includes both so every test runs everywhere.
@@ -88,6 +90,14 @@ session cookie (with `X-CSRF-Token` on unsafe requests; see web-api.md).
 
 **Accounts**
 
+Registration and sign-in are implemented once, framework-free, in
+`backend/accounts.py` (`AccountService`); the routes below and the direct
+desktop mode both call it. Password hashing and identifier normalization are
+in `backend/passwords.py` (no JWT dependency; `backend/security.py`
+re-exports them and adds the tokens). `backend/errors.py` (`ApiError`) is
+framework-free as well; the FastAPI handlers that render it are in
+`backend/http_errors.py`.
+
 - `POST /auth/register` takes `{email, password, username?, display_name?}`.
   Emails and usernames are normalized (NFKC, trimmed, case-folded), and the
   database's unique constraints enforce uniqueness. A duplicate, including
@@ -137,11 +147,14 @@ cannot be overwritten. Transitions and completion metrics are the desktop's
 own (`app/execution/lifecycle.py`). An execution uploaded from history whose
 task or placement was never persisted sets `historical_reference: true`.
 Its ids are then kept as history and never resolved, and no parent record
-is invented for them.
+is invented for them. Wherever an execution's ids do resolve to the user's
+own task (and a placement of that task), the database also stores them as
+enforced references (see "Storage model" below).
 
 **Change feed.** `GET /changes?after=<seq>&limit=` returns the caller's
 accepted changes in commit order. Each entry carries the complete record,
-or the tombstone for a delete.
+or the tombstone for a delete, exactly as it was at that change (an
+immutable snapshot, not the current row).
 
 ### Errors
 
@@ -192,6 +205,80 @@ Every error has the same shape:
   writes serialize on the lock: at most one succeeds (checked on real
   PostgreSQL in `tests/backend/test_postgres.py`).
 
+### Storage model
+
+`backend/models.py` is the one schema of the server and of the planned
+direct desktop adapter. Structured content is stored relationally, never as
+a JSON or text document:
+
+- **Tasks.** Tags, preferred dates and dependency ids are ordered child rows
+  (`task_tags`, `task_preferred_dates`, `task_dependencies`), so a list is
+  kept exactly, repeated values included. Recurrence is scalar columns
+  (`recurrence_frequency`, `_interval`, `_day_of_month`, `_end_date`,
+  `_count`) plus `task_recurrence_weekdays` (a set, as the canonical model
+  keeps it) -- the desktop SQLite layout. A deadline keeps its original UTC
+  offset (`deadline`) next to its UTC twin (`deadline_utc`).
+- **Preference layers.** The day window and every reward field are nullable
+  scalar columns (NULL = this layer does not override it). Category
+  multipliers and preferred windows are `preference_category_*` rows: a row
+  is a present key, a row with NULL values is an explicit clear, no row is
+  an absent key. `reward_tag_relations_present` distinguishes an absent
+  `tag_relations` from a present, possibly empty, mapping
+  (`preference_tag_relations` and ordered `preference_related_tags`; a tag
+  may relate to an empty list). Mapping keys read back in sorted order.
+- **Placement extension metadata.** `optimization_metadata` is the only JSON
+  column: a small, genuinely unstructured object the wire contract and the
+  desktop allow on a placement. Greedy Optimizer v1 writes none; established
+  fields would become columns. Its compact JSON is limited to 4096 bytes and
+  may not use keys such as `tasks`, `placements` or `schedule`
+  (`backend/record_mapping.py`); PostgreSQL additionally checks that it is an
+  object of bounded size for every writer. A task list or schedule is never
+  stored in it.
+- **History.** Every change-log entry references an immutable record
+  revision: a `record_revisions` header (the record's id, version, audit
+  fields and tombstone) plus one typed table per entity type with the same
+  content columns and child-row layout as the live table (so both use the
+  same field mapping), e.g. `task_revisions` + `task_revision_tags`, and
+  `execution_revisions` + `execution_revision_sessions` for work-session
+  histories. The feed's JSON is built from them at the serialization
+  boundary (`backend/snapshots.py`).
+- **Sync outcomes.** `sync_operations` stores the status, the error code,
+  message and details as columns (the version pair, the fixed-block
+  `reason`, a group's `failed_op_id`), validation problems as
+  `sync_operation_problems` rows, and references to the immutable
+  revisions of the applied `record` or the error's `current` /
+  `conflicting` record. A retry therefore answers exactly the same even
+  after the record was edited later, and the push response itself is built
+  from what was recorded. An error detail the schema cannot store is
+  refused loudly rather than dropped.
+- **Executions.** `task_id` / `scheduled_task_id` stay the historical
+  identity (possibly unresolved). `linked_task_id` / `linked_placement_id`
+  are the same ids when they resolve to the user's own task and a placement
+  **of that task** -- composite foreign keys to `tasks (user_id, id)` and
+  `placements (user_id, task_id, id)` -- and are required unless
+  `historical_reference` is set. Tasks and placements are only ever
+  tombstoned, so linked history stays attached to them. The execution's
+  name/category/tag/priority/planned snapshot is kept as the audit record
+  analytics need.
+
+Revision rows and outcomes are written through the same `Mutator`
+transaction as the change they describe; a rolled-back group leaves none.
+Reads load child rows per page (SQLAlchemy `selectin`, one query per child
+kind per up to 500 parents), never per record.
+
+**Indexes added for queries** (besides the primary keys, which lead with
+`(user_id, parent id)` and serve every child-row load):
+
+| Index | Query it supports |
+| --- | --- |
+| `executions (user_id, task_id)` | `ServerPlanningRepository.execution_facts_for_tasks`: `WHERE user_id = ? AND task_id IN (...)` |
+| unique `placements (user_id, task_id, id)` | the target of the enforced execution-to-placement reference; also serves placements-by-task queries (task-delete cascade, `active_placements_for_tasks`), so it replaces `ix_placements_user_task` |
+
+No index was added for execution status or date, eligible-task dates, tags
+or preference lookups: no server query filters on them beyond the existing
+user-prefixed keys (`uq_preferences_live_scope` already serves the
+preference lookups).
+
 ### The shared mutation path and change ordering
 
 Every accepted mutation goes through `backend/mutations.py`'s `Mutator`: the
@@ -217,10 +304,65 @@ feed never orders by `updated_at`. `tests/backend/test_postgres.py` checks
 this on real PostgreSQL with concurrent transactions. Every feed is per
 user, so no global order is needed.
 
+## Schema upgrades
+
+`python -m backend.migrate upgrade` applies every pending revision in **one
+transaction**: if any step fails, the database stays at the revision it had.
+On SQLite (tests) the transaction is explicit and foreign keys are checked
+before the commit.
+
+### Normalized storage (0004-0006)
+
+Revisions 0004-0006 move the structured JSON of revision 0003 into the
+storage model above:
+
+1. **0004 expand** -- creates the child, revision and outcome tables and the
+   new nullable columns, foreign keys and indexes. Existing values are not
+   touched.
+2. **0005 backfill** -- converts `tasks.tags / preferred_dates / recurrence`,
+   `preferences.overrides`, every `change_log.payload` (tombstones and
+   execution session histories included) and every `sync_operations.result`
+   (applied, conflict with `current`/`conflicting`, rejected with or without
+   problems), and sets the execution links, in keyset-paginated batches of
+   500 rows so memory stays bounded. UUIDs, versions, timestamps,
+   tombstones, deadline offsets, ownership, `users.change_seq` and op ids
+   are kept as they are.
+3. **0006 validate and contract** -- rebuilds every original JSON value from
+   the rows actually stored and compares it (instants as instants), checks
+   the child-row counts, the placement metadata bound, and that every
+   non-historical execution is linked; only then adds the new constraints
+   and drops the six JSON columns and the redundant `ix_placements_user_task`.
+
+Data that cannot be converted exactly (for example tags that are not a list
+of strings, metadata over the bound, or a non-historical execution whose
+task does not exist) stops the upgrade with an error naming the table, the
+row's key and the field -- never the value -- and rolls everything back.
+Nothing is deleted, rounded or de-duplicated to make it fit. The conversion
+code (`backend/migrations/normalized_storage.py`) imports nothing from the
+application, so the migrations keep their meaning if the models change.
+
+**Writers must stop.** 0006 removes columns the previous application version
+reads and writes, so this upgrade is not backward compatible with a running
+older server: stop (or suspend) every process of the previous version before
+the upgrade starts, run the upgrade, then start this version. Take a backup
+or logical export first.
+
+**Downgrades** rebuild the JSON columns losslessly from the relational rows,
+but are for tests and disposable databases only: never run
+`backend.migrate` downgrades against a real database; restore a backup
+instead.
+
 ## Tests
 
 - `python -m pytest tests/backend` runs the whole API against in-memory
   SQLite databases created by the real migrations. No server is needed.
+- `tests/backend/test_normalized_migration.py` upgrades a *populated*
+  revision-0003 database (every JSON shape, tombstones, histories, recorded
+  sync outcomes) and checks that every record, change and sync replay reads
+  back the same; `tests/backend/test_normalized_storage.py` covers the
+  storage model itself (enforced ownership and references, exact lists and
+  preference states, rollback, bounded queries for 1000 tasks, and a schema
+  check that forbids structured JSON/text blobs).
 - **Real PostgreSQL** (optional). Use a disposable database whose name
   contains `test`; any other name is refused. Each run works in a private
   schema that is dropped afterwards.

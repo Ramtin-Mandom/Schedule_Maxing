@@ -1,0 +1,7 @@
+# Optional: the desktop app with direct PostgreSQL storage (app/persistence).
+# The desktop runtime plus the shared database packages -- no FastAPI,
+# Uvicorn, HTTPX or PyJWT, and no JWT secret. Offline desktop use needs only
+# requirements-desktop.txt. Install with:
+#     python -m pip install -r requirements-direct.txt
+-r requirements-desktop.txt
+-r requirements-database.txt

@@ -156,7 +156,9 @@ The server records each operation's outcome under `(user, op_id)`.
 - A **conflict or rejection** is recorded after its mutation rolled back.
 - A **retry** with the same `op_id` — including after a lost response —
   returns the recorded result. Nothing is applied twice: no new records,
-  sessions, versions, or change-log entries.
+  sessions, versions, or change-log entries. The recorded result
+  references immutable snapshots of its records, so it stays the same
+  even after those records are edited later.
 - **Reusing** an `op_id` for a different operation returns `op_id_reused`.
 
 ### Acknowledgement

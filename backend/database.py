@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, Engine, create_engine, event
+from sqlalchemy import JSON, URL, DateTime, Engine, create_engine, event, make_url
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -48,13 +48,16 @@ class UTCDateTime(TypeDecorator):
         return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
-def create_backend_engine(url: str, **kwargs) -> Engine:
+def create_backend_engine(url: str | URL, **kwargs) -> Engine:
     """
-    An engine for `url`. For SQLite (tests, local experiments) foreign keys
-    are enabled on every connection, and an in-memory database uses one
-    shared connection so every session sees the same data.
+    An engine for `url` (a string, or a sqlalchemy URL -- passed through
+    unrendered, so its escaping is kept). For SQLite (tests, local
+    experiments) foreign keys are enabled on every connection, and an
+    in-memory database uses one shared connection so every session sees the
+    same data.
     """
-    if url.startswith("sqlite"):
+    if make_url(url).get_backend_name() == "sqlite":
+        url = str(url)
         options = {"connect_args": {"check_same_thread": False}}
         if ":memory:" in url or url in ("sqlite://", "sqlite+pysqlite://"):
             options["poolclass"] = StaticPool

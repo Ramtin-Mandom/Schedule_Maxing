@@ -9,22 +9,59 @@ dependencies. The page provides `page_controller` (a SchedulePageController),
 (app/ui/task_list.AddedTasksPanel), `_editing`, `_render(snapshot)`,
 `reload()`, `show_panel(key)` and `_refuse_while_busy()`. Persistence and
 validation stay in the presenter and the planning services.
+
+Storage calls go through _io(): at once with local storage, in a worker
+with direct PostgreSQL storage (background_io; app/ui/background.run_io),
+the page counting as busy meanwhile so a second action waits. Whatever the
+storage, a failed save keeps everything typed in the form.
 """
 
 from __future__ import annotations
 
 from tkinter import messagebox
 
+from app.persistence.errors import NotSignedInError
+from app.ui.background import ControllerResult, run_io
 from app.ui.schedule_page_controller import RowRef
 from app.ui.task_form_model import FormErrors, TaskDraft
 
 
 class TaskFormActions:
+    #: True with direct PostgreSQL storage: storage calls run off the Tk thread.
+    background_io = False
+
+    def _io(self, work, done, *, blocking: bool = True) -> None:
+        """Run a storage call (see the module docstring); `blocking` marks the page busy while it runs."""
+        if blocking and self.background_io:
+            self._busy = True
+
+        def finish(result) -> None:
+            if blocking and self.background_io:
+                self._busy = False
+            done(result)
+
+        if not run_io(self, work, finish, background=self.background_io) and blocking:
+            self._busy = False
+
+    def _next_load(self) -> int:
+        """A token for a load: only the newest load's result is shown."""
+        self._load_token = getattr(self, "_load_token", 0) + 1
+        return self._load_token
+
+    def _load_failed(self, result) -> None:
+        if isinstance(result.cause, NotSignedInError):
+            return  # direct storage before sign-in: the Account page says so; no dialog per page
+        messagebox.showerror("Could Not Load Saved Data", result.error or "Unknown error.", parent=self)
+
     def submit_task(self, draft: TaskDraft) -> None:
         """Add (or, in edit mode, save) the form's task/fixed block through the presenter and services."""
         if self._refuse_while_busy():
             return
-        result = self.page_controller.save_draft(draft, editing=self._editing)
+        editing = self._editing
+        self._io(lambda: self.page_controller.save_draft(draft, editing=editing),
+                 lambda result: self._task_saved(draft, result))
+
+    def _task_saved(self, draft: TaskDraft, result) -> None:
         if result.value is not None:
             self._render(result.value)
         if not result.ok:
@@ -55,14 +92,23 @@ class TaskFormActions:
         """Load one saved task/fixed block into the form for editing."""
         if self._refuse_while_busy():
             return
-        draft = self.page_controller.draft_for(ref)
+
+        def work():
+            draft = self.page_controller.draft_for(ref)
+            if not draft.ok:
+                return draft, None
+            return draft, self.page_controller.editor_options(ref, category=draft.value.category,
+                                                              project_id=draft.value.project_id)
+
+        self._io(work, lambda loaded: self._edit_loaded(ref, loaded))
+
+    def _edit_loaded(self, ref: RowRef, loaded) -> None:
+        draft, options = loaded if not isinstance(loaded, ControllerResult) else (loaded, None)
         if not draft.ok:
             messagebox.showerror("Could Not Edit", draft.error or "Unknown error.", parent=self)
             self.reload()
             return
-        options = self.page_controller.editor_options(ref, category=draft.value.category,
-                                                      project_id=draft.value.project_id)
-        if options.ok:
+        if options is not None and options.ok:
             self.form.set_options(options.value)
         self._editing = ref
         self.form.load(draft.value, editing=True)
@@ -74,10 +120,22 @@ class TaskFormActions:
 
     def _reset_editor(self) -> None:
         """A blank form for this page's date, with current choices (dependencies, projects, categories)."""
-        options = self.page_controller.editor_options()
-        if options.ok:
-            self.form.set_options(options.value)
-        self.form.load(self.page_controller.blank_draft(self.form.kind), editing=False)
+
+        def apply(options) -> None:
+            if options.ok:
+                self.form.set_options(options.value)
+            self.form.load(self.page_controller.blank_draft(self.form.kind), editing=False)
+
+        self._io(self.page_controller.editor_options, apply, blocking=False)
+
+    def _refresh_options(self) -> None:
+        """Refresh the form's choices after a redraw (not while an edit is open)."""
+
+        def apply(options) -> None:
+            if options.ok and not self._editing:
+                self.form.set_options(options.value)
+
+        self._io(self.page_controller.editor_options, apply, blocking=False)
 
     def use_selected_as_dependencies(self) -> None:
         refs = self.added_tasks_panel.selected_refs()
@@ -106,14 +164,19 @@ class TaskFormActions:
         """Remove one saved task/fixed block after confirming what goes with it."""
         if self._refuse_while_busy():
             return
-        description = self.page_controller.delete_description(ref)
+        self._io(lambda: self.page_controller.delete_description(ref), lambda description: self._confirm_removal(
+            ref, description))
+
+    def _confirm_removal(self, ref: RowRef, description) -> None:
         if not description.ok:
             messagebox.showerror("Could Not Remove", description.error or "Unknown error.", parent=self)
             self.reload()
             return
         if not messagebox.askyesno("Remove?", description.value, icon="warning", parent=self):
             return
-        result = self.page_controller.delete(ref)
+        self._io(lambda: self.page_controller.delete(ref), lambda result: self._removed(ref, result))
+
+    def _removed(self, ref: RowRef, result) -> None:
         self._render_result(result, "Could Not Remove Task")
         if result.ok and self._editing == ref:
             self.cancel_edit()

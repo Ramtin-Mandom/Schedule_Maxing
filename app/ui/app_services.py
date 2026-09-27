@@ -104,6 +104,8 @@ class AppServices:
     execution_repository: ExecutionRepository = field(repr=False)
     project_root: str | None = None
     instance_lock: InstanceLock | None = field(default=None, repr=False)
+    #: "local" (this SQLite database); app/ui/direct_services.DirectAppServices is "postgres".
+    storage_mode: str = field(default="local", init=False)
     closed: bool = field(default=False, init=False)
     _switch_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
@@ -135,6 +137,12 @@ class AppServices:
         """For run_in_background(still_current=...): true while the workspace is the one current now."""
         epoch = self.workspace.epoch
         return lambda: self.workspace.epoch == epoch and not self.closed
+
+    def workspace_label(self) -> str:
+        return f"Working in {self.workspace.scope.describe()}."
+
+    def location_label(self) -> str:
+        return f"Saved locally in {self.db_path.name}; works offline."
 
     # ------------------------------------------------------------------
     # Shutdown

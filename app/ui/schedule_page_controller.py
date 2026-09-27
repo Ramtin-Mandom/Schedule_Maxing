@@ -265,7 +265,7 @@ class SchedulePageController:
         try:
             return ControllerResult.success(self._snapshot())
         except _Failure as failure:
-            return ControllerResult.failure(failure.message)
+            return ControllerResult.failure(failure.message, failure.cause)
 
     def form_state_for(self, ref: RowRef) -> ControllerResult[FormState]:
         """The stored values of one row, for editing in the form."""
@@ -303,7 +303,7 @@ class SchedulePageController:
             }
             return ControllerResult.success(FormState(ref=ref, values=values, dependency_ids=[]))
         except _Failure as failure:
-            return ControllerResult.failure(failure.message)
+            return ControllerResult.failure(failure.message, failure.cause)
 
     # ------------------------------------------------------------------
     # The reusable task form (app/ui/task_form_model.py)
@@ -353,7 +353,7 @@ class SchedulePageController:
                 projects=projects,
             ))
         except _Failure as failure:
-            return ControllerResult.failure(failure.message)
+            return ControllerResult.failure(failure.message, failure.cause)
 
     def draft_for(self, ref: RowRef) -> ControllerResult[TaskDraft]:
         """The stored values of one row as a form draft (for editing)."""
@@ -365,7 +365,7 @@ class SchedulePageController:
                 return ControllerResult.success(draft_from_task(task, self.timezone))
             return ControllerResult.success(draft_from_block(self._find_block(ref.id)))
         except _Failure as failure:
-            return ControllerResult.failure(failure.message)
+            return ControllerResult.failure(failure.message, failure.cause)
 
     def save_draft(self, draft: TaskDraft, *, editing: RowRef | None = None) -> ControllerResult[PageSnapshot]:
         """
@@ -422,7 +422,7 @@ class SchedulePageController:
             return ControllerResult.success(
                 f"Remove the fixed block \u201c{block.label}\u201d on {day_label(block.planned_date)}?")
         except _Failure as failure:
-            return ControllerResult.failure(failure.message)
+            return ControllerResult.failure(failure.message, failure.cause)
 
     def _block_refusal(self, result: ControllerResult) -> str:
         """A fixed-block refusal in local times, naming the block it collides with."""
@@ -445,7 +445,7 @@ class SchedulePageController:
                 labels.append(self._task_display(task) if task is not None else f"(missing task {task_id})")
             return ControllerResult.success(labels)
         except _Failure as failure:
-            return ControllerResult.failure(failure.message)
+            return ControllerResult.failure(failure.message, failure.cause)
 
     # ------------------------------------------------------------------
     # Mutations (commit, then re-read from SQLite)
@@ -861,7 +861,7 @@ class SchedulePageController:
     @staticmethod
     def _unwrap(result: ControllerResult):
         if not result.ok:
-            raise _Failure(result.error or "An unknown error occurred.")
+            raise _Failure(result.error or "An unknown error occurred.", result.cause)
         return result.value
 
 
@@ -876,9 +876,11 @@ def _batch_summary(applied: BatchApplyResult) -> str:
 
 
 class _Failure(Exception):
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str, cause: BaseException | None = None) -> None:
         super().__init__(message)
         self.message = message
+        #: The structured error behind the message, kept so a page can tell, e.g., "signed out" from a real failure.
+        self.cause = cause
 
 
 class _FormFailure(_Failure):

@@ -110,6 +110,8 @@ Since Milestone 2, the desktop app and the CLI keep all planning data (tasks, fi
 ├── pyproject.toml            # Ruff configuration (py310, line-length 130, E/F) and the `postgres` pytest marker
 ├── requirements.txt          # development/CI: desktop, tests, and (via -r) the backend
 ├── requirements-desktop.txt  # desktop-only runtime (no web/server packages)
+├── requirements-database.txt # PostgreSQL packages shared by the backend and the direct desktop mode
+├── requirements-direct.txt   # optional: desktop + direct PostgreSQL storage (no HTTP/JWT packages)
 └── requirements-backend.txt  # server-only dependencies (what the backend deployment installs)
 ```
 
@@ -547,6 +549,16 @@ The **Day Schedule** opens on today's date in the planning timezone. It shows a 
 If the database cannot be opened (for example, the folder is not writable, or the same database is already open in another Schedule Maxing process such as a second window or `python -m app.web`), the app shows the error and the database path instead of the scheduler. Nothing can be edited that could not be saved.
 
 The desktop app needs no internet, backend, or cloud credentials; it starts no server and opens no network port. It works in one workspace: the ownerless local records, or the records of the account active on this device (see [docs/desktop-web-boundaries.md](docs/desktop-web-boundaries.md)).
+
+**Optional: direct PostgreSQL storage (private development only).** Instead of the local database, the desktop can keep its records in the server's PostgreSQL schema and talk to it directly -- no FastAPI server, HTTP or JWT secret:
+
+```bash
+pip install -r requirements-direct.txt
+python -m backend.migrate --env-file .env check      # the schema must be current; upgrade explicitly after a backup
+python -m app.app --storage postgres --env-file .env
+```
+
+The app opens on the Account page: create an account or sign in, and every page then works on that account's records in PostgreSQL. There is no offline copy, no synchronization and no fallback to the local database: if the database cannot be reached, the app says so and saves nothing. `DATABASE_URL` alone never switches the app away from local storage. **The `.env` file gives full access to every account's data**, so this mode is for your own machine only, never for distribution to other users (they should use the HTTP API, which serves the same schema and services). Details: [docs/direct-postgres.md](docs/direct-postgres.md); for a Render Postgres database, including the opt-in `python -m app.persistence.verify_render` check, see [docs/render-direct-desktop.md](docs/render-direct-desktop.md).
 
 Times you enter are wall-clock minutes in the planning timezone: `UTC` unless you set `SCHEDULE_MAXING_TIMEZONE` (e.g. `SCHEDULE_MAXING_TIMEZONE=America/Toronto`). Set it to your own zone so start-delay statistics compare against real local times.
 

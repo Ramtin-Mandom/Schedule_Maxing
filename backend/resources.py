@@ -23,14 +23,15 @@ the caller's user scope only:
                  fixed_block_overlap with the `conflicting` block. An update
                  that keeps the interval unchanged is not re-judged.
     placement    task_id must be a live task of the user; it cannot move to
-                 another task once execution history references it
+                 another task once execution history references it;
+                 optimization_metadata is a bounded extension object
+                 (backend/record_mapping.check_optimization_metadata)
     preference   one live layer per scope ("user" or one date); scope is fixed
     generation   one live record per date; the date is fixed
 """
 
 from __future__ import annotations
 
-import json
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -47,11 +48,18 @@ from app.planning.models import FixedBlock as CanonicalFixedBlock
 from app.planning.models import LocalTimeWindow, RecurrenceSpec
 from app.planning.models import ScheduledTask as CanonicalPlacement
 from app.planning.models import Task as CanonicalTask
-from app.planning.preferences import OptimizerMode, PreferenceOverrides, overrides_to_document
+from app.planning.preferences import OptimizerMode, PreferenceOverrides
 from app.planning.provenance import GenerationRecord
 from backend import models
 from backend.errors import ApiError, invalid_reference
 from backend.preferences import effective_day_preferences
+from backend.record_mapping import (
+    check_optimization_metadata,
+    preference_overrides,
+    task_content,
+    write_preference_overrides,
+    write_task,
+)
 
 # -----------------------------------------------------------------------------
 # Schemas
@@ -182,10 +190,7 @@ class PlacementFields(Strict):
     @model_validator(mode="after")
     def _canonical_rules(self):
         _validated(lambda: CanonicalPlacement(**self.model_dump(include=set(PlacementFields.model_fields))))
-        try:
-            json.dumps(self.optimization_metadata, allow_nan=False)
-        except (TypeError, ValueError):
-            raise ValueError("optimization_metadata must be a JSON object") from None
+        check_optimization_metadata(self.optimization_metadata)
         return self
 
 
@@ -283,9 +288,11 @@ class ResourceSpec:
     create_schema: type[BaseModel]
     update_schema: type[BaseModel]
     out_schema: type[BaseModel]
-    #: (session, user_id, row) -> the record's content fields (python values)
+    #: (session, user_id, row) -> the record's content fields (python values). Reads only the row and
+    #: its child rows, so it serves a live row and a revision row alike (backend/snapshots.py).
     content: Callable[[Session, uuid.UUID, Any], dict]
-    #: (session, user_id, row, payload) -> None: write the payload's content into the row (and child rows)
+    #: (session, user_id, row, payload) -> None: write the payload's content into the row (and child rows);
+    #: also used, without a session, to fill a revision row from an Out record.
     assign: Callable[[Session, uuid.UUID, Any, BaseModel], None]
     #: (session, user_id, payload, existing row or None) -> None: reference/policy checks; raise ApiError
     validate: Callable[[Session, uuid.UUID, BaseModel, Any], None] = lambda *args: None
@@ -334,50 +341,12 @@ def _project_before_delete(mutator, row) -> None:
 # -- tasks -------------------------------------------------------------------
 
 
-def _task_content(session, user_id, row) -> dict:
-    dependencies = session.scalars(
-        select(models.TaskDependency.depends_on_id)
-        .where(models.TaskDependency.user_id == user_id, models.TaskDependency.task_id == row.id)
-        .order_by(models.TaskDependency.position)
-    ).all()
-    window = None
-    if row.preferred_window_start_minute is not None:
-        window = {"start_minute": row.preferred_window_start_minute, "end_minute": row.preferred_window_end_minute}
-    return {
-        "project_id": row.project_id, "name": row.name, "category": row.category, "tags": list(row.tags),
-        "estimated_duration_minutes": row.estimated_duration_minutes, "priority": row.priority,
-        "required": row.required, "required_date": row.required_date,
-        "preferred_dates": [date_.fromisoformat(value) for value in row.preferred_dates],
-        "preferred_time_window": window, "dependency_ids": list(dependencies),
-        "deadline": datetime.fromisoformat(row.deadline) if row.deadline else None,
-        "recurrence": row.recurrence,
-    }
+def _task_content(_session, _user_id, row) -> dict:
+    return task_content(row)
 
 
-def _task_assign(session, user_id, row, payload: TaskFields) -> None:
-    window = payload.preferred_time_window
-    row.project_id = payload.project_id
-    row.name, row.category, row.tags = payload.name, payload.category, list(payload.tags)
-    row.estimated_duration_minutes, row.priority, row.required = (
-        payload.estimated_duration_minutes, payload.priority, payload.required,
-    )
-    row.required_date = payload.required_date
-    row.preferred_dates = [day.isoformat() for day in payload.preferred_dates]
-    row.preferred_window_start_minute = window.start_minute if window else None
-    row.preferred_window_end_minute = window.end_minute if window else None
-    row.deadline = payload.deadline.isoformat() if payload.deadline else None
-    row.deadline_utc = payload.deadline if payload.deadline else None
-    row.recurrence = payload.recurrence.model_dump(mode="json") if payload.recurrence else None
-    session.flush()  # the task row must exist before its dependency rows
-    for existing in session.scalars(
-        select(models.TaskDependency).where(
-            models.TaskDependency.user_id == user_id, models.TaskDependency.task_id == row.id
-        )
-    ):
-        session.delete(existing)
-    session.flush()
-    for position, dependency in enumerate(payload.dependency_ids):
-        session.add(models.TaskDependency(user_id=user_id, task_id=row.id, position=position, depends_on_id=dependency))
+def _task_assign(_session, _user_id, row, payload: TaskFields) -> None:
+    write_task(row, payload)
 
 
 def _task_validate(session, user_id, payload: TaskFields, existing) -> None:
@@ -495,15 +464,12 @@ def _preference_scope_key(payload: PreferenceFields) -> str:
 
 
 def _preference_content(_session, _user_id, row) -> dict:
-    overrides = PreferenceOverrides.model_validate({**row.overrides, "optimizer_mode": row.optimizer_mode})
-    return {"scope": row.scope, "date": row.scope_date, "overrides": overrides}
+    return {"scope": row.scope, "date": row.scope_date, "overrides": preference_overrides(row)}
 
 
 def _preference_assign(_session, _user_id, row, payload: PreferenceFields) -> None:
     row.scope, row.scope_date, row.scope_key = payload.scope, payload.date, _preference_scope_key(payload)
-    mode = payload.overrides.optimizer_mode
-    row.optimizer_mode = mode.value if mode is not None else None
-    row.overrides = json.loads(overrides_to_document(payload.overrides))
+    write_preference_overrides(row, payload.overrides)
 
 
 def _preference_validate(session, user_id, payload: PreferenceFields, existing) -> None:

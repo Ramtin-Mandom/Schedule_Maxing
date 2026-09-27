@@ -142,6 +142,9 @@ def probe_launch() -> None:
     import runpy
     import tkinter as tk
 
+    from tests import window_placement
+
+    window_placement.install()  # on the left monitor, like the in-process widget tests
     try:
         tk.Tk().destroy()
     except tk.TclError:
@@ -166,6 +169,7 @@ def probe_launch() -> None:
         return original(self, *args, **kwargs)
 
     customtkinter.CTk.mainloop = mainloop
+    sys.argv = ["app.app"]  # the entry point's own arguments: none (local storage, the default)
     runpy.run_module("app.app", run_name="__main__")
     app = seen.pop("app")
     _report(ok=True, display=True, closed=app.services.closed if app.services else None, **seen)
