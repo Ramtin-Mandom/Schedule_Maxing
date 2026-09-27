@@ -72,9 +72,11 @@ class DaySchedulePage(TaskFormActions, ctk.CTkFrame):
         on_anchor_changed: Callable[[str, date], None] | None = None,
         on_return: Callable[[str], None] | None = None,
         return_context: tuple[str, date] | None = None,
+        background_io: bool = False,
     ) -> None:
         super().__init__(parent, fg_color=theme.APP_BG, corner_radius=0)
         self.page_controller = page_controller
+        self.background_io = background_io
         self.number_of_days = 1
         self.execution_controller = execution_controller
         self.productivity_controller = productivity_controller
@@ -293,12 +295,18 @@ class DaySchedulePage(TaskFormActions, ctk.CTkFrame):
     # ----------------------------- Loading and dates -----------------------------
 
     def reload(self) -> None:
-        """Re-read this date from SQLite (startup, page switch, after any failure)."""
-        result = self.page_controller.load()
-        if result.ok:
-            self._render(result.value)
-        else:
-            messagebox.showerror("Could Not Load Saved Data", result.error or "Unknown error.", parent=self)
+        """Re-read this date from storage (startup, page switch, after any failure)."""
+        token = self._next_load()
+
+        def done(result) -> None:
+            if token != self._load_token:
+                return  # a newer load (another date) was started meanwhile
+            if result.ok:
+                self._render(result.value)
+            else:
+                self._load_failed(result)
+
+        self._io(self.page_controller.load, done, blocking=False)
 
     def on_show(self) -> None:
         """Called when the page is shown: other pages, imports or a sync may have changed shared data."""
@@ -328,7 +336,15 @@ class DaySchedulePage(TaskFormActions, ctk.CTkFrame):
     def _go_to(self, value) -> None:
         if self._refuse_while_busy():
             return
-        result = self.page_controller.set_anchor_date(value)
+        token = self._next_load()
+
+        def done(result) -> None:
+            if token == self._load_token:
+                self._went_to(result)
+
+        self._io(lambda: self.page_controller.set_anchor_date(value), done, blocking=False)
+
+    def _went_to(self, result) -> None:
         if not result.ok:
             messagebox.showerror("Invalid Date", result.error or "Unknown error.", parent=self)
             self.start_date_var.set(self.page_controller.anchor_date.isoformat())
@@ -432,13 +448,16 @@ class DaySchedulePage(TaskFormActions, ctk.CTkFrame):
     def open_preferences(self) -> None:
         if self._refuse_while_busy():
             return
-        self.preferences_dialog = DayPreferencesDialog(self, self.page_controller, on_closed=self.reload)
+        self.preferences_dialog = DayPreferencesDialog(self, self.page_controller, on_closed=self.reload,
+                                                       background_io=self.background_io)
         self.preferences_dialog.present()
 
     def reset_day(self) -> None:
         if self._refuse_while_busy():
             return
-        plan = self.page_controller.reset_plan()
+        self._io(self.page_controller.reset_plan, self._reset_planned)
+
+    def _reset_planned(self, plan) -> None:
         if not plan.ok:
             self.notice.show("error", plan.error or "The reset could not be prepared.")
             return
@@ -448,7 +467,9 @@ class DaySchedulePage(TaskFormActions, ctk.CTkFrame):
         if not self._confirm("Reset Day?", plan.value.message, "Reset Day", danger=True):
             self.notice.show("info", "Reset cancelled; nothing was deleted.")
             return
-        result = self.page_controller.reset_day(plan.value)
+        self._io(lambda: self.page_controller.reset_day(plan.value), self._day_reset)
+
+    def _day_reset(self, result) -> None:
         if result.value is not None:
             self._render(result.value)
         if not result.ok:
@@ -468,7 +489,9 @@ class DaySchedulePage(TaskFormActions, ctk.CTkFrame):
                                           filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
         if not path:
             return
-        plan = self.page_controller.csv_plan(path)
+        self._io(lambda: self.page_controller.csv_plan(path), lambda plan: self._csv_planned(path, plan))
+
+    def _csv_planned(self, path: str, plan) -> None:
         if not plan.ok:
             self.notice.show("error", plan.error or "The file cannot be imported.")
             return
@@ -491,7 +514,9 @@ class DaySchedulePage(TaskFormActions, ctk.CTkFrame):
             self._apply_csv(plan, legacy_mode=mode)
 
     def _apply_csv(self, plan, *, legacy_mode: ImportMode | None = None) -> None:
-        result = self.page_controller.apply_csv(plan, legacy_mode=legacy_mode)
+        self._io(lambda: self.page_controller.apply_csv(plan, legacy_mode=legacy_mode), self._csv_applied)
+
+    def _csv_applied(self, result) -> None:
         if not result.ok:
             if result.value is not None:
                 self._render(result.value)
@@ -509,7 +534,9 @@ class DaySchedulePage(TaskFormActions, ctk.CTkFrame):
                                             filetypes=[("CSV files", "*.csv")])
         if not path:
             return
-        result = self.page_controller.export_csv(path)
+        self._io(lambda: self.page_controller.export_csv(path), self._csv_exported)
+
+    def _csv_exported(self, result) -> None:
         if not result.ok:
             self.notice.show("error", result.error or "The export failed.")
             return
@@ -533,9 +560,7 @@ class DaySchedulePage(TaskFormActions, ctk.CTkFrame):
         self._show_return()
         self.added_tasks_panel.refresh(snapshot.rows)
         if not self._editing:
-            options = self.page_controller.editor_options()
-            if options.ok:
-                self.form.set_options(options.value)
+            self._refresh_options()
         self.schedule_canvas.draw(snapshot)
         self._show_engine(snapshot)
         self._show_available(snapshot)

@@ -25,6 +25,7 @@ from app.ui.shell_state import NAV_ITEMS, LayoutMode
 from tests.ui.test_desktop_app import WEDNESDAY, close_app, fill_form, open_app, tree_names
 from tests.ui.test_desktop_app import dialogs as dialogs  # noqa: F401 - the dialog-recorder fixture
 from tests.ui.test_desktop_app import pytestmark as pytestmark  # noqa: F401 - skip without a display
+from tests.window_placement import place
 
 
 @pytest.fixture(autouse=True)
@@ -37,7 +38,7 @@ def _default_look():
 def shown(app, tmp_path: Path):
     """Map the window (layout, focus and <Configure> need a visible window)."""
     app.deiconify()
-    app.geometry("1440x880+30+30")
+    app.geometry(place("1440x880+30+30"))
     settle(app)
     return app
 
@@ -152,9 +153,9 @@ def test_moving_resizing_minimizing_and_scaling_settle_into_a_stable_layout(tmp_
         app.bind_all("<Configure>", lambda e: events.append(e), add="+")
         canvas = day.schedule_canvas
 
-        expected = [("1440x880+30+30", LayoutMode.WIDE), ("1100x760+30+30", LayoutMode.MEDIUM),
-                    ("700x700+30+30", LayoutMode.NARROW), ("700x700+160+120", LayoutMode.NARROW),
-                    ("1100x760+60+40", LayoutMode.MEDIUM), ("1440x880+30+30", LayoutMode.WIDE)]
+        expected = [(place("1440x880+30+30"), LayoutMode.WIDE), (place("1100x760+30+30"), LayoutMode.MEDIUM),
+                    (place("700x700+30+30"), LayoutMode.NARROW), (place("700x700+160+120"), LayoutMode.NARROW),
+                    (place("1100x760+60+40"), LayoutMode.MEDIUM), (place("1440x880+30+30"), LayoutMode.WIDE)]
         checks_before = app.shell.layout_checks.runs
         for geometry, mode in expected:
             draws = canvas.draw_count
@@ -182,7 +183,7 @@ def test_moving_resizing_minimizing_and_scaling_settle_into_a_stable_layout(tmp_
 
         # Narrow: Day, Week and Month stack their workspace in one scrolling column (calendar or timeline
         # first, then the task form, then the actions and task list) and still fit the window.
-        app.geometry("700x700+30+30")
+        app.geometry(place("700x700+30+30"))
         settle(app)
         for name in ("day", "week", "month"):
             app.show_page(name)
@@ -195,7 +196,7 @@ def test_moving_resizing_minimizing_and_scaling_settle_into_a_stable_layout(tmp_
         settle(app)
 
         # A larger interface size means fewer logical pixels: the layout follows (and is saved).
-        app.geometry("1440x880+30+30")
+        app.geometry(place("1440x880+30+30"))
         settle(app)
         assert app.shell_state.layout == LayoutMode.WIDE
         assert app.set_ui_scale(1.3)

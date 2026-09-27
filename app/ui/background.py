@@ -110,6 +110,28 @@ def current_registry() -> WorkerRegistry:
     return _current_registry
 
 
+def run_io(
+    widget: tk.Misc,
+    work: Callable[[], T],
+    on_done: Callable[[T], None],
+    *,
+    background: bool,
+    still_current: Callable[[], bool] | None = None,
+) -> bool:
+    """
+    A page's storage call. With local storage (background=False) it runs at
+    once on the Tk thread, as pages always did -- SQLite on this computer
+    answers immediately. With direct PostgreSQL storage (background=True,
+    app/ui/direct_services.py) every call is a network round trip, so it runs
+    in a worker and on_done runs on the Tk thread (run_in_background).
+    Returns False if nothing ran (shutting down).
+    """
+    if not background:
+        on_done(work())
+        return True
+    return run_in_background(widget, work, on_done, still_current=still_current)
+
+
 def run_in_background(
     widget: tk.Misc,
     work: Callable[[], T],

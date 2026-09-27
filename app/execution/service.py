@@ -318,48 +318,7 @@ class ExecutionService:
         *,
         user_id: uuid.UUID | None,
     ) -> TaskExecution:
-        now = self._clock()
-        now_iso = now.isoformat()
-        tag = task.tags[0] if task.tags else ""
-
-        if scheduled_task is not None:
-            planned_duration_minutes = round(
-                (scheduled_task.planned_end - scheduled_task.planned_start).total_seconds() / 60
-            )
-            canonical_kwargs = dict(
-                scheduled_task_id=scheduled_task.id,
-                canonical_planned_date=scheduled_task.planned_date,
-                canonical_timezone=scheduled_task.timezone,
-                canonical_planned_start=scheduled_task.planned_start,
-                canonical_planned_end=scheduled_task.planned_end,
-            )
-        else:
-            planned_duration_minutes = task.estimated_duration_minutes
-            canonical_kwargs = dict(
-                scheduled_task_id=None,
-                canonical_planned_date=None,
-                canonical_timezone=None,
-                canonical_planned_start=None,
-                canonical_planned_end=None,
-            )
-
-        return TaskExecution(
-            id=str(uuid.uuid4()),
-            task_name=task.name,
-            category=task.category,
-            tag=tag,
-            planned_date=None,
-            planned_start=None,
-            planned_end=None,
-            planned_duration=planned_duration_minutes,
-            priority=task.priority,
-            status=ExecutionStatus.SCHEDULED,
-            created_at=now_iso,
-            updated_at=now_iso,
-            task_id=task.id,
-            user_id=self._new_record_owner(user_id),
-            **canonical_kwargs,
-        )
+        return build_canonical_execution(task, scheduled_task, now=self._clock(), user_id=self._new_record_owner(user_id))
 
     # ------------------------------------------------------------------
     # State transitions
@@ -513,14 +472,7 @@ class ExecutionService:
         and ExecutionVersionConflictError if the execution is no longer at
         expected_version (so newer feedback is never overwritten).
         """
-        if focus_rating is not None and not 1 <= focus_rating <= 5:
-            raise InvalidFeedbackError(f"focus_rating must be between 1 and 5, got {focus_rating}.")
-        if energy_rating is not None and not 1 <= energy_rating <= 5:
-            raise InvalidFeedbackError(f"energy_rating must be between 1 and 5, got {energy_rating}.")
-        if interruption_count is not None and interruption_count < 0:
-            raise InvalidFeedbackError(
-                f"interruption_count must be zero or greater, got {interruption_count}."
-            )
+        check_feedback(focus_rating=focus_rating, energy_rating=energy_rating, interruption_count=interruption_count)
 
         original = self._load(execution_id, expected_version)
         updates: dict[str, object] = {}
@@ -599,6 +551,74 @@ class ExecutionService:
 
     def _now_iso(self) -> str:
         return self._clock().isoformat()
+
+
+def build_canonical_execution(
+    task: CanonicalTask,
+    scheduled_task: CanonicalScheduledTask | None,
+    *,
+    now: datetime,
+    user_id: uuid.UUID | None,
+) -> TaskExecution:
+    """
+    A new 'scheduled' execution of a canonical Task (and the placement it
+    came from, if any), with the planned snapshot the module docstring
+    describes. Shared by ExecutionService and the direct PostgreSQL service
+    (app/persistence/executions.py), so both snapshot a task identically.
+    """
+    now_iso = now.isoformat()
+    tag = task.tags[0] if task.tags else ""
+
+    if scheduled_task is not None:
+        planned_duration_minutes = round(
+            (scheduled_task.planned_end - scheduled_task.planned_start).total_seconds() / 60
+        )
+        canonical_kwargs = dict(
+            scheduled_task_id=scheduled_task.id,
+            canonical_planned_date=scheduled_task.planned_date,
+            canonical_timezone=scheduled_task.timezone,
+            canonical_planned_start=scheduled_task.planned_start,
+            canonical_planned_end=scheduled_task.planned_end,
+        )
+    else:
+        planned_duration_minutes = task.estimated_duration_minutes
+        canonical_kwargs = dict(
+            scheduled_task_id=None,
+            canonical_planned_date=None,
+            canonical_timezone=None,
+            canonical_planned_start=None,
+            canonical_planned_end=None,
+        )
+
+    return TaskExecution(
+        id=str(uuid.uuid4()),
+        task_name=task.name,
+        category=task.category,
+        tag=tag,
+        planned_date=None,
+        planned_start=None,
+        planned_end=None,
+        planned_duration=planned_duration_minutes,
+        priority=task.priority,
+        status=ExecutionStatus.SCHEDULED,
+        created_at=now_iso,
+        updated_at=now_iso,
+        task_id=task.id,
+        user_id=user_id,
+        **canonical_kwargs,
+    )
+
+
+def check_feedback(*, focus_rating: int | None, energy_rating: int | None, interruption_count: int | None) -> None:
+    """The feedback ranges (InvalidFeedbackError), shared with the direct PostgreSQL service."""
+    if focus_rating is not None and not 1 <= focus_rating <= 5:
+        raise InvalidFeedbackError(f"focus_rating must be between 1 and 5, got {focus_rating}.")
+    if energy_rating is not None and not 1 <= energy_rating <= 5:
+        raise InvalidFeedbackError(f"energy_rating must be between 1 and 5, got {energy_rating}.")
+    if interruption_count is not None and interruption_count < 0:
+        raise InvalidFeedbackError(
+            f"interruption_count must be zero or greater, got {interruption_count}."
+        )
 
 
 @contextmanager

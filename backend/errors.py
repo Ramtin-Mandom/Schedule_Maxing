@@ -11,17 +11,18 @@ distinguished from records that do not exist --, 409 conflict (version
 conflict, tombstone, duplicate, in use), 422 validation / invalid
 reference, 503 not ready. Messages never contain passwords, tokens, hashes,
 or configuration values.
+
+This module is framework-free: the mutation, resource and account code
+raises ApiError without importing FastAPI, so it also serves the direct
+desktop path (app/persistence). The FastAPI handlers that render an ApiError
+as an HTTP response live in backend/http_errors.py.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from fastapi import FastAPI, Request
-from fastapi.encoders import jsonable_encoder
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
-from starlette.exceptions import HTTPException as StarletteHTTPException
+from pydantic_core import to_jsonable_python
 
 
 class ApiError(Exception):
@@ -33,7 +34,7 @@ class ApiError(Exception):
         self.details = details
 
     def body(self) -> dict:
-        return {"error": {"code": self.code, "message": self.message, **jsonable_encoder(self.details)}}
+        return {"error": {"code": self.code, "message": self.message, **to_jsonable_python(self.details)}}
 
 
 def not_found(kind: str) -> ApiError:
@@ -60,23 +61,10 @@ def version_conflict(kind: str, supplied: int | None, current: dict) -> ApiError
     )
 
 
-def install_error_handlers(app: FastAPI) -> None:
-    @app.exception_handler(ApiError)
-    async def _api_error(_request: Request, error: ApiError) -> JSONResponse:
-        headers = {"WWW-Authenticate": "Bearer"} if error.status == 401 else None
-        return JSONResponse(error.body(), status_code=error.status, headers=headers)
+def __getattr__(name: str):
+    # Compatibility: install_error_handlers used to live here (it needs FastAPI, so it is loaded on demand).
+    if name == "install_error_handlers":
+        from backend.http_errors import install_error_handlers
 
-    @app.exception_handler(RequestValidationError)
-    async def _validation(_request: Request, error: RequestValidationError) -> JSONResponse:
-        problems = [
-            {"location": [str(part) for part in item.get("loc", ())], "message": str(item.get("msg", ""))}
-            for item in error.errors()
-        ]
-        # Only locations and messages are echoed -- never the submitted values (they may contain a password).
-        body = {"error": {"code": "validation_error", "message": "The request is not valid.", "problems": problems}}
-        return JSONResponse(body, status_code=422)
-
-    @app.exception_handler(StarletteHTTPException)
-    async def _http(_request: Request, error: StarletteHTTPException) -> JSONResponse:
-        code = {404: "not_found", 405: "method_not_allowed"}.get(error.status_code, "http_error")
-        return JSONResponse({"error": {"code": code, "message": str(error.detail)}}, status_code=error.status_code)
+        return install_error_handlers
+    raise AttributeError(name)

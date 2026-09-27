@@ -20,6 +20,7 @@ import customtkinter as ctk
 
 from app.planning.errors import PlanningError
 from app.ui import theme
+from app.ui.background import run_io
 from app.ui.components import AppButton, LabeledEntry, ModalDialog, Notice, font
 from app.ui.preferences_model import FieldInput, PreferenceRow
 
@@ -140,9 +141,10 @@ class DayPreferencesDialog(ModalDialog):
     page re-reads itself when the dialog closes (freshness may change).
     """
 
-    def __init__(self, parent, controller, *, on_closed: Callable[[], None]) -> None:
+    def __init__(self, parent, controller, *, on_closed: Callable[[], None], background_io: bool = False) -> None:
         super().__init__(parent, "Day Preferences", width=640)
         self._controller = controller
+        self._background_io = background_io
         self._on_closed = on_closed
         self.view = None
         self.header = ctk.CTkLabel(self.body, text="", anchor="w", justify="left", wraplength=600,
@@ -161,12 +163,20 @@ class DayPreferencesDialog(ModalDialog):
         self.add_buttons("Done", self.close, cancel_text="Close")
         self.refresh()
 
-    def refresh(self) -> None:
-        result = self._controller.preferences()
-        if not result.ok:
-            self.notice.show("error", result.error or "The preferences could not be read.")
-            return
-        self._show(result.value)
+    def _io(self, work, done) -> None:
+        """A storage call: at once locally, in a worker with direct PostgreSQL storage (app/ui/background.run_io)."""
+        run_io(self, work, done, background=self._background_io, still_current=lambda: not self._closed)
+
+    def refresh(self, then: Callable[[], None] | None = None) -> None:
+        def done(result) -> None:
+            if not result.ok:
+                self.notice.show("error", result.error or "The preferences could not be read.")
+                return
+            self._show(result.value)
+            if then is not None:
+                then()
+
+        self._io(self._controller.preferences, done)
 
     def _show(self, view) -> None:
         self.view = view
@@ -189,30 +199,39 @@ class DayPreferencesDialog(ModalDialog):
             self.notice.show("error", f"Not saved: {result.error}")
             return
         pending = {name: self.editor.value_of(name) for name in self.editor.inputs}
-        self.refresh()
-        for name, value in pending.items():
-            if name in self.editor.inputs:
-                self.editor.set_input(name, value)
-        self.notice.show("error", f"{result.error} Saved values were refreshed; your typed edits are kept for review.")
+
+        def restore() -> None:
+            for name, value in pending.items():
+                if name in self.editor.inputs:
+                    self.editor.set_input(name, value)
+            self.notice.show("error", f"{result.error} Saved values were refreshed; your typed edits are kept for "
+                                      "review.")
+
+        self.refresh(then=restore)
 
     def _label(self, key: str) -> str:
         return self.editor.rows[key].spec.label if key in self.editor.rows else key
 
     def save(self, key: str, value: FieldInput) -> None:
-        result = self._controller.save_preference(key, value, expected_version=self.view.layer_version)
-        self._apply(result, key, f"{self._label(key)} saved for this date.")
+        version = self.view.layer_version
+        self._io(lambda: self._controller.save_preference(key, value, expected_version=version),
+                 lambda result: self._apply(result, key, f"{self._label(key)} saved for this date."))
 
     def inherit(self, key: str) -> None:
-        result = self._controller.inherit_preference(key, expected_version=self.view.layer_version)
-        self._apply(result, key, f"{self._label(key)} now uses the inherited value.")
+        version = self.view.layer_version
+        self._io(lambda: self._controller.inherit_preference(key, expected_version=version),
+                 lambda result: self._apply(result, key, f"{self._label(key)} now uses the inherited value."))
 
     def clear(self, key: str) -> None:
-        result = self._controller.clear_preference(key, expected_version=self.view.layer_version)
-        self._apply(result, key, f"{self._label(key)}: no preference for this date.")
+        version = self.view.layer_version
+        self._io(lambda: self._controller.clear_preference(key, expected_version=version),
+                 lambda result: self._apply(result, key, f"{self._label(key)}: no preference for this date."))
 
     def reset_all(self) -> None:
-        result = self._controller.reset_date_preferences(expected_version=self.view.layer_version)
-        self._apply(result, None, "This date's own preferences and engine were removed; it inherits your defaults.")
+        version = self.view.layer_version
+        self._io(lambda: self._controller.reset_date_preferences(expected_version=version),
+                 lambda result: self._apply(result, None, "This date's own preferences and engine were removed; it "
+                                                          "inherits your defaults."))
 
     def close(self, result=None) -> None:
         already = self._closed

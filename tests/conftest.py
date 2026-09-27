@@ -10,6 +10,11 @@ import pytest
 
 from app.models import DaySchedule, FixedBlock, ScheduledTask, Task, TimeWindow
 from config import settings
+from tests import window_placement
+
+# Windows opened by the tests appear on the monitor left of the primary one, when there is one
+# (tests/window_placement.py); the child-process probes inherit the same placement.
+window_placement.install()
 
 
 @pytest.fixture(autouse=True)

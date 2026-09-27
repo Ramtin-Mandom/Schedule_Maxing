@@ -24,7 +24,7 @@ from sqlalchemy import Engine
 
 from backend.api import install_routes
 from backend.database import create_backend_engine, session_factory
-from backend.errors import install_error_handlers
+from backend.http_errors import install_error_handlers
 from backend.planning_api import build_planning_router, hosted_capabilities, hosted_context_dependency
 from backend.settings import BackendSettings, load_settings
 from backend.sync import sync

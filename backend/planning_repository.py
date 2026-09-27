@@ -48,12 +48,13 @@ from app.planning.application import task_planned_date
 from app.planning.errors import DuplicateEntityError, InvalidEntityError, ScopeError
 from app.planning.external_dependencies import ExecutionFact
 from app.planning.models import FixedBlock, Project, ScheduledTask, Task
-from app.planning.preferences import PreferenceOverrides, PreferenceRecord, PreferenceScope
+from app.planning.preferences import PreferenceRecord, PreferenceScope
 from app.planning.provenance import GenerationRecord
 from app.planning.scope import OwnerScope
 from app.planning.time import local_day_start_utc
 from backend import models
 from backend.mutations import Mutator, mutation
+from backend.record_mapping import preference_overrides, task_content
 from backend.resources import (
     FIXED_BLOCKS,
     GENERATIONS,
@@ -281,18 +282,8 @@ class ServerPlanningRepository:
         return dict(dependents)
 
     def _tasks(self, rows: list) -> list[Task]:
-        if not rows:
-            return []
-        dependencies: dict[uuid.UUID, list] = defaultdict(list)
-        ids = [row.id for row in rows]
-        for dependency in self._session.scalars(
-            select(models.TaskDependency).where(models.TaskDependency.user_id == self._user_id,
-                                                models.TaskDependency.task_id.in_(ids))
-            .order_by(models.TaskDependency.task_id, models.TaskDependency.position)
-        ):
-            dependencies[dependency.task_id].append(dependency.depends_on_id)
-        tasks = [_task(row, dependencies[row.id]) for row in rows]
-        return sorted(tasks, key=lambda task: (task.created_at, str(task.id)))
+        # The child rows (tags, dates, dependencies, weekdays) were loaded with the rows, one query per kind.
+        return sorted((_task(row) for row in rows), key=lambda task: (task.created_at, str(task.id)))
 
     # ------------------------------------------------------------------
     # Fixed blocks
@@ -447,18 +438,8 @@ def _project(row) -> Project:
     return Project(name=row.name, description=row.description, **_audit(row))
 
 
-def _task(row, dependency_ids: list) -> Task:
-    window = None
-    if row.preferred_window_start_minute is not None:
-        window = {"start_minute": row.preferred_window_start_minute, "end_minute": row.preferred_window_end_minute}
-    return Task.model_validate({
-        **_audit(row), "project_id": row.project_id, "name": row.name, "category": row.category, "tags": list(row.tags),
-        "estimated_duration_minutes": row.estimated_duration_minutes, "priority": row.priority,
-        "required": row.required, "required_date": row.required_date,
-        "preferred_dates": [date_.fromisoformat(value) for value in row.preferred_dates],
-        "preferred_time_window": window, "dependency_ids": list(dependency_ids),
-        "deadline": datetime.fromisoformat(row.deadline) if row.deadline else None, "recurrence": row.recurrence,
-    })
+def _task(row) -> Task:
+    return Task.model_validate({**_audit(row), **task_content(row)})
 
 
 def _task_payload(task: Task):
@@ -494,8 +475,8 @@ def _preference_fields(record: PreferenceRecord) -> dict:
 
 
 def _preference(row) -> PreferenceRecord:
-    overrides = PreferenceOverrides.model_validate({**row.overrides, "optimizer_mode": row.optimizer_mode})
-    return PreferenceRecord(scope=PreferenceScope(row.scope), date=row.scope_date, overrides=overrides, **_audit(row))
+    return PreferenceRecord(scope=PreferenceScope(row.scope), date=row.scope_date, overrides=preference_overrides(row),
+                            **_audit(row))
 
 
 _GENERATION_FIELDS = (

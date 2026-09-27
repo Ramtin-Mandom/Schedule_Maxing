@@ -24,7 +24,9 @@ not exposed. No YAML editing is needed.
 
 Language currently offers English only. Theme and interface scale persist in
 `ui_settings.json` beside the database and stay on this device. Scheduling preferences
-are SQLite records and sync when associated with an account. The planning timezone is
+are SQLite records and sync when associated with an account; with direct PostgreSQL
+storage ([direct-postgres.md](direct-postgres.md)) they are the signed-in account's
+records in PostgreSQL, read and saved in background workers. The planning timezone is
 shown read-only; configure `SCHEDULE_MAXING_TIMEZONE` at startup. Unsupported overnight
 and ambiguous daylight-saving inputs are refused without rounding.
 

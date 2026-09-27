@@ -608,7 +608,7 @@ class DayScheduleController(SchedulePageController):
         try:
             views = self._unwrap(self._planning.preference_views(self._anchor, self._anchor))
         except _Failure as failure:
-            return ControllerResult.failure(failure.message)
+            return ControllerResult.failure(failure.message, failure.cause)
         return ControllerResult.success(self._preferences_view(views))
 
     def _preferences_view(self, views: PreferenceViews) -> DayPreferencesView:
@@ -668,7 +668,7 @@ class DayScheduleController(SchedulePageController):
         except (FieldError, ValueError) as error:
             return ControllerResult.failure(_short_error(error), error)
         except _Failure as failure:
-            return ControllerResult.failure(failure.message)
+            return ControllerResult.failure(failure.message, failure.cause)
         result = self._planning.update_date_overrides(day, change, expected_version=expected_version)
         if not result.ok:
             return ControllerResult.failure(result.error, result.cause)

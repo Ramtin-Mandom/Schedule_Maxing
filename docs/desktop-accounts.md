@@ -5,8 +5,21 @@ a backend is optional. The app then signs you in and keeps your account's
 records synchronized through the existing sync client (`app/sync`,
 [sync-protocol.md](sync-protocol.md)).
 
-The desktop never runs, and never needs, the local web service. It never
-holds a database password.
+The desktop never runs, and never needs, the local web service. In the
+default (local) storage mode it never holds a database password.
+
+**Direct PostgreSQL storage** (`python -m app.app --storage postgres --env-file
+.env`, [direct-postgres.md](direct-postgres.md)) uses the same Account page
+differently: registering, signing in, the profile and signing out go straight to
+the PostgreSQL database with the shared account rules (no backend address, HTTP
+or JWT). The app starts signed out on the Account page and checks the database
+and its schema revision in the background; **Check database** repeats that. Until
+someone signs in, the other pages load nothing. Signing in binds every page to
+that account; signing out ends that access and rebuilds the pages, so nothing of
+the previous account stays visible and results of work it started are dropped.
+The password field is cleared after every attempt and no password is kept. The
+backend address, association, synchronization and conflict cards are hidden:
+PostgreSQL is the only copy, so there is nothing to associate or synchronize.
 
 ## The Account page (sidebar → Account, or **Account** in the status bar)
 

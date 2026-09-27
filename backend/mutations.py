@@ -12,7 +12,10 @@ REST CRUD today, batch synchronization later -- goes through a Mutator, which
        is accepted without a new version),
     4. appends one change_log entry per changed record -- tombstones and every
        record touched by a compound change (e.g. a task delete that tombstones
-       its placements) included -- in the same transaction.
+       its placements) included -- in the same transaction. Each entry
+       references an immutable snapshot of the record (backend/snapshots.py);
+       the record a mutation returns is that snapshot, so the response, the
+       change feed and a sync retry agree exactly.
 
 Change ordering (for incremental pull, docs/backend.md): each user has a
 counter, users.change_seq. A mutation begins with
@@ -53,7 +56,7 @@ from app.execution.lifecycle import TRANSITIONS, compute_active_duration_minutes
 from app.execution.models import ExecutionStatus
 from app.execution.models import WorkSession as CanonicalSession
 from app.planning.time import elapsed_minutes
-from backend import models
+from backend import models, snapshots
 from backend.errors import ApiError, invalid_reference, not_found, version_conflict
 from backend.executions import EXECUTIONS, ActionIn, ExecutionCreate, FeedbackIn
 from backend.resources import ResourceSpec, live
@@ -70,6 +73,8 @@ class Mutator:
         self.user_id = user_id
         self.now = clock()
         self._seq: int | None = None
+        #: The snapshots logged in this transaction (a sync outcome of the same record reuses its snapshot).
+        self.revisions: snapshots.KnownRevisions = {}
 
     # ------------------------------------------------------------------
     # Change log
@@ -84,12 +89,16 @@ class Mutator:
         if self._seq is None:
             raise ApiError(401, "unauthenticated", "The account no longer exists.")
 
-    def log(self, entity_type: str, record: dict, operation: str) -> None:
+    def log(self, entity_type: str, record: dict, operation: str) -> dict:
+        """Append the change-log entry of `record`; returns the record as its snapshot stores it."""
+        revision = snapshots.encode(self.user_id, entity_type, record)
         self._seq += 1
         self.session.add(models.ChangeLogEntry(
-            user_id=self.user_id, seq=self._seq, entity_type=entity_type, entity_id=uuid.UUID(record["id"]),
-            operation=operation, version=record["version"], recorded_at=self.now, payload=record,
+            user_id=self.user_id, seq=self._seq, entity_type=entity_type, entity_id=revision.entity_id,
+            operation=operation, version=revision.version, recorded_at=self.now, revision=revision,
         ))
+        self.revisions[(entity_type, revision.entity_id, revision.version)] = revision
+        return snapshots.decode(revision)
 
     def _finish(self) -> None:
         self.session.execute(
@@ -117,9 +126,7 @@ class Mutator:
         self.session.add(row)
         spec.assign(self.session, self.user_id, row, payload)
         self._flush(spec, row)
-        record = spec.serialize(self.session, self.user_id, row)
-        self.log(spec.entity_type, record, "upsert")
-        return record
+        return self.log(spec.entity_type, spec.serialize(self.session, self.user_id, row), "upsert")
 
     def update(self, spec: ResourceSpec, record_id: uuid.UUID, payload) -> dict:
         row = self._load(spec.model, record_id, spec.label)
@@ -132,9 +139,7 @@ class Mutator:
             return spec.serialize(self.session, self.user_id, row)  # accepted, nothing changed: no new version
         row.updated_at, row.version = self.now, row.version + 1
         self._flush(spec, row)
-        record = spec.serialize(self.session, self.user_id, row)
-        self.log(spec.entity_type, record, "upsert")
-        return record
+        return self.log(spec.entity_type, spec.serialize(self.session, self.user_id, row), "upsert")
 
     def delete(self, spec: ResourceSpec, record_id: uuid.UUID, base_version: int) -> dict:
         row = self._load(spec.model, record_id, spec.label)
@@ -147,9 +152,7 @@ class Mutator:
         row.deleted_at = row.updated_at = self.now
         row.version += 1
         self._flush(spec, row)
-        record = spec.serialize(self.session, self.user_id, row)
-        self.log(spec.entity_type, record, "delete")
-        return record
+        return self.log(spec.entity_type, spec.serialize(self.session, self.user_id, row), "delete")
 
     def _check_precondition(self, spec, row, base_version: int) -> None:
         if row.deleted_at is not None or row.version != base_version:
@@ -187,21 +190,21 @@ class Mutator:
             self._check_execution_links(payload)
 
         fields = payload.model_dump(exclude={"id", "sessions", "status"})
+        linked_task_id, linked_placement_id = self._execution_links(payload)
         row = models.Execution(
             user_id=self.user_id, id=record_id, created_at=self.now, updated_at=self.now, version=1,
-            status=payload.status.value, **fields,
+            status=payload.status.value, linked_task_id=linked_task_id, linked_placement_id=linked_placement_id,
+            **fields,
         )
         self.session.add(row)
-        self.session.flush()
+        self._flush(EXECUTIONS, row)
         for position, work in enumerate(payload.sessions):
             self.session.add(models.WorkSession(
                 user_id=self.user_id, execution_id=record_id, position=position,
                 started_at=work.started_at, ended_at=work.ended_at,
             ))
         self._flush(EXECUTIONS, row)
-        record = EXECUTIONS.serialize(self.session, self.user_id, row)
-        self.log(EXECUTIONS.entity_type, record, "upsert")
-        return record
+        return self.log(EXECUTIONS.entity_type, EXECUTIONS.serialize(self.session, self.user_id, row), "upsert")
 
     def _check_execution_links(self, payload: ExecutionCreate) -> None:
         """A new (non-historical) execution must link to the user's own live task and placement."""
@@ -213,6 +216,22 @@ class Mutator:
                 raise invalid_reference("scheduled_task_id does not name one of your placements.")
             if placement.task_id != payload.task_id:
                 raise invalid_reference("The placement belongs to a different task.")
+
+    def _execution_links(self, payload: ExecutionCreate) -> tuple[uuid.UUID | None, uuid.UUID | None]:
+        """
+        The database-enforced references of a new execution: its task_id when
+        that is one of the user's own tasks, and its scheduled_task_id when
+        that is a placement of that task (tombstones included -- history stays
+        bound to them). A historical execution whose ids do not resolve keeps
+        them as history only; nothing is ever invented for it.
+        """
+        if payload.task_id is None or self.session.get(models.Task, (self.user_id, payload.task_id)) is None:
+            return None, None
+        if payload.scheduled_task_id is None:
+            return payload.task_id, None
+        placement = self.session.get(models.Placement, (self.user_id, payload.scheduled_task_id))
+        resolves = placement is not None and placement.task_id == payload.task_id
+        return payload.task_id, payload.scheduled_task_id if resolves else None
 
     def execution_action(self, record_id: uuid.UUID, action: str, payload: ActionIn) -> dict:
         row = self._load(models.Execution, record_id, "execution")
@@ -273,9 +292,7 @@ class Mutator:
     def _commit_execution(self, row) -> dict:
         row.updated_at, row.version = self.now, row.version + 1
         self._flush(EXECUTIONS, row)
-        record = EXECUTIONS.serialize(self.session, self.user_id, row)
-        self.log(EXECUTIONS.entity_type, record, "upsert")
-        return record
+        return self.log(EXECUTIONS.entity_type, EXECUTIONS.serialize(self.session, self.user_id, row), "upsert")
 
     def delete_execution(self, record_id: uuid.UUID, base_version: int) -> dict:
         """Tombstone one execution; its work sessions stay with it (history)."""

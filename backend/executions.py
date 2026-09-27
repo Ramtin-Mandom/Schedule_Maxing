@@ -22,7 +22,9 @@ task_id/scheduled_task_id: a normal execution must reference the caller's
 own live task (and placement of that task). An execution uploaded from
 history whose parents were never persisted or are gone sets
 historical_reference=true; its ids are then stored as historical identity
-without being resolved -- no placeholder parent is ever created.
+without being resolved -- no placeholder parent is ever created. Wherever
+the ids do resolve, the row also stores them as database-enforced
+references (backend/models.Execution: linked_task_id/linked_placement_id).
 """
 
 from __future__ import annotations
