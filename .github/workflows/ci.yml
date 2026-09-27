@@ -59,7 +59,52 @@ jobs:
           if importlib.util.find_spec(m)]; sys.exit(f'unexpected web packages: {found}' if found else 0)"
 
       - name: Desktop, planning, execution, productivity and CLI tests
-        run: xvfb-run -a python -m pytest --ignore=tests/backend --ignore=tests/sync --ignore=tests/web
+        run: xvfb-run -a python -m pytest --ignore=tests/backend --ignore=tests/sync --ignore=tests/web --ignore=tests/direct
+
+  direct-desktop:
+    # The desktop's optional direct PostgreSQL mode (docs/direct-postgres.md) with only its own
+    # packages (requirements-direct.txt): no FastAPI, Uvicorn, HTTPX or PyJWT, and no JWT secret.
+    # A throwaway PostgreSQL service container (trust authentication, no secret involved).
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: sm_test
+          POSTGRES_DB: schedule_maxing_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sm_test -d schedule_maxing_test"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      TEST_DATABASE_URL: postgresql://sm_test@localhost:5432/schedule_maxing_test
+      BACKEND_TESTS_ON_POSTGRES: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Install direct-mode dependencies only
+        run: python -m pip install -r requirements-direct.txt pytest
+
+      - name: Install virtual desktop
+        run: sudo apt-get update && sudo apt-get install -y xvfb xauth python3-tk
+
+      - name: HTTP/JWT packages are absent
+        run: >-
+          python -c "import importlib.util, sys;
+          found = [m for m in ('fastapi', 'starlette', 'uvicorn', 'httpx', 'jwt') if importlib.util.find_spec(m)];
+          sys.exit(f'unexpected HTTP packages: {found}' if found else 0)"
+
+      - name: Direct-mode suites on PostgreSQL, plus offline isolation
+        run: xvfb-run -a python -m pytest tests/direct tests/test_desktop_isolation.py
 
   postgres:
     # The backend and sync suites against a real, throwaway PostgreSQL
@@ -96,7 +141,7 @@ jobs:
       - name: PostgreSQL-specific tests
         run: python -m pytest -m postgres tests/backend
 
-      - name: Backend and sync suites on PostgreSQL
-        run: python -m pytest tests/backend tests/sync
+      - name: Backend, sync and direct-desktop suites on PostgreSQL
+        run: python -m pytest tests/backend tests/sync tests/direct
         env:
           BACKEND_TESTS_ON_POSTGRES: "1"

@@ -20,6 +20,7 @@ from typing import Literal
 
 import customtkinter as ctk
 
+from app.persistence.errors import NotSignedInError
 from app.productivity.buckets import TimeBucket
 from app.productivity.filters import ObservationFilters
 from app.productivity.reporting import ProductivityDashboard
@@ -259,6 +260,8 @@ class ProductivityPage(ctk.CTkFrame):
 
     def _on_dashboard_loaded(self, result: ControllerResult[ProductivityDashboard]) -> None:
         if not result.ok:
+            if isinstance(result.cause, NotSignedInError):
+                return  # direct storage before sign-in: the Account page says so
             messagebox.showerror("Productivity Data Error", result.error or "An unknown error occurred.", parent=self)
             return
 

@@ -16,6 +16,13 @@ switch the workspace and rebuild its pages.
 
 Nothing here stores a password: the password field is cleared after every
 attempt and the session token stays inside SyncService.
+
+Direct PostgreSQL storage (a controller with storage_mode == "postgres",
+app/ui/direct_services.DirectAccountController): the same page registers,
+signs in, shows the profile and signs out directly against the database.
+The backend address, association, synchronization and conflict cards are
+hidden -- there is no local copy to associate or synchronize -- and
+"Check connection" checks the database and its schema revision.
 """
 
 from __future__ import annotations
@@ -52,6 +59,8 @@ class AccountPage(ctk.CTkFrame):
         super().__init__(parent, fg_color=theme.APP_BG, corner_radius=0)
         self.controller = controller
         self._on_workspace_changed = on_workspace_changed
+        #: Direct PostgreSQL storage: no backend address, synchronization, association or conflicts.
+        self.direct = getattr(controller, "storage_mode", None) == "postgres"
         self.view: ConnectionView | None = None
         self.preview: AssociationPreview | None = None
         self.conflicts: list[ConflictView] = []
@@ -62,8 +71,10 @@ class AccountPage(ctk.CTkFrame):
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
-        PageHeader(self, "Account", "Connect to a backend to sign in and synchronize. Everything also works offline."
-                   ).grid(row=0, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(22, 12))
+        subtitle = ("Sign in to your account in the PostgreSQL database. This mode needs the network; nothing is "
+                    "kept on this computer." if self.direct else
+                    "Connect to a backend to sign in and synchronize. Everything also works offline.")
+        PageHeader(self, "Account", subtitle).grid(row=0, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(22, 12))
         self.body = ctk.CTkScrollableFrame(self, fg_color="transparent")
         self.body.grid(row=1, column=0, sticky="nsew", padx=theme.SPACE_M, pady=(0, theme.SPACE_L))
         self.body.columnconfigure(0, weight=1)
@@ -77,6 +88,11 @@ class AccountPage(ctk.CTkFrame):
         ctk.CTkLabel(performance, text="Performance analytics will appear here in a later milestone.",
                      wraplength=440, anchor="w", justify="left", text_color=theme.TEXT_MUTED).grid(
                          row=1, column=0, sticky="ew", padx=16, pady=(0, 16))
+        if self.direct:
+            for widget in (self.backend_field, self.save_backend_button, self.offline_button, self.association_card,
+                           self.sync_card, self.conflicts_card):
+                widget.grid_remove()
+            self.check_button.configure(text="Check database")
         self.refresh()
 
     # ----------------------------------------------------------------- building
@@ -126,8 +142,11 @@ class AccountPage(ctk.CTkFrame):
         self.profile_label.grid(row=1, column=0, sticky="ew", pady=(2, 8))
         self.sign_out_button = AppButton(self.signed_in_frame, "Sign out", self.sign_out, variant="secondary")
         self.sign_out_button.grid(row=2, column=0, sticky="w")
-        ctk.CTkLabel(self.signed_in_frame, text="Signing out forgets the session on this device. Your records stay "
-                                                "here; the backend's token simply expires (it is not revoked).",
+        sign_out_note = ("Signing out closes access to your records on this computer until you sign in again. They "
+                         "stay in the database." if getattr(self, "direct", False) else
+                         "Signing out forgets the session on this device. Your records stay here; the backend's token "
+                         "simply expires (it is not revoked).")
+        ctk.CTkLabel(self.signed_in_frame, text=sign_out_note,
                      font=font(theme.SIZE_CAPTION), text_color=theme.TEXT_MUTED, anchor="w", justify="left",
                      wraplength=440).grid(row=3, column=0, sticky="ew", pady=(6, 0))
 
@@ -272,9 +291,18 @@ class AccountPage(ctk.CTkFrame):
             return
         self.render(result.value)
         if self.view.state == "signed_in":
-            self.load_preview()
-            self.load_conflicts()
+            if not self.direct:
+                self.load_preview()
+                self.load_conflicts()
             self._load_profile()
+
+    def database_checked(self, view: ConnectionView) -> None:
+        """Direct storage: show the outcome of the startup/explicit database check."""
+        self.render(view)
+        if view.last_error:
+            self.connection_notice.show("error", view.last_error)
+        else:
+            self.connection_notice.show("success", "The database answered and its schema is current.")
 
     def render(self, view: ConnectionView) -> None:
         self.view = view
@@ -286,7 +314,8 @@ class AccountPage(ctk.CTkFrame):
             self.form_frame.grid_remove()
             self.signed_in_label.configure(text=f"Signed in as {masked_email(view.signed_in_email)}")
             self.signed_in_frame.grid(row=1, column=0, columnspan=3, sticky="ew", padx=theme.SPACE_L)
-            self.association_card.grid()
+            if not self.direct:
+                self.association_card.grid()
         else:
             self.profile_label.configure(text="")
             self.signed_in_frame.grid_remove()
@@ -310,7 +339,7 @@ class AccountPage(ctk.CTkFrame):
         view = self.view
         if view is None:
             return
-        configured = view.state != "unconfigured"
+        configured = self.direct or view.state != "unconfigured"
         self._enable(self.check_button, configured and "check" not in self.busy)
         self._enable(self.offline_button, configured and "backend" not in self.busy)
         self._enable(self.submit_button, configured and "account" not in self.busy)
@@ -356,6 +385,9 @@ class AccountPage(ctk.CTkFrame):
         def done(result: ControllerResult[ConnectionView]) -> None:
             if not result.ok:
                 self.connection_notice.show("error", result.error)
+                return
+            if self.direct:
+                self.database_checked(result.value)
                 return
             self.render(result.value)
             if result.value.reachable:
@@ -416,7 +448,8 @@ class AccountPage(ctk.CTkFrame):
             self._field_errors(result)
             return
         outcome = result.value
-        note = "Signed in. Nothing on this device was uploaded or claimed."
+        note = ("Signed in. Your schedule is read from the database." if self.direct else
+                "Signed in. Nothing on this device was uploaded or claimed.")
         if outcome.unassociated:
             note += f" {outcome.unassociated} record(s) without an account are listed below if you want them here."
         self.account_notice.show("success", note)
@@ -442,7 +475,8 @@ class AccountPage(ctk.CTkFrame):
             if not result.ok:
                 self.account_notice.show("error", result.error)
                 return
-            self.account_notice.show("info", "Signed out. Your records stay on this device.")
+            self.account_notice.show("info", "Signed out. Your records stay in the database; sign in again to use "
+                                             "them." if self.direct else "Signed out. Your records stay on this device.")
             self._on_workspace_changed()
             self.render(result.value)
 

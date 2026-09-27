@@ -194,6 +194,6 @@ class ExecutionController:
         try:
             return ControllerResult.success(operation())
         except ExecutionError as error:
-            return ControllerResult.failure(str(error))
+            return ControllerResult.failure(str(error), error)
         except Exception as error:  # noqa: BLE001 - last-resort safety net so DB/unexpected errors never crash the UI
-            return ControllerResult.failure(f"Unexpected error: {error}")
+            return ControllerResult.failure(f"Unexpected error: {error}", error)

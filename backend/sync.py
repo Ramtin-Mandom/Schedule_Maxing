@@ -22,8 +22,11 @@ recorded (sync_operations) -- for an applied operation in the same
 transaction as the mutation itself, so a lost response after commit is
 answered from the record on retry, with no second write, record, session or
 version increment. A rejected/conflicting outcome is recorded too, so
-retries are stable. The lookup happens while the user's change-log lock is
-held, so two concurrent pushes of the same op_id cannot both apply it.
+retries are stable. Outcomes are typed rows that reference immutable record
+snapshots (backend/snapshots.py), so a retry answers exactly the same even
+after the record was edited later; the response itself is built from what
+was recorded. The lookup happens while the user's change-log lock is held,
+so two concurrent pushes of the same op_id cannot both apply it.
 Reusing an op_id for a different operation (a different request hash) is
 answered with status "rejected", code "op_id_reused", and changes nothing.
 
@@ -48,7 +51,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend import models
+from backend import models, snapshots
 from backend.api import current_user_id, get_session
 from backend.errors import ApiError
 from backend.executions import ACTIONS, ActionIn, ExecutionCreate, FeedbackIn
@@ -164,11 +167,11 @@ def _units(operations: list[SyncOperationIn]) -> list[list[SyncOperationIn]]:
     return units
 
 
-def _record(session: Session, mutator: Mutator, op: SyncOperationIn, result: dict) -> None:
-    session.add(models.SyncOperation(
-        user_id=mutator.user_id, op_id=op.op_id, request_hash=op.request_hash(), status=result["status"],
-        result=result, recorded_at=mutator.now,
-    ))
+def _record(session: Session, mutator: Mutator, op: SyncOperationIn, result: dict) -> dict:
+    """Record one outcome; returns the result as recorded (what every retry of the op_id answers)."""
+    row = snapshots.outcome_row(mutator.user_id, op.op_id, op.request_hash(), mutator.now, result, mutator.revisions)
+    session.add(row)
+    return snapshots.outcome(row)
 
 
 def _push_unit(session: Session, user_id: uuid.UUID, clock, unit: list[SyncOperationIn]) -> list[dict]:
@@ -186,9 +189,9 @@ def _push_unit(session: Session, user_id: uuid.UUID, clock, unit: list[SyncOpera
                 return [{"op_id": str(op.op_id), "status": "rejected", "error": {
                     "code": "op_id_reused", "message": "This op_id was already used for a different operation.",
                 }} for op in unit]
-            return [stored[op.op_id].result for op in unit]  # a retry: the recorded outcome, nothing reapplied
+            return [snapshots.outcome(stored[op.op_id]) for op in unit]  # a retry: the recorded outcome
 
-        seq_before = mutator._seq
+        seq_before, revisions_before = mutator._seq, dict(mutator.revisions)
         results: list[dict] = []
         try:
             with session.begin_nested():
@@ -196,7 +199,8 @@ def _push_unit(session: Session, user_id: uuid.UUID, clock, unit: list[SyncOpera
                     record = _apply(mutator, op)
                     results.append({"op_id": str(op.op_id), "status": "applied", "record": record})
         except ApiError as error:
-            mutator._seq = seq_before  # the savepoint's change-log entries were rolled back with it
+            # The savepoint's change-log entries and their snapshots were rolled back with it.
+            mutator._seq, mutator.revisions = seq_before, revisions_before
             failed_status = "conflict" if error.status == 409 else "rejected"
             failing = unit[len(results)]
             results = []
@@ -208,9 +212,7 @@ def _push_unit(session: Session, user_id: uuid.UUID, clock, unit: list[SyncOpera
                         "code": "group_failed", "message": f"Operation {failing.op_id} of this group failed.",
                         "failed_op_id": str(failing.op_id),
                     }})
-        for op, result in zip(unit, results):
-            _record(session, mutator, op, result)
-        return results
+        return [_record(session, mutator, op, result) for op, result in zip(unit, results)]
 
 
 sync = APIRouter(prefix="/sync", tags=["sync"])
