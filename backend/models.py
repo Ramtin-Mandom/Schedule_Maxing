@@ -3,7 +3,8 @@ backend/models.py
 
 The server's database schema (SQLAlchemy 2 ORM). The versioned Alembic
 migrations in backend/migrations/ create exactly this schema; the
-migration test compares them so they cannot drift apart.
+migration test compares them so they cannot drift apart. It is the one
+storage model for the server and for any future direct desktop adapter.
 
 Design:
     - Every user-owned table's primary key is (user_id, id). Client-chosen
@@ -16,8 +17,26 @@ Design:
       create, +1 per accepted mutation; used by SQLAlchemy as the
       optimistic-concurrency column, so every UPDATE also compares it), and
       a `deleted_at` tombstone. Rows are never physically deleted by the API.
+    - Structured content is relational (migration 0006): a task's tags,
+      preferred dates, dependencies and recurrence weekdays are ordered or
+      keyed child rows, recurrence is scalar columns (the desktop SQLite
+      schema's own layout), and a preference layer is scalar columns plus
+      category/tag-relation child rows that keep the absent/value/explicit-
+      clear states of app.planning.preferences.PreferenceOverrides.
+    - The only JSON column is a placement's optimization_metadata: a small
+      (backend/record_mapping.py: MAX_OPTIMIZATION_METADATA_BYTES),
+      genuinely unstructured extension object that the wire contract and
+      the desktop allow. Nothing writes a task list or schedule into it.
     - change_log is the per-user, gap-free, commit-ordered feed of accepted
-      mutations (see backend/mutations.py for the ordering strategy).
+      mutations (see backend/mutations.py for the ordering strategy). Each
+      entry and each recorded sync outcome references an immutable record
+      revision (record_revisions + one typed table per entity type), so the
+      feed and sync retries keep returning the historical record, never the
+      current row.
+    - Executions keep their historical task/placement identity
+      (task_id/scheduled_task_id, possibly unresolved) and, separately, the
+      database-enforced owned references linked_task_id/linked_placement_id
+      (the placement must belong to that task and user).
 """
 
 from __future__ import annotations
@@ -38,18 +57,44 @@ from sqlalchemy import (
     String,
     Text,
     Uuid,
+    false,
     text,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, declared_attr, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, declared_attr, mapped_column, relationship
 
 from backend.database import JSONDocument, UTCDateTime
 
 EXECUTION_STATUSES = ("scheduled", "in_progress", "paused", "completed", "skipped", "cancelled")
 OPTIMIZER_MODES = ("precise_greedy", "adhd_friendly")
+RECURRENCE_FREQUENCIES = ("daily", "weekly", "monthly")
+ENTITY_TYPES = ("project", "task", "fixed_block", "placement", "preference", "schedule_generation", "execution")
+SYNC_STATUSES = ("applied", "conflict", "rejected")
+
+#: The reward fields of app.planning.preferences.RewardPreferencesOverride stored as reward_<name> columns.
+REWARD_FLOAT_FIELDS = (
+    "weight_importance", "weight_time_bonus", "weight_tag_relation", "weight_fragmentation_penalty",
+    "weight_category_bonus", "short_gap_bonus_weight", "short_gap_bonus_cap",
+)
+REWARD_INT_FIELDS = (
+    "max_time_distance_minutes", "same_tag_window_minutes", "min_gap_between_tasks_minutes",
+    "short_gap_bonus_max_minutes",
+)
 
 
 def _in(column: str, values: tuple[str, ...]) -> str:
     return f"{column} IN ({', '.join(repr(value) for value in values)})"
+
+
+def _child_of(table: str, parent: str, columns: tuple[str, ...], parent_columns: tuple[str, ...]) -> ForeignKeyConstraint:
+    """A value row's owner-aware composite foreign key to its parent row (removed with it)."""
+    return ForeignKeyConstraint(
+        ["user_id", *columns], [f"{parent}.user_id", *(f"{parent}.{name}" for name in parent_columns)],
+        name=f"fk_{table}_parent", ondelete="CASCADE",
+    )
+
+
+def _position_check(table: str) -> CheckConstraint:
+    return CheckConstraint("position >= 0", name=f"ck_{table}_position")
 
 
 class Base(DeclarativeBase):
@@ -99,73 +144,77 @@ def _record_checks(table: str) -> tuple:
     return (CheckConstraint("version > 0", name=f"ck_{table}_version"),)
 
 
-class Project(_Record, Base):
-    __tablename__ = "projects"
+# -----------------------------------------------------------------------------
+# Content columns, shared by each live table and its revision table, so a
+# record and its historical snapshots use the same field <-> column mapping
+# (backend/resources.py reads and writes both through the same functions).
+# -----------------------------------------------------------------------------
 
+
+class _ProjectContent:
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    __table_args__ = (*_record_checks("projects"), CheckConstraint("length(name) > 0", name="ck_projects_name"))
+
+def _project_checks(table: str) -> tuple:
+    return (CheckConstraint("length(name) > 0", name=f"ck_{table}_name"),)
 
 
-class Task(_Record, Base):
-    __tablename__ = "tasks"
-
+class _TaskContent:
     project_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     name: Mapped[str] = mapped_column(String(500), nullable=False)
     category: Mapped[str] = mapped_column(String(100), nullable=False)
-    tags: Mapped[list] = mapped_column(JSONDocument, nullable=False)
     estimated_duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     priority: Mapped[int] = mapped_column(Integer, nullable=False)
     required: Mapped[bool] = mapped_column(Boolean, nullable=False)
     required_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    preferred_dates: Mapped[list] = mapped_column(JSONDocument, nullable=False)
     preferred_window_start_minute: Mapped[int | None] = mapped_column(Integer, nullable=True)
     preferred_window_end_minute: Mapped[int | None] = mapped_column(Integer, nullable=True)
     #: ISO 8601 with its original UTC offset (exact round trip), plus a UTC twin for queries.
     deadline: Mapped[str | None] = mapped_column(String(40), nullable=True)
     deadline_utc: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
-    recurrence: Mapped[dict | None] = mapped_column(JSONDocument, nullable=True)
+    #: RecurrenceSpec as scalars (NULL frequency = no recurrence); weekdays are child rows.
+    recurrence_frequency: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    recurrence_interval: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    recurrence_day_of_month: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    recurrence_end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    recurrence_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    __table_args__ = (
-        *_record_checks("tasks"),
-        ForeignKeyConstraint(["user_id", "project_id"], ["projects.user_id", "projects.id"], name="fk_tasks_project"),
-        CheckConstraint("length(name) > 0", name="ck_tasks_name"),
-        CheckConstraint("length(category) > 0", name="ck_tasks_category"),
-        CheckConstraint("estimated_duration_minutes > 0", name="ck_tasks_duration"),
-        CheckConstraint("priority BETWEEN 1 AND 10", name="ck_tasks_priority"),
+
+def _task_checks(table: str) -> tuple:
+    return (
+        CheckConstraint("length(name) > 0", name=f"ck_{table}_name"),
+        CheckConstraint("length(category) > 0", name=f"ck_{table}_category"),
+        CheckConstraint("estimated_duration_minutes > 0", name=f"ck_{table}_duration"),
+        CheckConstraint("priority BETWEEN 1 AND 10", name=f"ck_{table}_priority"),
         CheckConstraint(
-            "(preferred_window_start_minute IS NULL) = (preferred_window_end_minute IS NULL)", name="ck_tasks_window"
+            "(preferred_window_start_minute IS NULL) = (preferred_window_end_minute IS NULL)", name=f"ck_{table}_window"
         ),
-        CheckConstraint("(deadline IS NULL) = (deadline_utc IS NULL)", name="ck_tasks_deadline"),
-        Index("ix_tasks_user_project", "user_id", "project_id"),
+        CheckConstraint("(deadline IS NULL) = (deadline_utc IS NULL)", name=f"ck_{table}_deadline"),
+        CheckConstraint(
+            f"recurrence_frequency IS NULL OR {_in('recurrence_frequency', RECURRENCE_FREQUENCIES)}",
+            name=f"ck_{table}_recurrence_frequency",
+        ),
+        CheckConstraint(
+            "(recurrence_frequency IS NULL) = (recurrence_interval IS NULL)"
+            " AND (recurrence_interval IS NULL OR recurrence_interval > 0)"
+            " AND (recurrence_count IS NULL OR recurrence_count > 0)"
+            " AND (recurrence_end_date IS NULL OR recurrence_count IS NULL)",
+            name=f"ck_{table}_recurrence",
+        ),
+        CheckConstraint(
+            "recurrence_day_of_month IS NULL"
+            " OR (recurrence_frequency = 'monthly' AND recurrence_day_of_month BETWEEN 1 AND 31)",
+            name=f"ck_{table}_recurrence_day",
+        ),
+        CheckConstraint(
+            "recurrence_frequency IS NOT NULL OR (recurrence_end_date IS NULL AND recurrence_count IS NULL)",
+            name=f"ck_{table}_recurrence_bounds",
+        ),
     )
 
 
-class TaskDependency(Base):
-    """Task.dependency_ids, in order. Both ends must be tasks of the same user (composite foreign keys)."""
-
-    __tablename__ = "task_dependencies"
-
-    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
-    task_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
-    position: Mapped[int] = mapped_column(Integer, primary_key=True)
-    depends_on_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
-
-    __table_args__ = (
-        ForeignKeyConstraint(["user_id", "task_id"], ["tasks.user_id", "tasks.id"], name="fk_task_dependencies_task"),
-        ForeignKeyConstraint(
-            ["user_id", "depends_on_id"], ["tasks.user_id", "tasks.id"], name="fk_task_dependencies_depends_on"
-        ),
-        CheckConstraint("task_id <> depends_on_id", name="ck_task_dependencies_not_self"),
-        CheckConstraint("position >= 0", name="ck_task_dependencies_position"),
-        Index("ix_task_dependencies_depends_on", "user_id", "depends_on_id"),
-    )
-
-
-class FixedBlock(_Record, Base):
-    __tablename__ = "fixed_blocks"
-
+class _FixedBlockContent:
     label: Mapped[str] = mapped_column(String(500), nullable=False)
     category: Mapped[str] = mapped_column(String(100), nullable=False)
     planned_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -173,48 +222,109 @@ class FixedBlock(_Record, Base):
     planned_start: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     planned_end: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
 
-    __table_args__ = (
-        *_record_checks("fixed_blocks"),
-        CheckConstraint("length(label) > 0", name="ck_fixed_blocks_label"),
-        CheckConstraint("length(category) > 0", name="ck_fixed_blocks_category"),
-        CheckConstraint("planned_end > planned_start", name="ck_fixed_blocks_order"),
-        Index("ix_fixed_blocks_user_date", "user_id", "planned_date"),
+
+def _fixed_block_checks(table: str) -> tuple:
+    return (
+        CheckConstraint("length(label) > 0", name=f"ck_{table}_label"),
+        CheckConstraint("length(category) > 0", name=f"ck_{table}_category"),
+        CheckConstraint("planned_end > planned_start", name=f"ck_{table}_order"),
     )
 
 
-class Placement(_Record, Base):
-    """A ScheduledTask."""
-
-    __tablename__ = "placements"
-
+class _PlacementContent:
     task_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
     planned_date: Mapped[date] = mapped_column(Date, nullable=False)
     timezone: Mapped[str] = mapped_column(String(64), nullable=False)
     planned_start: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     planned_end: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     score: Mapped[float] = mapped_column(Float, nullable=False)
+    #: The bounded extension object (see the module docstring); never a task list or schedule.
     optimization_metadata: Mapped[dict] = mapped_column(JSONDocument, nullable=False)
 
-    __table_args__ = (
-        *_record_checks("placements"),
-        ForeignKeyConstraint(["user_id", "task_id"], ["tasks.user_id", "tasks.id"], name="fk_placements_task"),
-        CheckConstraint("planned_end > planned_start", name="ck_placements_order"),
-        Index("ix_placements_user_date", "user_id", "planned_date"),
-        Index("ix_placements_user_task", "user_id", "task_id"),
+
+def _placement_checks(table: str) -> tuple:
+    return (
+        CheckConstraint("planned_end > planned_start", name=f"ck_{table}_order"),
+        # A coarse database backstop for every writer (the exact 4 KiB compact-JSON limit is enforced by
+        # backend/record_mapping.py); PostgreSQL only, because SQLite has no jsonb functions.
+        CheckConstraint(
+            "jsonb_typeof(optimization_metadata) = 'object' AND octet_length(optimization_metadata::text) <= 8192",
+            name=f"ck_{table}_metadata",
+        ).ddl_if(dialect="postgresql"),
     )
 
 
-class Execution(_Record, Base):
-    """
-    A TaskExecution. `id` is the wire id (docs/sync-contract.md section 3);
-    `legacy_id` keeps a non-UUID local id exactly. task_id/scheduled_task_id
-    are historical identity, not foreign keys: they may name records that
-    were never persisted (historical_reference) and never cascade.
-    """
+class _PreferenceContent:
+    scope: Mapped[str] = mapped_column(String(10), nullable=False)
+    scope_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    #: "user" or the ISO date: one live layer per (user, scope_key).
+    scope_key: Mapped[str] = mapped_column(String(16), nullable=False)
+    optimizer_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    #: DayWindowSpec; all three NULL = the layer does not set a day window.
+    day_window_start_minute: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    day_window_end_minute: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    day_window_end_day_offset: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: RewardPreferencesOverride scalars; NULL = the layer does not override that field.
+    reward_weight_importance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reward_weight_time_bonus: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reward_weight_tag_relation: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reward_weight_fragmentation_penalty: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reward_weight_category_bonus: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reward_max_time_distance_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reward_same_tag_window_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reward_min_gap_between_tasks_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reward_short_gap_bonus_weight: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reward_short_gap_bonus_max_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reward_short_gap_bonus_cap: Mapped[float | None] = mapped_column(Float, nullable=True)
+    #: False = reward.tag_relations is absent (inherit); True = present, even as {} (tag-relation rows).
+    reward_tag_relations_present: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
 
-    __tablename__ = "executions"
+
+def _preference_checks(table: str) -> tuple:
+    return (
+        CheckConstraint("scope IN ('user', 'date')", name=f"ck_{table}_scope"),
+        CheckConstraint("(scope = 'date') = (scope_date IS NOT NULL)", name=f"ck_{table}_scope_date"),
+        CheckConstraint(f"optimizer_mode IS NULL OR {_in('optimizer_mode', OPTIMIZER_MODES)}", name=f"ck_{table}_mode"),
+        CheckConstraint(
+            "(day_window_start_minute IS NULL) = (day_window_end_minute IS NULL)"
+            " AND (day_window_start_minute IS NULL) = (day_window_end_day_offset IS NULL)",
+            name=f"ck_{table}_day_window",
+        ),
+    )
+
+
+class _GenerationContent:
+    planned_date: Mapped[date] = mapped_column(Date, nullable=False)
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False)
+    engine_mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    range_start: Mapped[date] = mapped_column(Date, nullable=False)
+    range_end: Mapped[date] = mapped_column(Date, nullable=False)
+    range_scope: Mapped[str] = mapped_column(String(20), nullable=False)
+    allocation_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    fingerprint_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    placements_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    placement_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    unscheduled_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_score: Mapped[float] = mapped_column(Float, nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+
+
+def _generation_checks(table: str) -> tuple:
+    return (
+        CheckConstraint(_in("engine_mode", OPTIMIZER_MODES), name=f"ck_{table}_mode"),
+        CheckConstraint("range_start <= planned_date AND planned_date <= range_end", name=f"ck_{table}_range"),
+        CheckConstraint("placement_count >= 0 AND unscheduled_count >= 0", name=f"ck_{table}_counts"),
+    )
+
+
+class _ExecutionContent:
+    """The TaskExecution snapshot: its audit copy of what was planned is history, not a live reference."""
 
     legacy_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    #: Historical identity (docs/sync-contract.md section 7): may name a task/placement never persisted.
     task_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     scheduled_task_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     historical_reference: Mapped[bool] = mapped_column(Boolean, nullable=False)
@@ -241,17 +351,181 @@ class Execution(_Record, Base):
     actual_first_start_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     actual_final_end_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
+
+def _execution_checks(table: str) -> tuple:
+    return (
+        CheckConstraint(_in("status", EXECUTION_STATUSES), name=f"ck_{table}_status"),
+        CheckConstraint("priority BETWEEN 1 AND 10", name=f"ck_{table}_priority"),
+        CheckConstraint("focus_rating IS NULL OR focus_rating BETWEEN 1 AND 5", name=f"ck_{table}_focus"),
+        CheckConstraint("energy_rating IS NULL OR energy_rating BETWEEN 1 AND 5", name=f"ck_{table}_energy"),
+        CheckConstraint("interruption_count IS NULL OR interruption_count >= 0", name=f"ck_{table}_interruptions"),
+        CheckConstraint("scheduled_task_id IS NULL OR task_id IS NOT NULL", name=f"ck_{table}_link"),
+    )
+
+
+# -----------------------------------------------------------------------------
+# Live records
+# -----------------------------------------------------------------------------
+
+
+class Project(_Record, _ProjectContent, Base):
+    __tablename__ = "projects"
+
+    __table_args__ = (*_record_checks("projects"), *_project_checks("projects"))
+
+
+class Task(_Record, _TaskContent, Base):
+    __tablename__ = "tasks"
+
+    tag_rows: Mapped[list[TaskTag]] = relationship(
+        order_by="TaskTag.position", cascade="all, delete-orphan", lazy="selectin")
+    preferred_date_rows: Mapped[list[TaskPreferredDate]] = relationship(
+        order_by="TaskPreferredDate.position", cascade="all, delete-orphan", lazy="selectin")
+    dependency_rows: Mapped[list[TaskDependency]] = relationship(
+        primaryjoin="and_(Task.user_id == TaskDependency.user_id, Task.id == TaskDependency.task_id)",
+        foreign_keys="[TaskDependency.user_id, TaskDependency.task_id]",
+        order_by="TaskDependency.position", cascade="all, delete-orphan", lazy="selectin")
+    recurrence_weekday_rows: Mapped[list[TaskRecurrenceWeekday]] = relationship(
+        order_by="TaskRecurrenceWeekday.weekday", cascade="all, delete-orphan", lazy="selectin")
+
+    __table_args__ = (
+        *_record_checks("tasks"),
+        ForeignKeyConstraint(["user_id", "project_id"], ["projects.user_id", "projects.id"], name="fk_tasks_project"),
+        *_task_checks("tasks"),
+        Index("ix_tasks_user_project", "user_id", "project_id"),
+    )
+
+
+class TaskTag(Base):
+    """Task.tags, in order; a repeated tag is kept (the list is stored exactly)."""
+
+    __tablename__ = "task_tags"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    task_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tag: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (_child_of("task_tags", "tasks", ("task_id",), ("id",)), _position_check("task_tags"))
+
+
+class TaskPreferredDate(Base):
+    """Task.preferred_dates, in order (exactly as given)."""
+
+    __tablename__ = "task_preferred_dates"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    task_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    preferred_date: Mapped[date] = mapped_column(Date, nullable=False)
+
+    __table_args__ = (
+        _child_of("task_preferred_dates", "tasks", ("task_id",), ("id",)), _position_check("task_preferred_dates"),
+    )
+
+
+class TaskDependency(Base):
+    """Task.dependency_ids, in order. Both ends must be tasks of the same user (composite foreign keys)."""
+
+    __tablename__ = "task_dependencies"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    task_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    depends_on_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(["user_id", "task_id"], ["tasks.user_id", "tasks.id"], name="fk_task_dependencies_task"),
+        ForeignKeyConstraint(
+            ["user_id", "depends_on_id"], ["tasks.user_id", "tasks.id"], name="fk_task_dependencies_depends_on"
+        ),
+        CheckConstraint("task_id <> depends_on_id", name="ck_task_dependencies_not_self"),
+        CheckConstraint("position >= 0", name="ck_task_dependencies_position"),
+        Index("ix_task_dependencies_depends_on", "user_id", "depends_on_id"),
+    )
+
+
+class TaskRecurrenceWeekday(Base):
+    """RecurrenceSpec.weekdays (a set: the canonical model keeps it sorted and unique)."""
+
+    __tablename__ = "task_recurrence_weekdays"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    task_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    weekday: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    __table_args__ = (
+        _child_of("task_recurrence_weekdays", "tasks", ("task_id",), ("id",)),
+        CheckConstraint("weekday BETWEEN 0 AND 6", name="ck_task_recurrence_weekdays_weekday"),
+    )
+
+
+class FixedBlock(_Record, _FixedBlockContent, Base):
+    __tablename__ = "fixed_blocks"
+
+    __table_args__ = (
+        *_record_checks("fixed_blocks"),
+        *_fixed_block_checks("fixed_blocks"),
+        Index("ix_fixed_blocks_user_date", "user_id", "planned_date"),
+    )
+
+
+class Placement(_Record, _PlacementContent, Base):
+    """A ScheduledTask."""
+
+    __tablename__ = "placements"
+
+    __table_args__ = (
+        *_record_checks("placements"),
+        ForeignKeyConstraint(["user_id", "task_id"], ["tasks.user_id", "tasks.id"], name="fk_placements_task"),
+        *_placement_checks("placements"),
+        Index("ix_placements_user_date", "user_id", "planned_date"),
+        # The target of an execution's (user, task, placement) reference -- so the database checks that a
+        # linked placement belongs to that task and user -- and the index of placements-by-task queries.
+        Index("uq_placements_user_task_id", "user_id", "task_id", "id", unique=True),
+    )
+
+
+class Execution(_Record, _ExecutionContent, Base):
+    """
+    A TaskExecution. `id` is the wire id (docs/sync-contract.md section 3);
+    `legacy_id` keeps a non-UUID local id exactly. task_id/scheduled_task_id
+    are historical identity and never cascade: they may name records that
+    were never persisted (historical_reference). linked_task_id /
+    linked_placement_id are the same ids when they resolve to the user's own
+    task and a placement of that task -- enforced by composite foreign keys
+    and required for every non-historical execution. Tasks and placements
+    are only ever tombstoned, so a linked row, and its history, stays.
+    """
+
+    __tablename__ = "executions"
+
+    linked_task_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    linked_placement_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+
     __table_args__ = (
         *_record_checks("executions"),
-        CheckConstraint(_in("status", EXECUTION_STATUSES), name="ck_executions_status"),
-        CheckConstraint("priority BETWEEN 1 AND 10", name="ck_executions_priority"),
-        CheckConstraint("focus_rating IS NULL OR focus_rating BETWEEN 1 AND 5", name="ck_executions_focus"),
-        CheckConstraint("energy_rating IS NULL OR energy_rating BETWEEN 1 AND 5", name="ck_executions_energy"),
-        CheckConstraint("interruption_count IS NULL OR interruption_count >= 0", name="ck_executions_interruptions"),
-        CheckConstraint("scheduled_task_id IS NULL OR task_id IS NOT NULL", name="ck_executions_link"),
+        *_execution_checks("executions"),
+        ForeignKeyConstraint(["user_id", "linked_task_id"], ["tasks.user_id", "tasks.id"], name="fk_executions_task"),
+        ForeignKeyConstraint(
+            ["user_id", "linked_task_id", "linked_placement_id"],
+            ["placements.user_id", "placements.task_id", "placements.id"], name="fk_executions_placement",
+        ),
+        CheckConstraint("linked_task_id IS NULL OR linked_task_id = task_id", name="ck_executions_linked_task"),
+        CheckConstraint(
+            "linked_placement_id IS NULL OR (linked_placement_id = scheduled_task_id AND linked_task_id IS NOT NULL)",
+            name="ck_executions_linked_placement",
+        ),
+        CheckConstraint(
+            "historical_reference OR ((task_id IS NULL OR linked_task_id IS NOT NULL)"
+            " AND (scheduled_task_id IS NULL OR linked_placement_id IS NOT NULL))",
+            name="ck_executions_canonical_links",
+        ),
         # One execution per placement (like the local partial unique index), and legacy ids stay unique.
         Index("uq_executions_user_placement", "user_id", "scheduled_task_id", unique=True),
         Index("uq_executions_user_legacy_id", "user_id", "legacy_id", unique=True),
+        # PlanningService's execution facts of tasks: WHERE user_id = ? AND task_id IN (...).
+        Index("ix_executions_user_task", "user_id", "task_id"),
     )
 
 
@@ -275,23 +549,21 @@ class WorkSession(Base):
     )
 
 
-class Preference(_Record, Base):
+class Preference(_Record, _PreferenceContent, Base):
     """A user-level (scope 'user') or per-date (scope 'date') PreferenceOverrides layer."""
 
     __tablename__ = "preferences"
 
-    scope: Mapped[str] = mapped_column(String(10), nullable=False)
-    scope_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    #: "user" or the ISO date: one live layer per (user, scope_key).
-    scope_key: Mapped[str] = mapped_column(String(16), nullable=False)
-    optimizer_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    overrides: Mapped[dict] = mapped_column(JSONDocument, nullable=False)
+    category_multiplier_rows: Mapped[list[PreferenceCategoryMultiplier]] = relationship(
+        order_by="PreferenceCategoryMultiplier.category", cascade="all, delete-orphan", lazy="selectin")
+    category_window_rows: Mapped[list[PreferenceCategoryWindow]] = relationship(
+        order_by="PreferenceCategoryWindow.category", cascade="all, delete-orphan", lazy="selectin")
+    tag_relation_rows: Mapped[list[PreferenceTagRelation]] = relationship(
+        order_by="PreferenceTagRelation.tag", cascade="all, delete-orphan", lazy="selectin")
 
     __table_args__ = (
         *_record_checks("preferences"),
-        CheckConstraint("scope IN ('user', 'date')", name="ck_preferences_scope"),
-        CheckConstraint("(scope = 'date') = (scope_date IS NOT NULL)", name="ck_preferences_scope_date"),
-        CheckConstraint(f"optimizer_mode IS NULL OR {_in('optimizer_mode', OPTIMIZER_MODES)}", name="ck_preferences_mode"),
+        *_preference_checks("preferences"),
         Index(
             "uq_preferences_live_scope", "user_id", "scope_key", unique=True,
             sqlite_where=text("deleted_at IS NULL"), postgresql_where=text("deleted_at IS NULL"),
@@ -299,36 +571,328 @@ class Preference(_Record, Base):
     )
 
 
-class ScheduleGeneration(_Record, Base):
+class PreferenceCategoryMultiplier(Base):
+    """One category_multipliers key. The row is the key's presence; multiplier NULL = an explicit clear."""
+
+    __tablename__ = "preference_category_multipliers"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    preference_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    category: Mapped[str] = mapped_column(Text, primary_key=True)
+    multiplier: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    __table_args__ = (_child_of("preference_category_multipliers", "preferences", ("preference_id",), ("id",)),)
+
+
+class PreferenceCategoryWindow(Base):
+    """One category_preferred_windows key. The row is the key's presence; both minutes NULL = an explicit clear."""
+
+    __tablename__ = "preference_category_windows"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    preference_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    category: Mapped[str] = mapped_column(Text, primary_key=True)
+    start_minute: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_minute: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (
+        _child_of("preference_category_windows", "preferences", ("preference_id",), ("id",)),
+        CheckConstraint("(start_minute IS NULL) = (end_minute IS NULL)", name="ck_preference_category_windows_window"),
+    )
+
+
+class PreferenceTagRelation(Base):
+    """One reward.tag_relations key (only when the mapping is present); its related tags may be an empty list."""
+
+    __tablename__ = "preference_tag_relations"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    preference_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    tag: Mapped[str] = mapped_column(Text, primary_key=True)
+
+    related_rows: Mapped[list[PreferenceRelatedTag]] = relationship(
+        order_by="PreferenceRelatedTag.position", cascade="all, delete-orphan", lazy="selectin")
+
+    __table_args__ = (_child_of("preference_tag_relations", "preferences", ("preference_id",), ("id",)),)
+
+
+class PreferenceRelatedTag(Base):
+    """One related tag of a tag relation, in order (exactly as given)."""
+
+    __tablename__ = "preference_related_tags"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    preference_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    tag: Mapped[str] = mapped_column(Text, primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    related_tag: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        _child_of("preference_related_tags", "preference_tag_relations", ("preference_id", "tag"),
+                  ("preference_id", "tag")),
+        _position_check("preference_related_tags"),
+    )
+
+
+class ScheduleGeneration(_Record, _GenerationContent, Base):
     """Persisted schedule freshness/provenance of one date (app/planning/provenance.GenerationRecord)."""
 
     __tablename__ = "schedule_generations"
 
-    planned_date: Mapped[date] = mapped_column(Date, nullable=False)
-    timezone: Mapped[str] = mapped_column(String(64), nullable=False)
-    engine_mode: Mapped[str] = mapped_column(String(20), nullable=False)
-    range_start: Mapped[date] = mapped_column(Date, nullable=False)
-    range_end: Mapped[date] = mapped_column(Date, nullable=False)
-    range_scope: Mapped[str] = mapped_column(String(20), nullable=False)
-    allocation_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
-    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
-    fingerprint_version: Mapped[int] = mapped_column(Integer, nullable=False)
-    placements_digest: Mapped[str] = mapped_column(String(64), nullable=False)
-    placement_count: Mapped[int] = mapped_column(Integer, nullable=False)
-    unscheduled_count: Mapped[int] = mapped_column(Integer, nullable=False)
-    total_score: Mapped[float] = mapped_column(Float, nullable=False)
-    generated_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
-
     __table_args__ = (
         *_record_checks("schedule_generations"),
-        CheckConstraint(_in("engine_mode", OPTIMIZER_MODES), name="ck_schedule_generations_mode"),
-        CheckConstraint("range_start <= planned_date AND planned_date <= range_end", name="ck_schedule_generations_range"),
-        CheckConstraint("placement_count >= 0 AND unscheduled_count >= 0", name="ck_schedule_generations_counts"),
+        *_generation_checks("schedule_generations"),
         Index(
             "uq_schedule_generations_live_date", "user_id", "planned_date", unique=True,
             sqlite_where=text("deleted_at IS NULL"), postgresql_where=text("deleted_at IS NULL"),
         ),
     )
+
+
+# -----------------------------------------------------------------------------
+# Immutable record revisions: the historical snapshots the change log and the
+# recorded sync outcomes return (the record exactly as the API returned it
+# then). One header row per snapshot plus one typed row (joined-table
+# inheritance, keyed like the header) and ordered child rows. Revisions are
+# history: their ids are not foreign keys to the live tables.
+# -----------------------------------------------------------------------------
+
+
+class RecordRevision(Base):
+    __tablename__ = "record_revisions"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), primary_key=True)
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    entity_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    #: The record's own metadata, as it was in this snapshot.
+    entity_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(_in("entity_type", ENTITY_TYPES), name="ck_record_revisions_entity_type"),
+        CheckConstraint("version > 0", name="ck_record_revisions_version"),
+    )
+    __mapper_args__ = {"polymorphic_on": "entity_type"}
+
+
+def _revision_of(table: str) -> ForeignKeyConstraint:
+    return ForeignKeyConstraint(
+        ["user_id", "id"], ["record_revisions.user_id", "record_revisions.id"], name=f"fk_{table}_revision",
+        ondelete="CASCADE",
+    )
+
+
+class _RevisionKey:
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+
+
+class ProjectRevision(_RevisionKey, _ProjectContent, RecordRevision):
+    __tablename__ = "project_revisions"
+    __table_args__ = (_revision_of("project_revisions"), *_project_checks("project_revisions"))
+    __mapper_args__ = {"polymorphic_identity": "project", "polymorphic_load": "selectin"}
+
+
+class TaskRevision(_RevisionKey, _TaskContent, RecordRevision):
+    __tablename__ = "task_revisions"
+
+    tag_rows: Mapped[list[TaskRevisionTag]] = relationship(
+        order_by="TaskRevisionTag.position", cascade="all, delete-orphan", lazy="selectin")
+    preferred_date_rows: Mapped[list[TaskRevisionPreferredDate]] = relationship(
+        order_by="TaskRevisionPreferredDate.position", cascade="all, delete-orphan", lazy="selectin")
+    dependency_rows: Mapped[list[TaskRevisionDependency]] = relationship(
+        order_by="TaskRevisionDependency.position", cascade="all, delete-orphan", lazy="selectin")
+    recurrence_weekday_rows: Mapped[list[TaskRevisionRecurrenceWeekday]] = relationship(
+        order_by="TaskRevisionRecurrenceWeekday.weekday", cascade="all, delete-orphan", lazy="selectin")
+
+    __table_args__ = (_revision_of("task_revisions"), *_task_checks("task_revisions"))
+    __mapper_args__ = {"polymorphic_identity": "task", "polymorphic_load": "selectin"}
+
+
+class TaskRevisionTag(Base):
+    __tablename__ = "task_revision_tags"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    revision_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tag: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        _child_of("task_revision_tags", "task_revisions", ("revision_id",), ("id",)),
+        _position_check("task_revision_tags"),
+    )
+
+
+class TaskRevisionPreferredDate(Base):
+    __tablename__ = "task_revision_preferred_dates"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    revision_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    preferred_date: Mapped[date] = mapped_column(Date, nullable=False)
+
+    __table_args__ = (
+        _child_of("task_revision_preferred_dates", "task_revisions", ("revision_id",), ("id",)),
+        _position_check("task_revision_preferred_dates"),
+    )
+
+
+class TaskRevisionDependency(Base):
+    """A dependency id as it was (history: not a foreign key)."""
+
+    __tablename__ = "task_revision_dependencies"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    revision_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    depends_on_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+
+    __table_args__ = (
+        _child_of("task_revision_dependencies", "task_revisions", ("revision_id",), ("id",)),
+        _position_check("task_revision_dependencies"),
+    )
+
+
+class TaskRevisionRecurrenceWeekday(Base):
+    __tablename__ = "task_revision_recurrence_weekdays"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    revision_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    weekday: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    __table_args__ = (
+        _child_of("task_revision_recurrence_weekdays", "task_revisions", ("revision_id",), ("id",)),
+        CheckConstraint("weekday BETWEEN 0 AND 6", name="ck_task_revision_recurrence_weekdays_weekday"),
+    )
+
+
+class FixedBlockRevision(_RevisionKey, _FixedBlockContent, RecordRevision):
+    __tablename__ = "fixed_block_revisions"
+    __table_args__ = (_revision_of("fixed_block_revisions"), *_fixed_block_checks("fixed_block_revisions"))
+    __mapper_args__ = {"polymorphic_identity": "fixed_block", "polymorphic_load": "selectin"}
+
+
+class PlacementRevision(_RevisionKey, _PlacementContent, RecordRevision):
+    __tablename__ = "placement_revisions"
+    __table_args__ = (_revision_of("placement_revisions"), *_placement_checks("placement_revisions"))
+    __mapper_args__ = {"polymorphic_identity": "placement", "polymorphic_load": "selectin"}
+
+
+class PreferenceRevision(_RevisionKey, _PreferenceContent, RecordRevision):
+    __tablename__ = "preference_revisions"
+
+    category_multiplier_rows: Mapped[list[PreferenceRevisionCategoryMultiplier]] = relationship(
+        order_by="PreferenceRevisionCategoryMultiplier.category", cascade="all, delete-orphan", lazy="selectin")
+    category_window_rows: Mapped[list[PreferenceRevisionCategoryWindow]] = relationship(
+        order_by="PreferenceRevisionCategoryWindow.category", cascade="all, delete-orphan", lazy="selectin")
+    tag_relation_rows: Mapped[list[PreferenceRevisionTagRelation]] = relationship(
+        order_by="PreferenceRevisionTagRelation.tag", cascade="all, delete-orphan", lazy="selectin")
+
+    __table_args__ = (_revision_of("preference_revisions"), *_preference_checks("preference_revisions"))
+    __mapper_args__ = {"polymorphic_identity": "preference", "polymorphic_load": "selectin"}
+
+
+class PreferenceRevisionCategoryMultiplier(Base):
+    __tablename__ = "preference_revision_category_multipliers"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    revision_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    category: Mapped[str] = mapped_column(Text, primary_key=True)
+    multiplier: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    __table_args__ = (
+        _child_of("preference_revision_category_multipliers", "preference_revisions", ("revision_id",), ("id",)),
+    )
+
+
+class PreferenceRevisionCategoryWindow(Base):
+    __tablename__ = "preference_revision_category_windows"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    revision_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    category: Mapped[str] = mapped_column(Text, primary_key=True)
+    start_minute: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_minute: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (
+        _child_of("preference_revision_category_windows", "preference_revisions", ("revision_id",), ("id",)),
+        CheckConstraint(
+            "(start_minute IS NULL) = (end_minute IS NULL)", name="ck_preference_revision_category_windows_window"
+        ),
+    )
+
+
+class PreferenceRevisionTagRelation(Base):
+    __tablename__ = "preference_revision_tag_relations"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    revision_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    tag: Mapped[str] = mapped_column(Text, primary_key=True)
+
+    related_rows: Mapped[list[PreferenceRevisionRelatedTag]] = relationship(
+        order_by="PreferenceRevisionRelatedTag.position", cascade="all, delete-orphan", lazy="selectin")
+
+    __table_args__ = (
+        _child_of("preference_revision_tag_relations", "preference_revisions", ("revision_id",), ("id",)),
+    )
+
+
+class PreferenceRevisionRelatedTag(Base):
+    __tablename__ = "preference_revision_related_tags"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    revision_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    tag: Mapped[str] = mapped_column(Text, primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    related_tag: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        _child_of("preference_revision_related_tags", "preference_revision_tag_relations", ("revision_id", "tag"),
+                  ("revision_id", "tag")),
+        _position_check("preference_revision_related_tags"),
+    )
+
+
+class ScheduleGenerationRevision(_RevisionKey, _GenerationContent, RecordRevision):
+    __tablename__ = "schedule_generation_revisions"
+    __table_args__ = (_revision_of("schedule_generation_revisions"), *_generation_checks("schedule_generation_revisions"))
+    __mapper_args__ = {"polymorphic_identity": "schedule_generation", "polymorphic_load": "selectin"}
+
+
+class ExecutionRevision(_RevisionKey, _ExecutionContent, RecordRevision):
+    __tablename__ = "execution_revisions"
+
+    session_rows: Mapped[list[ExecutionRevisionSession]] = relationship(
+        order_by="ExecutionRevisionSession.position", cascade="all, delete-orphan", lazy="selectin")
+
+    __table_args__ = (_revision_of("execution_revisions"), *_execution_checks("execution_revisions"))
+    __mapper_args__ = {"polymorphic_identity": "execution", "polymorphic_load": "selectin"}
+
+
+class ExecutionRevisionSession(Base):
+    """A work session of the execution as it was in the snapshot, in order."""
+
+    __tablename__ = "execution_revision_sessions"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    revision_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    ended_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    __table_args__ = (
+        _child_of("execution_revision_sessions", "execution_revisions", ("revision_id",), ("id",)),
+        _position_check("execution_revision_sessions"),
+        CheckConstraint("ended_at IS NULL OR ended_at >= started_at", name="ck_execution_revision_sessions_order"),
+    )
+
+
+# -----------------------------------------------------------------------------
+# Change log and sync outcomes
+# -----------------------------------------------------------------------------
 
 
 class ChangeLogEntry(Base):
@@ -343,14 +907,29 @@ class ChangeLogEntry(Base):
     operation: Mapped[str] = mapped_column(String(10), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     recorded_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
-    #: The complete record after the mutation (a tombstone for a delete), as the API returns it.
-    payload: Mapped[dict] = mapped_column(JSONDocument, nullable=False)
+    #: The complete record after the mutation (a tombstone for a delete), as the API returned it.
+    revision_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+
+    revision: Mapped[RecordRevision] = relationship(lazy="selectin")
 
     __table_args__ = (
         CheckConstraint("seq > 0", name="ck_change_log_seq"),
         CheckConstraint("operation IN ('upsert', 'delete')", name="ck_change_log_operation"),
+        ForeignKeyConstraint(
+            ["user_id", "revision_id"], ["record_revisions.user_id", "record_revisions.id"],
+            name="fk_change_log_revision",
+        ),
         Index("ix_change_log_entity", "user_id", "entity_type", "entity_id"),
     )
+
+
+def _outcome_revision(column: str) -> dict:
+    """A many-to-one from a sync outcome to one of its snapshots; user_id is the outcome's own (never copied)."""
+    return {
+        "primaryjoin": f"and_(SyncOperation.user_id == RecordRevision.user_id, SyncOperation.{column} == RecordRevision.id)",
+        "foreign_keys": f"[SyncOperation.{column}]",
+        "lazy": "selectin",
+    }
 
 
 class SyncOperation(Base):
@@ -361,6 +940,13 @@ class SyncOperation(Base):
     different operation is refused (request_hash). Applied operations are
     recorded in the same transaction as their mutation; rejected ones after
     it rolled back.
+
+    The outcome is typed: an applied operation references the snapshot of
+    its resulting record; a conflict/rejection stores its error code,
+    message and details (the version pair, the reason, the failing op of a
+    group, validation problems as child rows) and references the snapshot
+    of the `current`/`conflicting` record it reported. Snapshots are
+    immutable, so a retry answers the same even after later edits.
     """
 
     __tablename__ = "sync_operations"
@@ -369,11 +955,87 @@ class SyncOperation(Base):
     op_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
     request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(10), nullable=False)
-    result: Mapped[dict] = mapped_column(JSONDocument, nullable=False)
     recorded_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    record_revision_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Present together (a version conflict/tombstone): supplied_version may still be NULL.
+    error_supplied_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_current_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_current_revision_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    error_conflicting_revision_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    error_reason: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    error_failed_op_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    #: Whether the error carried a `problems` list (which may be empty); the problems are child rows.
+    error_problems_present: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+
+    record_revision: Mapped[RecordRevision | None] = relationship(**_outcome_revision("record_revision_id"))
+    error_current_revision: Mapped[RecordRevision | None] = relationship(**_outcome_revision("error_current_revision_id"))
+    error_conflicting_revision: Mapped[RecordRevision | None] = relationship(
+        **_outcome_revision("error_conflicting_revision_id"))
+    problem_rows: Mapped[list[SyncOperationProblem]] = relationship(
+        order_by="SyncOperationProblem.position", cascade="all, delete-orphan", lazy="selectin")
 
     __table_args__ = (
-        CheckConstraint("status IN ('applied', 'conflict', 'rejected')", name="ck_sync_operations_status"),
+        CheckConstraint(_in("status", SYNC_STATUSES), name="ck_sync_operations_status"),
+        CheckConstraint(
+            "(status = 'applied') = (record_revision_id IS NOT NULL)"
+            " AND (status = 'applied') = (error_code IS NULL)"
+            " AND (error_code IS NULL) = (error_message IS NULL)",
+            name="ck_sync_operations_outcome",
+        ),
+        CheckConstraint(
+            "error_supplied_version IS NULL OR error_current_version IS NOT NULL", name="ck_sync_operations_versions"
+        ),
+        ForeignKeyConstraint(
+            ["user_id", "record_revision_id"], ["record_revisions.user_id", "record_revisions.id"],
+            name="fk_sync_operations_record",
+        ),
+        ForeignKeyConstraint(
+            ["user_id", "error_current_revision_id"], ["record_revisions.user_id", "record_revisions.id"],
+            name="fk_sync_operations_current",
+        ),
+        ForeignKeyConstraint(
+            ["user_id", "error_conflicting_revision_id"], ["record_revisions.user_id", "record_revisions.id"],
+            name="fk_sync_operations_conflicting",
+        ),
+    )
+
+
+class SyncOperationProblem(Base):
+    """One validation problem of a recorded sync error, in order."""
+
+    __tablename__ = "sync_operation_problems"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    op_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+
+    location_rows: Mapped[list[SyncOperationProblemLocation]] = relationship(
+        order_by="SyncOperationProblemLocation.position", cascade="all, delete-orphan", lazy="selectin")
+
+    __table_args__ = (
+        _child_of("sync_operation_problems", "sync_operations", ("op_id",), ("op_id",)),
+        _position_check("sync_operation_problems"),
+    )
+
+
+class SyncOperationProblemLocation(Base):
+    """One part of a problem's location path, in order."""
+
+    __tablename__ = "sync_operation_problem_locations"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    op_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    problem_position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    part: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        _child_of("sync_operation_problem_locations", "sync_operation_problems", ("op_id", "problem_position"),
+                  ("op_id", "position")),
+        _position_check("sync_operation_problem_locations"),
     )
 
 

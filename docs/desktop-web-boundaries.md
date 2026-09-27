@@ -74,6 +74,25 @@ The backend's `ServerPlanningRepository` implements the same repository
 interface over SQLAlchemy, so the hosted API runs the same `PlanningService`
 and `workflow` code on PostgreSQL. There is no second engine or domain model.
 
+**Optional direct PostgreSQL composition (`app/persistence`,
+[direct-postgres.md](direct-postgres.md)).** A separate package, not a shared
+layer: it may import the backend's framework-free modules (models, accounts,
+planning repository, mutations) but never FastAPI, Uvicorn, HTTPX, PyJWT,
+`backend.api`/`backend.security` or `app.web`, and nothing in the shared
+layers imports it (`tests/direct/test_direct_boundary.py`). Importing it reads
+no file and opens no connection; it needs `requirements-direct.txt`.
+
+The desktop reaches it only through `app/ui/direct_services.py`
+(`DirectAppServices`, `DirectAccountController`), selected explicitly with
+`python -m app.app --storage postgres` or `SCHEDULE_MAXING_STORAGE=postgres`
+(never by `DATABASE_URL` alone). That module imports only the package's pure
+modules; the database packages load when direct mode is opened, so the offline
+isolation probe still blocks SQLAlchemy and the backend. In direct mode there is
+no SQLite database, instance lock or sync loop; pages run their storage calls in
+background workers (`app/ui/background.run_io`); `tests/direct_isolation_probe.py`
+proves the mode runs with FastAPI, Starlette, uvicorn, HTTPX, PyJWT, `app.web` and
+the backend's HTTP modules unimportable and every socket refused.
+
 ## 3. Independent launch commands
 
 | What | Install | Run |

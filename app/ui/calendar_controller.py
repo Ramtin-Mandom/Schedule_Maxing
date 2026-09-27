@@ -213,7 +213,7 @@ class CalendarController(SchedulePageController):
         try:
             return ControllerResult.success(self._calendar_snapshot(period))
         except _Failure as failure:
-            return ControllerResult.failure(failure.message)
+            return ControllerResult.failure(failure.message, failure.cause)
 
     def _snapshot(self) -> CalendarSnapshot:
         return self._calendar_snapshot(self._period)

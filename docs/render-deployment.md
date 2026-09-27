@@ -1,5 +1,9 @@
 # Deploying the backend to Render (manual handoff)
 
+> This guide deploys the **HTTP API** as a Render web service. To connect the desktop app
+> directly to a Render Postgres database instead (no web service or JWT secret), see
+> [render-direct-desktop.md](render-direct-desktop.md).
+
 This guide prepares a **manual** deployment of the server backend
 (`backend/`, see [backend.md](backend.md)) to Render. Nothing in this
 repository has been deployed, and no Render account, service, or database
@@ -72,9 +76,9 @@ The backend never reads a `.env` file and never logs passwords, tokens,
 - **Order.** Migrations are versioned Alembic scripts in
   `backend/migrations/versions`, applied in order by
   `python -m backend.migrate upgrade`. That command reads only
-  `DATABASE_URL`. On PostgreSQL each migration runs in a transaction, so a
-  failed migration rolls back and the database stays at the previous
-  revision.
+  `DATABASE_URL`. On PostgreSQL one upgrade (every pending migration) runs
+  in one transaction, so a failed migration rolls back and the database
+  stays at the previous revision.
 - **Paid plans.** The pre-deploy command runs after the build, before the
   new version receives traffic. If it fails, Render aborts the deploy and
   the previous version keeps serving.
@@ -84,7 +88,13 @@ The backend never reads a `.env` file and never logs passwords, tokens,
   database is at the latest revision. `GET /ready` reports the same thing
   over HTTP.
 - **Compatibility.** Keep schema changes backward compatible with the
-  version that is still running: add first, remove later.
+  version that is still running: add first, remove later. **Exception:**
+  the normalized-storage revisions 0004-0006 remove the JSON columns the
+  previous version uses, so the previous service must be stopped (not
+  serving or writing) before that upgrade runs; see
+  [backend.md](backend.md#normalized-storage-0004-0006). A pre-deploy
+  command alone is not enough, because the old version keeps serving while
+  it runs.
 
 ## Backups and rollback
 

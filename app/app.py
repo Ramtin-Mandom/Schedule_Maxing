@@ -3,7 +3,8 @@ The CustomTkinter desktop app of Schedule Maxing.
 
 Run from the project root with:
 
-    python -m app.app
+    python -m app.app                                        # local SQLite storage (default; works offline)
+    python -m app.app --storage postgres --env-file .env     # direct PostgreSQL storage (docs/direct-postgres.md)
 
 Shell (Milestone 4, app/ui/shell.py): a left sidebar that starts collapsed
 and opens with its hamburger button (or Ctrl+B; Ctrl+1..9 jump to a page),
@@ -34,10 +35,17 @@ fresh read of what was committed. There is no widget-owned task collection.
 - Layout is responsive (wide, medium and narrow) and is re-laid out only
   when that mode changes, so moving/resizing the window stays smooth.
 - Closing waits for background work, then closes the database.
+- Direct PostgreSQL storage (--storage postgres or SCHEDULE_MAXING_STORAGE=postgres,
+  app/ui/direct_services.py) replaces the local database with the server's
+  schema: the Account page signs in directly (no HTTP, no JWT), every page
+  works on that account's records, and there is no synchronization, local
+  copy or silent fallback. DATABASE_URL alone never selects it.
 """
 
 from __future__ import annotations
 
+import argparse
+import os
 import tkinter as tk
 from datetime import date, datetime
 from pathlib import Path
@@ -59,6 +67,12 @@ from app.ui import theme
 from app.ui.account_controller import AccountController, ConnectionView
 from app.ui.account_page import AccountPage
 from app.ui.app_services import AppServices, describe_startup_failure, open_app_services
+from app.ui.direct_services import (
+    DirectAccountController,
+    DirectAppServices,
+    describe_direct_startup_failure,
+    open_direct_app_services,
+)
 from app.ui.background import run_in_background
 from app.ui.day_controller import DayScheduleController
 from app.ui.calendar_controller import CalendarController
@@ -214,7 +228,12 @@ class ScheduleOptimizerApp(ctk.CTk):
         ui_settings_path: str | Path | None = None,
         transport_factory: Callable[[str], SyncTransport] = HttpTransport,
         background_sync: bool = True,
+        storage: str | None = None,
+        env_file: str | None = None,
+        direct_backend=None,
     ) -> None:
+        # "local" unless chosen explicitly (argument or SCHEDULE_MAXING_STORAGE); DATABASE_URL alone never switches.
+        self.storage = storage or settings.resolve_storage_mode()
         self.ui_store = UISettingsStore(ui_settings_path or settings_path_for(resolve_db_path(db_path)))
         self.ui_settings: UISettings = self.ui_store.load()
         ctk.set_appearance_mode(self.ui_settings.appearance)
@@ -231,35 +250,48 @@ class ScheduleOptimizerApp(ctk.CTk):
         self.minsize(520, 440)
         self.configure(fg_color=theme.APP_BG)
 
-        self.services: AppServices | None = None
+        self.services: AppServices | DirectAppServices | None = None
         self.startup_error: str | None = None
         self.shell: AppShell | None = None
         self.shell_state = ShellState()
         self._today_override = today
         self._transport_factory = transport_factory
         self._background_sync = background_sync
-        self.account_controller: AccountController | None = None
+        self.account_controller: AccountController | DirectAccountController | None = None
         self._status_poll = None
         self._seen_report = None
         self._closing = False
 
         self._configure_treeview_style()
         try:
-            self.services = open_app_services(db_path, timezone=timezone, project_root=project_root,
-                                              transport_factory=transport_factory, background_sync=background_sync)
+            if self.direct:
+                self.services = open_direct_app_services(env_file=env_file, timezone=timezone,
+                                                         project_root=project_root, backend=direct_backend)
+            else:
+                self.services = open_app_services(db_path, timezone=timezone, project_root=project_root,
+                                                  transport_factory=transport_factory, background_sync=background_sync)
         except Exception as error:  # noqa: BLE001 - reported to the user; no scheduler without storage
-            self.startup_error = describe_startup_failure(error, db_path)
+            self.startup_error = (describe_direct_startup_failure(error) if self.direct
+                                  else describe_startup_failure(error, db_path))
 
         if self.services is None:
             self._build_startup_error()
             messagebox.showerror("Database Unavailable", self.startup_error, parent=self)
         else:
             self._build_shell()
-            self.show_page("day")
+            # Direct storage starts signed out: the Account page first, while the database is checked off the Tk thread.
+            self.show_page("account" if self.direct else "day")
+            if self.direct:
+                self._check_direct_database()
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # -- pages and services ---------------------------------------------------------------
+
+    @property
+    def direct(self) -> bool:
+        """True when this window stores its records directly in PostgreSQL (not the local database)."""
+        return self.storage == "postgres"
 
     @property
     def pages(self) -> dict[str, ctk.CTkFrame]:
@@ -346,9 +378,9 @@ class ScheduleOptimizerApp(ctk.CTk):
         if self.services is None or self.shell is None:
             return
         if not reload_only:
-            workspace = self.services.switch_workspace()
+            self.services.switch_workspace()
             self._build_workspace_pages(replace=True)
-            self.shell.sidebar.set_footer(f"Working in {workspace.scope.describe()}.")
+            self.shell.sidebar.set_footer(self.services.workspace_label())
         else:
             self._reload_current_page()
         self.refresh_status()
@@ -367,6 +399,9 @@ class ScheduleOptimizerApp(ctk.CTk):
             self.shell.status_bar.show(f"Sync status unavailable: {result.error}", can_sync=False, syncing=False)
             return None
         view = result.value
+        if self.direct:  # no synchronization: PostgreSQL is the one copy
+            self.shell.status_bar.show(view.headline, can_sync=False, syncing=False)
+            return view
         text = view.headline if view.state == "unconfigured" else f"{view.headline} · last sync {view.last_success_text}"
         self.shell.status_bar.show(text, can_sync=view.state == "signed_in", syncing=view.in_progress)
         report = self.services.sync_service.last_report
@@ -385,7 +420,7 @@ class ScheduleOptimizerApp(ctk.CTk):
 
     def sync_now(self) -> None:
         """The status bar's Sync now (the same SyncService.sync_now the Account page uses; one at a time)."""
-        if self.account_controller is None:
+        if self.account_controller is None or self.direct:
             return
         self.shell.status_bar.show("Synchronizing...", can_sync=False, syncing=True)
         run_in_background(self, self.account_controller.sync_now, lambda _result: self.refresh_status(),
@@ -448,12 +483,16 @@ class ScheduleOptimizerApp(ctk.CTk):
         services = self.services
         self.shell = shell = AppShell(self, self.shell_state, scaling=lambda: self.ui_settings.ui_scale)
         shell.grid(row=0, column=0, sticky="nsew")
-        shell.sidebar.set_footer(f"Saved locally in {services.db_path.name}; works offline.")
+        shell.sidebar.set_footer(services.location_label())
         host = shell.host
 
         self._build_workspace_pages(replace=False)
-        self.account_controller = AccountController(services.sync_service, transport_factory=self._transport_factory,
-                                                    background_sync=self._background_sync)
+        if self.direct:
+            self.account_controller = DirectAccountController(services)
+            shell.status_bar.sync_button.grid_remove()  # nothing to synchronize in direct storage
+        else:
+            self.account_controller = AccountController(services.sync_service, transport_factory=self._transport_factory,
+                                                        background_sync=self._background_sync)
         shell.add_page("account", AccountPage(host, self.account_controller, on_workspace_changed=self.apply_workspace))
         shell.status_bar.sync_button.configure(command=self.sync_now)
         shell.status_bar.account_button.configure(command=lambda: self.show_page("account"))
@@ -463,6 +502,17 @@ class ScheduleOptimizerApp(ctk.CTk):
             shell.add_page(key, PlaceholderPage(host, title, message, links))
         self.refresh_status()
         self._status_poll = self.after(self.STATUS_POLL_MS, self._poll_status)
+
+    def _check_direct_database(self) -> None:
+        """Check the direct database's connection and schema revision in a worker; show the outcome."""
+
+        def done(result) -> None:
+            self.refresh_status()
+            page = self.pages.get("account")
+            if page is not None and result.ok:
+                page.database_checked(result.value)
+
+        run_in_background(self, self.account_controller.check_backend, done, still_current=lambda: True)
 
     def _build_workspace_pages(self, *, replace: bool) -> None:
         """The pages bound to the workspace's controllers (each schedule page keeps its remembered date)."""
@@ -477,7 +527,7 @@ class ScheduleOptimizerApp(ctk.CTk):
                                                       timezone=services.timezone, today=self.today),
                     services.execution_controller, services.productivity_controller,
                     on_anchor_changed=self.shell_state.remember, on_return=self.show_page,
-                    return_context=self.shell_state.selection("day_return"),
+                    return_context=self.shell_state.selection("day_return"), background_io=self.direct,
                 ))
                 continue
             add(mode_name, CalendarPage(
@@ -486,6 +536,7 @@ class ScheduleOptimizerApp(ctk.CTk):
                                    timezone=services.timezone, today=self.today),
                 services.productivity_controller, on_anchor_changed=self.shell_state.remember,
                 on_open_day=lambda day, mode_name=mode_name: self.open_day(day, return_to=mode_name),
+                background_io=self.direct,
             ))
         add("productivity", ScrollPage(
             shell.host, lambda parent: ProductivityPage(parent, services.productivity_controller)))
@@ -497,11 +548,26 @@ class ScheduleOptimizerApp(ctk.CTk):
             on_open_day=lambda day: self.open_day(day, return_to="allocation")))
         add("settings", SettingsPage(
             shell.host, self.ui_settings, on_appearance=self.set_appearance, on_scale=self.set_ui_scale,
-            controller=SettingsController(services.planning_controller, today=self.today)))
+            controller=SettingsController(services.planning_controller, today=self.today), background_io=self.direct))
 
 
-def main() -> None:
-    app = ScheduleOptimizerApp()
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="python -m app.app", description="The Schedule Maxing desktop app.")
+    parser.add_argument("--storage", choices=settings.STORAGE_MODES, default=None,
+                        help=f"local (default; the SQLite database, works offline) or postgres (direct PostgreSQL "
+                             f"storage, docs/direct-postgres.md). Default: {settings.STORAGE_ENV_VAR}, else local.")
+    parser.add_argument("--env-file", metavar="PATH", default=None,
+                        help=f"with --storage postgres: read DATABASE_URL from this file (the environment still "
+                             f"wins). Default: {settings.ENV_FILE_ENV_VAR}, else the environment only.")
+    args = parser.parse_args(argv)
+    try:
+        storage = args.storage or settings.resolve_storage_mode()
+    except ValueError as error:
+        parser.error(str(error))
+    env_file = args.env_file or os.environ.get(settings.ENV_FILE_ENV_VAR) or None
+    if env_file is not None and storage != "postgres":
+        parser.error("--env-file is only used with --storage postgres (local storage reads no env file).")
+    app = ScheduleOptimizerApp(storage=storage, env_file=env_file)
     app.mainloop()
 
 

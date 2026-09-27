@@ -60,8 +60,10 @@ class CalendarPage(TaskFormActions, ctk.CTkFrame):
         *,
         on_anchor_changed: Callable[[str, date], None] | None = None,
         on_open_day: Callable[[date], None] | None = None,
+        background_io: bool = False,
     ) -> None:
         super().__init__(parent, fg_color=theme.APP_BG, corner_radius=0)
+        self.background_io = background_io
         self.mode_name = mode_name
         self.page_controller = page_controller
         self.productivity_controller = productivity_controller
@@ -232,14 +234,20 @@ class CalendarPage(TaskFormActions, ctk.CTkFrame):
     # ----------------------------- Loading and navigation -----------------------------
 
     def reload(self) -> None:
-        """Re-read the shown period from SQLite (startup, returning to the page, after any change)."""
+        """Re-read the shown period from storage (startup, returning to the page, after any change)."""
         self._load_token += 1
+        token = self._load_token
         self.loading = False
-        result = self.page_controller.load()
-        if result.ok:
-            self._render(result.value)
-        else:
-            messagebox.showerror("Could Not Load Saved Data", result.error or "Unknown error.", parent=self)
+
+        def done(result) -> None:
+            if token != self._load_token:
+                return  # a newer load was started meanwhile
+            if result.ok:
+                self._render(result.value)
+            else:
+                self._load_failed(result)
+
+        self._io(self.page_controller.load, done, blocking=False)
 
     def on_show(self) -> None:
         if not self._busy:
@@ -321,7 +329,9 @@ class CalendarPage(TaskFormActions, ctk.CTkFrame):
     def reset_period(self) -> None:
         if self._refuse_while_busy():
             return
-        plan = self.page_controller.reset_plan()
+        self._io(self.page_controller.reset_plan, self._reset_planned)
+
+    def _reset_planned(self, plan) -> None:
         if not plan.ok:
             self.notice.show("error", plan.error or "The reset could not be prepared.")
             return
@@ -332,7 +342,9 @@ class CalendarPage(TaskFormActions, ctk.CTkFrame):
         if not self._confirm(f"Reset {unit}?", plan.value.message, f"Reset {unit}", danger=True):
             self.notice.show("info", "Reset cancelled; nothing was deleted.")
             return
-        result = self.page_controller.reset_period(plan.value)
+        self._io(lambda: self.page_controller.reset_period(plan.value), self._period_reset)
+
+    def _period_reset(self, result) -> None:
         if result.value is not None:
             self._render(result.value)
         if not result.ok:
@@ -362,9 +374,7 @@ class CalendarPage(TaskFormActions, ctk.CTkFrame):
         self.status_label.configure(text=snapshot.status_text + undated)
         self.added_tasks_panel.refresh(snapshot.rows)
         if not self._editing:
-            options = self.page_controller.editor_options()
-            if options.ok:
-                self.form.set_options(options.value)
+            self._refresh_options()
         self.calendar.draw(snapshot, self.page_controller.selected_date)
         self._show_selection()
 

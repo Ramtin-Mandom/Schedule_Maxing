@@ -28,6 +28,7 @@ from app.planning.preferences import (
     resolve_day_preferences,
 )
 from backend import models
+from backend.record_mapping import preference_overrides
 
 
 def stored_layers(session: Session, user_id: uuid.UUID, days: list[date_]) -> dict[str, PreferenceOverrides]:
@@ -40,10 +41,7 @@ def stored_layers(session: Session, user_id: uuid.UUID, days: list[date_]) -> di
             models.Preference.deleted_at.is_(None),
         )
     )
-    return {
-        row.scope_key: PreferenceOverrides.model_validate({**row.overrides, "optimizer_mode": row.optimizer_mode})
-        for row in rows
-    }
+    return {row.scope_key: preference_overrides(row) for row in rows}
 
 
 def effective_day_preferences(

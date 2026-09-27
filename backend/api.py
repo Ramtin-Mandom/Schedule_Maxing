@@ -25,11 +25,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, FastAPI, Query, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
-from sqlalchemy import select, text, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from backend import browser_sessions, models
+from backend import browser_sessions, models, snapshots
+from backend.accounts import AccountExistsError, AccountIdentity, AccountService, InvalidCredentialsError
 from backend.database import session_scope
 from backend.errors import ApiError, not_found, unauthenticated, version_conflict
 from backend.executions import ACTIONS, EXECUTIONS, ActionIn, ExecutionCreate, ExecutionOut, FeedbackIn
@@ -40,12 +40,9 @@ from backend.security import (
     MAX_PASSWORD_LENGTH,
     MIN_PASSWORD_LENGTH,
     TokenError,
-    hash_password,
     issue_access_token,
-    needs_rehash,
     normalize_identifier,
     verify_access_token,
-    verify_password,
 )
 from backend.settings import BackendSettings
 
@@ -178,42 +175,28 @@ class ProfileUpdate(BaseModel):
     display_name: str | None = Field(default=None, max_length=200)
 
 
-def _user_out(user: models.User) -> dict:
+def _user_out(user: models.User | AccountIdentity) -> dict:
     return UserOut.model_validate(user, from_attributes=True).model_dump(mode="json")
 
 
 @auth.post("/auth/register", status_code=201, response_model=UserOut, summary="Create an account.")
 def register(payload: RegisterIn, session: Session = Depends(get_session), now: datetime = Depends(server_now)) -> dict:
-    user = models.User(
-        id=uuid.uuid4(),
-        email=normalize_identifier(payload.email),
-        username=normalize_identifier(payload.username) if payload.username else None,
-        display_name=unicodedata.normalize("NFKC", payload.display_name).strip() if payload.display_name else None,
-        password_hash=hash_password(payload.password),
-        change_seq=0, created_at=now, updated_at=now, version=1,
-    )
-    session.add(user)
     try:
-        session.commit()
-    except IntegrityError:
-        # The unique constraints decide, so two concurrent registrations cannot both succeed.
-        session.rollback()
-        raise ApiError(409, "account_exists", "An account with this email or username already exists.") from None
-    return _user_out(user)
+        identity = AccountService(session, lambda: now).register(
+            email=payload.email, password=payload.password, username=payload.username,
+            display_name=payload.display_name,
+        )
+    except AccountExistsError as error:
+        raise ApiError(409, "account_exists", str(error)) from None
+    return _user_out(identity)
 
 
-def _check_credentials(payload: LoginIn, session: Session) -> models.User:
-    column = models.User.email if payload.email is not None else models.User.username
-    user = session.scalars(select(models.User).where(
-        column == normalize_identifier(payload.email or payload.username)
-    )).first()
-    if not verify_password(payload.password, user.password_hash if user else None):
-        raise unauthenticated("The email/username or password is incorrect.")
-    if needs_rehash(user.password_hash):
-        session.execute(update(models.User).where(models.User.id == user.id)
-                        .values(password_hash=hash_password(payload.password)))
-        session.commit()
-    return user
+def _check_credentials(payload: LoginIn, session: Session) -> AccountIdentity:
+    try:
+        return AccountService(session).authenticate(email=payload.email, username=payload.username,
+                                                    password=payload.password)
+    except InvalidCredentialsError as error:
+        raise unauthenticated(str(error)) from None
 
 
 @auth.post("/auth/login", response_model=TokenOut, summary="Exchange credentials for an access token.")
@@ -545,6 +528,7 @@ def list_changes(
     session: Session = Depends(get_session),
 ) -> dict:
     size = _page_size(request, limit)
+    # Each entry's snapshot, its typed row and its child rows load for the whole page (a few queries per page).
     rows = list(session.scalars(
         select(models.ChangeLogEntry)
         .where(models.ChangeLogEntry.user_id == user_id, models.ChangeLogEntry.seq > after)
@@ -555,7 +539,7 @@ def list_changes(
     return {
         "changes": [
             {"seq": row.seq, "entity_type": row.entity_type, "entity_id": row.entity_id, "operation": row.operation,
-             "version": row.version, "recorded_at": row.recorded_at, "record": row.payload}
+             "version": row.version, "recorded_at": row.recorded_at, "record": snapshots.decode(row.revision)}
             for row in rows
         ],
         "cursor": rows[-1].seq if rows else after,

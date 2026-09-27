@@ -79,17 +79,39 @@ def _user(engine) -> uuid.UUID:
     return user_id
 
 
+def _column_types(connection, table: str) -> dict[str, str]:
+    return dict(connection.execute(text(
+        "SELECT column_name, data_type FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name = :table"
+    ), {"table": table}).all())
+
+
 def test_migrations_match_the_models_on_postgresql(pg_engine) -> None:
     with pg_engine.connect() as connection:
         assert current_revision(connection) == head_revision()
         context = MigrationContext.configure(connection, opts={"compare_type": True})
         assert compare_metadata(context, models.Base.metadata) == []
-        types = dict(connection.execute(text(
-            "SELECT column_name, data_type FROM information_schema.columns "
-            "WHERE table_schema = current_schema() AND table_name = 'tasks'"
-        )).all())
-    assert types["id"] == "uuid" and types["tags"] == "jsonb"
-    assert types["created_at"] == "timestamp with time zone"
+        tasks = _column_types(connection, "tasks")
+        tags = _column_types(connection, "task_tags")
+        dates = _column_types(connection, "task_preferred_dates")
+        preferences = _column_types(connection, "preferences")
+        change_log = _column_types(connection, "change_log")
+        sync_operations = _column_types(connection, "sync_operations")
+        json_columns = set(connection.execute(text(
+            "SELECT table_name || '.' || column_name FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND data_type IN ('json', 'jsonb')"
+        )).scalars())
+    # Native types, and tags/preferred dates/recurrence as ordered child rows and scalar columns instead of JSONB.
+    assert tasks["id"] == "uuid" and tasks["created_at"] == "timestamp with time zone"
+    assert not {"tags", "preferred_dates", "recurrence"} & set(tasks)
+    assert tasks["recurrence_end_date"] == "date" and tasks["recurrence_interval"] == "integer"
+    assert tags == {"user_id": "uuid", "task_id": "uuid", "position": "integer", "tag": "text"}
+    assert dates["preferred_date"] == "date"
+    assert "overrides" not in preferences and preferences["reward_weight_importance"] == "double precision"
+    assert "payload" not in change_log and change_log["revision_id"] == "uuid"
+    assert "result" not in sync_operations and sync_operations["record_revision_id"] == "uuid"
+    # The only JSON left is the documented, bounded placement extension object (live and in snapshots).
+    assert json_columns == {"placements.optimization_metadata", "placement_revisions.optimization_metadata"}
 
 
 def test_postgresql_enforces_the_partial_and_composite_constraints(pg_engine) -> None:
@@ -99,7 +121,7 @@ def test_postgresql_enforces_the_partial_and_composite_constraints(pg_engine) ->
 
     def preference(user_id, deleted=None):
         return models.Preference(user_id=user_id, id=uuid.uuid4(), scope="user", scope_date=None, scope_key="user",
-                                 optimizer_mode=None, overrides={}, created_at=now, updated_at=now, version=1,
+                                 optimizer_mode=None, created_at=now, updated_at=now, version=1,
                                  deleted_at=deleted)
 
     with factory() as session:
@@ -113,12 +135,37 @@ def test_postgresql_enforces_the_partial_and_composite_constraints(pg_engine) ->
         project = models.Project(user_id=alice, id=uuid.uuid4(), name="A", created_at=now, updated_at=now, version=1)
         session.add(project)
         session.commit()
-        forged = models.Task(user_id=bob, id=uuid.uuid4(), project_id=project.id, name="B", category="c", tags=[],
-                             estimated_duration_minutes=5, priority=5, required=False, preferred_dates=[],
+        forged = models.Task(user_id=bob, id=uuid.uuid4(), project_id=project.id, name="B", category="c",
+                             estimated_duration_minutes=5, priority=5, required=False,
                              created_at=now, updated_at=now, version=1)
         session.add(forged)
         with pytest.raises(IntegrityError):  # the composite foreign key includes user_id
             session.commit()
+
+
+def test_postgresql_backstops_the_placement_extension_object(pg_engine) -> None:
+    """Any writer (not only the API) is held to a JSON object of bounded size in optimization_metadata."""
+    owner, now = _user(pg_engine), datetime.now(timezone.utc)
+    task_id = uuid.uuid4()
+    factory = session_factory(pg_engine)
+    with factory() as session:
+        session.add(models.Task(user_id=owner, id=task_id, name="T", category="c", estimated_duration_minutes=5,
+                                priority=5, required=False, created_at=now, updated_at=now, version=1))
+        session.commit()
+
+    def placement(metadata) -> models.Placement:
+        return models.Placement(user_id=owner, id=uuid.uuid4(), task_id=task_id, planned_date=now.date(),
+                                timezone="UTC", planned_start=now, planned_end=now.replace(year=now.year + 1),
+                                score=0.0, optimization_metadata=metadata, created_at=now, updated_at=now, version=1)
+
+    for metadata in ([{"task": 1}], {"blob": "x" * 9000}):
+        with factory() as session:
+            session.add(placement(metadata))
+            with pytest.raises(IntegrityError):
+                session.commit()
+    with factory() as session:
+        session.add(placement({"mode": "precise"}))
+        session.commit()
 
 
 def test_concurrent_registrations_create_exactly_one_account(pg_app) -> None:
@@ -196,7 +243,9 @@ def test_a_later_cursor_can_never_skip_an_earlier_uncommitted_change(pg_engine) 
     thread.join(timeout=30)
     assert b_finished.is_set()
     with factory() as reader:
-        names = list(reader.scalars(select(models.ChangeLogEntry.payload["name"].as_string())
+        names = list(reader.scalars(select(models.ProjectRevision.name)
+                                    .join(models.ChangeLogEntry, (models.ChangeLogEntry.user_id == models.ProjectRevision.user_id)
+                                          & (models.ChangeLogEntry.revision_id == models.ProjectRevision.id))
                                     .where(models.ChangeLogEntry.user_id == user_id)
                                     .order_by(models.ChangeLogEntry.seq)))
     assert committed_seqs() == [1, 2] and names == ["A", "B"]
@@ -224,3 +273,38 @@ def test_concurrent_overlapping_fixed_blocks_cannot_both_be_created(pg_app) -> N
     assert sorted(results) == [201] + [409] * 7
     with TestClient(pg_app) as client:
         assert len(client.get("/fixed-blocks", headers=headers).json()["items"]) == 1
+
+
+def test_the_query_plans_can_use_the_indexes_the_direct_path_relies_on(pg_engine) -> None:
+    """
+    Index applicability, not planner choice. For each query shape the services
+    issue: (1) an index whose leading columns are exactly the query's equality
+    columns exists (inspected in pg_indexes), and (2) with sequential scans
+    disabled for the session, the planner answers the query from an index
+    rather than a table scan. Which of several usable indexes it picks for an
+    empty table is its business, so no plan is required to name one index, and
+    nothing depends on sample sizes or timings.
+    """
+    user = uuid.uuid4()
+    queries = {  # index -> (its leading columns, the query shape)
+        "ix_executions_user_task": ("(user_id, task_id)",
+                                    "SELECT id FROM executions WHERE user_id = :u AND task_id = ANY(:ids)"),
+        "uq_placements_user_task_id": ("(user_id, task_id, id)",
+                                       "SELECT id FROM placements WHERE user_id = :u AND task_id = ANY(:ids)"),
+        "task_tags_pkey": ('(user_id, task_id, "position")',
+                           "SELECT tag FROM task_tags WHERE user_id = :u AND task_id = ANY(:ids) ORDER BY position"),
+        "change_log_pkey": ("(user_id, seq)",
+                            "SELECT seq FROM change_log WHERE user_id = :u AND seq > 0 ORDER BY seq LIMIT 100"),
+        "uq_preferences_live_scope": ("(user_id, scope_key) WHERE (deleted_at IS NULL)",
+                                      "SELECT id FROM preferences WHERE user_id = :u AND scope_key = 'user' "
+                                      "AND deleted_at IS NULL"),
+    }
+    with pg_engine.connect() as connection:
+        definitions = dict(connection.execute(text(
+            "SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = current_schema()")).all())
+        connection.execute(text("SET enable_seqscan = off"))
+        for index, (columns, query) in queries.items():
+            assert index in definitions and columns in definitions[index], (index, definitions.get(index))
+            rows = connection.execute(text("EXPLAIN " + query), {"u": user, "ids": [uuid.uuid4()]}).scalars()
+            plan = " | ".join(rows)
+            assert "Index" in plan and "Seq Scan" not in plan, (index, plan)

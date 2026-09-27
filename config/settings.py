@@ -162,3 +162,23 @@ ML_MODEL_META_FILENAME = "ml_duration_model.meta.json"
 # network access, account, or backend setting is needed. Credentials are
 # never configured here -- they are entered at sign-in and kept in memory.
 BACKEND_URL = os.environ.get("SCHEDULE_MAXING_BACKEND_URL", "").strip() or None
+
+# Where the desktop app stores its records (docs/direct-postgres.md):
+#   "local"    -- the SQLite database above; works offline (the default)
+#   "postgres" -- direct PostgreSQL storage (app/persistence), for private development
+# Chosen with `python -m app.app --storage postgres [--env-file .env]` or
+# SCHEDULE_MAXING_STORAGE=postgres. DATABASE_URL alone never selects PostgreSQL, and
+# nothing here reads a .env file: only the app's entry point loads the one named by
+# --env-file (or SCHEDULE_MAXING_ENV_FILE).
+STORAGE_ENV_VAR = "SCHEDULE_MAXING_STORAGE"
+ENV_FILE_ENV_VAR = "SCHEDULE_MAXING_ENV_FILE"
+STORAGE_MODES = ("local", "postgres")
+
+
+def resolve_storage_mode(environ: Mapping[str, str] | None = None) -> str:
+    """The configured storage mode ("local" unless SCHEDULE_MAXING_STORAGE says "postgres"); ValueError otherwise."""
+    environ = os.environ if environ is None else environ
+    mode = (environ.get(STORAGE_ENV_VAR) or "local").strip().lower()
+    if mode not in STORAGE_MODES:
+        raise ValueError(f"{STORAGE_ENV_VAR} must be one of: {', '.join(STORAGE_MODES)}.")
+    return mode

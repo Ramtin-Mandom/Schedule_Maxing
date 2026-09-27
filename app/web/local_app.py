@@ -69,7 +69,8 @@ from app.sync.transport import AuthenticationError, HttpTransport, ProtocolError
 from app.web.local_session import LocalGuard
 from app.web.records import build_records_router
 from backend.api import UserOut
-from backend.errors import ApiError, install_error_handlers
+from backend.errors import ApiError
+from backend.http_errors import install_error_handlers
 from backend.planning_api import (
     ENGINES,
     MAX_CSV_BYTES,

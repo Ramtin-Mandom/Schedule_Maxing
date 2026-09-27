@@ -18,7 +18,9 @@ from collections.abc import Callable
 
 import customtkinter as ctk
 
+from app.persistence.errors import NotSignedInError
 from app.ui import theme
+from app.ui.background import run_io
 from app.ui.components import AppButton, Card, LabeledSelect, Notice, SectionTitle, ask_confirm, font
 from app.planning.preferences import ENGINE_LABELS
 from app.ui.preferences_editor import PreferencesEditor
@@ -98,8 +100,11 @@ class SettingsPage(ctk.CTkFrame):
         on_appearance: Callable[[str], bool],
         on_scale: Callable[[float], bool],
         controller=None,
+        background_io: bool = False,
     ) -> None:
         super().__init__(parent, fg_color=theme.APP_BG, corner_radius=0)
+        #: Direct PostgreSQL storage: the defaults are read and saved in workers (app/ui/background.run_io).
+        self.background_io = background_io
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
         self._on_appearance = on_appearance
@@ -161,13 +166,18 @@ class SettingsPage(ctk.CTkFrame):
         self.reset_button = AppButton(defaults, "Reset default overrides…", self.reset_defaults, variant="danger")
         self.reset_button.grid(row=6, column=0, sticky="w", padx=16, pady=12)
 
+    def _io(self, work, done):
+        run_io(self, work, done, background=self.background_io)
+
     def on_show(self):
         if self.controller is not None:
-            result = self.controller.load()
-            if result.ok:
-                self.render_defaults(result.value)
-            else:
-                self.preference_notice.show("error", result.error)
+            self._io(self.controller.load, self._loaded)
+
+    def _loaded(self, result):
+        if result.ok:
+            self.render_defaults(result.value)
+        elif not isinstance(result.cause, NotSignedInError):
+            self.preference_notice.show("error", result.error)
 
     def render_defaults(self, view):
         self.view = view
@@ -184,30 +194,38 @@ class SettingsPage(ctk.CTkFrame):
             self.preference_notice.show("success", "Defaults saved. Date overrides were kept; no schedule was generated.")
         else:
             pending = {name: self.editor.value_of(name) for name in self.editor.inputs}
-            latest = self.controller.load()
-            if latest.ok:
-                self.render_defaults(latest.value)
-                for name, value in pending.items():
-                    if name in self.editor.inputs:
-                        self.editor.set_input(name, value)
-            if key is not None:
-                self.editor.show_error(key, result.error)
-            self.preference_notice.show("error", f"{result.error} Your typed edits are kept; review before saving again.")
+
+            def reloaded(latest):
+                if latest.ok:
+                    self.render_defaults(latest.value)
+                    for name, value in pending.items():
+                        if name in self.editor.inputs:
+                            self.editor.set_input(name, value)
+                if key is not None:
+                    self.editor.show_error(key, result.error)
+                self.preference_notice.show("error", f"{result.error} Your typed edits are kept; review before saving "
+                                                     "again.")
+
+            self._io(self.controller.load, reloaded)
 
     def change(self, key, action, value=None):
         if self.view is not None:
-            self.apply_result(self.controller.change(self.view, key, action, value), key)
+            view = self.view
+            self._io(lambda: self.controller.change(view, key, action, value), lambda result: self.apply_result(
+                result, key))
 
     def choose_engine(self, label):
         if self.view is not None:
+            view = self.view
             mode = next((key for key, value in ENGINE_LABELS.items() if value == label), None)
-            self.apply_result(self.controller.set_engine(self.view, mode))
+            self._io(lambda: self.controller.set_engine(view, mode), self.apply_result)
 
     def reset_defaults(self):
         if self.view is not None and ask_confirm(self, title="Reset defaults?",
                 message="Remove your default overrides and inherit app defaults? Date overrides and history stay.",
                 confirm_text="Reset defaults", danger=True):
-            self.apply_result(self.controller.reset(self.view))
+            view = self.view
+            self._io(lambda: self.controller.reset(view), self.apply_result)
 
     def _appearance_chosen(self, label: str) -> None:
         mode = next(key for key, value in APPEARANCE_LABELS.items() if value == label)
