@@ -19,7 +19,9 @@ Rules of this adapter:
       mutation -- the user's change-log lock is taken first and held until
       commit, so a read-check-write inside it (e.g. the generation's
       fingerprint re-check) cannot interleave with another write of the user.
-      Nested transactions are savepoints.
+      Nested transactions are savepoints. A repository built with an open
+      Mutator (a sync push applying a reschedule) joins that mutation:
+      every transaction() is then a savepoint and the caller commits.
     - Every write goes through the Mutator's change log: one change_log
       entry per written record, in commit order, exactly like the REST and
       sync endpoints.
@@ -47,12 +49,15 @@ from sqlalchemy.orm import Session
 from app.planning.application import task_planned_date
 from app.planning.errors import DuplicateEntityError, InvalidEntityError, ScopeError
 from app.planning.external_dependencies import ExecutionFact
-from app.planning.models import FixedBlock, Project, ScheduledTask, Task
+from app.planning.history import ExecutionHistory, ScheduleHistory, collect_schedule_history
+from app.execution.models import ExecutionStatus
+from app.planning.models import FixedBlock, PlacementRemovalReason, Project, ScheduledTask, Task
 from app.planning.preferences import PreferenceRecord, PreferenceScope
 from app.planning.provenance import GenerationRecord
 from app.planning.scope import OwnerScope
 from app.planning.time import local_day_start_utc
 from backend import models
+from backend.executions import ActionIn, to_task_execution, to_work_session
 from backend.mutations import Mutator, mutation
 from backend.record_mapping import preference_overrides, task_content
 from backend.resources import (
@@ -87,12 +92,16 @@ def _payload(schema, data: dict):
 
 
 class ServerPlanningRepository:
-    def __init__(self, session: Session, user_id: uuid.UUID, clock: Callable[[], datetime]) -> None:
+    def __init__(
+        self, session: Session, user_id: uuid.UUID, clock: Callable[[], datetime], *, mutator: Mutator | None = None
+    ) -> None:
+        if mutator is not None and mutator.user_id != user_id:
+            raise ScopeError("a server repository joins only a mutation of its own user.")
         self._session = session
         self._user_id = user_id
         self._clock = clock
         self._owner = OwnerScope.account(user_id)
-        self._mutator: Mutator | None = None
+        self._mutator: Mutator | None = mutator
 
     # ------------------------------------------------------------------
     # Scope and transactions
@@ -163,6 +172,9 @@ class ServerPlanningRepository:
             if row is None or row.deleted_at is not None or row.version != expected_version:
                 return False
             if getattr(model, "deleted_at", None) is not None:
+                if spec is PLACEMENTS:
+                    row.removal_reason = model.removal_reason.value if model.removal_reason is not None else None
+                    row.superseded_by_id = model.superseded_by_id
                 self._mutator.tombstone(spec, row)
                 return True
             spec.assign(self._session, self._user_id, row, payload)
@@ -171,13 +183,20 @@ class ServerPlanningRepository:
             self._mutator.log(spec.entity_type, spec.serialize(self._session, self._user_id, row), "upsert")
             return True
 
-    def _soft_delete(self, spec: ResourceSpec, entity_id, expected_version: int | None) -> bool:
+    def _soft_delete(
+        self, spec: ResourceSpec, entity_id, expected_version: int | None,
+        removal: tuple[PlacementRemovalReason | None, uuid.UUID | None] | None = None,
+    ) -> bool:
         with self.transaction():
             row = self._session.get(spec.model, (self._user_id, uuid.UUID(str(entity_id))), populate_existing=True)
             if row is None or row.deleted_at is not None:
                 return False
             if expected_version is not None and row.version != expected_version:
                 return False
+            if removal is not None:  # a placement's removal provenance, part of the same revision
+                reason, successor = removal
+                row.removal_reason = reason.value if reason is not None else None
+                row.superseded_by_id = successor
             self._mutator.tombstone(spec, row)
             return True
 
@@ -316,12 +335,85 @@ class ServerPlanningRepository:
     def update_placement(self, placement: ScheduledTask, *, expected_version: int) -> bool:
         return self._update(PLACEMENTS, placement, _payload(PlacementCreate, _placement_fields(placement)), expected_version)
 
-    def soft_delete_placement(self, placement_id, *, deleted_at, expected_version) -> bool:
-        return self._soft_delete(PLACEMENTS, placement_id, expected_version)
+    def soft_delete_placement(self, placement_id, *, deleted_at, expected_version, removal_reason=None,
+                              superseded_by_id=None) -> bool:
+        return self._soft_delete(PLACEMENTS, placement_id, expected_version, (removal_reason, superseded_by_id))
 
-    def soft_delete_placements(self, placement_ids: Iterable, *, deleted_at) -> int:
+    def soft_delete_placements(self, placement_ids: Iterable, *, deleted_at, removal_reason=None,
+                               superseded_by=None) -> int:
+        superseded_by = superseded_by or {}
         with self.transaction():
-            return sum(int(self._soft_delete(PLACEMENTS, placement_id, None)) for placement_id in dict.fromkeys(placement_ids))
+            return sum(
+                int(self._soft_delete(PLACEMENTS, placement_id, None,
+                                      (removal_reason, superseded_by.get(uuid.UUID(str(placement_id))))))
+                for placement_id in dict.fromkeys(placement_ids)
+            )
+
+    def placements_superseded_by(self, placement_ids: Iterable) -> dict[uuid.UUID, list[ScheduledTask]]:
+        ids = [uuid.UUID(str(value)) for value in placement_ids]
+        grouped: dict[uuid.UUID, list[ScheduledTask]] = defaultdict(list)
+        if ids:
+            rows = self._rows(models.Placement, models.Placement.superseded_by_id.in_(ids), include_deleted=True)
+            for row in sorted(rows, key=lambda row: str(row.id)):
+                grouped[row.superseded_by_id].append(_placement(row))
+        return dict(grouped)
+
+    def schedule_history(self, start_utc: datetime, end_utc: datetime) -> ScheduleHistory:
+        """
+        The analytics read model (app/planning/history.py) of the user's records.
+        On PostgreSQL the user's change-log row is read FOR SHARE first: every
+        writer of the user takes that row exclusively (backend/mutations.py), so
+        until this unit of work ends nothing of the user can commit and the
+        queries below see one consistent state. Writes nothing.
+        """
+        self._session.execute(
+            select(models.User.id).where(models.User.id == self._user_id).with_for_update(read=True)
+        )
+        return collect_schedule_history(
+            start_utc, end_utc, in_range=self._placements_starting_between,
+            superseded_by=self.placements_superseded_by, executions_for=self._executions_for_placements,
+            tasks_for=lambda ids: self.get_tasks(ids, include_deleted=True),
+        )
+
+    def _placements_starting_between(self, start_utc: datetime, end_utc: datetime) -> list[ScheduledTask]:
+        rows = self._rows(models.Placement, models.Placement.planned_start >= start_utc,
+                          models.Placement.planned_start < end_utc, include_deleted=True)
+        return _ordered_placements(_placement(row) for row in rows)
+
+    def _executions_for_placements(self, placement_ids: Iterable) -> list[ExecutionHistory]:
+        ids = [uuid.UUID(str(value)) for value in placement_ids]
+        if not ids:
+            return []
+        rows = sorted(self._rows(models.Execution, models.Execution.scheduled_task_id.in_(ids)), key=lambda row: str(row.id))
+        sessions: dict[uuid.UUID, list] = defaultdict(list)
+        if rows:
+            for work in self._session.scalars(
+                select(models.WorkSession).where(
+                    models.WorkSession.user_id == self._user_id,
+                    models.WorkSession.execution_id.in_([row.id for row in rows]),
+                ).order_by(models.WorkSession.execution_id, models.WorkSession.position)
+            ):
+                sessions[work.execution_id].append(to_work_session(work))
+        return [ExecutionHistory(to_task_execution(row), tuple(sessions[row.id])) for row in rows]
+
+    def cancel_unstarted_execution(self, placement_id, *, at: datetime) -> str | None:
+        """
+        A reschedule's execution disposition (see the SQLite repository): the
+        placement's live, never-started execution is cancelled through the
+        Mutator's lifecycle action -- the shared transition table, a server
+        version and a change-log entry. Returns its id, or None.
+        """
+        with self.transaction():
+            row = self._session.scalars(select(models.Execution).where(
+                models.Execution.user_id == self._user_id,
+                models.Execution.scheduled_task_id == uuid.UUID(str(placement_id)),
+                models.Execution.deleted_at.is_(None),
+                models.Execution.status == ExecutionStatus.SCHEDULED.value,
+            )).first()
+            if row is None:
+                return None
+            self._mutator.execution_action(row.id, "cancel", ActionIn(base_version=row.version, at=at))
+            return str(row.id)
 
     def get_placements(self, placement_ids: Iterable, *, include_deleted: bool = False) -> dict[uuid.UUID, ScheduledTask]:
         return {row.id: _placement(row) for row in self._by_ids(models.Placement, placement_ids, include_deleted)}
@@ -457,13 +549,15 @@ def _block(row) -> FixedBlock:
 
 def _placement_fields(placement: ScheduledTask) -> dict:
     return placement.model_dump(include={"task_id", "planned_date", "timezone", "planned_start", "planned_end", "score",
-                                         "optimization_metadata"})
+                                         "optimization_metadata", "task_category", "removal_reason",
+                                         "superseded_by_id"})
 
 
 def _placement(row) -> ScheduledTask:
     return ScheduledTask(task_id=row.task_id, planned_date=row.planned_date, timezone=row.timezone,
                          planned_start=row.planned_start, planned_end=row.planned_end, score=row.score,
-                         optimization_metadata=dict(row.optimization_metadata), **_audit(row))
+                         optimization_metadata=dict(row.optimization_metadata), task_category=row.task_category,
+                         removal_reason=row.removal_reason, superseded_by_id=row.superseded_by_id, **_audit(row))
 
 
 def _ordered_placements(placements: Iterable[ScheduledTask]) -> list[ScheduledTask]:

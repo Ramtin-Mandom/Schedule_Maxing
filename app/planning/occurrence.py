@@ -24,6 +24,12 @@ actually produced, never those of tasks the run left unplaced, never other
 occurrences of a recurring template, and never a placement whose execution
 has already started or finished (see HISTORY_PROTECTED_STATUSES) -- that
 placement is history, not an obsolete plan.
+
+An explicit reschedule (app.planning.workflow.reschedule_placement) keeps
+the occurrence: the replacement is the same task's placement, and a
+recurring template's placement may move only within its own date (another
+date would be another occurrence). The same statuses make a placement
+immovable.
 """
 
 from __future__ import annotations

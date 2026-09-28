@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -49,8 +50,33 @@ def _restore_installed_registry():
     background.install_registry(previous)
 
 
-def rows(connection, table: str) -> list[tuple]:
-    return [tuple(row) for row in connection.execute(f"SELECT * FROM {table} ORDER BY 1, 2")]
+def rows(connection, table: str, columns: list[str] | None = None) -> list[tuple]:
+    selected = ", ".join(columns) if columns else "*"
+    return [tuple(row) for row in connection.execute(f"SELECT {selected} FROM {table} ORDER BY 1, 2")]
+
+
+def column_names(connection, table: str) -> list[str]:
+    return [row[1] for row in connection.execute(f"PRAGMA table_info({table})")]
+
+
+#: Placement columns added by schema v7 (Milestone 5); Milestone 3 code neither had nor wrote them.
+V7_PLACEMENT_COLUMNS = ("task_category", "removal_reason", "superseded_by_id")
+
+
+@contextmanager
+def milestone3_placement_writer():
+    """The planning repository as Milestone 3 shipped it: placements without the v7 columns."""
+    from app.planning import repository
+
+    columns = repository._PLACEMENT_COLUMNS
+    to_row, from_row = repository._placement_to_row, repository._row_to_placement
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(repository, "_PLACEMENT_COLUMNS", tuple(c for c in columns if c not in V7_PLACEMENT_COLUMNS))
+        patch.setattr(repository, "_placement_to_row", lambda placement: tuple(
+            value for column, value in zip(columns, to_row(placement)) if column not in V7_PLACEMENT_COLUMNS))
+        patch.setattr(repository, "_row_to_placement", lambda row: from_row(
+            {**dict(row), **{column: None for column in V7_PLACEMENT_COLUMNS}}))
+        yield
 
 
 def build_milestone3_database(db_path: Path, project_root: Path) -> dict:
@@ -79,11 +105,14 @@ def build_milestone3_database(db_path: Path, project_root: Path) -> dict:
     planning.save_date_preferences(MON, PreferenceOverrides(optimizer_mode=OptimizerMode.PRECISE_GREEDY))
     connection.execute("UPDATE preference_overrides SET user_id = ?", (str(ALICE),))  # as association left them
     # Milestone 3's desktop Make Schedule (device-wide, the same template the desktop opens with below).
-    run = PlanningController(service=planning, timezone="UTC", project_root=str(project_root)).schedule_range(MON, MON)
+    with milestone3_placement_writer():
+        run = PlanningController(service=planning, timezone="UTC", project_root=str(project_root)).schedule_range(
+            MON, MON)
     assert run.ok, run.error
     connection.execute("UPDATE schedule_generations SET user_id = ?", (str(ALICE),))
 
-    placement = planning.placements_for_date(MON)[0]
+    with milestone3_placement_writer():
+        placement = planning.placements_for_date(MON)[0]
     executions = ExecutionService(ExecutionRepository(connection))
     execution = executions.get_or_create_canonical_execution(planning.get_task(placement.task_id), placement,
                                                              user_id=ALICE)
@@ -110,6 +139,7 @@ def test_a_synchronized_milestone3_database_opens_unchanged_in_its_owners_worksp
     owners = {row[0] for table in ("tasks", "fixed_blocks", "scheduled_tasks", "executions")
               for row in before_connection.execute(f"SELECT user_id FROM {table}")}
     assert owners == {str(ALICE)}  # every record is the account's, as association leaves it
+    before_columns = {table: column_names(before_connection, table) for table in PRESERVED_TABLES}
     before = {table: rows(before_connection, table) for table in PRESERVED_TABLES}
     before_connection.close()
 
@@ -118,7 +148,8 @@ def test_a_synchronized_milestone3_database_opens_unchanged_in_its_owners_worksp
         try:
             connection = services.connection
             assert connection.execute("PRAGMA user_version").fetchone()[0] == LATEST_SCHEMA_VERSION
-            assert {table: rows(connection, table) for table in PRESERVED_TABLES} == before
+            assert {table: rows(connection, table, before_columns[table]) for table in PRESERVED_TABLES} == before
+            assert set(rows(connection, "scheduled_tasks", list(V7_PLACEMENT_COLUMNS))) == {(None, None, None)}
             account = connection.execute("SELECT pull_cursor, active, associated_at, last_synced_at FROM sync_accounts "
                                          "WHERE account_key = ?", (ACCOUNT_KEY,)).fetchone()
             assert tuple(account) == (42, 1, "2024-06-01T09:00:00+00:00", None)

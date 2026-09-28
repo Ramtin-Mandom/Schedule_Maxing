@@ -43,7 +43,9 @@ _TASK_FIELDS = (
 )
 _BLOCK_FIELDS = ("label", "category", "planned_date", "timezone", "planned_start", "planned_end")
 _PLACEMENT_FIELDS = ("task_id", "planned_date", "timezone", "planned_start", "planned_end", "score",
-                     "optimization_metadata")
+                     "optimization_metadata", "task_category")
+#: Removal provenance: written by the server with a tombstone (never part of a create/update payload).
+_PLACEMENT_REMOVAL_FIELDS = ("removal_reason", "superseded_by_id")
 _GENERATION_FIELDS = (
     "planned_date", "timezone", "engine_mode", "range_start", "range_end", "range_scope", "allocation_id",
     "fingerprint", "fingerprint_version", "placements_digest", "placement_count", "unscheduled_count",
@@ -147,6 +149,32 @@ class LocalRecords:
                            str(execution.user_id) if execution.user_id else None, execution.deleted_at is not None,
                            payload, execution, sessions)
 
+    def placement_removal(self, record: LocalRecord) -> dict | None:
+        """A placement tombstone's removal provenance as a delete payload (None when it has none)."""
+        placement = record.model
+        if placement.removal_reason is None and placement.superseded_by_id is None:
+            return None
+        return {
+            "removal_reason": placement.removal_reason.value if placement.removal_reason is not None else None,
+            "superseded_by_id": str(placement.superseded_by_id) if placement.superseded_by_id else None,
+        }
+
+    def reschedule_payload(self, record: LocalRecord) -> dict | None:
+        """
+        The payload of the reschedule action a locally rescheduled placement
+        tombstone is pushed as: its replacement's id and interval, and the
+        time of the move (the tombstone's). None if the replacement is gone.
+        """
+        replacement = self.read("placement", str(record.model.superseded_by_id))
+        if replacement is None:
+            return None
+        return {
+            "replacement_id": replacement.local_id,
+            **{name: replacement.payload[name]
+               for name in ("planned_date", "timezone", "planned_start", "planned_end", "task_category")},
+            "at": record.model.deleted_at.isoformat(),
+        }
+
     def links_resolve(self, record: LocalRecord) -> bool:
         """Whether an execution's task/placement are live local records (else it is uploaded as history)."""
         execution = record.model
@@ -178,7 +206,10 @@ class LocalRecords:
         elif entity_type == "fixed_block":
             model = FixedBlock.model_validate({**meta, **{name: record[name] for name in _BLOCK_FIELDS}})
         elif entity_type == "placement":
-            model = ScheduledTask.model_validate({**meta, **{name: record[name] for name in _PLACEMENT_FIELDS}})
+            # .get: a record acknowledged before the server had these fields (an older shadow) has none of them.
+            model = ScheduledTask.model_validate({
+                **meta, **{name: record.get(name) for name in (*_PLACEMENT_FIELDS, *_PLACEMENT_REMOVAL_FIELDS)}
+            })
         elif entity_type == "preference":
             model = PreferenceRecord.model_validate({
                 **meta, "scope": PreferenceScope(record["scope"]), "date": record["date"],

@@ -440,8 +440,30 @@ def as_instants(value):
     return value
 
 
+#: Placement fields added by revision 0007 (docs/execution-rescheduling.md). A record written before it has
+#: them all null: an unknown category snapshot and removal provenance are never back-filled or guessed.
+PLACEMENT_FIELDS_SINCE_0007 = {"task_category": None, "removal_reason": None, "superseded_by_id": None}
+
+
+def as_of_head(value):
+    """The fixture (as the 0003 API wrote it) as today's API returns it: placements gain the 0007 fields, null."""
+    if isinstance(value, dict):
+        converted = {key: as_of_head(item) for key, item in value.items()}
+        if {"task_id", "planned_start", "optimization_metadata"} <= set(value):
+            converted = {**PLACEMENT_FIELDS_SINCE_0007, **converted}
+        return converted
+    if isinstance(value, list):
+        return [as_of_head(item) for item in value]
+    return value
+
+
 def assert_same(actual, expected) -> None:
     assert as_instants(actual) == as_instants(expected)
+
+
+def assert_same_at_head(actual, expected) -> None:
+    """`actual` (read from today's API) equals the fixture record as it looks at the head revision."""
+    assert_same(actual, as_of_head(expected))
 
 
 # -----------------------------------------------------------------------------
@@ -453,7 +475,7 @@ def test_the_fixture_records_are_valid_api_records() -> None:
     """The fixture is what the 0003 API really wrote: every record validates against today's Out schemas."""
     schemas = {spec.entity_type: spec.out_schema for spec in CRUD_RESOURCES} | {"execution": ExecutionOut}
     for entity_type, _, record in CHANGES:
-        assert_same(schemas[entity_type].model_validate(record).model_dump(mode="json"), record)
+        assert_same_at_head(schemas[entity_type].model_validate(record).model_dump(mode="json"), record)
 
 
 @pytest.mark.parametrize("batch_size", [500, 2], ids=["one-batch", "many-batches"])
@@ -469,7 +491,7 @@ def test_a_populated_0003_database_upgrades_losslessly(predecessor, monkeypatch,
         def read(path: str, record: dict) -> None:
             response = client.get(f"/{path}/{record['id']}", params={"include_deleted": True}, headers=headers)
             assert response.status_code == 200, response.text
-            assert_same(response.json(), record)
+            assert_same_at_head(response.json(), record)
 
         read("projects", PROJECT)
         for record in (TASK1, TASK2, TASK3):  # ordered tags/dates with repeats, recurrence, deadline offset, tombstone
@@ -489,7 +511,7 @@ def test_a_populated_0003_database_upgrades_losslessly(predecessor, monkeypatch,
         for change, (entity_type, operation, record) in zip(feed["changes"], CHANGES):
             assert (change["entity_type"], change["operation"], change["version"]) == (
                 entity_type, operation, record["version"])
-            assert_same(change["record"], record)  # the historical snapshot, not the current row
+            assert_same_at_head(change["record"], record)  # the historical snapshot, not the current row
 
         # The per-user order continues after the migrated entries; Bob's feed is still empty.
         created = client.post("/projects", json={"name": "After"}, headers=headers).json()
@@ -526,8 +548,9 @@ def test_recorded_sync_outcomes_replay_identically_even_after_later_edits(predec
         for result, (_, recorded) in zip(first, replayable):
             expected = copy.deepcopy(recorded)
             expected.setdefault("record", None)
+            expected.setdefault("related", None)  # only a multi-record operation (a reschedule) has any
             expected.setdefault("error", None)
-            assert_same(result, expected)
+            assert_same_at_head(result, expected)
 
         task1 = client.get(f"/tasks/{T1}", headers=headers).json()
         edit = {**content(task1), "name": "Renamed later", "tags": ["new"], "base_version": task1["version"]}
@@ -615,3 +638,51 @@ def test_an_empty_database_upgrades_and_a_disposable_one_downgrades_losslessly(p
     upgrade(predecessor)  # and forward again
     with predecessor.connect() as connection:
         assert current_revision(connection) == head_revision()
+
+
+def test_the_previous_head_upgrades_to_0007_keeping_every_record_and_replay(predecessor) -> None:
+    """0006 (the Milestone 4 head, populated) -> 0007: history, change feed and recorded outcomes survive."""
+    upgrade(predecessor, "0006")
+    tables = ("placements", "executions", "work_sessions", "change_log", "sync_operations", "record_revisions")
+    with predecessor.connect() as connection:
+        before = {table: connection.execute(sa.text(f"SELECT COUNT(*) FROM {table}")).scalar_one() for table in tables}
+        users = [tuple(row) for row in connection.execute(sa.text("SELECT id, change_seq FROM users ORDER BY id"))]
+
+    upgrade(predecessor)
+    with predecessor.connect() as connection:
+        assert current_revision(connection) == head_revision() == "0007"
+        assert {table: connection.execute(sa.text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
+                for table in tables} == before
+        assert [tuple(row) for row in connection.execute(sa.text("SELECT id, change_seq FROM users ORDER BY id"))] == users
+        unknown = connection.execute(sa.text(
+            "SELECT COUNT(*) FROM placements WHERE task_category IS NOT NULL OR removal_reason IS NOT NULL "
+            "OR superseded_by_id IS NOT NULL")).scalar_one()
+        assert unknown == 0  # history from before 0007 stays unknown: nothing is back-filled
+        assert connection.execute(sa.text("SELECT COUNT(*) FROM sync_operation_related_records")).scalar_one() == 0
+
+    replayable = [RESULTS[0], RESULTS[1], RESULTS[2], RESULTS[3], RESULTS[4], RESULTS[5], RESULTS[6], RESULTS[8],
+                  RESULTS[9]]
+    with client_for(predecessor) as client:
+        headers = login_headers(client, "alice@example.com")
+        results = client.post("/sync/push", json={"operations": [op for op, _ in replayable]}, headers=headers).json()
+        for result, (_, recorded) in zip(results["results"], replayable):
+            expected = copy.deepcopy(recorded)
+            expected.setdefault("record", None)
+            expected.setdefault("related", None)
+            expected.setdefault("error", None)
+            assert_same_at_head(result, expected)
+        for record in (EXEC1, EXEC2, EXEC3, EXEC4, EXEC5):  # sessions, legacy ids and owners kept
+            response = client.get(f"/executions/{record['id']}", params={"include_deleted": True}, headers=headers)
+            assert_same_at_head(response.json(), record)
+
+
+def test_a_failing_0007_rolls_back_to_a_working_0006(blank_engine) -> None:
+    upgrade(blank_engine, "0006")
+    with blank_engine.begin() as connection:  # makes 0007's create_table fail after its column changes
+        connection.execute(sa.text("CREATE TABLE sync_operation_related_records (x INTEGER)"))
+    with pytest.raises(sa.exc.DBAPIError):  # the table already exists
+        upgrade(blank_engine)
+    with blank_engine.connect() as connection:
+        assert current_revision(connection) == "0006"
+        columns = {column["name"] for column in sa.inspect(connection).get_columns("placements")}
+        assert "removal_reason" not in columns and "task_category" not in columns

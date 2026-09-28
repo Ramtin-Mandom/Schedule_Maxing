@@ -61,6 +61,11 @@ and provenance written together. A failure anywhere leaves the previous
 schedule exactly as it was. A MandatoryTaskSchedulingError from the engine
 is raised unchanged, with its per-task reasons.
 
+Explicit rescheduling (reschedule_placement): moves one saved placement to
+a new interval after validating the destination with the same hard rules a
+kept placement must meet (reschedule_problems). It is not a generation: no
+engine run and no provenance record; the dates it touches become stale.
+
 preserve_on_empty (opt-in; the desktop Day page uses it): when a run would
 place nothing at all on any generated date -- no work was allocated there,
 or none of it fits -- while those dates still have saved placements, it
@@ -91,12 +96,20 @@ from app.planning.allocation import AllocationResult, allocate_tasks
 from app.planning.application import (
     PROJECT_TEMPLATE,
     GenerationProvenance,
+    PlacementReschedule,
     PlanningRange,
     PlanningService,
     RangeScope,
     RescheduleResult,
 )
-from app.planning.errors import PlanningError, RegenerationRequiredError, ScopeError, StaleInputsError
+from app.planning.errors import (
+    InvalidEntityError,
+    PlanningError,
+    RegenerationRequiredError,
+    RescheduleRejectedError,
+    ScopeError,
+    StaleInputsError,
+)
 from app.planning.external_dependencies import (
     ExternalDependency,
     allocation_dates,
@@ -432,7 +445,7 @@ def generate_from(
         except MandatoryTaskSchedulingError as error:
             error.failed_date = day  # which date could not be generated (the error names only tasks)
             raise
-        outputs[day] = output
+        outputs[day] = _with_category_snapshots(output, stored)
         expected.update({placement.id: placement.version for placement in stored})
         kept[day] = kept_ids
 
@@ -467,6 +480,21 @@ def generate_from(
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _with_category_snapshots(output: DayScheduleOutput, stored: list[ScheduledTask]) -> DayScheduleOutput:
+    """
+    The output as it will be saved: a placement the engine kept (same id)
+    keeps its stored category snapshot, a new one takes its task's category
+    now -- so what generation returns is exactly what is stored.
+    """
+    by_id = {placement.id: placement for placement in stored}
+    placements = [
+        placement.model_copy(update={"task_category": by_id[placement.id].task_category if placement.id in by_id
+                                     else placement.task_category or output.tasks.get(placement.task_id).category})
+        for placement in output.placements
+    ]
+    return output.model_copy(update={"placements": placements})
 
 
 def _stored_output(service: PlanningService, day: date_, state: DayFreshness, inputs: SchedulingInputs) -> DayScheduleOutput:
@@ -678,3 +706,125 @@ def _dependency_done_by(
     if resolved is not None and resolved.satisfied:
         return resolved.satisfied_date < day or resolved.satisfied_at <= placement.planned_start
     return False
+
+
+# -----------------------------------------------------------------------------
+# Explicit rescheduling (docs/execution-rescheduling.md)
+# -----------------------------------------------------------------------------
+
+
+def reschedule_placement(
+    service: PlanningService,
+    placement_id: uuid.UUID,
+    *,
+    expected_version: int,
+    planned_date: date_,
+    timezone_name: str,
+    planned_start: datetime,
+    planned_end: datetime,
+    replacement_id: uuid.UUID | None = None,
+    task_category: str | None = None,
+    at: datetime | None = None,
+    template: object = PROJECT_TEMPLATE,
+) -> PlacementReschedule:
+    """
+    Move one saved placement to a new interval -- explicitly, atomically and
+    without rewriting history -- in one transaction:
+
+    1. the source must be a live placement at `expected_version`, of a live
+       task, whose execution (if any) has not started
+       (PlanningService.reschedule_source: EntityNotFoundError,
+       VersionConflictError, InvalidReferenceError, HistoryProtectedError);
+    2. the destination must satisfy the hard scheduling rules of the day
+       engine and of incremental generation (reschedule_problems), judged
+       against what is stored inside this transaction -- else
+       RescheduleRejectedError listing every problem;
+    3. PlanningService.apply_reschedule tombstones the source (reason
+       RESCHEDULED, superseded_by_id = the replacement), inserts the
+       replacement (replacement_id, or a new id) and cancels the source's
+       never-started execution at `at`.
+
+    A rejected move changes nothing. The saved schedule of the affected
+    dates becomes stale (its placements changed); nothing is regenerated.
+    """
+    with service.transaction():
+        previous, task = service.reschedule_source(placement_id, expected_version=expected_version)
+        try:
+            candidate = ScheduledTask(
+                id=replacement_id or uuid.uuid4(), task_id=task.id, user_id=previous.user_id,
+                planned_date=planned_date, timezone=timezone_name, planned_start=planned_start,
+                planned_end=planned_end, task_category=task_category,
+            )
+        except ValueError as error:
+            raise InvalidEntityError(f"the destination is not a valid placement: {error}") from None
+        problems = reschedule_problems(service, previous, candidate, task, template=template)
+        if problems:
+            raise RescheduleRejectedError(problems)
+        return service.apply_reschedule(placement_id, expected_version=expected_version, replacement=candidate, at=at)
+
+
+def reschedule_problems(
+    service: PlanningService,
+    previous: ScheduledTask,
+    candidate: ScheduledTask,
+    task: Task,
+    *,
+    template: object = PROJECT_TEMPLATE,
+) -> list[PlacementProblem]:
+    """
+    Why `candidate` (the destination of moving `previous`) breaks a hard rule;
+    empty when the move is valid. The destination must: start on its
+    planned_date in its timezone, on whole minutes; differ from where the
+    placement already is; keep a recurring template's occurrence on its own
+    date (each date of a template is its own occurrence -- recurrence is not
+    expanded); honour the task's required date and deadline; and, like a
+    placement kept by incremental generation (_kept_problems), lie inside the
+    date's day window, clear of fixed blocks and of the date's other
+    placements, last exactly the task's estimate, fit the engine mode and
+    start after its dependencies finish. Tasks that depend on it must still
+    start after it ends.
+    """
+    day = candidate.planned_date
+    problems: list[PlacementProblem] = []
+
+    def problem(reason: str, explanation: str) -> None:
+        problems.append(PlacementProblem(candidate.id, task.id, day, reason, explanation))
+
+    local_start = candidate.planned_start.astimezone(ZoneInfo(candidate.timezone))
+    if local_start.date() != day:
+        problem("wrong_date", f"it would start on {local_start.date()} in {candidate.timezone}, not on {day}.")
+    if any(instant.second or instant.microsecond for instant in (candidate.planned_start, candidate.planned_end)):
+        problem("not_whole_minutes", "it must start and end on whole minutes.")
+    if (candidate.planned_date, candidate.timezone, candidate.planned_start, candidate.planned_end) == (
+            previous.planned_date, previous.timezone, previous.planned_start, previous.planned_end):
+        problem("unchanged", "it is already planned there.")
+    if task.recurrence is not None and day != previous.planned_date:
+        problem("recurring_occurrence_date",
+                "a recurring task's placement is the occurrence of its own date; it can only move within that date.")
+    if task.required_date is not None and task.required_date != day:
+        problem("required_date", f"its task must happen on {task.required_date}.")
+    if task.deadline is not None and candidate.planned_end > task.deadline:
+        problem("deadline_missed", f"it would end after the task's deadline ({task.deadline.isoformat()}).")
+    if problems:
+        return problems
+
+    inputs = read_inputs(service, day, day, scope=RangeScope.ELIGIBLE, timezone_name=candidate.timezone,
+                         template=template)
+    others = [placement for placement in service.placements_for_date(day) if placement.id != previous.id]
+    kept_tasks = service.get_tasks_including_deleted({task.id, *(placement.task_id for placement in others)})
+    problems.extend(
+        found for found in _kept_problems(service, [candidate, *others], kept_tasks, inputs, day, full_check=True)
+        if found.placement_id == candidate.id
+    )
+    if task.recurrence is not None and any(placement.task_id == task.id for placement in others):
+        problem("occurrence_taken", f"its recurring task already has a placement on {day}.")
+
+    dependents = [other.id for other in service.list_tasks() if task.id in other.dependency_ids]
+    grouped = service.active_placements_for_tasks(dependents)
+    for dependent_id in sorted(grouped, key=str):
+        if any(placement.planned_date < day
+               or (placement.planned_date == day and placement.planned_start < candidate.planned_end)
+               for placement in grouped[dependent_id]):
+            problem("dependent_starts_first",
+                    f"the task {dependent_id} depends on it and is planned to start before it would end.")
+    return problems

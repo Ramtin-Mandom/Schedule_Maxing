@@ -246,11 +246,13 @@ class _Services:
 
         return DirectExecutionService(self)
 
-    def productivity_service(self):
+    def productivity_service(self, timezone_name: str | None = None):
+        """Productivity analysis of the account; the schedule cohort reads its planning history (one session)."""
         from app.persistence.executions import DirectExecutionReader
         from app.productivity.reporting import ProductivityService
 
-        return ProductivityService(DirectExecutionReader(self))
+        return ProductivityService(DirectExecutionReader(self), history=self.planning_service(),
+                                   timezone_name=timezone_name)
 
 
 class AccountSession(_Services):
