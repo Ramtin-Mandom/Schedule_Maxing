@@ -25,7 +25,24 @@ Push (prepare, then push_batch):
         shadow, live               -> update (base = shadow version); for an
                                       execution: its new lifecycle actions and
                                       feedback as one atomic group
-        shadow, deleted/missing    -> delete (base = shadow version)
+        shadow, deleted/missing    -> delete (base = shadow version); a
+                                      placement's removal reason travels with it
+        no shadow, placement tombstone that a later placement superseded
+                                   -> a history create: the removed plan with
+                                      its reason and successor (sent after the
+                                      successor), so a plan made and moved or
+                                      regenerated before the first sync keeps
+                                      its lineage on the server
+        shadow live, local placement tombstone RESCHEDULED
+                                   -> one "reschedule" action (base = shadow
+                                      version) that the server applies as one
+                                      unit: the move, the replacement and the
+                                      cancellation of the never-started
+                                      execution. Until it is acknowledged, the
+                                      replacement and that execution are part
+                                      of it and send nothing of their own;
+                                      afterwards the results' related records
+                                      are their shadows
         shadow is a tombstone, local is live -> a conflict (never a revival)
     Operations are ordered so references resolve: creates/updates by
     ENTITY_ORDER (tasks after the tasks they depend on), then deletes in
@@ -56,6 +73,10 @@ Conflicts are resolved explicitly (resolve):
                    when the server record is a tombstone (no silent revival)
                    or a different record owns the same unique scope.
 Every decision is kept on the conflict row (resolution, resolved_at).
+Accepting the server's state for a placement this device had rescheduled
+also undoes the rest of that local move: its replacement (which the server
+never accepted) is discarded, and the execution the move cancelled goes
+back to its server state (or, never synchronized, to `scheduled`).
 """
 
 from __future__ import annotations
@@ -68,7 +89,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from app.execution.db import SYNC_TABLES
+from app.execution.models import ExecutionStatus
 from app.execution.repository import ExecutionRepository
+from app.planning.models import PlacementRemovalReason
 from app.planning.repository import PlanningRepository
 from app.sync.mapping import ENTITY_ORDER, DivergedHistory, LocalRecord, LocalRecords, execution_changes
 from app.sync.store import Account, Conflict, SyncStore
@@ -226,7 +249,10 @@ class SyncEngine:
         key = account.account_key
         with self.store.transaction():
             upserts: list[tuple[LocalRecord, object]] = []
-            deletes: list[tuple[str, str, str, int, object]] = []  # (type, wire id, local id, rev, shadow)
+            reschedules: list[tuple[LocalRecord, object, int]] = []
+            histories: list[LocalRecord] = []
+            # (type, wire id, local id, rev, shadow, payload)
+            deletes: list[tuple[str, str, str, int, object, dict | None]] = []
             for entity_type, local_id, rev in self.store.dirty():
                 local = self.records.read(entity_type, local_id)
                 if local is None:  # physically removed locally (a history reset)
@@ -240,14 +266,22 @@ class SyncEngine:
                     elif found[1].deleted:
                         self.store.clear_dirty(entity_type, local_id, if_rev=rev)
                     elif not self._waiting(key, entity_type, found[0]):
-                        deletes.append((entity_type, found[0], local_id, rev, found[1]))
+                        deletes.append((entity_type, found[0], local_id, rev, found[1], None))
                     continue
                 if local.owner != account.user_id or self._waiting(key, entity_type, local.wire_id):
+                    continue
+                if self._part_of_pending_reschedule(key, local):
                     continue
                 shadow = self.store.shadow(key, entity_type, local.wire_id)
                 if local.deleted:
                     if shadow is not None and not shadow.deleted:
-                        deletes.append((entity_type, local.wire_id, local_id, rev, shadow))
+                        if self._is_rescheduled(local):
+                            reschedules.append((local, shadow, rev))
+                        else:
+                            payload = self.records.placement_removal(local) if entity_type == "placement" else None
+                            deletes.append((entity_type, local.wire_id, local_id, rev, shadow, payload))
+                    elif shadow is None and self._is_lineage_history(local):
+                        histories.append(local)
                     else:
                         self.store.clear_dirty(entity_type, local_id, if_rev=rev)
                 elif shadow is not None and shadow.deleted:
@@ -260,13 +294,103 @@ class SyncEngine:
                     upserts.append((local, shadow))
 
             count = 0
-            for local, shadow in self._ordered_upserts(upserts):
+            rank = {entity_type: index for index, entity_type in enumerate(ENTITY_ORDER)}
+            ordered = self._ordered_upserts(upserts)
+            # Moves go after the placement creates/updates (their tasks exist) and before executions.
+            for local, shadow in (item for item in ordered if rank[item[0].entity_type] <= rank["placement"]):
                 count += self._materialize(key, local, shadow)
-            for entity_type, wire_id, local_id, rev, shadow in self._ordered_deletes(deletes):
+            for local, shadow, rev in sorted(reschedules, key=lambda item: item[0].wire_id):
+                count += self._materialize_reschedule(key, local, shadow, rev)
+            for local in self._ordered_histories(histories):  # each after the placement that superseded it
+                payload = {**local.payload, **self.records.placement_removal(local)}
+                self.store.add_op(key, "placement", local.wire_id, local.local_id, "create", payload=payload,
+                                  local_rev=self.store.dirty_rev("placement", local.local_id) or 1)
+                count += 1
+            for local, shadow in (item for item in ordered if rank[item[0].entity_type] > rank["placement"]):
+                count += self._materialize(key, local, shadow)
+            for entity_type, wire_id, local_id, rev, shadow, payload in self._ordered_deletes(deletes):
                 self.store.add_op(key, entity_type, wire_id, local_id, "delete", base_version=shadow.server_version,
-                                  local_rev=rev)
+                                  payload=payload, local_rev=rev)
                 count += 1
             return count
+
+    @staticmethod
+    def _is_lineage_history(local: LocalRecord) -> bool:
+        """A placement tombstone that a later placement superseded (moved or re-placed): part of a lineage."""
+        return (local.entity_type == "placement" and local.deleted and local.model.superseded_by_id is not None
+                and local.model.removal_reason in (PlacementRemovalReason.RESCHEDULED,
+                                                   PlacementRemovalReason.REGENERATED))
+
+    @staticmethod
+    def _ordered_histories(histories: list[LocalRecord]) -> list[LocalRecord]:
+        """Successors first: a history create names its successor, which the server must already have."""
+        by_id = {local.model.id: local for local in histories}
+
+        def depth(local: LocalRecord) -> int:
+            steps, current, seen = 0, local, set()
+            while current.model.superseded_by_id in by_id and current.model.id not in seen:
+                seen.add(current.model.id)
+                current = by_id[current.model.superseded_by_id]
+                steps += 1
+            return steps
+
+        return sorted(histories, key=lambda local: (depth(local), local.wire_id))
+
+    @staticmethod
+    def _is_rescheduled(local: LocalRecord) -> bool:
+        """A placement tombstone left by an explicit local reschedule."""
+        return (local.entity_type == "placement" and local.deleted
+                and local.model.removal_reason == PlacementRemovalReason.RESCHEDULED
+                and local.model.superseded_by_id is not None)
+
+    def _pending_move(self, key: str, placement: LocalRecord | None) -> bool:
+        """A local reschedule of `placement` that the server has not applied yet (its shadow is still live)."""
+        if placement is None or not self._is_rescheduled(placement):
+            return False
+        shadow = self.store.shadow(key, "placement", placement.wire_id)
+        return shadow is not None and not shadow.deleted
+
+    def _awaiting_move(self, key: str, placement_id) -> bool:
+        """
+        Whether a local move that produced this placement has not reached the
+        server yet: a predecessor's move is pending, or the predecessor is
+        itself a replacement the server has not seen (a chain of offline moves).
+        """
+        predecessors = self.records.planning.placements_superseded_by([placement_id]).get(placement_id, [])
+        for predecessor in predecessors:
+            local = self.records.read("placement", str(predecessor.id))
+            if local is None or not self._is_rescheduled(local):
+                continue
+            if self._pending_move(key, local):
+                return True
+            if self.store.shadow(key, "placement", local.wire_id) is None and self._awaiting_move(key, predecessor.id):
+                return True
+        return False
+
+    def _part_of_pending_reschedule(self, key: str, local: LocalRecord) -> bool:
+        """
+        The replacement of a pending move (or of a chain of them), or the
+        execution of a placement that is being moved or is such a replacement:
+        the reschedule actions carry (or cause) their change, so they send
+        nothing of their own until those are acknowledged or resolved.
+        """
+        if local.entity_type == "placement":
+            return self._awaiting_move(key, local.model.id)
+        if local.entity_type == "execution" and local.model.scheduled_task_id is not None:
+            placement = self.records.read("placement", str(local.model.scheduled_task_id))
+            return placement is not None and (
+                self._pending_move(key, placement) or self._awaiting_move(key, placement.model.id))
+        return False
+
+    def _materialize_reschedule(self, key: str, local: LocalRecord, shadow, rev: int) -> int:
+        payload = self.records.reschedule_payload(local)
+        if payload is None:  # the replacement is gone locally: only the removal can be sent (reason unknown)
+            self.store.add_op(key, "placement", local.wire_id, local.local_id, "delete",
+                              base_version=shadow.server_version, local_rev=rev)
+            return 1
+        self.store.add_op(key, "placement", local.wire_id, local.local_id, "action", action="reschedule",
+                          base_version=shadow.server_version, payload=payload, local_rev=rev)
+        return 1
 
     def _ordered_upserts(self, upserts):
         rank = {entity_type: index for index, entity_type in enumerate(ENTITY_ORDER)}
@@ -295,7 +419,7 @@ class SyncEngine:
         # Dependents before what they depend on: executions first ... projects last; tasks that depend on
         # other deleted tasks first.
         task_deps = {}
-        for entity_type, wire_id, _, _, shadow in deletes:
+        for entity_type, wire_id, _, _, shadow, _ in deletes:
             if entity_type == "task":
                 task_deps[wire_id] = set(shadow.record.get("dependency_ids") or [])
 
@@ -358,6 +482,9 @@ class SyncEngine:
                     continue
                 if result["status"] == "applied":
                     self.store.put_shadow(key, op.entity_type, result["record"])
+                    # The other records a reschedule changed; they stay dirty and are compared next round.
+                    for related in result.get("related") or []:
+                        self.store.put_shadow(key, related["entity_type"], related["record"])
                     self.store.delete_op(op.op_id)
                     outcome.applied += 1
                     if not self.store.has_ops(key, op.entity_type, op.entity_id):
@@ -404,6 +531,12 @@ class SyncEngine:
             self.store.update_conflict_remote(open_conflict.id, record)  # resolve against the newest server state
             return
         local = self.records.read(entity_type, local_id)
+        if local is not None and local.owner in (None, account.user_id) and self._part_of_pending_reschedule(key, local):
+            # Its local change belongs to a move that is still being decided: the server state becomes the
+            # base the move is resolved against (applied: the move's result; refused: what is restored).
+            self.store.put_shadow(key, entity_type, record)
+            outcome.skipped += 1
+            return
         pending = self.store.dirty_rev(entity_type, local_id) is not None or self.store.has_ops(key, entity_type, wire_id)
         if local is not None and local.owner not in (None, account.user_id):
             self._pull_conflict(key, entity_type, wire_id, local_id, shadow, local, record, "owned_by_another_account")
@@ -420,12 +553,23 @@ class SyncEngine:
             outcome.conflicts.append(wire_id)
             return
         if local is None and record["deleted_at"] is not None:
-            self.store.put_shadow(key, entity_type, record)  # never seen here; nothing to delete
-            return
+            if not self._keeps_lineage(entity_type, record):
+                self.store.put_shadow(key, entity_type, record)  # never seen here; nothing to delete
+                return
         version = (local.model.version + 1) if local is not None else 1
         self.records.store(entity_type, record, account.user_id, version)
         self.store.put_shadow(key, entity_type, record)
         outcome.applied += 1
+
+    def _keeps_lineage(self, entity_type: str, record: dict) -> bool:
+        """
+        A removed placement never seen here is still stored when it is part of a
+        lineage (a later placement superseded it) and its task is here: the
+        original plan of a moved or regenerated occurrence stays readable.
+        """
+        if entity_type != "placement" or not record.get("superseded_by_id"):
+            return False
+        return self.records.planning.get_task(uuid.UUID(record["task_id"]), include_deleted=True) is not None
 
     def _pull_conflict(self, key, entity_type, wire_id, local_id, shadow, local, record, code) -> None:
         self.store.add_conflict(
@@ -447,7 +591,7 @@ class SyncEngine:
             sql = "SELECT id FROM schedule_generations WHERE planned_date = ? AND deleted_at IS NULL AND id <> ?"
             params = (record["planned_date"], local_id)
         elif entity_type == "execution" and record["scheduled_task_id"]:
-            sql = "SELECT id FROM executions WHERE scheduled_task_id = ? AND id <> ?"
+            sql = "SELECT id FROM executions WHERE scheduled_task_id = ? AND deleted_at IS NULL AND id <> ?"
             params = (record["scheduled_task_id"], local_id)
         else:
             return None
@@ -507,8 +651,11 @@ class SyncEngine:
                     self.store.put_shadow(key, entity_type, remote)  # the new precondition
                 self.store.ensure_dirty(entity_type, conflict.local_id)
             else:
+                before = self.records.read(entity_type, conflict.local_id) if entity_type == "placement" else None
                 with self.store.applying_remote():
                     self._accept_remote(account, conflict, remote, collision)
+                    if before is not None and self._is_rescheduled(before):
+                        self._undo_local_move(account, before)
                 self.store.clear_dirty(entity_type, conflict.local_id)
             self.store.delete_entity_ops(key, entity_type, conflict.entity_id)
             self.store.resolve_conflict(conflict_id, {
@@ -533,6 +680,34 @@ class SyncEngine:
                 self.records.store(conflict.entity_type, remote, account.user_id,
                                    (target.model.version + 1) if target else 1)
             self.store.put_shadow(account.account_key, conflict.entity_type, remote)
+
+    def _undo_local_move(self, account: Account, moved: LocalRecord) -> None:
+        """
+        The server state won over this device's reschedule of `moved`: discard
+        its replacement if the server never had it, and give back the
+        execution the move cancelled -- its last acknowledged server state,
+        or, never synchronized, `scheduled` again (the move only ever
+        cancels a never-started execution). Capture is suppressed.
+        """
+        key = account.account_key
+        replacement = self.records.read("placement", str(moved.model.superseded_by_id))
+        if replacement is not None and self.store.shadow(key, "placement", replacement.wire_id) is None:
+            if not replacement.deleted:
+                self._discard(account, replacement)
+            self.store.clear_dirty("placement", replacement.local_id)
+        execution = self.records.executions.find_by_scheduled_task_id(moved.local_id)
+        if execution is None or execution.status != ExecutionStatus.CANCELLED:
+            return
+        local = self.records.read("execution", execution.id)
+        shadow = self.store.shadow(key, "execution", local.wire_id)
+        if shadow is not None:
+            self.records.store("execution", shadow.record, account.user_id, execution.version + 1)
+            self.store.clear_dirty("execution", execution.id)
+        else:
+            restored = execution.model_copy(update={
+                "status": ExecutionStatus.SCHEDULED, "actual_final_end_at": None, "version": execution.version + 1,
+            })
+            self.records.executions.store_synced(restored, local.sessions or [])
 
     def _discard(self, account: Account, local: LocalRecord) -> None:
         """Tombstone a local record the server never accepted (no push follows: capture is suppressed)."""

@@ -86,6 +86,16 @@ Version 6 (Milestone 4, the local web profile): sync_accounts.last_synced_at
 (the last successful synchronization, shown by the sync status) and
 local_settings (non-secret settings such as the backend URL). Additive.
 
+Version 7 (Milestone 5, docs/execution-rescheduling.md): placement
+provenance -- scheduled_tasks.task_category (the task's category when the
+placement was saved), removal_reason and superseded_by_id (why a tombstone
+left the plan, and its replacement). A CHECK keeps both removal columns
+NULL on live rows. Existing rows keep NULL (unknown). The unique index of
+executions(scheduled_task_id) is narrowed to live rows: a tombstoned local
+duplicate that synchronization discarded no longer blocks the execution the
+server kept (creation of a new execution for a placement whose execution was
+deleted is still refused by the repository).
+
 Execution <-> planning links (the legacy compatibility strategy):
     executions.task_id / scheduled_task_id are *historical identity*: they
     record which task/placement an execution was created for, alongside the
@@ -900,6 +910,36 @@ _V6_STATEMENTS: tuple[str, ...] = (
 )
 
 
+#: The placement removal reasons (app.planning.models.PlacementRemovalReason), for the v7 CHECK.
+PLACEMENT_REMOVAL_REASONS = ("rescheduled", "regenerated", "deleted", "task_deleted", "reset")
+
+# Version 7 (Milestone 5, docs/execution-rescheduling.md): placement provenance.
+# task_category is the task's category when the placement was saved (a
+# historical snapshot); removal_reason/superseded_by_id say why a tombstone
+# stopped being part of the plan and which placement replaced it. Existing
+# rows keep NULL -- unknown, never back-filled from the current task or
+# guessed for old tombstones. ADD COLUMN writes no row, so the capture
+# triggers record nothing. Additive only.
+_V7_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE scheduled_tasks ADD COLUMN task_category TEXT CHECK (task_category IS NULL OR length(task_category) > 0)",
+    "ALTER TABLE scheduled_tasks ADD COLUMN removal_reason TEXT CHECK (removal_reason IS NULL OR "
+    f"(removal_reason IN ({', '.join(repr(reason) for reason in PLACEMENT_REMOVAL_REASONS)}) "
+    "AND deleted_at IS NOT NULL))",
+    "ALTER TABLE scheduled_tasks ADD COLUMN superseded_by_id TEXT CHECK (superseded_by_id IS NULL OR "
+    "(deleted_at IS NOT NULL AND superseded_by_id <> id))",
+    "CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_superseded_by ON scheduled_tasks(superseded_by_id) "
+    "WHERE superseded_by_id IS NOT NULL",
+    # One *live* execution per placement. A tombstoned local duplicate that synchronization discarded (the
+    # server kept another device's execution of the placement) keeps its history without blocking that one.
+    # Creating an execution for a placement whose execution was deleted is still refused (ExecutionDeletedError).
+    "DROP INDEX IF EXISTS idx_executions_scheduled_task_id",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_executions_live_scheduled_task_id ON executions(scheduled_task_id) "
+    "WHERE scheduled_task_id IS NOT NULL AND deleted_at IS NULL",
+    "CREATE INDEX IF NOT EXISTS idx_executions_scheduled_task_id_all ON executions(scheduled_task_id) "
+    "WHERE scheduled_task_id IS NOT NULL",
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     (
         1,
@@ -956,6 +996,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     (4, _migrate_v3_to_v4),
     (5, _V5_STATEMENTS),
     (6, _V6_STATEMENTS),
+    (7, _V7_STATEMENTS),
 )
 
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1][0]

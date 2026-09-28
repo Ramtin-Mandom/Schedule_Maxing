@@ -60,6 +60,18 @@ can never be reused by a create.
       precondition, removes superseded placements outside the range (see
       app/planning/occurrence.py), and saves the range's provenance -- all
       in one transaction.
+    - Placement provenance (Milestone 5, docs/execution-rescheduling.md):
+      every placement tombstone records why it left the plan
+      (PlacementRemovalReason: REGENERATED for replacements and supersession,
+      TASK_DELETED for a task's cascade, RESET for resets, RESCHEDULED for an
+      explicit move) and, when one exists, the placement that replaced it for
+      the same occurrence (superseded_by_id). A new placement snapshots its
+      task's category (task_category); a kept one keeps its snapshot.
+    - Explicit rescheduling (reschedule_source/apply_reschedule, called by
+      app.planning.workflow.reschedule_placement after validating the
+      destination): moves one never-started placement in one transaction and
+      cancels its 'scheduled' execution -- the only execution write this
+      service makes, through the lifecycle's cancel transition.
     - Execution history is never deleted, modified, or used to block a
       planning edit: a deleted/replaced task or placement that executions
       reference simply leaves those executions with their historical
@@ -148,11 +160,13 @@ from app.planning.errors import (
     DuplicateEntityError,
     EntityInUseError,
     EntityNotFoundError,
+    HistoryProtectedError,
     InvalidEntityError,
     InvalidReferenceError,
     ScopeError,
     VersionConflictError,
 )
+from app.planning.history import ScheduleHistory
 from app.planning.external_dependencies import (
     ExternalDependency,
     external_dependency_ids,
@@ -161,6 +175,7 @@ from app.planning.external_dependencies import (
 from app.planning.models import (
     DayScheduleOutput,
     FixedBlock,
+    PlacementRemovalReason,
     Project,
     ScheduledTask,
     Task,
@@ -224,6 +239,28 @@ def _same_content(stored, incoming) -> bool:
     return stored.model_dump(exclude=_AUDIT_FIELDS) == incoming.model_dump(exclude=_AUDIT_FIELDS)
 
 
+#: Placement fields that are history, not plan content: the category snapshot and the removal provenance.
+_PLACEMENT_HISTORY_FIELDS = ("task_category", "removal_reason", "superseded_by_id")
+
+
+def _with_placement_history(item: ScheduledTask, stored: ScheduledTask) -> ScheduledTask:
+    """`item` with the stored history fields it does not carry itself (a CSV row has none of them)."""
+    missing = {name: getattr(stored, name) for name in _PLACEMENT_HISTORY_FIELDS if getattr(item, name) is None}
+    return item.model_copy(update=missing) if missing else item
+
+
+def _successors(
+    placements: Iterable[ScheduledTask], tasks: Mapping[uuid.UUID, Task]
+) -> dict[tuple, uuid.UUID]:
+    """{occurrence key: id of the (earliest) given placement of that occurrence}."""
+    found: dict[tuple, uuid.UUID] = {}
+    for placement in sorted(placements, key=lambda p: (p.planned_date, p.planned_start, str(p.id))):
+        task = tasks.get(placement.task_id)
+        if task is not None:
+            found.setdefault(occurrence_key(placement, task), placement.id)
+    return found
+
+
 @dataclass(frozen=True)
 class PlanningRange:
     """Everything persisted that planning needs for one inclusive date range (a snapshot)."""
@@ -271,6 +308,19 @@ class RescheduleResult:
     #: Superseded placements outside the range kept because their execution had started or finished.
     history_protected_ids: list[uuid.UUID]
     generations: list[GenerationRecord]
+
+
+@dataclass(frozen=True)
+class PlacementReschedule:
+    """What an explicit reschedule (app.planning.workflow.reschedule_placement) committed."""
+
+    #: The moved placement's tombstone: its original planned values, removal_reason=RESCHEDULED and
+    #: superseded_by_id = replacement.id.
+    previous: ScheduledTask
+    #: The new live placement of the same task/occurrence.
+    replacement: ScheduledTask
+    #: The never-started ('scheduled') execution of the previous placement that the move cancelled, if any.
+    cancelled_execution_id: str | None
 
 
 @dataclass(frozen=True)
@@ -582,8 +632,13 @@ class PlanningService:
         with self._repository.transaction():
             return self._delete_tasks(dict(expected_versions))
 
-    def _delete_tasks(self, expected_versions: dict[uuid.UUID, int]) -> int:
-        # Caller holds a repository transaction.
+    def _delete_tasks(
+        self,
+        expected_versions: dict[uuid.UUID, int],
+        *,
+        cascade_reason: PlacementRemovalReason = PlacementRemovalReason.TASK_DELETED,
+    ) -> int:
+        # Caller holds a repository transaction. The tasks' live placements go with them (cascade_reason).
         ids = set(expected_versions)
         blocking = {
             dependency_id: dependents - ids
@@ -619,7 +674,8 @@ class PlanningService:
                 self._check_version("task", task_id, expected_versions[task_id])
         placements = self._repository.active_placements_for_tasks(live)
         self._repository.soft_delete_placements(
-            (placement.id for group in placements.values() for placement in group), deleted_at=now
+            (placement.id for group in placements.values() for placement in group), deleted_at=now,
+            removal_reason=cascade_reason,
         )
         return len(live)
 
@@ -891,11 +947,30 @@ class PlanningService:
         removed = current_ids - set(ids)
         removed_with_history = self._repository.placement_ids_with_history(removed)
         now = self._clock()
-        self._repository.soft_delete_placements(removed, deleted_at=now)
+        # A removed placement whose occurrence the replacement places again is superseded by that placement.
+        successors = _successors(placements, tasks)
+        removed_tasks = self._repository.get_tasks(
+            {placement.task_id for placement in current if placement.id in removed}, include_deleted=True
+        )
+        superseded_by = {
+            placement.id: successors[key]
+            for placement in current
+            if placement.id in removed and placement.task_id in removed_tasks
+            and (key := occurrence_key(placement, removed_tasks[placement.task_id])) in successors
+        }
+        self._repository.soft_delete_placements(
+            removed, deleted_at=now, removal_reason=PlacementRemovalReason.REGENERATED, superseded_by=superseded_by
+        )
 
         for placement in placements:
-            placement = placement.model_copy(update={"user_id": tasks[placement.task_id].user_id, "deleted_at": None})
             stored = stored_by_id.get(placement.id)
+            # A new placement snapshots its task's category now; a kept one keeps its original snapshot.
+            placement = placement.model_copy(update={
+                "user_id": tasks[placement.task_id].user_id, "deleted_at": None, "removal_reason": None,
+                "superseded_by_id": None,
+                "task_category": stored.task_category if stored is not None else (
+                    placement.task_category or tasks[placement.task_id].category),
+            })
             if stored is None:
                 self._repository.insert_placement(placement)
                 continue
@@ -965,8 +1040,12 @@ class PlanningService:
             ]
             statuses = self._repository.placement_execution_statuses(placement.id for placement in candidates)
             protected = [p.id for p in candidates if statuses.get(p.id) in HISTORY_PROTECTED_STATUSES]
-            superseded = [p.id for p in candidates if statuses.get(p.id) not in HISTORY_PROTECTED_STATUSES]
-            self._repository.soft_delete_placements(superseded, deleted_at=now)
+            superseded = [p for p in candidates if statuses.get(p.id) not in HISTORY_PROTECTED_STATUSES]
+            successors = _successors(new_placements, tasks)
+            self._repository.soft_delete_placements(
+                [p.id for p in superseded], deleted_at=now, removal_reason=PlacementRemovalReason.REGENERATED,
+                superseded_by={p.id: successors[occurrence_key(p, tasks[p.task_id])] for p in superseded},
+            )
 
             existing = {record.planned_date: record for record in self._repository.list_generations(start_date, end_date)}
             generations: list[GenerationRecord] = []
@@ -1004,7 +1083,7 @@ class PlanningService:
 
             return RescheduleResult(
                 replacement=replacement,
-                superseded_ids=sorted(superseded, key=str),
+                superseded_ids=sorted((p.id for p in superseded), key=str),
                 history_protected_ids=sorted(protected, key=str),
                 generations=generations,
             )
@@ -1019,6 +1098,102 @@ class PlanningService:
     def placement_execution_statuses(self, placement_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, str]:
         """{placement id: execution status} for the placements that execution history references."""
         return self._repository.placement_execution_statuses(placement_ids)
+
+    def get_placement(self, placement_id: uuid.UUID, *, include_deleted: bool = False) -> ScheduledTask | None:
+        placement_id = uuid.UUID(str(placement_id))
+        return self._repository.get_placements([placement_id], include_deleted=include_deleted).get(placement_id)
+
+    def placements_superseded_by(self, placement_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, list[ScheduledTask]]:
+        """{placement id: the tombstones it superseded} -- one step back along a chain of moves/regenerations."""
+        return self._repository.placements_superseded_by(placement_ids)
+
+    def schedule_history(self, start_utc: datetime, end_utc: datetime) -> ScheduleHistory:
+        """
+        The planned-versus-actual history of [start_utc, end_utc) in this
+        service's scope, as one consistent read (app/planning/history.py): the
+        placements planned to start in it (tombstones included), everything
+        they superseded, and the live executions of the in-range placements.
+        """
+        return self._repository.schedule_history(start_utc, end_utc)
+
+    # ------------------------------------------------------------------
+    # Explicit rescheduling (docs/execution-rescheduling.md)
+    # ------------------------------------------------------------------
+
+    def reschedule_source(self, placement_id: uuid.UUID, *, expected_version: int) -> tuple[ScheduledTask, Task]:
+        """
+        The placement an explicit reschedule would move, and its task, after
+        checking the legal source state: a live placement (of this scope) at
+        `expected_version` (EntityNotFoundError / VersionConflictError,
+        deleted=True for a tombstone -- e.g. one already moved), whose task is
+        live (InvalidReferenceError), and whose execution, if any, has not
+        started (HistoryProtectedError for in_progress, paused, completed,
+        skipped or cancelled: started or finished work is history and is never
+        moved or rewritten). Reads only.
+        """
+        placement_id = uuid.UUID(str(placement_id))
+        with self._repository.transaction():
+            previous = self.get_placement(placement_id)
+            if previous is None or previous.version != expected_version:
+                self._check_version("placement", placement_id, expected_version)
+            status = self._repository.placement_execution_statuses([placement_id]).get(placement_id)
+            if status in HISTORY_PROTECTED_STATUSES:
+                raise HistoryProtectedError(placement_id, status)
+            task = self._repository.get_task(previous.task_id)
+            if task is None:
+                raise InvalidReferenceError(
+                    f"placement {placement_id} belongs to a task that was deleted; it cannot be rescheduled.",
+                    {previous.task_id},
+                )
+            return previous, task
+
+    def apply_reschedule(
+        self,
+        placement_id: uuid.UUID,
+        *,
+        expected_version: int,
+        replacement: ScheduledTask,
+        at: datetime | None = None,
+    ) -> PlacementReschedule:
+        """
+        The write half of an explicit reschedule, in one transaction.
+        app.planning.workflow.reschedule_placement validates the destination
+        against the hard scheduling rules first, inside the same transaction;
+        call that, not this, to move a placement.
+
+        After re-checking the source (reschedule_source): tombstones the
+        placement (removal_reason=RESCHEDULED, superseded_by_id =
+        replacement.id; its row keeps the original planned values), inserts
+        `replacement` for the same task (owner, category snapshot and audit
+        fields set here; DuplicateEntityError if its id exists, even as a
+        tombstone), and cancels the placement's never-started execution, if
+        it has one, at `at` (default: now) so it is not actionable as current
+        work. Any failure changes nothing.
+        """
+        placement_id = uuid.UUID(str(placement_id))
+        with self._repository.transaction():
+            previous, task = self.reschedule_source(placement_id, expected_version=expected_version)
+            if replacement.task_id != previous.task_id:
+                raise InvalidEntityError("a reschedule keeps the placement's task; the replacement names another.")
+            if replacement.id == previous.id:
+                raise InvalidEntityError("the replacement needs a new placement id.")
+            now = self._clock()
+            # The tombstone comes first, so a reader of the change order never sees both placements live.
+            if not self._repository.soft_delete_placement(
+                placement_id, deleted_at=now, expected_version=expected_version,
+                removal_reason=PlacementRemovalReason.RESCHEDULED, superseded_by_id=replacement.id,
+            ):
+                self._check_version("placement", placement_id, expected_version)
+            self._repository.insert_placement(replacement.model_copy(update={
+                "user_id": task.user_id, "task_category": replacement.task_category or task.category,
+                "removal_reason": None, "superseded_by_id": None, "deleted_at": None,
+                "created_at": now, "updated_at": now, "version": 1,
+            }))
+            cancelled = self._repository.cancel_unstarted_execution(placement_id, at=at or now)
+            stored = self._repository.get_placements([placement_id, replacement.id], include_deleted=True)
+            return PlacementReschedule(
+                previous=stored[placement_id], replacement=stored[replacement.id], cancelled_execution_id=cancelled
+            )
 
     def placements_for_range(self, start_date: date_, end_date: date_) -> dict[date_, list[ScheduledTask]]:
         _require_range(start_date, end_date)
@@ -1221,7 +1396,9 @@ class PlanningService:
             now = self._clock()
             placement_ids = [p.id for p in self._repository.list_placements(start_date, end_date)]
             history = self._repository.placement_ids_with_history(placement_ids)
-            self._repository.soft_delete_placements(placement_ids, deleted_at=now)
+            self._repository.soft_delete_placements(
+                placement_ids, deleted_at=now, removal_reason=PlacementRemovalReason.RESET
+            )
             self._repository.soft_delete_generations(start_date, end_date, deleted_at=now)
 
             block_ids: list[uuid.UUID] = []
@@ -1232,8 +1409,10 @@ class PlanningService:
                 for block in blocks:
                     self._repository.soft_delete_fixed_block(block.id, deleted_at=now, expected_version=block.version)
                 tasks = self._repository.list_tasks_planned_in_range(start_date, end_date, include_undated=False)
-                # Their placements dated *outside* the range go with them.
-                deleted_tasks = self._delete_tasks({task.id: task.version for task in tasks})
+                # Their placements dated *outside* the range go with them (removed by the reset).
+                deleted_tasks = self._delete_tasks(
+                    {task.id: task.version for task in tasks}, cascade_reason=PlacementRemovalReason.RESET
+                )
 
             return RangeClearResult(
                 deleted_placements=len(placement_ids),
@@ -1304,14 +1483,17 @@ class PlanningService:
                     )
             generations = self._repository.soft_delete_generations(start_date, end_date, deleted_at=now)
             placements = self._repository.soft_delete_placements(
-                [*plan.placement_ids, *plan.cascade_placement_ids], deleted_at=now
+                [*plan.placement_ids, *plan.cascade_placement_ids], deleted_at=now,
+                removal_reason=PlacementRemovalReason.RESET,
             )
             blocks = self._repository.get_fixed_blocks(plan.fixed_block_ids)
             for block in blocks.values():
                 if not self._repository.soft_delete_fixed_block(block.id, deleted_at=now, expected_version=block.version):
                     self._check_version("fixed_block", block.id, block.version)
             tasks = self._repository.get_tasks(plan.task_ids)
-            deleted_tasks = self._delete_tasks({task.id: task.version for task in tasks.values()})
+            deleted_tasks = self._delete_tasks(
+                {task.id: task.version for task in tasks.values()}, cascade_reason=PlacementRemovalReason.RESET
+            )
             return ResetResult(
                 start_date=start_date,
                 end_date=end_date,
@@ -1533,7 +1715,8 @@ class PlanningService:
             # A task deleted by the batch takes its remaining active placements with it.
             leftover = self._repository.active_placements_for_tasks(deleted_task_ids)
             self._repository.soft_delete_placements(
-                (placement.id for group in leftover.values() for placement in group), deleted_at=now
+                (placement.id for group in leftover.values() for placement in group), deleted_at=now,
+                removal_reason=PlacementRemovalReason.TASK_DELETED,
             )
             self._validate_batch_result(plans, touched_dates)
 
@@ -1557,6 +1740,8 @@ class PlanningService:
             return ("insert", item, None)
         if stored.user_id != owner:
             raise InvalidEntityError(f"{label} {item.id} is stored for a different owner (user_id); it cannot be imported.")
+        if kind == "placement":
+            item = _with_placement_history(item, stored)  # the file does not carry them; never cleared by it
         if _same_content(stored, item):
             return ("unchanged", item, stored)
         if stored.deleted_at is not None and item.deleted_at is not None:

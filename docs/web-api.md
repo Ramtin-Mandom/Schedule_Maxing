@@ -183,6 +183,30 @@ nothing is deleted; preview again. Any refusal rolls the whole reset back.
 Undated tasks, projects, the user layer and execution history are never
 touched.
 
+### `POST /planning/placements/{id}/reschedule` `RescheduleIn` -> `RescheduleOut`
+
+Moves one saved placement that has not been started (Milestone 5; the full
+contract is [execution-rescheduling.md](execution-rescheduling.md)). Body:
+`{base_version, planned_date, timezone, planned_start, planned_end,
+replacement_id?}`. The destination is checked with the scheduling rules
+(day window, fixed blocks, other placements, the task's estimate, required
+date, deadline, engine mode, dependencies and dependents; a recurring
+template's placement stays on its date). Answer: `{previous, replacement,
+cancelled_execution_id}` -- `previous` is the tombstone with the original
+plan, `removal_reason: "rescheduled"` and `superseded_by_id`. Refusals
+(`409 version_conflict` / `deleted` / `history_protected` /
+`reschedule_rejected`) change nothing and carry the stored placement in
+`current`. This endpoint is not replayed: after a lost response, a `409
+deleted` whose `current.superseded_by_id` is your `replacement_id` means the
+move happened.
+
+### `GET /planning/analytics/schedule-cohort?start_date&end_date&timezone&as_of` -> `ScheduleCohortReport`
+
+The planned-versus-actual report of an inclusive local date range in the
+given IANA timezone, as of `as_of` (aware; default: now; a future cutoff is
+`422`). Read-only and scoped to the caller. Formulas, cohort and time rules:
+[analytics.md](analytics.md).
+
 ### Canonical CSV (format version 2)
 
 - `GET /planning/csv/export?start_date&end_date&include_deleted&timezone`:

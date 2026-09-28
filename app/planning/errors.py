@@ -129,3 +129,36 @@ class VersionConflictError(PlanningError):
                 f"but it {state}. Reload it and try again."
             )
         super().__init__(message)
+
+
+class HistoryProtectedError(PlanningError):
+    """
+    An explicit reschedule was refused because the placement's execution has
+    already started or finished (`status` is its execution status): moving it
+    would rewrite the history of an attempt. Nothing was changed.
+    """
+
+    def __init__(self, placement_id: object, status: str) -> None:
+        self.placement_id = placement_id
+        self.status = status
+        super().__init__(
+            f"The placement {placement_id} cannot be rescheduled: its execution is {status}, and started or "
+            "finished work is history. Nothing was changed."
+        )
+
+
+class RescheduleRejectedError(PlanningError):
+    """
+    An explicit reschedule's destination breaks a hard scheduling rule;
+    `problems` (app.planning.workflow.PlacementProblem) says which and why.
+    Nothing was changed.
+    """
+
+    def __init__(self, problems: list, message: str | None = None) -> None:
+        self.problems = list(problems)
+        super().__init__(
+            message
+            or "The placement cannot be moved there: "
+            + "; ".join(f"{problem.explanation} ({problem.reason})" for problem in self.problems)
+            + " Nothing was changed."
+        )

@@ -224,8 +224,8 @@ class ExecutionRepository:
         owner_sql, owner_params = self._owner_sql()
 
         with self.transaction():
-            existing = self._connection.execute(
-                f"SELECT * FROM executions WHERE scheduled_task_id = ?{owner_sql}",
+            existing = self._connection.execute(  # the live execution, else a tombstone
+                f"SELECT * FROM executions WHERE scheduled_task_id = ?{owner_sql} ORDER BY deleted_at IS NOT NULL",
                 (scheduled_task_id, *owner_params),
             ).fetchone()
             if existing is not None:

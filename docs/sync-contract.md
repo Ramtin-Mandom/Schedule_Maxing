@@ -268,6 +268,14 @@ one transaction:
   finished.
 - It saves the provenance.
 
+Milestone 5 ([execution-rescheduling.md](execution-rescheduling.md)) adds the
+explicit move of one placement (`workflow.reschedule_placement`) and records,
+on every placement tombstone, why it left the plan (`removal_reason`:
+`rescheduled`, `regenerated`, `deleted`, `task_deleted`, `reset`) and which
+placement replaced it (`superseded_by_id`), plus each placement's
+`task_category` snapshot (schema v7). Tombstones written before v7 keep an
+unknown reason.
+
 ## 10. The canonical planning CSV (format version 2)
 
 `app/planning/csv_export.py` writes the file and
@@ -303,6 +311,11 @@ Implemented later in Milestone 3:
 - the claim step, as `SyncService.associate_local_data()`;
 - server versions, held per account in `sync_shadows` alongside the local
   revision.
+
+Milestone 5 (schema v7): placement provenance and explicit rescheduling, see
+[execution-rescheduling.md](execution-rescheduling.md). The canonical CSV
+appends three optional placement columns (`task_category`, `removal_reason`,
+`superseded_by_id`); files without them still import.
 
 Since then (Milestone 4): the local web profile serves synchronization,
 association and conflict resolution to the web UI (`app/web`,

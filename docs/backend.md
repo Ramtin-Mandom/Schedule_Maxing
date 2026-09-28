@@ -133,6 +133,15 @@ provenance and freshness).
 | `PUT /<resource>/{id}` | Update; takes the full content plus `base_version` |
 | `DELETE /<resource>/{id}?base_version=N` | Soft delete; returns the tombstone |
 
+Placements also carry `task_category` (the task's category when the
+placement was saved: taken from the request, else from the task on create;
+never changed afterwards) and, on tombstones only, `removal_reason` and
+`superseded_by_id` (a REST delete records `deleted`; a task delete cascades
+`task_deleted`). A create or update cannot set the removal fields. Moving a
+placement is `POST /planning/placements/{id}/reschedule` (see
+[execution-rescheduling.md](execution-rescheduling.md)): validated, atomic,
+refused for started or finished work.
+
 **Executions.**
 
 - `POST /executions` uploads a whole aggregate, including sessions, as long
@@ -166,6 +175,7 @@ Every error has the same shape:
 | `404 not_found` | The record doesn't exist, **or it belongs to another user**. The two cases are indistinguishable. |
 | `409 version_conflict` or `409 deleted` | A stale `base_version`, or the target is a tombstone. The body includes `supplied_version`, `current_version`, and the caller's own `current` record or tombstone. |
 | `409` | `already_exists`, `in_use`, `invalid_transition`, `account_exists` |
+| `409 history_protected` / `409 reschedule_rejected` | A reschedule of started/finished work (`reason` = the execution status), or to a destination that breaks a scheduling rule (`reason`, `problems`). Both carry the placement as stored now in `current`. |
 | `422` | `validation_error` or `invalid_reference`. References to another user's records are rejected the same way as references to records that don't exist. A fixed block that breaks a write invariant is a `validation_error` with a `reason` (`sub_minute_precision`, `date_mismatch`, `outside_day_window`, `unsupported_day_window`, `invalid_interval`). |
 | `409 fixed_block_overlap` | The fixed block overlaps another live block of the caller; `conflicting` is that block (never `current`, which always means the record itself). |
 | `401 unauthenticated` | Missing or bad credentials. The response includes `WWW-Authenticate: Bearer`. |
@@ -346,6 +356,19 @@ reads and writes, so this upgrade is not backward compatible with a running
 older server: stop (or suspend) every process of the previous version before
 the upgrade starts, run the upgrade, then start this version. Take a backup
 or logical export first.
+
+### Placement provenance (0007)
+
+Revision 0007 (Milestone 5, [execution-rescheduling.md](execution-rescheduling.md))
+adds `task_category`, `removal_reason` and `superseded_by_id` to `placements`
+and `placement_revisions` (nullable; existing rows stay `NULL` = unknown,
+nothing is back-filled), the check that removal provenance appears only on
+tombstones, an index for walking chains of moves, and
+`sync_operation_related_records` (the further snapshots of a sync operation
+that changed several records, so its retry replays all of them). It is
+additive: run it first (a server of the previous version keeps working
+against it), then deploy the new server, then update desktop clients -- a new
+client needs the new server, while older clients keep working against it.
 
 **Downgrades** rebuild the JSON columns losslessly from the relational rows,
 but are for tests and disposable databases only: never run

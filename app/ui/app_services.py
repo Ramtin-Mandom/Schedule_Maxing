@@ -125,7 +125,8 @@ class AppServices:
         with self._switch_lock:
             scope = scope or self.sync_service.workspace_scope()
             planning, execution, productivity = _build_controllers(
-                self.planning_service, self.execution_repository, scope, self.timezone, self.project_root
+                self.planning_service, self.execution_repository, scope, self.timezone, self.project_root,
+                self.sync_service,
             )
             self.planning_controller, self.execution_controller, self.productivity_controller = (
                 planning, execution, productivity
@@ -198,11 +199,18 @@ def _build_controllers(
     scope: OwnerScope,
     timezone: str,
     project_root: str | None,
+    sync_service: SyncService,
 ) -> tuple[PlanningController, ExecutionController, ProductivityController]:
     planning = PlanningController(service=planning_service.scoped(scope), timezone=timezone, project_root=project_root)
     executions = execution_repository.scoped(scope)
-    execution = ExecutionController(ExecutionService(executions))
-    productivity = ProductivityController(ProductivityService(executions), execution)
+    execution = ExecutionController(
+        ExecutionService(executions),
+        sync_state=lambda execution_id: sync_service.record_sync_state("execution", execution_id),
+    )
+    productivity = ProductivityController(
+        ProductivityService(executions, history=planning_service.scoped(scope), timezone_name=timezone), execution,
+        storage="device" if scope.is_ownerless else "account",
+    )
     return planning, execution, productivity
 
 
@@ -239,7 +247,7 @@ def open_app_services(
         sync_service = SyncService(connection, _sync_transport(backend_url, transport_factory))
         scope = sync_service.workspace_scope()
         planning_controller, execution_controller, productivity_controller = _build_controllers(
-            planning_service, execution_repository, scope, timezone, project_root
+            planning_service, execution_repository, scope, timezone, project_root, sync_service
         )
     except BaseException:
         if connection is not None:

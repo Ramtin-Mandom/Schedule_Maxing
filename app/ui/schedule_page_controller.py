@@ -236,6 +236,11 @@ class SchedulePageController:
     # ------------------------------------------------------------------
 
     @property
+    def planning(self) -> PlanningController:
+        """The planning controller this page works through (e.g. for the Execute tab's reschedule)."""
+        return self._planning
+
+    @property
     def anchor_date(self) -> date_:
         return self._anchor
 

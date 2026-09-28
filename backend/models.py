@@ -69,6 +69,8 @@ OPTIMIZER_MODES = ("precise_greedy", "adhd_friendly")
 RECURRENCE_FREQUENCIES = ("daily", "weekly", "monthly")
 ENTITY_TYPES = ("project", "task", "fixed_block", "placement", "preference", "schedule_generation", "execution")
 SYNC_STATUSES = ("applied", "conflict", "rejected")
+#: app.planning.models.PlacementRemovalReason (docs/execution-rescheduling.md).
+PLACEMENT_REMOVAL_REASONS = ("rescheduled", "regenerated", "deleted", "task_deleted", "reset")
 
 #: The reward fields of app.planning.preferences.RewardPreferencesOverride stored as reward_<name> columns.
 REWARD_FLOAT_FIELDS = (
@@ -240,11 +242,22 @@ class _PlacementContent:
     score: Mapped[float] = mapped_column(Float, nullable=False)
     #: The bounded extension object (see the module docstring); never a task list or schedule.
     optimization_metadata: Mapped[dict] = mapped_column(JSONDocument, nullable=False)
+    #: The task's category when the placement was saved (a historical snapshot; NULL = not recorded).
+    task_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    #: Why a tombstone left the plan (PLACEMENT_REMOVAL_REASONS; NULL while live, or unknown for old tombstones)
+    #: and the placement that replaced it. History, not a live reference: not a foreign key.
+    removal_reason: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    superseded_by_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
 
 
 def _placement_checks(table: str) -> tuple:
     return (
         CheckConstraint("planned_end > planned_start", name=f"ck_{table}_order"),
+        CheckConstraint(
+            f"removal_reason IS NULL OR {_in('removal_reason', PLACEMENT_REMOVAL_REASONS)}",
+            name=f"ck_{table}_removal_reason",
+        ),
+        CheckConstraint("superseded_by_id IS NULL OR superseded_by_id <> id", name=f"ck_{table}_superseded_by"),
         # A coarse database backstop for every writer (the exact 4 KiB compact-JSON limit is enforced by
         # backend/record_mapping.py); PostgreSQL only, because SQLite has no jsonb functions.
         CheckConstraint(
@@ -483,6 +496,13 @@ class Placement(_Record, _PlacementContent, Base):
         # The target of an execution's (user, task, placement) reference -- so the database checks that a
         # linked placement belongs to that task and user -- and the index of placements-by-task queries.
         Index("uq_placements_user_task_id", "user_id", "task_id", "id", unique=True),
+        # Removal provenance is only ever set on a tombstone.
+        CheckConstraint(
+            "deleted_at IS NOT NULL OR (removal_reason IS NULL AND superseded_by_id IS NULL)",
+            name="ck_placements_removal_tombstone",
+        ),
+        # Walking a chain of moves backwards (which tombstones did this placement supersede?).
+        Index("ix_placements_user_superseded_by", "user_id", "superseded_by_id"),
     )
 
 
@@ -975,6 +995,9 @@ class SyncOperation(Base):
         **_outcome_revision("error_conflicting_revision_id"))
     problem_rows: Mapped[list[SyncOperationProblem]] = relationship(
         order_by="SyncOperationProblem.position", cascade="all, delete-orphan", lazy="selectin")
+    #: An applied operation that changed several records (a placement reschedule): the others, in order.
+    related_rows: Mapped[list[SyncOperationRelatedRecord]] = relationship(
+        order_by="SyncOperationRelatedRecord.position", cascade="all, delete-orphan", lazy="selectin")
 
     __table_args__ = (
         CheckConstraint(_in("status", SYNC_STATUSES), name="ck_sync_operations_status"),
@@ -999,6 +1022,37 @@ class SyncOperation(Base):
             ["user_id", "error_conflicting_revision_id"], ["record_revisions.user_id", "record_revisions.id"],
             name="fk_sync_operations_conflicting",
         ),
+    )
+
+
+class SyncOperationRelatedRecord(Base):
+    """
+    One further record an applied sync operation changed, besides its own
+    (e.g. a reschedule's replacement placement and cancelled execution), as
+    the immutable snapshot the change log also references -- so a retry of
+    the op_id answers every record exactly as the first response did.
+    """
+
+    __tablename__ = "sync_operation_related_records"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    op_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    revision_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+
+    revision: Mapped[RecordRevision] = relationship(
+        primaryjoin="and_(SyncOperationRelatedRecord.user_id == RecordRevision.user_id, "
+                    "SyncOperationRelatedRecord.revision_id == RecordRevision.id)",
+        foreign_keys="[SyncOperationRelatedRecord.revision_id]", lazy="selectin",
+    )
+
+    __table_args__ = (
+        _child_of("sync_operation_related_records", "sync_operations", ("op_id",), ("op_id",)),
+        ForeignKeyConstraint(
+            ["user_id", "revision_id"], ["record_revisions.user_id", "record_revisions.id"],
+            name="fk_sync_operation_related_records_revision",
+        ),
+        _position_check("sync_operation_related_records"),
     )
 
 

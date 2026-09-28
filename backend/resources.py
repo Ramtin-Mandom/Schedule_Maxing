@@ -25,7 +25,12 @@ the caller's user scope only:
     placement    task_id must be a live task of the user; it cannot move to
                  another task once execution history references it;
                  optimization_metadata is a bounded extension object
-                 (backend/record_mapping.check_optimization_metadata)
+                 (backend/record_mapping.check_optimization_metadata);
+                 task_category is a snapshot taken on create (the client's,
+                 else the task's category now) and never changes after;
+                 removal_reason/superseded_by_id are set only when it is
+                 removed (a delete, a task cascade, a reschedule), never by a
+                 create or update
     preference   one live layer per scope ("user" or one date); scope is fixed
     generation   one live record per date; the date is fixed
 """
@@ -40,12 +45,13 @@ from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 from sqlalchemy.orm import Session
 
 from app.planning import fixed_block_rules
 from app.planning.models import FixedBlock as CanonicalFixedBlock
 from app.planning.models import LocalTimeWindow, RecurrenceSpec
+from app.planning.models import PlacementRemovalReason
 from app.planning.models import ScheduledTask as CanonicalPlacement
 from app.planning.models import Task as CanonicalTask
 from app.planning.preferences import OptimizerMode, PreferenceOverrides
@@ -186,6 +192,11 @@ class PlacementFields(Strict):
     planned_end: AwareDatetime
     score: float = 0.0
     optimization_metadata: dict[str, Any] = Field(default_factory=dict)
+    #: The task's category when the placement was saved (docs/execution-rescheduling.md).
+    task_category: str | None = Field(default=None, min_length=1, max_length=100)
+    #: Set on a tombstone only: why it was removed, and the placement that replaced it.
+    removal_reason: PlacementRemovalReason | None = None
+    superseded_by_id: uuid.UUID | None = None
 
     @model_validator(mode="after")
     def _canonical_rules(self):
@@ -377,6 +388,7 @@ def _task_before_delete(mutator, row) -> None:
             models.Placement.deleted_at.is_(None),
         )
     ):
+        placement.removal_reason = PlacementRemovalReason.TASK_DELETED.value
         mutator.tombstone(PLACEMENTS, placement)
 
 
@@ -443,7 +455,32 @@ def _placement_content(_session, _user_id, row) -> dict:
     return {name: getattr(row, name) for name in PlacementFields.model_fields}
 
 
+def _placement_assign(session, user_id, row, payload: PlacementFields) -> None:
+    """
+    The payload's content. task_category is a snapshot: kept when the payload
+    has none, and taken from the task's current category when a live
+    placement is created without one (a revision row stores exactly what it
+    is given: it is filled without a session).
+    """
+    for name, value in _fields(payload, PlacementFields).items():
+        if name == "task_category":
+            continue
+        setattr(row, name, value.value if isinstance(value, PlacementRemovalReason) else value)
+    if payload.task_category is not None:
+        row.task_category = payload.task_category
+    elif session is not None and inspect(row).pending and row.deleted_at is None:
+        task = session.get(models.Task, (user_id, payload.task_id))
+        row.task_category = task.category if task is not None else None
+
+
 def _placement_validate(session, user_id, payload: PlacementFields, existing) -> None:
+    if payload.removal_reason is not None or payload.superseded_by_id is not None:
+        raise ApiError(422, "validation_error", "removal_reason and superseded_by_id are recorded when a placement "
+                                                "is removed; a create or update cannot set them.")
+    if (existing is not None and existing.task_category is not None and payload.task_category is not None
+            and payload.task_category != existing.task_category):
+        raise ApiError(422, "validation_error", "task_category is the snapshot taken when the placement was saved; "
+                                                "it cannot change.")
     if live(session, models.Task, user_id, payload.task_id) is None:
         raise invalid_reference("task_id does not name one of your tasks.")
     if existing is not None and existing.task_id != payload.task_id:
@@ -531,7 +568,7 @@ FIXED_BLOCKS = ResourceSpec(
 )
 PLACEMENTS = ResourceSpec(
     "placements", "placement", "placement", models.Placement, PlacementCreate, PlacementUpdate, PlacementOut,
-    content=_placement_content, assign=_generic_assign(PlacementFields), validate=_placement_validate,
+    content=_placement_content, assign=_placement_assign, validate=_placement_validate,
 )
 PREFERENCES = ResourceSpec(
     "preferences", "preference", "preference layer", models.Preference, PreferenceCreate, PreferenceUpdate,
