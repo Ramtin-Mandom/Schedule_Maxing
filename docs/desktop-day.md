@@ -188,6 +188,49 @@ An out-of-date schedule says why:
   **Replace** choice and a confirmation.
 - Other pages re-read their data when shown.
 
+## Execute (Milestone 5)
+
+The Execute tab beside "Tasks on this date" works on the date's saved
+placements, by identity (two tasks with the same name stay two items).
+
+- **Viewing writes nothing.** Selecting, refreshing or opening the page only
+  looks up the placement's execution. The execution is created by the first
+  action the user takes (Start, Skip or Cancel).
+- **Legal actions only** (the lifecycle table, docs/execution-rescheduling.md):
+  not started -> Start, Skip, Cancel, Reschedule; in progress -> Pause,
+  Finish, Skip, Cancel; paused -> Resume, Finish, Skip, Cancel; completed,
+  skipped and cancelled -> none. Finish and Skip ask for optional feedback.
+- **Reschedule** asks for `HH:MM` (same date) or `YYYY-MM-DD HH:MM`, keeps the
+  duration, and runs the validated, atomic move; a refusal says why (overlap,
+  outside the day window, deadline, dependencies, ...). Started or finished
+  work is never moved: the tab says that it stays in history.
+- **State now**: "Upcoming", "Due now", or "Overdue: ... and not started" for
+  work without a start -- derived from the time and the saved outcome, never
+  stored. In-progress or paused work past its planned end keeps its state and
+  says by how much it is running late.
+- **Details**: the planned interval and estimate in the plan's timezone (which
+  is named), the actual first start and final end, and active time (sessions
+  only; pauses excluded, live while in progress). "This date" lists every
+  saved placement with its state.
+- **Where it is saved**: "Saved on this device only (no account)", "Saved on
+  this device; not yet confirmed by the server" (a local commit waiting for
+  synchronization), "Confirmed by the server", "Conflicts with the server's
+  copy -- resolve it on the Account page", or, in direct mode, "Saved on the
+  server".
+- While an action runs every button is disabled; a change made elsewhere
+  meanwhile (another device, a sync) is reported and the saved state reloaded.
+  After a sync that pulled changes, the visible page re-reads its records.
+
+The Productivity page adds "Schedule follow-through" (the schedule cohort of
+docs/analytics.md: due completion with numerator and denominator, the date
+basis and reporting timezone, reschedules, workload, signals and
+underestimation) and "History" (last 7/30/90 days, filtered by status and
+category; each entry shows the original plan, the move lineage, the outcome,
+actual times and sessions -- also for work whose task or placement is no
+longer on the schedule). Its Data section says where history is stored and
+what deleting it does in the active mode (this device only; this device and
+the account's synchronized copy; or the server database in direct mode).
+
 ## Limitations
 
 - On a daylight-saving change day, positions on the strip are elapsed minutes

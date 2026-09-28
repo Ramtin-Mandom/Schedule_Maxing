@@ -7,12 +7,21 @@ analytics code should call -- it is the only place that wires the
 repository, data prep, segmenting, insight generation, and prediction
 together. Nothing here executes SQL directly (that stays inside
 app/execution/repository.py).
+
+Two views, deliberately separate (docs/analytics.md):
+    - the terminal-outcome statistics (generate_report/build_dashboard,
+      unchanged): executions filtered by created_at; completion among
+      resolved executions = completed / (completed + skipped + cancelled);
+    - the schedule cohort (build_schedule_cohort_report, Milestone 5): the
+      intended occurrences planned in a local date range -- placements with
+      or without an execution -- as of an explicit cutoff, in an explicit
+      reporting timezone (app/productivity/schedule_cohort.py).
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from pydantic import BaseModel
 
@@ -23,6 +32,13 @@ from app.productivity.filters import ObservationFilters, apply_filters
 from app.productivity.insights import Insight, generate_insights
 from app.productivity.ml_prediction import MLDurationPrediction, predict_duration_with_ml
 from app.productivity.prediction import DurationPrediction, predict_duration
+from app.planning.history import ScheduleHistory
+from app.productivity.schedule_cohort import (
+    ScheduleCohortReport,
+    ScheduleHistorySource,
+    read_schedule_cohort_report,
+    read_schedule_history_and_report,
+)
 from app.productivity.segments import (
     best_supported_time_bucket_by_category,
     by_category,
@@ -94,17 +110,55 @@ class ProductivityDashboard(BaseModel):
 
 
 class ProductivityService:
-    """Builds ProductivityReport and DurationPrediction results from execution history."""
+    """
+    Builds ProductivityReport and DurationPrediction results from execution
+    history, and -- given a schedule-history source (the owner-scoped
+    PlanningService) and a reporting timezone -- the schedule-cohort report.
+    """
 
     def __init__(
         self,
         repository: ExecutionRepository,
         thresholds: ProductivityThresholds = ProductivityThresholds(),
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        *,
+        history: ScheduleHistorySource | None = None,
+        timezone_name: str | None = None,
     ) -> None:
         self._repository = repository
         self._thresholds = thresholds
         self._clock = clock
+        self._history = history
+        self._timezone = timezone_name
+
+    @property
+    def reporting_timezone(self) -> str | None:
+        return self._timezone
+
+    def build_schedule_cohort_report(
+        self,
+        *,
+        start_date: date,
+        end_date: date,
+        timezone_name: str | None = None,
+        as_of: datetime | None = None,
+    ) -> ScheduleCohortReport:
+        """
+        The schedule-cohort report of [start_date, end_date] (local dates in
+        `timezone_name`, default: this service's reporting timezone -- never
+        the host's) as of `as_of` (default: now). Read-only: it never creates
+        an execution or changes a record.
+        """
+        if self._history is None:
+            raise ValueError("this productivity service has no schedule history source.")
+        tz = timezone_name or self._timezone
+        if tz is None:
+            raise ValueError("a reporting timezone is required (the host timezone is never assumed).")
+        now = self._clock()
+        return read_schedule_cohort_report(
+            self._history, start_date=start_date, end_date=end_date, timezone_name=tz,
+            as_of=as_of or now, now=now, thresholds=self._thresholds,
+        )
 
     def generate_report(
         self,
@@ -145,6 +199,21 @@ class ProductivityService:
                 for (category, time_bucket), stats in category_and_bucket.items()
             },
             insights=insights,
+        )
+
+    def schedule_history_and_report(
+        self, *, start_date: date, end_date: date, timezone_name: str | None = None, as_of: datetime | None = None,
+    ) -> tuple[ScheduleHistory, ScheduleCohortReport]:
+        """The range's history (placements, lineage, executions with sessions, tasks) and its cohort report."""
+        if self._history is None:
+            raise ValueError("this productivity service has no schedule history source.")
+        tz = timezone_name or self._timezone
+        if tz is None:
+            raise ValueError("a reporting timezone is required (the host timezone is never assumed).")
+        now = self._clock()
+        return read_schedule_history_and_report(
+            self._history, start_date=start_date, end_date=end_date, timezone_name=tz, as_of=as_of or now, now=now,
+            thresholds=self._thresholds,
         )
 
     def predict_duration(

@@ -24,7 +24,7 @@ import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.runtime.migration import MigrationContext
 from fastapi.testclient import TestClient
-from sqlalchemy import make_url, select, text
+from sqlalchemy import func, make_url, select, text
 from sqlalchemy.exc import IntegrityError
 
 from backend import models
@@ -308,3 +308,187 @@ def test_the_query_plans_can_use_the_indexes_the_direct_path_relies_on(pg_engine
             rows = connection.execute(text("EXPLAIN " + query), {"u": user, "ids": [uuid.uuid4()]}).scalars()
             plan = " | ".join(rows)
             assert "Index" in plan and "Seq Scan" not in plan, (index, plan)
+
+
+# -----------------------------------------------------------------------------
+# Execution lifecycle and explicit rescheduling under concurrency (Milestone 5)
+# -----------------------------------------------------------------------------
+
+
+def _planned_work(client, headers) -> tuple[dict, dict, dict]:
+    """A task, its placement on 2026-03-02 09:00-10:00 and the placement's scheduled execution."""
+    task = client.post("/tasks", headers=headers, json={"name": "Study", "category": "study",
+                                                         "estimated_duration_minutes": 60, "priority": 5}).json()
+    placement = client.post("/placements", headers=headers, json={
+        "task_id": task["id"], "planned_date": "2026-03-02", "timezone": "UTC",
+        "planned_start": "2026-03-02T09:00:00Z", "planned_end": "2026-03-02T10:00:00Z"}).json()
+    execution = client.post("/executions", headers=headers, json={
+        "task_id": task["id"], "scheduled_task_id": placement["id"], "task_name": "Study", "category": "study",
+        "planned_duration": 60, "priority": 5}).json()
+    return task, placement, execution
+
+
+def _race(target, count: int = 8) -> None:
+    threads = [threading.Thread(target=target, args=(index,)) for index in range(count)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=120)
+
+
+def test_concurrent_moves_of_one_placement_have_exactly_one_winner(pg_app) -> None:
+    with TestClient(pg_app) as client:
+        register(client, "mover@example.com")
+        headers = login_headers(client, "mover@example.com")
+        task, placement, execution = _planned_work(client, headers)
+    results: list[tuple[int, str | None]] = []
+
+    def attempt(index: int) -> None:
+        with TestClient(pg_app) as client:
+            response = client.post(f"/planning/placements/{placement['id']}/reschedule", headers=headers, json={
+                "base_version": placement["version"], "planned_date": "2026-03-02", "timezone": "UTC",
+                "planned_start": f"2026-03-02T{12 + index % 6:02d}:00:00Z",
+                "planned_end": f"2026-03-02T{13 + index % 6:02d}:00:00Z"})
+            results.append((response.status_code, response.json().get("error", {}).get("code")))
+
+    _race(attempt)
+    assert sorted(status for status, _ in results) == [200] + [409] * 7
+    assert {code for status, code in results if status == 409} <= {"deleted", "version_conflict"}
+    with TestClient(pg_app) as client:
+        live = [p for p in client.get("/placements", headers=headers).json()["items"] if p["task_id"] == task["id"]]
+        assert len(live) == 1  # never two replacements
+        assert client.get(f"/executions/{execution['id']}", headers=headers).json()["version"] == 2  # cancelled once
+        feed = client.get("/changes", params={"limit": 500}, headers=headers).json()["changes"]
+    assert [change["seq"] for change in feed] == list(range(1, len(feed) + 1))
+
+
+def test_concurrent_starts_of_one_execution_open_one_session(pg_app) -> None:
+    with TestClient(pg_app) as client:
+        register(client, "starter@example.com")
+        headers = login_headers(client, "starter@example.com")
+        _, _, execution = _planned_work(client, headers)
+    statuses: list[int] = []
+
+    def attempt(_index: int) -> None:
+        with TestClient(pg_app) as client:
+            statuses.append(client.post(f"/executions/{execution['id']}/actions/start", headers=headers,
+                                        json={"base_version": 1}).status_code)
+
+    _race(attempt)
+    assert sorted(statuses) == [200] + [409] * 7
+    with TestClient(pg_app) as client:
+        stored = client.get(f"/executions/{execution['id']}", headers=headers).json()
+    assert stored["status"] == "in_progress" and len(stored["sessions"]) == 1 and stored["version"] == 2
+
+
+def test_a_move_that_fails_part_way_rolls_back_on_postgresql(pg_app, pg_engine, monkeypatch) -> None:
+    from backend.planning_repository import ServerPlanningRepository
+
+    with TestClient(pg_app) as client:
+        register(client, "rollback@example.com")
+        headers = login_headers(client, "rollback@example.com")
+        task, placement, execution = _planned_work(client, headers)
+        feed_before = client.get("/changes", params={"limit": 500}, headers=headers).json()["changes"]
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("connection lost (injected)")  # after the tombstone and the replacement were written
+
+    monkeypatch.setattr(ServerPlanningRepository, "cancel_unstarted_execution", fail)
+    with TestClient(pg_app, raise_server_exceptions=False) as client:
+        response = client.post(f"/planning/placements/{placement['id']}/reschedule", headers=headers, json={
+            "base_version": placement["version"], "planned_date": "2026-03-02", "timezone": "UTC",
+            "planned_start": "2026-03-02T14:00:00Z", "planned_end": "2026-03-02T15:00:00Z"})
+        assert response.status_code == 500
+    monkeypatch.undo()
+
+    with TestClient(pg_app) as client:
+        assert client.get(f"/placements/{placement['id']}", headers=headers).json() == placement
+        assert [p["id"] for p in client.get("/placements", headers=headers).json()["items"]
+                if p["task_id"] == task["id"]] == [placement["id"]]
+        assert client.get(f"/executions/{execution['id']}", headers=headers).json() == execution
+        assert client.get("/changes", params={"limit": 500}, headers=headers).json()["changes"] == feed_before
+
+
+def _counts(engine, user_email: str) -> dict:
+    with session_factory(engine)() as session:
+        user_id = session.scalar(select(models.User.id).where(models.User.email == user_email))
+        return {model.__tablename__: session.scalar(select(func.count()).select_from(model)
+                                                    .where(model.user_id == user_id))
+                for model in (models.Placement, models.Execution, models.WorkSession, models.ChangeLogEntry,
+                              models.SyncOperation)}
+
+
+def test_competing_finish_skip_and_cancel_have_exactly_one_winner(pg_app, pg_engine) -> None:
+    with TestClient(pg_app) as client:
+        register(client, "ends@example.com")
+        headers = login_headers(client, "ends@example.com")
+        _, _, execution = _planned_work(client, headers)
+        assert client.post(f"/executions/{execution['id']}/actions/start", headers=headers,
+                           json={"base_version": 1}).status_code == 200
+    before = _counts(pg_engine, "ends@example.com")
+    outcomes: dict[str, int] = {}
+
+    def attempt(index: int) -> None:
+        action = ("complete", "skip", "cancel")[index % 3]
+        with TestClient(pg_app) as client:
+            status = client.post(f"/executions/{execution['id']}/actions/{action}", headers=headers,
+                                 json={"base_version": 2}).status_code
+            outcomes[f"{action}-{index}"] = status
+
+    _race(attempt, 9)
+    assert sorted(outcomes.values()) == [200] + [409] * 8
+    with TestClient(pg_app) as client:
+        stored = client.get(f"/executions/{execution['id']}", headers=headers).json()
+    winner = next(key.split("-")[0] for key, status in outcomes.items() if status == 200)
+    assert stored["status"] == {"complete": "completed", "skip": "skipped", "cancel": "cancelled"}[winner]
+    assert stored["version"] == 3 and len(stored["sessions"]) == 1 and stored["sessions"][0]["ended_at"]
+    after = _counts(pg_engine, "ends@example.com")
+    assert after["change_log"] == before["change_log"] + 1 and after["work_sessions"] == before["work_sessions"]
+
+
+def test_a_move_racing_a_start_never_moves_started_work(pg_app, pg_engine) -> None:
+    with TestClient(pg_app) as client:
+        register(client, "move-race@example.com")
+        headers = login_headers(client, "move-race@example.com")
+        task, placement, execution = _planned_work(client, headers)
+    results: dict[str, int] = {}
+
+    def attempt(index: int) -> None:
+        with TestClient(pg_app) as client:
+            if index == 0:
+                results["move"] = client.post(f"/planning/placements/{placement['id']}/reschedule", headers=headers, json={
+                    "base_version": placement["version"], "planned_date": "2026-03-02", "timezone": "UTC",
+                    "planned_start": "2026-03-02T14:00:00Z", "planned_end": "2026-03-02T15:00:00Z"}).status_code
+            else:
+                results["start"] = client.post(f"/executions/{execution['id']}/actions/start", headers=headers,
+                                               json={"base_version": 1}).status_code
+
+    _race(attempt, 2)
+    assert sorted(results.values()) == [200, 409]
+    with TestClient(pg_app) as client:
+        stored = client.get(f"/executions/{execution['id']}", headers=headers).json()
+        live = [p for p in client.get("/placements", headers=headers).json()["items"] if p["task_id"] == task["id"]]
+    if results["start"] == 200:  # the start won: the placement stays, the work is in progress
+        assert stored["status"] == "in_progress" and [p["id"] for p in live] == [placement["id"]]
+    else:  # the move won: the untouched attempt was cancelled with the move
+        assert stored["status"] == "cancelled" and stored["sessions"] == [] and live[0]["id"] != placement["id"]
+
+
+def test_reusing_a_reschedule_op_id_for_another_move_changes_nothing(pg_app, pg_engine) -> None:
+    with TestClient(pg_app) as client:
+        register(client, "reuse@example.com")
+        headers = login_headers(client, "reuse@example.com")
+        _, placement, _ = _planned_work(client, headers)
+        op = {"op_id": str(uuid.uuid4()), "entity_type": "placement", "entity_id": placement["id"], "kind": "action",
+              "action": "reschedule", "base_version": placement["version"], "payload": {
+                  "replacement_id": str(uuid.uuid4()), "planned_date": "2026-03-02", "timezone": "UTC",
+                  "planned_start": "2026-03-02T14:00:00Z", "planned_end": "2026-03-02T15:00:00Z"}}
+        first = client.post("/sync/push", json={"operations": [op]}, headers=headers).json()["results"][0]
+        assert first["status"] == "applied" and len(first["related"]) == 2
+        applied = _counts(pg_engine, "reuse@example.com")
+        assert client.post("/sync/push", json={"operations": [op]}, headers=headers).json()["results"][0] == first
+        other = {**op, "payload": {**op["payload"], "planned_start": "2026-03-02T16:00:00Z",
+                                   "planned_end": "2026-03-02T17:00:00Z"}}
+        reused = client.post("/sync/push", json={"operations": [other]}, headers=headers).json()["results"][0]
+        assert reused["status"] == "rejected" and reused["error"]["code"] == "op_id_reused"
+    assert _counts(pg_engine, "reuse@example.com") == applied  # no placement, execution, session or change entry

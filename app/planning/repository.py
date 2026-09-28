@@ -61,16 +61,19 @@ import json
 import sqlite3
 import uuid
 from collections import defaultdict
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import date as date_
 from datetime import datetime, timezone
 from typing import Any
 
 from app.execution.db import EXECUTION_LINK_VIOLATION, TransactionState, locked, transaction, transaction_state_for
+from app.execution.lifecycle import TRANSITIONS
+from app.execution.models import ExecutionStatus, TaskExecution, WorkSession
 from app.planning.errors import DuplicateEntityError, InvalidEntityError, ScopeError
 from app.planning.external_dependencies import ExecutionFact
-from app.planning.models import FixedBlock, Project, ScheduledTask, Task
+from app.planning.history import ExecutionHistory, ScheduleHistory, collect_schedule_history
+from app.planning.models import FixedBlock, PlacementRemovalReason, Project, ScheduledTask, Task
 from app.planning.preferences import (
     PreferenceRecord,
     PreferenceScope,
@@ -106,6 +109,7 @@ _FIXED_BLOCK_COLUMNS = (
 _PLACEMENT_COLUMNS = (
     "id", "task_id", "user_id", "planned_date", "timezone", "planned_start", "planned_end",
     "planned_start_utc", "planned_end_utc", "score", "optimization_metadata",
+    "task_category", "removal_reason", "superseded_by_id",
     "created_at", "updated_at", "version", "deleted_at",
 )
 
@@ -594,18 +598,140 @@ class PlanningRepository:
             )
 
     def soft_delete_placement(
-        self, placement_id: uuid.UUID, *, deleted_at: datetime, expected_version: int | None
+        self,
+        placement_id: uuid.UUID,
+        *,
+        deleted_at: datetime,
+        expected_version: int | None,
+        removal_reason: PlacementRemovalReason | None = None,
+        superseded_by_id: uuid.UUID | None = None,
     ) -> bool:
         with self.transaction():
-            return self._soft_delete("scheduled_tasks", placement_id, deleted_at, expected_version)
+            if not self._soft_delete("scheduled_tasks", placement_id, deleted_at, expected_version):
+                return False
+            self._record_removal(placement_id, removal_reason, superseded_by_id)
+            return True
 
-    def soft_delete_placements(self, placement_ids: Iterable[uuid.UUID], *, deleted_at: datetime) -> int:
-        """Tombstone live placements (derived output; no per-row precondition). Execution rows are untouched."""
+    def soft_delete_placements(
+        self,
+        placement_ids: Iterable[uuid.UUID],
+        *,
+        deleted_at: datetime,
+        removal_reason: PlacementRemovalReason | None = None,
+        superseded_by: Mapping[uuid.UUID, uuid.UUID] | None = None,
+    ) -> int:
+        """
+        Tombstone live placements (derived output; no per-row precondition),
+        recording why (removal_reason) and, per placement, its replacement
+        (superseded_by). Execution rows are untouched.
+        """
+        superseded_by = superseded_by or {}
         deleted = 0
         with self.transaction():
             for placement_id in _ids(placement_ids):
-                deleted += int(self._soft_delete("scheduled_tasks", placement_id, deleted_at))
+                if self._soft_delete("scheduled_tasks", placement_id, deleted_at):
+                    deleted += 1
+                    self._record_removal(placement_id, removal_reason, superseded_by.get(uuid.UUID(placement_id)))
         return deleted
+
+    def _record_removal(
+        self, placement_id: object, reason: PlacementRemovalReason | None, superseded_by_id: uuid.UUID | None
+    ) -> None:
+        """The caller just tombstoned the placement in this transaction: add its removal provenance (same revision)."""
+        if reason is None and superseded_by_id is None:
+            return
+        self._connection.execute(
+            "UPDATE scheduled_tasks SET removal_reason = ?, superseded_by_id = ? WHERE id = ?",
+            (reason.value if reason is not None else None, _str_or_none(superseded_by_id), str(placement_id)),
+        )
+
+    def placements_superseded_by(self, placement_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, list[ScheduledTask]]:
+        """{replacement id: the tombstoned placements it superseded} (in scope), each list ordered by id."""
+        grouped: dict[uuid.UUID, list[ScheduledTask]] = defaultdict(list)
+        owner_sql, owner_params = self._owner_sql()
+        with self._read():
+            for chunk in _chunks(_ids(placement_ids)):
+                rows = self._connection.execute(
+                    f"SELECT * FROM scheduled_tasks WHERE superseded_by_id IN ({_placeholders(chunk)}){owner_sql} "
+                    "ORDER BY id",
+                    (*chunk, *owner_params),
+                ).fetchall()
+                for row in rows:
+                    placement = _row_to_placement(row)
+                    grouped[placement.superseded_by_id].append(placement)
+        return dict(grouped)
+
+    def schedule_history(self, start_utc: datetime, end_utc: datetime) -> ScheduleHistory:
+        """
+        The analytics read model of [start_utc, end_utc) (app/planning/history.py),
+        read in one transaction -- a consistent snapshot -- in this repository's
+        owner scope. Writes nothing.
+        """
+        with self.transaction():
+            return collect_schedule_history(
+                start_utc, end_utc, in_range=self._placements_starting_between,
+                superseded_by=self.placements_superseded_by, executions_for=self._executions_for_placements,
+                tasks_for=lambda ids: self.get_tasks(ids, include_deleted=True),
+            )
+
+    def _placements_starting_between(self, start_utc: datetime, end_utc: datetime) -> list[ScheduledTask]:
+        owner_sql, owner_params = self._owner_sql()
+        rows = self._connection.execute(
+            f"SELECT * FROM scheduled_tasks WHERE planned_start_utc >= ? AND planned_start_utc < ?{owner_sql} "
+            "ORDER BY planned_start_utc, id",
+            (_utc_text(start_utc), _utc_text(end_utc), *owner_params),
+        ).fetchall()
+        return [_row_to_placement(row) for row in rows]
+
+    def _executions_for_placements(self, placement_ids: Iterable[uuid.UUID]) -> list[ExecutionHistory]:
+        owner_sql, owner_params = self._owner_sql()
+        found: list[ExecutionHistory] = []
+        for chunk in _chunks(_ids(placement_ids)):
+            executions = [TaskExecution.model_validate(dict(row)) for row in self._connection.execute(
+                f"SELECT * FROM executions WHERE scheduled_task_id IN ({_placeholders(chunk)}) AND {_LIVE}{owner_sql} "
+                "ORDER BY id",
+                (*chunk, *owner_params),
+            ).fetchall()]
+            sessions: dict[str, list[WorkSession]] = defaultdict(list)
+            for part in _chunks([execution.id for execution in executions]):
+                for row in self._connection.execute(
+                    f"SELECT * FROM work_sessions WHERE execution_id IN ({_placeholders(part)}) "
+                    "ORDER BY execution_id, started_at, id",
+                    tuple(part),
+                ).fetchall():
+                    sessions[row["execution_id"]].append(WorkSession.model_validate(dict(row)))
+            found.extend(ExecutionHistory(execution, tuple(sessions[execution.id])) for execution in executions)
+        return found
+
+    def cancel_unstarted_execution(self, placement_id: uuid.UUID, *, at: datetime) -> str | None:
+        """
+        The execution disposition of an explicit reschedule: cancel the
+        placement's live execution if it is still `scheduled` (never started,
+        so it has no work sessions) as one logical execution mutation -- the
+        lifecycle's cancel transition (app/execution/lifecycle.py): status,
+        actual_final_end_at at `at`, version + 1, updated_at. Returns its id,
+        or None when the placement has no such execution. A started or
+        finished execution is never touched (the caller refuses to move it).
+        """
+        allowed, target = TRANSITIONS["cancel"]
+        if ExecutionStatus.SCHEDULED not in allowed:  # pragma: no cover - the transition table is fixed
+            raise InvalidEntityError("a scheduled execution cannot be cancelled")
+        stamp = at.isoformat()
+        owner_sql, owner_params = self._owner_sql()
+        with self.transaction():
+            row = self._connection.execute(
+                "SELECT id FROM executions WHERE scheduled_task_id = ? AND status = ? "
+                f"AND {_LIVE}{owner_sql}",
+                (str(placement_id), ExecutionStatus.SCHEDULED.value, *owner_params),
+            ).fetchone()
+            if row is None:
+                return None
+            self._connection.execute(
+                "UPDATE executions SET status = ?, actual_final_end_at = ?, updated_at = ?, version = version + 1 "
+                "WHERE id = ? AND status = ?",
+                (target.value, stamp, stamp, row["id"], ExecutionStatus.SCHEDULED.value),
+            )
+            return row["id"]
 
     def get_placements(
         self, placement_ids: Iterable[uuid.UUID], *, include_deleted: bool = False
@@ -663,9 +789,9 @@ class PlanningRepository:
         owner_sql, owner_params = self._owner_sql()
         with self._read():
             for chunk in _chunks(_ids(placement_ids)):
-                rows = self._connection.execute(
+                rows = self._connection.execute(  # a live execution's status wins over a discarded duplicate's
                     f"SELECT scheduled_task_id, status FROM executions "
-                    f"WHERE scheduled_task_id IN ({_placeholders(chunk)}){owner_sql}",
+                    f"WHERE scheduled_task_id IN ({_placeholders(chunk)}){owner_sql} ORDER BY deleted_at IS NULL",
                     (*chunk, *owner_params),
                 ).fetchall()
                 found.update({uuid.UUID(row["scheduled_task_id"]): row["status"] for row in rows})
@@ -1001,6 +1127,9 @@ def _placement_to_row(placement: ScheduledTask) -> tuple:
         placement.timezone, placement.planned_start.isoformat(), placement.planned_end.isoformat(),
         _utc_text(placement.planned_start), _utc_text(placement.planned_end),
         placement.score, metadata,
+        placement.task_category,
+        placement.removal_reason.value if placement.removal_reason is not None else None,
+        _str_or_none(placement.superseded_by_id),
         placement.created_at.isoformat(), placement.updated_at.isoformat(), placement.version,
         _iso(placement.deleted_at),
     )
@@ -1018,6 +1147,9 @@ def _row_to_placement(row: sqlite3.Row) -> ScheduledTask:
             "planned_end": datetime.fromisoformat(row["planned_end"]),
             "score": row["score"],
             "optimization_metadata": json.loads(row["optimization_metadata"]),
+            "task_category": row["task_category"],
+            "removal_reason": row["removal_reason"],
+            "superseded_by_id": _uuid_or_none(row["superseded_by_id"]),
             "created_at": datetime.fromisoformat(row["created_at"]),
             "updated_at": datetime.fromisoformat(row["updated_at"]),
             "version": row["version"],

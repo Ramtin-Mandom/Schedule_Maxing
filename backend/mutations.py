@@ -55,6 +55,7 @@ from sqlalchemy.orm.exc import StaleDataError
 from app.execution.lifecycle import TRANSITIONS, compute_active_duration_minutes, compute_start_delay_minutes
 from app.execution.models import ExecutionStatus
 from app.execution.models import WorkSession as CanonicalSession
+from app.planning.models import PlacementRemovalReason
 from app.planning.time import elapsed_minutes
 from backend import models, snapshots
 from backend.errors import ApiError, invalid_reference, not_found, version_conflict
@@ -141,11 +142,70 @@ class Mutator:
         self._flush(spec, row)
         return self.log(spec.entity_type, spec.serialize(self.session, self.user_id, row), "upsert")
 
-    def delete(self, spec: ResourceSpec, record_id: uuid.UUID, base_version: int) -> dict:
+    def delete(
+        self,
+        spec: ResourceSpec,
+        record_id: uuid.UUID,
+        base_version: int,
+        *,
+        removal_reason: str | None = PlacementRemovalReason.DELETED.value,
+        superseded_by_id: uuid.UUID | None = None,
+    ) -> dict:
+        """
+        Tombstone one record. For a placement, removal_reason/superseded_by_id
+        are its removal provenance (docs/execution-rescheduling.md): an explicit
+        REST delete is "deleted"; a synchronized delete reports the reason
+        the device recorded (None = unknown, e.g. from an older client).
+        """
         row = self._load(spec.model, record_id, spec.label)
         self._check_precondition(spec, row, base_version)
         spec.before_delete(self, row)
+        if spec.entity_type == "placement":
+            self._record_placement_removal(row, removal_reason, superseded_by_id)
         return self.tombstone(spec, row)
+
+    def create_placement_history(self, payload) -> dict:
+        """
+        Store an already-removed placement the server never had (a sync upload
+        of a device's lineage): a tombstone from the start, with its removal
+        reason ("rescheduled" or "regenerated") and its successor -- which must
+        be one of the user's placements of the same task. It never becomes live,
+        so nothing current is created, moved or rewritten.
+        """
+        from backend.resources import PLACEMENTS
+
+        record_id = payload.id or uuid.uuid4()
+        if self.session.get(models.Placement, (self.user_id, record_id)) is not None:
+            existing = self.session.get(models.Placement, (self.user_id, record_id))
+            raise ApiError(409, "already_exists", "This placement already exists.",
+                           current=PLACEMENTS.serialize(self.session, self.user_id, existing))
+        reasons = (PlacementRemovalReason.RESCHEDULED, PlacementRemovalReason.REGENERATED)
+        if payload.removal_reason not in reasons or payload.superseded_by_id is None:
+            raise ApiError(422, "validation_error", "A placement uploaded as history needs removal_reason "
+                                                    "'rescheduled' or 'regenerated' and its superseded_by_id.")
+        if self.session.get(models.Task, (self.user_id, payload.task_id)) is None:
+            raise invalid_reference("task_id does not name one of your tasks.")
+        successor = self.session.get(models.Placement, (self.user_id, payload.superseded_by_id))
+        if successor is None or successor.id == record_id or successor.task_id != payload.task_id:
+            raise invalid_reference("superseded_by_id must name another of your placements of the same task.")
+        row = models.Placement(user_id=self.user_id, id=record_id, created_at=self.now, updated_at=self.now,
+                               version=1, deleted_at=self.now)  # removed from the start: never current
+        self.session.add(row)
+        PLACEMENTS.assign(self.session, self.user_id, row, payload)
+        self._flush(PLACEMENTS, row)
+        return self.log(PLACEMENTS.entity_type, PLACEMENTS.serialize(self.session, self.user_id, row), "delete")
+
+    def _record_placement_removal(self, row, reason: str | None, superseded_by_id: uuid.UUID | None) -> None:
+        if reason == PlacementRemovalReason.RESCHEDULED.value:
+            raise ApiError(422, "validation_error", "A placement is rescheduled with the reschedule action, which "
+                                                    "moves it atomically; a delete cannot claim it.")
+        if reason is not None and reason not in {item.value for item in PlacementRemovalReason}:
+            raise ApiError(422, "validation_error", f"Unknown placement removal reason {reason!r}.")
+        if superseded_by_id is not None:
+            successor = self.session.get(models.Placement, (self.user_id, superseded_by_id))
+            if successor is None or successor.id == row.id or successor.task_id != row.task_id:
+                raise invalid_reference("superseded_by_id must name another of your placements of the same task.")
+        row.removal_reason, row.superseded_by_id = reason, superseded_by_id
 
     def tombstone(self, spec: ResourceSpec, row) -> dict:
         """Soft-delete one live row (also used for cascades) and log it."""

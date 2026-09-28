@@ -182,6 +182,30 @@ class SyncService:
         """The account whose workspace workspace_scope() is (None: the ownerless local workspace)."""
         return self.account or self._engine.store.active_account()
 
+    def record_sync_state(self, entity_type: str, local_id: str) -> str:
+        """
+        Where one local record stands relative to the server, for honest labels:
+        "local_only" (no account workspace), "conflict" (an open conflict),
+        "pending" (changed here and not yet acknowledged, or never uploaded) or
+        "synced" (the server acknowledged its current state). Reads only.
+        """
+        account = self.workspace_account()
+        if account is None:
+            return "local_only"
+        store = self._engine.store
+        wire_id = local_id
+        if entity_type == "execution":
+            try:
+                wire_id = str(self._engine.records.executions.wire_id(local_id))
+            except Exception:  # noqa: BLE001 - an unknown id is simply not synchronized
+                return "pending"
+        key = account.account_key
+        if store.open_conflict(key, entity_type, wire_id) is not None:
+            return "conflict"
+        if store.dirty_rev(entity_type, local_id) is not None or store.has_ops(key, entity_type, wire_id):
+            return "pending"
+        return "synced" if store.shadow(key, entity_type, wire_id) is not None else "pending"
+
     @property
     def signed_in(self) -> bool:
         with self._state_lock:

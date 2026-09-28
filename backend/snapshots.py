@@ -7,6 +7,7 @@ typed tables) and the typed sync outcomes that reference them.
     encode(user_id, entity_type, record) -> RecordRevision   a record, as the API returns it, as rows
     decode(revision) -> dict                                  that record again (API JSON)
     outcome_row(...) -> SyncOperation / outcome(row) -> dict  a recorded sync result, both ways
+                                                              (with the snapshots of its related records)
 
 A record is parsed with the same Out schema the API serializes with and
 written with the same content mapping as its live table (ResourceSpec.assign
@@ -116,15 +117,24 @@ def outcome_row(
     user_id: uuid.UUID, op_id: uuid.UUID, request_hash: str, recorded_at: datetime, result: dict,
     known: KnownRevisions,
 ) -> models.SyncOperation:
-    """A new (unsaved) sync_operations row recording `result` ({op_id, status, record | error})."""
+    """A new (unsaved) sync_operations row recording `result` ({op_id, status, record [, related] | error})."""
     status = result["status"]
     expected = {"op_id", "status", "record" if status == "applied" else "error"}
+    if status == "applied" and "related" in result:
+        expected.add("related")
     if set(result) != expected:
         raise ValueError(f"a {status} sync result must have exactly the fields {sorted(expected)}")
     row = models.SyncOperation(user_id=user_id, op_id=op_id, request_hash=request_hash, status=status,
                                recorded_at=recorded_at, error_problems_present=False)
     if status == "applied":
         row.record_revision = _snapshot(user_id, result["record"], known)
+        related = []
+        for position, item in enumerate(result.get("related", [])):
+            if set(item) != {"entity_type", "record"} or entity_type_of(item["record"]) != item["entity_type"]:
+                raise ValueError("a related record must be exactly {entity_type, record} of that type")
+            related.append(models.SyncOperationRelatedRecord(
+                position=position, revision=_snapshot(user_id, item["record"], known)))
+        row.related_rows = related
         return row
 
     details = dict(result["error"])
@@ -165,6 +175,9 @@ def outcome(row: models.SyncOperation) -> dict:
     result: dict = {"op_id": str(row.op_id), "status": row.status}
     if row.status == "applied":
         result["record"] = decode(row.record_revision)
+        if row.related_rows:
+            result["related"] = [{"entity_type": item.revision.entity_type, "record": decode(item.revision)}
+                                 for item in row.related_rows]
         return result
     error: dict = {"code": row.error_code, "message": row.error_message}
     if row.error_current_version is not None:

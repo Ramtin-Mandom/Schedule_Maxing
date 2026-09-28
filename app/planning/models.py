@@ -311,6 +311,26 @@ class FixedBlock(BaseModel):
         return self
 
 
+class PlacementRemovalReason(str, Enum):
+    """
+    Why a placement stopped being part of the plan (set on its tombstone; see
+    docs/execution-rescheduling.md). A tombstone without a reason was removed
+    before reasons were recorded: its reason is unknown and never guessed.
+    """
+
+    #: An explicit reschedule moved it; superseded_by_id is the replacement.
+    RESCHEDULED = "rescheduled"
+    #: A schedule generation replaced or dropped it; superseded_by_id is the new placement of the same
+    #: occurrence when that generation saved one, else None (the occurrence was not placed again).
+    REGENERATED = "regenerated"
+    #: The placement itself was deleted.
+    DELETED = "deleted"
+    #: Its task was deleted.
+    TASK_DELETED = "task_deleted"
+    #: A range reset/clear removed it.
+    RESET = "reset"
+
+
 class ScheduledTask(BaseModel):
     """
     A canonical placement of one flexible Task into a specific interval.
@@ -318,6 +338,16 @@ class ScheduledTask(BaseModel):
     Intentionally does not carry name/category/tags -- those live on the
     referenced Task (task_id) and should be read through a TaskRegistry /
     project_scheduled_task_display when a caller needs them for display.
+    The one exception is task_category, a *historical snapshot* taken when
+    the placement was saved (like an execution's category), so the plan
+    stays comparable by category after the task is edited, even when no
+    execution was ever created. The planned estimate needs no snapshot: it
+    is the placement's own interval.
+
+    Removal provenance (docs/execution-rescheduling.md): a tombstone keeps
+    its planned values and records why it was removed (removal_reason) and,
+    when it was replaced for the same occurrence, by which placement
+    (superseded_by_id). Both are None on a live placement.
     """
 
     id: uuid.UUID = Field(default_factory=_new_id)
@@ -332,6 +362,11 @@ class ScheduledTask(BaseModel):
 
     score: float = 0.0
     optimization_metadata: dict[str, Any] = Field(default_factory=dict)
+
+    #: The task's category when the placement was saved (None: saved before it was recorded).
+    task_category: str | None = Field(default=None, min_length=1)
+    removal_reason: PlacementRemovalReason | None = None
+    superseded_by_id: uuid.UUID | None = None
 
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
@@ -358,6 +393,8 @@ class ScheduledTask(BaseModel):
     def _validate_order(self) -> "ScheduledTask":
         if self.planned_end <= self.planned_start:
             raise ValueError("planned_end must be after planned_start")
+        if self.superseded_by_id is not None and self.superseded_by_id == self.id:
+            raise ValueError("a placement cannot supersede itself")
         return self
 
 

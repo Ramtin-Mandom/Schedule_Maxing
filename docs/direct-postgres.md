@@ -69,6 +69,9 @@ python -m backend.migrate --env-file .env upgrade
 python -m backend.migrate --env-file .env check
 ```
 
+This version needs revision 0007 (placement provenance, additive; see
+[backend.md](backend.md#placement-provenance-0007)).
+
 `--env-file` goes before the action. With it, the same TLS rules apply;
 without it, the command behaves as before (environment only). Expected
 failures print one `error: ...` line and exit with code 2, without a

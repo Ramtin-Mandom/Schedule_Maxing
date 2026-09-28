@@ -5,10 +5,18 @@ UI-facing wrapper around app.productivity.reporting.ProductivityService.
 Like ExecutionController, this is the only thing app/ui widgets should call
 into for productivity analysis, duration prediction, and history export --
 never the service or repository directly.
+
+Storage wording (Milestone 5): what the history section says and what its
+reset does depend on where history lives -- `storage` is "device" (the
+ownerless local workspace), "account" (a local workspace of a synchronized
+account) or "server" (direct PostgreSQL) -- see storage_copy().
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from app.execution.errors import ExecutionError
@@ -17,19 +25,108 @@ from app.productivity.buckets import TimeBucket
 from app.productivity.filters import ObservationFilters
 from app.productivity.prediction import DurationPrediction
 from app.productivity.reporting import DurationPredictionComparison, ProductivityDashboard, ProductivityService
+from app.productivity.schedule_cohort import ScheduleCohortReport
+from app.planning.time import local_date_of
 from app.ui.background import ControllerResult
 from app.ui.execution_controller import ExecutionController
+from app.ui.history_model import HistoryPage, build_history_page
 
 ExportFormat = str  # "csv" or "json"
 
 
+@dataclass(frozen=True)
+class StorageCopy:
+    """The history section's wording for the active storage mode (never claims more than the mode does)."""
+
+    summary: str
+    reset_button: str
+    reset_title: str
+    reset_message: str
+
+
+_STORAGE_COPY = {
+    "device": StorageCopy(
+        summary="Execution history is stored on this device only (no account is in use).",
+        reset_button="Delete history on this device...",
+        reset_title="Delete Execution History On This Device",
+        reset_message="This permanently deletes all execution history stored on this device (including work "
+                      "sessions and feedback). It cannot be undone.\n\nContinue?",
+    ),
+    "account": StorageCopy(
+        summary="Execution history is stored on this device and synchronized with your account.",
+        reset_button="Delete history...",
+        reset_title="Delete Execution History",
+        reset_message="This deletes this workspace's execution history on this device now. The next "
+                      "synchronization also deletes the history this account had synchronized from the server, "
+                      "and your other devices receive those deletions.\n\nContinue?",
+    ),
+    "server": StorageCopy(
+        summary="Execution history is stored in the server database (direct mode) for this account.",
+        reset_button="Delete history...",
+        reset_title="Delete Execution History",
+        reset_message="This deletes every execution of this account in the server database (they are kept as "
+                      "deleted records and disappear from every device and report).\n\nContinue?",
+    ),
+}
+
+
 class ProductivityController:
-    def __init__(self, productivity_service: ProductivityService, execution_controller: ExecutionController) -> None:
+    def __init__(
+        self,
+        productivity_service: ProductivityService,
+        execution_controller: ExecutionController,
+        *,
+        storage: str = "device",
+        clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    ) -> None:
         self._service = productivity_service
         self._execution_controller = execution_controller
+        self._storage = storage
+        self._clock = clock
+
+    def storage_copy(self) -> StorageCopy:
+        return _STORAGE_COPY[self._storage]
+
+    @property
+    def reporting_timezone(self) -> str | None:
+        return self._service.reporting_timezone
+
+    def _last_days(self, days: int) -> tuple[date, date]:
+        tz = self._service.reporting_timezone
+        if tz is None:
+            raise ValueError("a reporting timezone is required (the host timezone is never assumed).")
+        today = local_date_of(self._clock(), tz)
+        return today - timedelta(days=days - 1), today
+
+    def schedule_cohort_for_last(self, days: int) -> ControllerResult[ScheduleCohortReport]:
+        """The cohort of the last `days` local dates (today included) in the reporting timezone, as of now."""
+
+        def op() -> ScheduleCohortReport:
+            start, end = self._last_days(days)
+            return self._service.build_schedule_cohort_report(start_date=start, end_date=end)
+
+        return self._call(op)
+
+    def history(self, days: int, *, status: str | None = None, category: str | None = None
+                ) -> ControllerResult[HistoryPage]:
+        """Browsable history of the last `days` local dates (read-only; see app/ui/history_model.py)."""
+
+        def op() -> HistoryPage:
+            start, end = self._last_days(days)
+            history, report = self._service.schedule_history_and_report(start_date=start, end_date=end)
+            return build_history_page(history, report, status=status, category=category)
+
+        return self._call(op)
 
     def build_dashboard(self, filters: ObservationFilters | None = None) -> ControllerResult[ProductivityDashboard]:
         return self._call(lambda: self._service.build_dashboard(filters=filters))
+
+    def build_schedule_cohort_report(
+        self, start_date: date, end_date: date, *, timezone_name: str | None = None, as_of: datetime | None = None,
+    ) -> ControllerResult[ScheduleCohortReport]:
+        """The schedule-cohort report (read-only; the app's reporting timezone unless one is given)."""
+        return self._call(lambda: self._service.build_schedule_cohort_report(
+            start_date=start_date, end_date=end_date, timezone_name=timezone_name, as_of=as_of))
 
     def predict_duration(
         self,
@@ -90,7 +187,7 @@ class ProductivityController:
         return self._call(do_export)
 
     def reset_all_history(self) -> ControllerResult[int]:
-        """Permanently delete all local execution history. The caller (UI) must confirm with the user first."""
+        """Delete this workspace's execution history as storage_copy() describes. The UI must confirm first."""
         return self._execution_controller.reset_all_history()
 
     def _call(self, operation):

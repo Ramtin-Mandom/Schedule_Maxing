@@ -167,8 +167,8 @@ class DirectAppServices:
 def _build_controllers(account, timezone_name: str, project_root: str | None
                        ) -> tuple[PlanningController, ExecutionController, ProductivityController]:
     planning = PlanningController(service=account.planning_service(), timezone=timezone_name, project_root=project_root)
-    execution = ExecutionController(account.execution_service())
-    productivity = ProductivityController(account.productivity_service(), execution)
+    execution = ExecutionController(account.execution_service(), sync_state=lambda _execution_id: "server")
+    productivity = ProductivityController(account.productivity_service(timezone_name), execution, storage="server")
     return planning, execution, productivity
 
 
