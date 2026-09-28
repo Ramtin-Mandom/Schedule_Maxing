@@ -4,12 +4,19 @@ productivity_page.py
 The desktop UI's Productivity page: filters, summary stats, two native-canvas
 charts, best-supported time bucket per category, a recent-trend comparison,
 structured insights (each carrying its own evidence label and sample count),
-and a separated "Data" section for exporting or resetting local execution
-history.
+and a separated "Data" section for exporting or deleting execution history.
 
-All data comes from one ProductivityController.build_dashboard(...) call per
-refresh, run off the Tk main thread (see app/ui/background.py) so opening
-this page or changing a filter never freezes the UI.
+Milestone 5 adds two sections built on the schedule cohort (docs/analytics.md):
+"Schedule follow-through" (due-work completion with its numerator and
+denominator, the date basis and reporting timezone, reschedules, workload and
+explainable signals) and "History" (browsable occurrences with their original
+plan, outcome, actual times, sessions and move lineage). The terminal-outcome
+tiles are labelled as such ("among resolved executions"). The Data section's
+wording follows where history is stored (ProductivityController.storage_copy).
+
+All data comes from ProductivityController calls run off the Tk main thread
+(see app/ui/background.py); the page re-reads persisted records whenever it is
+shown, so actions, synchronization and direct writes are reflected.
 """
 
 from __future__ import annotations
@@ -26,10 +33,19 @@ from app.productivity.filters import ObservationFilters
 from app.productivity.reporting import ProductivityDashboard
 from app.ui import theme
 from app.ui.background import ControllerResult, run_in_background
+from app.productivity.schedule_cohort import ScheduleCohortReport
+from app.ui.cohort_view import cohort_view
+from app.ui.history_model import STATUS_LABELS as HISTORY_STATUS_LABELS
+from app.ui.history_model import STATUSES as HISTORY_STATUSES
+from app.ui.history_model import HistoryPage, detail_text
 from app.ui.productivity_charts import CompletionRateByBucketChart, PlannedVsActualChart
 from app.ui.productivity_controller import ProductivityController
 
 _DAY_OPTIONS = {"All time": None, "Last 7 days": 7, "Last 30 days": 30, "Last 90 days": 90}
+_WINDOW_OPTIONS = {"Last 7 days": 7, "Last 30 days": 30, "Last 90 days": 90}
+_COHORT_TILES = ("Due completion", "Due skip rate", "Overdue, not started", "In progress / paused",
+                 "Cancelled (excluded)", "Not yet due")
+_NO_ENTRY = "(no history in this selection)"
 _ANY = "(any)"
 _TIME_BUCKET_ORDER = [bucket.value for bucket in TimeBucket]
 
@@ -56,6 +72,9 @@ class ProductivityPage(ctk.CTkFrame):
         super().__init__(parent, fg_color=theme.APP_BG)
         self._controller = productivity_controller
         self._latest_dashboard: ProductivityDashboard | None = None
+        self.latest_cohort: ScheduleCohortReport | None = None
+        self.history_page: HistoryPage | None = None
+        self._history_by_label: dict[str, object] = {}
 
         self.columnconfigure(0, weight=1)
         self._build()
@@ -71,7 +90,59 @@ class ProductivityPage(ctk.CTkFrame):
         self._build_summary()
         self._build_charts()
         self._build_breakdowns()
+        self._build_cohort_section()
+        self._build_history_section()
         self._build_data_section()
+
+    def _build_cohort_section(self) -> None:
+        card = ctk.CTkFrame(self, fg_color=theme.CARD_BG, corner_radius=16, border_color=theme.CARD_BORDER, border_width=1)
+        card.grid(row=5, column=0, sticky="ew", padx=20, pady=(0, 12))
+        card.columnconfigure(tuple(range(len(_COHORT_TILES))), weight=1)
+        ctk.CTkLabel(card, text="Schedule follow-through (planned work that was due)",
+                     font=ctk.CTkFont(size=13, weight="bold"), text_color=theme.TEXT_PRIMARY).grid(
+            row=0, column=0, columnspan=4, sticky="w", padx=14, pady=(12, 2))
+        self.cohort_window_var = tk.StringVar(value="Last 7 days")
+        ctk.CTkOptionMenu(card, variable=self.cohort_window_var, values=list(_WINDOW_OPTIONS),
+                          command=lambda _value: self.refresh_cohort()).grid(
+            row=0, column=len(_COHORT_TILES) - 1, sticky="e", padx=14, pady=(12, 2))
+        self.cohort_basis_label = ctk.CTkLabel(card, text="", font=ctk.CTkFont(size=11), text_color=theme.TEXT_MUTED,
+                                               anchor="w", justify="left", wraplength=900)
+        self.cohort_basis_label.grid(row=1, column=0, columnspan=len(_COHORT_TILES), sticky="w", padx=14)
+        self.cohort_tiles: dict[str, _StatTile] = {}
+        for column, name in enumerate(_COHORT_TILES):
+            tile = _StatTile(card, name)
+            tile.grid(row=2, column=column, sticky="ew", padx=6, pady=(6, 6))
+            self.cohort_tiles[name] = tile
+        self.cohort_text = ctk.CTkLabel(card, text="", justify="left", anchor="w", text_color=theme.TEXT_PRIMARY,
+                                        wraplength=900)
+        self.cohort_text.grid(row=3, column=0, columnspan=len(_COHORT_TILES), sticky="w", padx=14, pady=(0, 12))
+
+    def _build_history_section(self) -> None:
+        card = ctk.CTkFrame(self, fg_color=theme.CARD_BG, corner_radius=16, border_color=theme.CARD_BORDER, border_width=1)
+        card.grid(row=6, column=0, sticky="ew", padx=20, pady=(0, 12))
+        card.columnconfigure((0, 1, 2), weight=1)
+        ctk.CTkLabel(card, text="History", font=ctk.CTkFont(size=13, weight="bold"),
+                     text_color=theme.TEXT_PRIMARY).grid(row=0, column=0, sticky="w", padx=14, pady=(12, 2))
+        self.history_window_var = tk.StringVar(value="Last 30 days")
+        self.history_status_var = tk.StringVar(value=_ANY)
+        self.history_category_var = tk.StringVar(value=_ANY)
+        filters = ctk.CTkFrame(card, fg_color="transparent")
+        filters.grid(row=1, column=0, columnspan=3, sticky="ew")
+        filters.columnconfigure((0, 1, 2), weight=1)
+        self._filter_menu(filters, 0, "Dates", self.history_window_var, list(_WINDOW_OPTIONS)).configure(
+            command=lambda _value: self.refresh_history())
+        self._filter_menu(filters, 1, "Status", self.history_status_var,
+                          [_ANY, *(HISTORY_STATUS_LABELS[s] for s in HISTORY_STATUSES)]).configure(
+            command=lambda _value: self.refresh_history())
+        self.history_category_menu = self._filter_menu(filters, 2, "Category", self.history_category_var, [_ANY])
+        self.history_category_menu.configure(command=lambda _value: self.refresh_history())
+        self.history_entry_var = tk.StringVar(value=_NO_ENTRY)
+        self.history_entry_menu = ctk.CTkOptionMenu(card, variable=self.history_entry_var, values=[_NO_ENTRY],
+                                                    command=self._show_history_entry)
+        self.history_entry_menu.grid(row=3, column=0, columnspan=3, sticky="ew", padx=10, pady=(0, 6))
+        self.history_detail = ctk.CTkTextbox(card, height=170, wrap="word")
+        self.history_detail.grid(row=4, column=0, columnspan=3, sticky="ew", padx=10, pady=(0, 12))
+        self.history_detail.configure(state="disabled")
 
     def _build_header(self) -> None:
         header = ctk.CTkFrame(self, fg_color="transparent")
@@ -82,6 +153,11 @@ class ProductivityPage(ctk.CTkFrame):
         self.range_label = ctk.CTkLabel(
             header, text="Selected range: all time", font=ctk.CTkFont(size=12), text_color=theme.TEXT_MUTED
         )
+        ctk.CTkLabel(
+            header, text="The tiles and charts below count recorded executions by when they were created; "
+                         "completion there is completed / (completed + skipped + cancelled).",
+            font=ctk.CTkFont(size=11), text_color=theme.TEXT_MUTED,
+        ).pack(anchor="w")
         self.range_label.pack(anchor="w", pady=(2, 0))
 
     def _build_filters(self) -> None:
@@ -131,7 +207,7 @@ class ProductivityPage(ctk.CTkFrame):
 
         self.completed_tile = _StatTile(row, "Completed")
         self.skipped_tile = _StatTile(row, "Skipped")
-        self.completion_rate_tile = _StatTile(row, "Completion rate")
+        self.completion_rate_tile = _StatTile(row, "Completion among resolved")
         self.productive_minutes_tile = _StatTile(row, "Productive active time")
         self.start_delay_tile = _StatTile(row, "Median start delay")
         self.duration_error_tile = _StatTile(row, "Duration estimate error")
@@ -204,15 +280,15 @@ class ProductivityPage(ctk.CTkFrame):
         # rest of the page's normal navigation/filtering flow, per the requirement that any
         # reset/delete control stay separate from normal navigation.
         card = ctk.CTkFrame(self, fg_color=theme.CARD_BG, corner_radius=16, border_color=theme.CARD_BORDER, border_width=1)
-        card.grid(row=5, column=0, sticky="ew", padx=20, pady=(0, 20))
+        card.grid(row=7, column=0, sticky="ew", padx=20, pady=(0, 20))
         card.columnconfigure((0, 1, 2), weight=1)
+        copy = self._controller.storage_copy()
 
         ctk.CTkLabel(
             card, text="Data", font=ctk.CTkFont(size=13, weight="bold"), text_color=theme.TEXT_PRIMARY
         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=14, pady=(12, 2))
         ctk.CTkLabel(
-            card, text="Your execution history stays local to this device.", font=ctk.CTkFont(size=11),
-            text_color=theme.TEXT_MUTED,
+            card, text=copy.summary, font=ctk.CTkFont(size=11), text_color=theme.TEXT_MUTED,
         ).grid(row=1, column=0, columnspan=3, sticky="w", padx=14, pady=(0, 10))
 
         ctk.CTkButton(
@@ -223,10 +299,11 @@ class ProductivityPage(ctk.CTkFrame):
             card, text="Export history (JSON)", height=32, fg_color=theme.NEUTRAL_BG, hover_color=theme.NEUTRAL_HOVER,
             command=lambda: self._export_history("json"),
         ).grid(row=2, column=1, sticky="ew", padx=6, pady=(0, 14))
-        ctk.CTkButton(
-            card, text="Reset local history...", height=32, fg_color=theme.DANGER, hover_color=theme.DANGER_HOVER,
+        self.reset_button = ctk.CTkButton(
+            card, text=copy.reset_button, height=32, fg_color=theme.DANGER, hover_color=theme.DANGER_HOVER,
             command=self._confirm_reset,
-        ).grid(row=2, column=2, sticky="ew", padx=(6, 14), pady=(0, 14))
+        )
+        self.reset_button.grid(row=2, column=2, sticky="ew", padx=(6, 14), pady=(0, 14))
 
     # ------------------------------------------------------------------
     # Refresh
@@ -237,9 +314,72 @@ class ProductivityPage(ctk.CTkFrame):
         self.planned_vs_actual_chart.redraw()
         self.completion_rate_chart.redraw()
 
+    def on_show(self) -> None:
+        """Re-read persisted records each time the page is shown (after actions, a sync or direct writes)."""
+        self.refresh()
+
     def refresh(self) -> None:
         filters = self._current_filters()
         run_in_background(self, lambda: self._controller.build_dashboard(filters), self._on_dashboard_loaded)
+        self.refresh_cohort()
+        self.refresh_history()
+
+    def refresh_cohort(self) -> None:
+        days = _WINDOW_OPTIONS[self.cohort_window_var.get()]
+        run_in_background(self, lambda: self._controller.schedule_cohort_for_last(days), self._on_cohort_loaded)
+
+    def _on_cohort_loaded(self, result: ControllerResult[ScheduleCohortReport]) -> None:
+        if not result.ok:
+            if isinstance(result.cause, NotSignedInError):
+                return
+            self.cohort_basis_label.configure(text=f"Unavailable: {result.error}")
+            return
+        self.latest_cohort = result.value
+        view = cohort_view(result.value)
+        self.cohort_basis_label.configure(text=view.basis)
+        for name, tile in self.cohort_tiles.items():
+            tile.set_value(view.tiles.get(name, "--"))
+        parts = [view.notes] if view.empty else [
+            view.workload, view.reschedules, "Workload signals:\n" + view.days,
+            "Underestimation:\n" + view.underestimation, view.notes]
+        self.cohort_text.configure(text="\n\n".join(part for part in parts if part))
+
+    def refresh_history(self) -> None:
+        days = _WINDOW_OPTIONS[self.history_window_var.get()]
+        label = self.history_status_var.get()
+        status = next((key for key, text in HISTORY_STATUS_LABELS.items() if text == label), None)
+        category = None if self.history_category_var.get() == _ANY else self.history_category_var.get()
+        run_in_background(self, lambda: self._controller.history(days, status=status, category=category),
+                          self._on_history_loaded)
+
+    def _on_history_loaded(self, result: ControllerResult[HistoryPage]) -> None:
+        if not result.ok:
+            if isinstance(result.cause, NotSignedInError):
+                return
+            self._set_history_detail(f"History unavailable: {result.error}")
+            return
+        page = self.history_page = result.value
+        self.history_category_menu.configure(values=[_ANY, *page.categories])
+        self._history_by_label = {entry.label: entry for entry in page.entries}
+        labels = list(self._history_by_label) or [_NO_ENTRY]
+        self.history_entry_menu.configure(values=labels)
+        self.history_entry_var.set(labels[0])
+        if page.entries:
+            self._show_history_entry(labels[0])
+        else:
+            self._set_history_detail("Nothing matches this selection." if page.total else
+                                     "No planned work on these dates yet.")
+
+    def _show_history_entry(self, label: str) -> None:
+        entry = self._history_by_label.get(label)
+        if entry is not None:
+            self._set_history_detail(detail_text(entry))
+
+    def _set_history_detail(self, text: str) -> None:
+        self.history_detail.configure(state="normal")
+        self.history_detail.delete("1.0", "end")
+        self.history_detail.insert("1.0", text)
+        self.history_detail.configure(state="disabled")
 
     def _clear_filters(self) -> None:
         self.days_var.set("All time")
@@ -383,14 +523,8 @@ class ProductivityPage(ctk.CTkFrame):
     def _confirm_reset(self) -> None:
         # A dedicated confirmation dialog, deliberately separate from the export buttons above,
         # for this destructive, irreversible action.
-        confirmed = messagebox.askyesno(
-            "Reset Local Execution History",
-            "This permanently deletes all locally stored task execution history "
-            "(including work sessions and feedback). This cannot be undone.\n\n"
-            "Continue?",
-            icon="warning",
-            parent=self,
-        )
+        copy = self._controller.storage_copy()
+        confirmed = messagebox.askyesno(copy.reset_title, copy.reset_message, icon="warning", parent=self)
         if not confirmed:
             return
 
@@ -400,7 +534,7 @@ class ProductivityPage(ctk.CTkFrame):
         if not result.ok:
             messagebox.showerror("Reset Error", result.error or "An unknown error occurred.", parent=self)
             return
-        messagebox.showinfo("History Reset", f"Deleted {result.value} execution record(s).", parent=self)
+        messagebox.showinfo("History Deleted", f"Deleted {result.value} execution record(s).", parent=self)
         self.refresh()
 
 

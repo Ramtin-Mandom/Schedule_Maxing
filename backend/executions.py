@@ -36,7 +36,7 @@ from pydantic import AwareDatetime, BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.execution.models import ExecutionStatus
+from app.execution.models import ExecutionStatus, TaskExecution, WorkSession
 from backend import models
 from backend.resources import BaseVersion, RecordMeta, Strict
 
@@ -162,3 +162,32 @@ class _ExecutionSpec:
 
 
 EXECUTIONS = _ExecutionSpec()
+
+
+#: The execution snapshot columns a TaskExecution carries (the rest are ids, status and audit fields).
+SNAPSHOT_FIELDS = (
+    "task_name", "category", "tag", "planned_date", "planned_start", "planned_end", "planned_duration", "priority",
+    "actual_active_duration_minutes", "duration_variance_minutes", "start_delay_minutes", "focus_rating",
+    "energy_rating", "interruption_count", "note", "task_id", "scheduled_task_id", "canonical_planned_date",
+    "canonical_timezone", "canonical_planned_start", "canonical_planned_end", "actual_first_start_at",
+    "actual_final_end_at",
+)
+
+
+def _iso(value: datetime | None) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+def to_task_execution(row: models.Execution) -> TaskExecution:
+    """A server execution row as the domain TaskExecution (id = the wire UUID's string form)."""
+    return TaskExecution(
+        id=str(row.id), status=ExecutionStatus(row.status), created_at=_iso(row.created_at),
+        updated_at=_iso(row.updated_at), version=row.version, deleted_at=_iso(row.deleted_at), user_id=row.user_id,
+        **{name: getattr(row, name) for name in SNAPSHOT_FIELDS},
+    )
+
+
+def to_work_session(row: models.WorkSession) -> WorkSession:
+    """A server work session as the domain WorkSession (id = its 1-based position in the execution)."""
+    return WorkSession(id=row.position + 1, execution_id=str(row.execution_id), started_at=row.started_at.isoformat(),
+                       ended_at=_iso(row.ended_at))

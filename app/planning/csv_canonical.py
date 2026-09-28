@@ -48,7 +48,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from app.planning.application import RecordBatch, task_planned_date
-from app.planning.csv_export import COLUMNS, FORMAT_VERSION
+from app.planning.csv_export import COLUMNS_V2, FORMAT_VERSION
 from app.planning.csv_import import CsvImportError, ImportIssue, read_csv_text
 from app.planning.models import FixedBlock, LocalTimeWindow, Project, RecurrenceSpec, ScheduledTask, Task
 from app.planning.time import local_minutes, minutes_to_hhmm
@@ -80,7 +80,7 @@ def parse_canonical_csv(text: str) -> RecordBatch:
             1, "this is a format version 1 planning export, which has no ownership, project, recurrence, or "
             "deletion columns; importing it could silently clear those fields. Export again with this version."
         )])
-    missing = [column for column in COLUMNS if column not in header]
+    missing = [column for column in COLUMNS_V2 if column not in header]
     if missing:
         raise CsvImportError([ImportIssue(1, f"missing column(s): {', '.join(missing)}")])
 
@@ -325,7 +325,9 @@ def _parse_placement(row: dict[str, str]) -> ScheduledTask:
     placement = ScheduledTask(
         id=_record_id(row), task_id=_uuid(row, "task_id", required=True), planned_date=day, timezone=tz_name,
         planned_start=start, planned_end=end, score=score,
-        optimization_metadata=_json(row, "optimization_metadata", dict, empty={}), **_audit(row),
+        optimization_metadata=_json(row, "optimization_metadata", dict, empty={}),
+        task_category=_text(row, "task_category") or None, removal_reason=_text(row, "removal_reason") or None,
+        superseded_by_id=_uuid(row, "superseded_by_id", required=False), **_audit(row),
     )
     _check_interval(row, start, end, day, tz_name)
     return placement

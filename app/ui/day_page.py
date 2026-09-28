@@ -248,7 +248,9 @@ class DaySchedulePage(TaskFormActions, ctk.CTkFrame):
             execute_tab = self.right_tabs.add("Execute")
             execute_tab.columnconfigure(0, weight=1)
             execute_tab.rowconfigure(0, weight=1)
-            self.execution_panel = ExecutionPanel(execute_tab, self.execution_controller)
+            self.execution_panel = ExecutionPanel(
+                execute_tab, self.execution_controller, planning_controller=self.page_controller.planning,
+                on_schedule_changed=self.reload)
             self.execution_panel.grid(row=0, column=0, sticky="nsew")
 
     # ----------------------------- Layout -----------------------------

@@ -102,8 +102,15 @@ operations. Each operation has this shape:
 ```json
 {"op_id": "<uuid>", "entity_type": "task", "entity_id": "<uuid>",
  "kind": "create|update|delete|action|feedback", "base_version": 3,
- "action": "start|pause|resume|complete|skip|cancel", "payload": {...}, "group": "<uuid>|null"}
+ "action": "start|pause|resume|complete|skip|cancel|reschedule", "payload": {...}, "group": "<uuid>|null"}
 ```
+
+`reschedule` is the one placement action (Milestone 5,
+[execution-rescheduling.md](execution-rescheduling.md#7-synchronization)):
+the move, its replacement and the cancellation of the never-started
+execution are applied as one unit, and the applied result lists the other
+records it changed in `related`. A placement `delete` may carry
+`{"removal_reason", "superseded_by_id"}`.
 
 ### What the client sends
 
@@ -126,6 +133,15 @@ unanswered operations or an open conflict waits.
   that differ from the server's) becomes a `diverged_history` rejection.
 - **History reset.** A local reset physically deletes executions. The next
   push sends a delete for each execution this account had synchronized.
+- **Moves.** A placement moved locally (a tombstone with reason
+  `rescheduled` whose shadow is live) is sent as one `reschedule` action,
+  never as a delete and a create. Its replacement(s) and the moved
+  placement's execution send nothing of their own until that action is
+  answered; a pulled change to them only refreshes their shadow. Other
+  placement tombstones send their removal reason with the delete.
+  A plan created and then moved or regenerated before it ever reached the
+  server is uploaded as history (a `create` with its removal reason and
+  successor, stored as a tombstone), after its successor.
 - **Order.** Creates and updates go in this order: projects, tasks (each
   after the tasks it depends on), fixed blocks, placements, preferences,
   schedule records, executions. Deletes follow, in reverse order
@@ -165,8 +181,8 @@ The server records each operation's outcome under `(user, op_id)`.
 
 The answers are recorded in one SQLite transaction:
 
-- **Applied:** the shadow becomes the returned record and the operation
-  leaves the outbox. The dirty mark is cleared **only if `local_rev` is
+- **Applied:** the shadow becomes the returned record (and each `related`
+  record the shadow of its own record) and the operation leaves the outbox. The dirty mark is cleared **only if `local_rev` is
   unchanged**. An edit made while the request was in flight stays pending
   and is sent next time, against the new shadow version.
 - **Conflict or rejected:** it becomes a `sync_conflicts` row, and that
@@ -228,6 +244,10 @@ retried automatically; everything else continues.
 | --- | --- |
 | `accept_remote` | The server state replaces the local record. If the server never had the record (a rejected create), or another record owns its scope, the local record is discarded as a local tombstone and is not pushed. |
 | `keep_local` | The remote version becomes the new precondition and the local change is sent again. It can conflict again. Refused when the server record is a tombstone, because that would silently revive it, and when another record owns the scope. |
+
+Accepting the server's placement over a local move also undoes the rest of
+that move: the replacement the server never had is discarded locally, and the
+execution the move cancelled returns to its last acknowledged server state.
 
 Every decision is kept on the conflict row: `resolution` (the choice, the
 time, and the base and remote versions) and `resolved_at`.

@@ -50,7 +50,10 @@ placement keeps its id -- and any execution history linked to it -- across
 regenerations and restarts) *and* the save's precondition; placements of
 the same occurrences outside the range are superseded; and the provenance
 is written in the same transaction. Either the whole range's new schedule
-is committed, or none of it is.
+is committed, or none of it is. Both protect history (Milestone 5): a
+placement whose execution has started or finished is kept exactly as it is
+and reserved, never replaced, and its task is not placed again -- with no
+such history the result is exactly the unprotected full generation's.
 
 Every mutating/possibly-failing method returns a ControllerResult, matching
 ExecutionController/ProductivityController's convention, so a Tk callback
@@ -74,6 +77,7 @@ from app.optimizer import MandatoryTaskSchedulingError
 from app.planning import workflow
 from app.planning.allocation import AllocationResult, month_dates, week_dates
 from app.planning.application import (
+    PlacementReschedule,
     BatchApplyResult,
     ImportApplyResult,
     PlacementReplacement,
@@ -87,7 +91,7 @@ from app.planning.application import (
 from app.planning.csv_canonical import is_canonical_csv, parse_canonical_csv_file
 from app.planning.csv_export import PlanningExportResult, export_planning_csv
 from app.planning.csv_import import ImportMode, ParsedImport, read_csv_text, parse_legacy_csv_file
-from app.planning.errors import PlanningError, VersionConflictError
+from app.planning.errors import HistoryProtectedError, PlanningError, RescheduleRejectedError, VersionConflictError
 from app.planning.models import DayScheduleOutput, FixedBlock, Project, ScheduledTask, Task, TaskRegistry
 from app.planning.preferences import (
     ENGINE_DESCRIPTIONS,
@@ -100,6 +104,7 @@ from app.planning.preferences import (
 from app.planning.repository import PlanningRepository
 from app.planning.scope import OwnerScope
 from app.planning.service import DayResultStatus, SelectedDayState, initial_state
+from app.planning.time import local_instant
 from app.reward import load_reward_settings
 from app.planning.workflow import (
     AllocationPreview,
@@ -384,6 +389,42 @@ class PlanningController:
             return ControllerResult.failure(str(error), error)
         return self._call(lambda: self._service.preview_record_batch(batch, allow_updates=allow_updates))
 
+    def reschedule_placement(
+        self, placement_id: uuid.UUID, *, expected_version: int, planned_date: date_, start_minute: int,
+        duration_minutes: int, timezone_name: str | None = None,
+    ) -> ControllerResult[PlacementReschedule]:
+        """
+        Move a saved, not-started placement (workflow.reschedule_placement): the
+        new local start on `planned_date` in the plan's timezone (default: the
+        controller's), keeping its duration. Refusals explain themselves and
+        change nothing.
+        """
+
+        def op() -> PlacementReschedule:
+            tz = timezone_name or self._timezone
+            start = local_instant(planned_date, start_minute, tz)
+            return workflow.reschedule_placement(
+                self._service, placement_id, expected_version=expected_version, planned_date=planned_date,
+                timezone_name=tz, planned_start=start, planned_end=start + timedelta(minutes=duration_minutes),
+                template=self._yaml_overrides,
+            )
+
+        result = self._call(op)
+        if result.ok:
+            return result
+        cause = result.cause
+        if isinstance(cause, HistoryProtectedError):
+            message = ("This work has already started or finished, and started or finished work stays in history: "
+                       f"it cannot be moved (its execution is {cause.status.replace('_', ' ')}).")
+        elif isinstance(cause, RescheduleRejectedError):
+            message = "It cannot be moved there: " + " ".join(problem.explanation for problem in cause.problems)
+        elif isinstance(cause, VersionConflictError):
+            message = ("It was moved, changed or removed elsewhere since it was shown. The schedule has been "
+                       "reloaded; check it and try again.")
+        else:
+            return result
+        return ControllerResult.failure(message, cause)
+
     def reset_preview(self, start_date: date_, end_date: date_) -> ControllerResult[ResetPreview]:
         """
         What reset_range would delete for [start_date, end_date] (tasks,
@@ -652,7 +693,8 @@ class PlanningController:
             # Saved first (placements + provenance, atomically, after re-checking the inputs); only then is it
             # the day's result.
             outcome = workflow.generate_from(
-                self._service, allocation, inputs, [selected_date], template=self._yaml_overrides
+                self._service, allocation, inputs, [selected_date], template=self._yaml_overrides,
+                protect_history=True,
             )
             return outcome.outputs[selected_date]
 
@@ -673,7 +715,8 @@ class PlanningController:
             inputs = self._scheduling_inputs(start_date, end_date, scope)
             allocation = workflow.allocate(inputs)
             outcome = workflow.generate_from(
-                self._service, allocation, inputs, _range_dates(start_date, end_date), template=self._yaml_overrides
+                self._service, allocation, inputs, _range_dates(start_date, end_date), template=self._yaml_overrides,
+                protect_history=True,
             )
             # Committed: only now does the new allocation become the current one.
             self._allocation, self._allocation_inputs = allocation, inputs

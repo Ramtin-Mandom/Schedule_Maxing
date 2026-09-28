@@ -13,6 +13,8 @@ docs/web-api.md and in the OpenAPI schema.
     POST /planning/generate              selected-date generation (full or incremental), saved atomically
     POST /planning/reset/preview         what a range reset would remove (nothing is written)
     POST /planning/reset                 the confirmed reset
+    POST /planning/placements/{id}/reschedule  move one placement (docs/execution-rescheduling.md)
+    GET  /planning/analytics/schedule-cohort  planned-versus-actual report of a date range (docs/analytics.md)
     POST /planning/csv/preview           validate a canonical v2 CSV against what is stored, apply nothing
     POST /planning/csv/import            apply it (all or nothing)
     GET  /planning/csv/export            the canonical v2 CSV of a range or of everything
@@ -44,13 +46,13 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Body, Depends, Query, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 
 from app.optimizer import MandatoryTaskSchedulingError
 from app.planning import workflow
 from app.planning.allocation import AllocationResult
-from app.planning.application import PlanningService, RangeScope, ResetPreview
+from app.planning.application import PlacementReschedule, PlanningService, RangeScope, ResetPreview
 from app.planning.csv_canonical import is_canonical_csv, parse_canonical_csv
 from app.planning.csv_export import FORMAT_VERSION, write_planning_csv
 from app.planning.csv_import import CsvImportError
@@ -58,10 +60,12 @@ from app.planning.errors import (
     DuplicateEntityError,
     EntityInUseError,
     EntityNotFoundError,
+    HistoryProtectedError,
     InvalidEntityError,
     InvalidReferenceError,
     PlanningError,
     RegenerationRequiredError,
+    RescheduleRejectedError,
     ScopeError,
     StaleInputsError,
     VersionConflictError,
@@ -76,6 +80,7 @@ from app.planning.preferences import (
     PreferenceRecord,
 )
 from app.planning.time import AmbiguousLocalTimeError, UnsupportedSchedulingWindowError, validate_timezone
+from app.productivity.schedule_cohort import ScheduleCohortReport, read_schedule_cohort_report
 from backend.errors import ApiError
 from backend.resources import FixedBlockOut, PlacementOut, PreferenceOut, ProjectOut, TaskFields, TaskOut
 
@@ -311,6 +316,32 @@ class ResetResultOut(BaseModel):
     protected_recurring_task_ids: list[uuid.UUID]
 
 
+class RescheduleIn(Strict):
+    #: The version of the placement the move is based on (the precondition).
+    base_version: int = Field(gt=0)
+    planned_date: date_
+    timezone: str
+    planned_start: AwareDatetime
+    planned_end: AwareDatetime
+    #: The new placement's id; a client that chooses it can recognize its own move after a lost response
+    #: (the moved placement's tombstone names it as superseded_by_id).
+    replacement_id: uuid.UUID | None = None
+
+    @field_validator("timezone")
+    @classmethod
+    def _valid_timezone(cls, value: str) -> str:
+        return _timezone(value)
+
+
+class RescheduleOut(BaseModel):
+    #: The moved placement's tombstone: its original planned values, removal_reason "rescheduled",
+    #: superseded_by_id = replacement.id.
+    previous: PlacementOut
+    replacement: PlacementOut
+    #: The never-started execution of the previous placement that the move cancelled, if any.
+    cancelled_execution_id: str | None = None
+
+
 class CsvResultOut(BaseModel):
     #: False for a preview: nothing was written.
     applied: bool
@@ -363,8 +394,8 @@ def block_out(block: FixedBlock) -> FixedBlockOut:
 
 def placement_out(placement: ScheduledTask) -> PlacementOut:
     return PlacementOut.model_validate({**placement.model_dump(include={
-        "task_id", "planned_date", "timezone", "planned_start", "planned_end", "score", "optimization_metadata"}),
-        **_meta(placement)})
+        "task_id", "planned_date", "timezone", "planned_start", "planned_end", "score", "optimization_metadata",
+        "task_category", "removal_reason", "superseded_by_id"}), **_meta(placement)})
 
 
 def preference_out(record: PreferenceRecord) -> PreferenceOut:
@@ -413,6 +444,12 @@ def api_error(error: Exception) -> ApiError:
     if isinstance(error, StaleInputsError):
         return ApiError(409, "inputs_changed", str(error), expected_fingerprint=error.expected,
                         current_fingerprint=error.current)
+    if isinstance(error, HistoryProtectedError):
+        return ApiError(409, "history_protected", str(error), reason=error.status)
+    if isinstance(error, RescheduleRejectedError):
+        return ApiError(409, "reschedule_rejected", str(error), reason=error.problems[0].reason, problems=[
+            {"location": ["destination", problem.reason], "message": problem.explanation}
+            for problem in error.problems])
     if isinstance(error, RegenerationRequiredError):
         return ApiError(409, "regenerate_required", str(error), problems=[
             {"placement_id": p.placement_id, "task_id": p.task_id, "date": p.date, "reason": p.reason,
@@ -545,6 +582,41 @@ def generate(service: PlanningService, request: GenerateIn, clock) -> GenerateOu
     )
 
 
+def reschedule(
+    service: PlanningService,
+    placement_id: uuid.UUID,
+    request: RescheduleIn,
+    *,
+    at: datetime | None = None,
+    task_category: str | None = None,
+) -> PlacementReschedule:
+    """
+    workflow.reschedule_placement with the API's errors. A 409 (stale or
+    tombstoned placement, protected history, rejected destination) carries
+    the placement as it is stored now in `current` -- the read to reconcile
+    with: after a lost response, a tombstone whose superseded_by_id is the
+    client's replacement_id is the client's own move.
+    """
+    try:
+        return workflow.reschedule_placement(
+            service, placement_id, expected_version=request.base_version, planned_date=request.planned_date,
+            timezone_name=request.timezone, planned_start=request.planned_start, planned_end=request.planned_end,
+            replacement_id=request.replacement_id, task_category=task_category, at=at,
+        )
+    except Exception as error:  # noqa: BLE001 - every planning failure becomes the API's structured error
+        failure = api_error(error)
+        if failure.status == 409 and "current" not in failure.details:
+            stored = service.get_placement(placement_id, include_deleted=True)
+            if stored is not None:
+                failure.details["current"] = placement_out(stored).model_dump(mode="json")
+        raise failure from None
+
+
+def reschedule_out(result: PlacementReschedule) -> RescheduleOut:
+    return RescheduleOut(previous=placement_out(result.previous), replacement=placement_out(result.replacement),
+                         cancelled_execution_id=result.cancelled_execution_id)
+
+
 def _csv_text(content: bytes) -> str:
     if len(content) > MAX_CSV_BYTES:
         raise ApiError(413, "too_large", f"A CSV upload may be at most {MAX_CSV_BYTES} bytes.")
@@ -645,6 +717,31 @@ def build_planning_router(
                                   protected_recurring_task_ids=result.protected_recurring_task_ids)
 
         return _run(run)
+
+    @router.post("/placements/{placement_id}/reschedule", response_model=RescheduleOut,
+                 operation_id="planning_reschedule_placement",
+                 summary="Move one placement that has not been started; validated and atomic (no regeneration).")
+    def post_reschedule(placement_id: uuid.UUID, body: RescheduleIn, context: PlanningContext = Depends(get_context)):
+        return reschedule_out(reschedule(context.service, placement_id, body))
+
+    @router.get("/analytics/schedule-cohort", response_model=ScheduleCohortReport,
+                operation_id="planning_schedule_cohort",
+                summary="Planned-versus-actual report of a local date range as of a cutoff (read-only).")
+    def get_schedule_cohort(
+        request: Request,
+        start_date: date_ = Query(), end_date: date_ = Query(),
+        timezone: str = Query(description="The IANA reporting timezone of the dates."),
+        as_of: datetime | None = Query(default=None, description="Aware cutoff instant; default: now."),
+        context: PlanningContext = Depends(get_context),
+    ):
+        now = request.app.state.clock()
+        try:
+            return read_schedule_cohort_report(
+                context.service, start_date=start_date, end_date=end_date, timezone_name=_timezone(timezone),
+                as_of=as_of or now, now=now,
+            )
+        except ValueError as error:  # an invalid range, timezone or cutoff
+            raise ApiError(422, "validation_error", _first_message(error)) from None
 
     csv_body = Body(media_type="text/csv", description="A canonical planning CSV (format version 2), UTF-8.")
 

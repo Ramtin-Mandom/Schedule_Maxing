@@ -15,14 +15,19 @@ exception reaching Tk's event loop.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timezone
 
-from app.execution.errors import ExecutionError
+from app.execution.errors import ExecutionError, ExecutionVersionConflictError, InvalidTransitionError
 from app.execution.models import ExecutionStatus, TaskExecution
 from app.execution.service import ExecutionService, compute_active_duration_minutes
 from app.planning.models import ScheduledTask as CanonicalScheduledTask
 from app.planning.models import Task as CanonicalTask
 from app.ui.background import ControllerResult
+from app.ui.execution_workflow import ExecutionItemView, describe_item
+
+#: Lifecycle actions the Execute tab runs through ExecutionController.perform.
+LIFECYCLE_ACTIONS = ("start", "pause", "resume", "complete", "skip", "cancel")
 
 # Which of start/pause/resume/complete/skip are valid from each status. This
 # is a UI-facing view of app.execution.service's own transition rules (see
@@ -48,8 +53,72 @@ _AVAILABLE_ACTIONS: dict[ExecutionStatus, tuple[str, ...]] = {
 
 
 class ExecutionController:
-    def __init__(self, execution_service: ExecutionService) -> None:
+    def __init__(
+        self,
+        execution_service: ExecutionService,
+        *,
+        sync_state: Callable[[str], str | None] | None = None,
+        clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    ) -> None:
         self._service = execution_service
+        #: execution id -> "local_only" / "pending" / "conflict" / "synced" / "server" (None: unknown).
+        self._sync_state = sync_state
+        self._clock = clock
+
+    def describe(self, placement: CanonicalScheduledTask, execution: TaskExecution | None
+                 ) -> ControllerResult[ExecutionItemView]:
+        """The Execute tab's view of a saved placement now (reads only; never creates an execution)."""
+
+        def op() -> ExecutionItemView:
+            now = self._clock()
+            active = None
+            state = None
+            if execution is not None:
+                active = self._active_minutes(execution.id, now)
+                state = self._sync_state(execution.id) if self._sync_state is not None else None
+            return describe_item(placement, execution, now=now, active_minutes=active, sync_state=state)
+
+        return self._call(op)
+
+    def perform(
+        self,
+        task: CanonicalTask,
+        placement: CanonicalScheduledTask,
+        action: str,
+        known: TaskExecution | None,
+        *,
+        feedback: dict | None = None,
+    ) -> ControllerResult[TaskExecution]:
+        """
+        Run one lifecycle action the user chose on a saved placement. The
+        first action creates its execution (get-or-create: never a duplicate);
+        the version on screen is the precondition, so a change made elsewhere
+        (another device, a sync, a second click) is reported, never
+        overwritten. Optional feedback is recorded after complete/skip.
+        """
+        if action not in LIFECYCLE_ACTIONS:
+            return ControllerResult.failure(f"Unknown action {action!r}.")
+
+        def op() -> TaskExecution:
+            if known is None:
+                current = self._service.get_or_create_canonical_execution(task, placement)
+            else:
+                current = known
+            result = getattr(self._service, action)(current.id, expected_version=current.version)
+            values = {name: value for name, value in (feedback or {}).items() if value is not None}
+            if values:
+                result = self._service.record_feedback(current.id, expected_version=result.version, **values)
+            return result
+
+        return self._call(op)
+
+    def _active_minutes(self, execution_id: str, now: datetime) -> float:
+        sessions = self._service.list_sessions(execution_id)
+        elapsed = compute_active_duration_minutes(sessions)
+        open_session = next((session for session in sessions if session.ended_at is None), None)
+        if open_session is not None:
+            elapsed += (now - datetime.fromisoformat(open_session.started_at)).total_seconds() / 60
+        return round(elapsed, 1)
 
     def available_actions(self, status: ExecutionStatus) -> tuple[str, ...]:
         """Pure lookup (no I/O): which actions should be enabled for an execution in this status."""
@@ -193,6 +262,13 @@ class ExecutionController:
     def _call(self, operation):
         try:
             return ControllerResult.success(operation())
+        except ExecutionVersionConflictError as error:
+            return ControllerResult.failure(
+                "This task was changed elsewhere (another device, a sync, or a second click) since it was shown. "
+                "Its saved state has been reloaded; check it and try again.", error)
+        except InvalidTransitionError as error:
+            return ControllerResult.failure(
+                f"That action is not possible any more: {error} Its saved state has been reloaded.", error)
         except ExecutionError as error:
             return ControllerResult.failure(str(error), error)
         except Exception as error:  # noqa: BLE001 - last-resort safety net so DB/unexpected errors never crash the UI

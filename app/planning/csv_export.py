@@ -47,6 +47,10 @@ order, so readers of version 1 keep working; version 2 appends seven.
     recurrence      task: JSON object of its recurrence rule (model-only), or empty
     optimization_metadata  placement: JSON object
     deleted_at      every record: ISO 8601 UTC tombstone time, or empty for a live record
+    --- appended in Milestone 5 (still format version 2; optional on import) ---
+    task_category   placement: its task's category when it was saved (a snapshot), or empty if unknown
+    removal_reason  placement tombstone: why it was removed (app.planning.models.PlacementRemovalReason), or empty
+    superseded_by_id  placement tombstone: the placement that replaced it, or empty
 
 Rows are ordered: projects and tasks by (created_at, id), then fixed
 blocks and placements by (date, start, id). Instants are exact to the
@@ -88,9 +92,14 @@ COLUMNS_V1 = (
     "dependency_ids", "score", "version", "created_at", "updated_at",
 )
 
-COLUMNS = COLUMNS_V1 + (
+#: The columns every format version 2 file has (an import requires them).
+COLUMNS_V2 = COLUMNS_V1 + (
     "format_version", "user_id", "project_id", "description", "recurrence", "optimization_metadata", "deleted_at",
 )
+
+#: Written by this version: version 2 plus the placement history columns appended in Milestone 5. They are
+#: optional on import (an earlier version 2 file has none: the history is then unknown, never guessed).
+COLUMNS = COLUMNS_V2 + ("task_category", "removal_reason", "superseded_by_id")
 
 
 @dataclass(frozen=True)
@@ -259,4 +268,7 @@ def _placement_row(placement: ScheduledTask, task: Task | None) -> dict[str, str
         **_interval(placement.planned_start, placement.planned_end, placement.planned_date, placement.timezone),
         "score": repr(placement.score),
         "optimization_metadata": json.dumps(placement.optimization_metadata, sort_keys=True),
+        "task_category": placement.task_category or "",
+        "removal_reason": placement.removal_reason.value if placement.removal_reason is not None else "",
+        "superseded_by_id": str(placement.superseded_by_id) if placement.superseded_by_id else "",
     }
