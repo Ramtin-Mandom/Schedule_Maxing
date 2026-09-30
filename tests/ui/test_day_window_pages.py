@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.ui.clock_input import ClockInput
 from app.ui.guide_content import GUIDE_SECTIONS
@@ -172,6 +173,25 @@ def test_the_time_input_by_keyboard(tmp_path: Path, dialogs) -> None:
         assert field.minute_var.get() == "05" and field.get() == "7:05 AM"  # normalized once the input is left
         field.hour_var.set("1")
         key(field.hour_entry, "KeyPress-colon")
+        settle(app, 0.1)
+        assert str(app.focus_get()).startswith(str(field.minute_entry))
+    finally:
+        close_app(app)
+
+
+def test_the_hour_moves_on_from_the_keysym_as_x11_leaves_a_key_release_char_empty(tmp_path: Path, dialogs) -> None:
+    app = shown(open_app(tmp_path / "x11.db", tmp_path), tmp_path)
+    try:
+        field = app.pages["day"].window_bar.start_input
+        field.clear()
+        field.hour_entry.focus_force()
+        settle(app, 0.1)
+        field.hour_var.set("1")
+        field._hour_typed(SimpleNamespace(keysym="1", char=""))  # "1" may start 10-12: stays on the hour
+        settle(app, 0.1)
+        assert str(app.focus_get()).startswith(str(field.hour_entry))
+        field.hour_var.set("11")
+        field._hour_typed(SimpleNamespace(keysym="KP_1", char=""))  # the keypad's digits count too
         settle(app, 0.1)
         assert str(app.focus_get()).startswith(str(field.minute_entry))
     finally:
