@@ -35,11 +35,18 @@ Defined once in `app/execution/lifecycle.py` and applied by the SQLite
 | `start` | scheduled | in_progress |
 | `pause` | in_progress | paused |
 | `resume` | paused | in_progress |
-| `complete` | in_progress, paused | completed |
+| `complete` | scheduled, in_progress, paused | completed |
 | `skip` | scheduled, in_progress, paused | skipped |
 | `cancel` | scheduled, in_progress, paused | cancelled |
+| `reopen` | completed, skipped | scheduled (paused when it has work sessions) |
 
-Completed, skipped and cancelled are terminal: every action out of them is
+Completed, skipped and cancelled are terminal for work: only `reopen` leaves
+completed or skipped (the Day board's "back to Tasks"), keeping every session
+and `actual_first_start_at` and withdrawing only `actual_final_end_at` and the
+completion metrics, which the next `complete` recomputes; the server's change
+log keeps the finished revision. `complete` from `scheduled` is a completion
+reported without timing: no sessions, so the duration metrics stay unknown
+(`null`), never 0. Every other action out of a terminal status is
 refused (`InvalidTransitionError` / `409 invalid_transition`) and changes
 nothing. Invariants, verified on every path by
 `tests/direct/test_execution_contract.py`:

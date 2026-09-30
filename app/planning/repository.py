@@ -93,7 +93,7 @@ _PROJECT_COLUMNS = ("id", "user_id", "name", "description", "created_at", "updat
 
 _TASK_COLUMNS = (
     "id", "user_id", "project_id", "name", "category",
-    "estimated_duration_minutes", "priority", "required", "required_date",
+    "estimated_duration_minutes", "priority", "points", "required", "required_date",
     "preferred_window_start_minute", "preferred_window_end_minute",
     "deadline", "deadline_utc",
     "recurrence_frequency", "recurrence_interval", "recurrence_day_of_month",
@@ -1025,6 +1025,7 @@ def _task_to_row(task: Task) -> tuple:
         task.category,
         task.estimated_duration_minutes,
         task.priority,
+        task.points,
         int(task.required),
         _iso(task.required_date),
         window.start_minute if window else None,
@@ -1071,6 +1072,7 @@ def _row_to_task(
             "tags": list(tags),
             "estimated_duration_minutes": row["estimated_duration_minutes"],
             "priority": row["priority"],
+            "points": row["points"],
             "required": bool(row["required"]),
             "required_date": _date_or_none(row["required_date"]),
             "preferred_dates": [date_.fromisoformat(value) for value in preferred_dates],

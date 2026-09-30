@@ -17,7 +17,7 @@ import pytest
 
 from app.execution.db import get_connection
 from app.execution.errors import InvalidTransitionError
-from app.execution.lifecycle import TRANSITIONS
+from app.execution.lifecycle import TRANSITIONS, TaskOutcome, reopen_target
 from app.execution.models import ExecutionStatus
 from app.execution.repository import ExecutionRepository
 from app.execution.service import ExecutionService
@@ -42,7 +42,7 @@ def _refusal(error: Exception) -> "Refused":
     return Refused(type(error).__name__)
 
 MONDAY = date(2026, 3, 2)
-ACTIONS = ("start", "pause", "resume", "complete", "skip", "cancel")
+ACTIONS = ("start", "pause", "resume", "complete", "skip", "cancel", "reopen")
 #: How each source status is reached from a fresh (scheduled) execution.
 SETUP = {
     "scheduled": (),
@@ -96,6 +96,20 @@ class ServiceDriver:
     def execution(self, task_id, placement_id) -> str:
         task = self.planning.get_task(task_id)
         return self.executions.get_or_create_canonical_execution(task, self.planning.get_placement(placement_id)).id
+
+    def bulk(self, day: date, value: str) -> dict:
+        """Every live placement of `day` to a column in one transaction; the statuses afterwards, by placement id."""
+        placements = self.planning.placements_for_date(day)
+        items = [(self.planning.get_task(p.task_id), p) for p in placements]
+        self.executions.set_outcomes(items, value)
+        found = self.executions.executions_for_placements([p.id for p in placements])
+        return {p.id: found[p.id].status.value if p.id in found else None for p in placements}
+
+    def outcome(self, placement_id, value: str) -> str | None:
+        """Move a placement to a board column; the execution's status afterwards (None: no execution)."""
+        placement = self.planning.get_placement(placement_id)
+        execution = self.executions.set_outcome(self.planning.get_task(placement.task_id), placement, value)
+        return execution.status.value if execution is not None else None
 
     def act(self, execution_id: str, action: str) -> None:
         try:
@@ -178,6 +192,15 @@ class RestDriver:
             "canonical_planned_start": placement["planned_start"], "canonical_planned_end": placement["planned_end"],
         })["id"]
 
+    def bulk(self, day: date, value: str) -> dict:
+        self._post(f"/days/{day.isoformat()}/outcome", {"outcome": value})
+        statuses = {item["scheduled_task_id"]: item["status"] for item in self.get("/executions", limit=500).json()["items"]}
+        return {placement.id: statuses.get(str(placement.id)) for placement in self.live_placements(day)}
+
+    def outcome(self, placement_id, value: str) -> str | None:
+        execution = self._post(f"/placements/{placement_id}/outcome", {"outcome": value})["execution"]
+        return execution["status"] if execution is not None else None
+
     def act(self, execution_id: str, action: str) -> None:
         version = self.get(f"/executions/{execution_id}").json()["version"]
         response = self.request("POST", f"/executions/{execution_id}/actions/{action}", json={"base_version": version})
@@ -250,6 +273,30 @@ def driver(request, tmp_path, backend, engine, clock):
 # -----------------------------------------------------------------------------
 
 
+def test_bulk_day_outcomes_are_identical_on_every_path(driver, clock) -> None:
+    # Week/Month "All Tasks Complete" / "No Tasks Complete": all of a date's placements, other dates untouched.
+    _, first = driver.placement(hour=9)
+    _, second = driver.placement(hour=11)
+    _, tomorrow = driver.placement(hour=9, day=MONDAY + timedelta(days=1))
+    clock.advance(seconds=5)
+    assert driver.outcome(first, "uncompleted") == "skipped"
+    clock.advance(seconds=5)
+    assert driver.bulk(MONDAY, "completed") == {first: "completed", second: "completed"}
+    clock.advance(seconds=5)
+    assert driver.bulk(MONDAY, "uncompleted") == {first: "skipped", second: "skipped"}
+    assert driver.bulk(MONDAY + timedelta(days=1), "pending") == {tomorrow: None}  # never touched: nothing created
+
+
+def test_board_outcomes_are_identical_on_every_path(driver, clock) -> None:
+    # The Day board's moves: one execution per placement, created on first use, the same statuses everywhere.
+    _, placement_id = driver.placement(hour=9)
+    steps = [("pending", None), ("completed", "completed"), ("pending", "scheduled"), ("uncompleted", "skipped"),
+             ("completed", "completed"), ("uncompleted", "skipped"), ("pending", "scheduled")]
+    for value, status in steps:
+        clock.advance(seconds=5)
+        assert driver.outcome(placement_id, TaskOutcome(value).value) == status, value
+
+
 def test_every_transition_is_legal_or_refused_exactly_as_the_table_says(driver, clock) -> None:
     for source, steps in SETUP.items():
         for action in ACTIONS:
@@ -265,6 +312,10 @@ def test_every_transition_is_legal_or_refused_exactly_as_the_table_says(driver, 
             if ExecutionStatus(source) in allowed:
                 driver.act(execution_id, action)
                 after = driver.read(execution_id)
+                if action == "reopen":  # back to pending: paused when work was recorded
+                    target = reopen_target(bool(before["sessions"]))
+                    assert after["sessions"] == before["sessions"] and after["first_start"] == before["first_start"]
+                    assert after["final_end"] is None and after["active"] is None
                 assert after["status"] == target.value, (source, action)
                 assert after["version"] == before["version"] + 1, (source, action)
             else:
@@ -310,9 +361,16 @@ def test_skipping_or_cancelling_after_work_keeps_sessions_but_is_no_duration_sam
     assert len(state["sessions"]) == 2 and all(end is not None for _, end in state["sessions"])
     assert state["first_start"] == started and state["final_end"] == clock.now
     assert state["active"] is None  # not a completed duration sample
-    for action in ACTIONS:  # terminal: nothing reopens it
+    for action in ACTIONS:  # terminal for work: only "reopen" leaves a skipped attempt, nothing a cancelled one
+        if action == "reopen" and ending == "skip":
+            continue
         with pytest.raises(Illegal):
             driver.act(execution_id, action)
+    if ending == "skip":  # back to Tasks: pending again (paused -- work was recorded), sessions untouched
+        driver.act(execution_id, "reopen")
+        reopened = driver.read(execution_id)
+        assert reopened["status"] == "paused" and reopened["sessions"] == state["sessions"]
+        assert reopened["first_start"] == started and reopened["final_end"] is None
 
 
 # -----------------------------------------------------------------------------

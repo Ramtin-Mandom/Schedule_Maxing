@@ -44,9 +44,10 @@ from app.planning.workflow import Freshness
 from app.ui.background import ControllerResult
 from app.ui.calendar_model import Period, days_in_month, month_title, shift_month
 from app.ui.day_controller import MINUTES_PER_DAY, ResetPlan, _interval_text, describe_reset
+from app.productivity.day_summary import DayStatusClass, DaySummary, summarize_range
+from app.ui.day_outcomes import DayOutcomeController
 from app.ui.planning_controller import PlanningController
 from app.ui.schedule_page_controller import PageSnapshot, RowRef, SchedulePageController, _Failure, day_label
-from app.ui.task_form_model import TaskDraft
 
 ItemKind = Literal["fixed", "scheduled", "stale", "unscheduled", "elsewhere"]
 _FRESHNESS_LABELS = {Freshness.CURRENT: "Current", Freshness.STALE: "Out of date", Freshness.NONE: ""}
@@ -91,6 +92,15 @@ class CalendarDay:
     #: Timed items in time order, then the rest in input order.
     items: list[CalendarItem] = field(default_factory=list)
     freshness: Freshness = Freshness.NONE
+    #: The date's aggregates of scheduled work (None when execution data is not available to this page).
+    summary: DaySummary | None = None
+
+    @property
+    def status_class(self) -> DayStatusClass | None:
+        """The historical classification -- only for a past date of the shown period (today/future: None)."""
+        if not (self.is_past and self.in_period) or self.summary is None:
+            return None
+        return self.summary.status_class
 
     @property
     def timed(self) -> list[CalendarItem]:
@@ -134,12 +144,15 @@ class CalendarController(SchedulePageController):
     """One Week or Month page (see the module docstring)."""
 
     def __init__(self, planning: PlanningController, *, mode: str, selected: date_, timezone: str,
-                 today: Callable[[], date_] | None = None) -> None:
+                 today: Callable[[], date_] | None = None, executions=None) -> None:
         self._period = Period.for_date(mode, selected)
         super().__init__(planning, number_of_days=len(self._period.dates), anchor_date=self._period.start,
                          timezone=timezone)
         self.mode = mode
         self._today = today
+        self._executions = executions
+        #: The selected-day panel's reads and bulk actions (None without execution tracking).
+        self.outcomes = DayOutcomeController(planning, executions) if executions is not None else None
 
     # ------------------------------------------------------------------
     # Period and selection
@@ -197,9 +210,10 @@ class CalendarController(SchedulePageController):
         self.select(value)
         return self.load()
 
-    def blank_draft(self, kind: str = "task") -> TaskDraft:
-        """A new task/fixed block starts on the selected date."""
-        return TaskDraft(kind=kind, date=self._period.selected.isoformat())
+    @property
+    def form_date(self) -> date_:
+        """A new task/fixed block belongs to the selected day of the week/month."""
+        return self._period.selected
 
     # ------------------------------------------------------------------
     # Reading
@@ -271,9 +285,14 @@ class CalendarController(SchedulePageController):
                 "elsewhere" if dates else "unscheduled", task.name, task.category, RowRef("task", task.id, task.version),
                 elsewhere=dates))
 
+        summaries: dict[date_, DaySummary] = {}
+        if self._executions is not None:  # one execution query for the whole grid (no read per date)
+            executions = self._unwrap(self._executions.executions_for_placements([p.id for p in placed])) if placed else {}
+            summaries = summarize_range(grid, placed, tasks, executions)
         today = self.today()
         days = [CalendarDay(date=day, in_period=period.contains(day), is_past=day < today, is_today=day == today,
-                            items=by_day[day], freshness=freshness[day].status) for day in grid]
+                            items=by_day[day], freshness=freshness[day].status, summary=summaries.get(day))
+                for day in grid]
         stale = sum(1 for cell in days if cell.in_period and cell.freshness == Freshness.STALE)
         current = sum(1 for cell in days if cell.in_period and cell.freshness == Freshness.CURRENT)
         status = (f"{current} date(s) have a current schedule, {stale} are out of date. "

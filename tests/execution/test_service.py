@@ -158,11 +158,16 @@ def test_resume_from_scheduled_is_invalid(service_with_clock: ExecutionService) 
         service_with_clock.resume(execution.id)
 
 
-def test_complete_from_scheduled_is_invalid(service_with_clock: ExecutionService) -> None:
+def test_complete_from_scheduled_records_no_timing(service_with_clock: ExecutionService) -> None:
+    # Marked done without being timed (the Day board's "->"): finished, but its duration is unknown -- never 0.
     execution = service_with_clock.create_execution(**make_execution_kwargs())
 
-    with pytest.raises(InvalidTransitionError):
-        service_with_clock.complete(execution.id)
+    done = service_with_clock.complete(execution.id)
+    assert done.status == ExecutionStatus.COMPLETED and done.version == execution.version + 1
+    assert done.actual_final_end_at is not None and done.actual_first_start_at is None
+    assert (done.actual_active_duration_minutes, done.duration_variance_minutes, done.start_delay_minutes) == (
+        None, None, None)
+    assert service_with_clock.list_sessions(execution.id) == []
 
 
 def test_start_twice_is_invalid(service_with_clock: ExecutionService) -> None:

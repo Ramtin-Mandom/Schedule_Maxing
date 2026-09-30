@@ -9,20 +9,25 @@ shown next to their fields, with the typed values kept.
 
 Controls:
 
-- TimeField: type a time ("10:13", "10:13 PM", "noon") or step it with the
-  Up/Down keys, the mouse wheel or the arrow buttons -- one minute at a time,
-  15 with Shift. It shows "h:mm AM/PM"; an end time can be "12:00 AM
-  (next day)". No minutes-from-midnight anywhere.
+- Times (preferred window, deadline time, fixed-block start/end) use the
+  shared [ Hour ] : [ Minute ] [ AM/PM ] input (app/ui/clock_input.py),
+  exact to the minute; an end time of 12:00 AM means the next midnight.
+  No minutes-from-midnight and no spinners anywhere.
+- The date is not typed: a new task or block belongs to the date the page
+  has selected (Day: its date, today unless opened for another; Week/Month:
+  the selected day). The page passes it with set_date(); the form shows it.
+  Editing keeps the record's own date (an undated imported task stays
+  undated).
 - DurationField: minutes typed as "13", "1 h 13 min" or "1:13", or stepped
   (1 minute, 15 with Shift).
-- DateField: YYYY-MM-DD, Up/Down move a day.
+- DateField (the optional deadline date): YYYY-MM-DD, Up/Down move a day.
 - TagInput: Enter adds the typed tag as a chip (it never submits the form);
   a chip's button (or Enter/Space on it) removes it; Backspace in the empty
   entry removes the last tag. Tags keep their order.
 - DependencyPicker: checkboxes labelled by task name and date, kept by id.
 
-A fixed block (label, category, date, start, end) and a flexible task are
-different forms; editing never switches between them.
+A fixed block (label, category, start, end on the page's date) and a
+flexible task are different forms; editing never switches between them.
 """
 
 from __future__ import annotations
@@ -31,11 +36,14 @@ import tkinter as tk
 import uuid
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import timedelta
+from datetime import date, timedelta
 
 import customtkinter as ctk
 
+from app.ui.paint_widgets import AppScrollableFrame
+
 from app.ui import theme
+from app.ui.clock_input import ClockInput
 from app.ui.components import (
     AppButton,
     Card,
@@ -47,16 +55,14 @@ from app.ui.components import (
     font,
     make_keyboard_accessible,
 )
+from app.planning.models import DEFAULT_TASK_POINTS
 from app.ui.task_form_model import CATEGORIES, PRIORITIES, Choice, EditorOptions, TaskDraft
 from app.ui.time_fields import (
     FieldError,
-    format_clock,
     format_date,
     format_duration,
-    parse_clock,
     parse_date,
     parse_duration,
-    step_clock,
 )
 
 NO_PROJECT = "(no project)"
@@ -104,28 +110,6 @@ class _SteppedField(LabeledEntry):
             self.set_error(None)
         except FieldError as error:
             self.set_error(str(error))
-
-
-class TimeField(_SteppedField):
-    def __init__(self, parent, label: str, *, end_of_interval: bool = False, default: int = 540) -> None:
-        super().__init__(parent, label, placeholder="e.g. 10:13 AM",
-                         hint="Up/Down or the wheel: 1 minute (Shift: 15)." if not end_of_interval else "")
-        self.end_of_interval = end_of_interval
-        self._default = default
-
-    def value(self) -> int:
-        return parse_clock(self.get(), end_of_interval=self.end_of_interval)
-
-    def show(self, minutes: int) -> None:
-        self.variable.set(format_clock(minutes))
-
-    def step(self, delta: int) -> None:
-        try:
-            current = self.value()
-        except FieldError:
-            current = self._default - delta  # an empty or unreadable field starts at the default
-        self.show(step_clock(current, delta, end_of_interval=self.end_of_interval))
-        self.set_error(None)
 
 
 class DurationField(_SteppedField):
@@ -233,7 +217,7 @@ class DependencyPicker(ctk.CTkFrame):
         self.columnconfigure(0, weight=1)
         ctk.CTkLabel(self, text="Depends on", text_color=theme.TEXT_MUTED, font=font(theme.SIZE_SMALL, "bold"),
                      anchor="w").grid(row=0, column=0, sticky="ew", pady=(0, 4))
-        self.list = ctk.CTkScrollableFrame(self, height=110, fg_color=theme.INPUT_BG, corner_radius=theme.RADIUS_CONTROL)
+        self.list = AppScrollableFrame(self, height=110, fg_color=theme.INPUT_BG, corner_radius=theme.RADIUS_CONTROL)
         self.list.grid(row=1, column=0, sticky="ew")
         self.list.columnconfigure(0, weight=1)
         self.empty = ctk.CTkLabel(self.list, text="No other tasks yet.", text_color=theme.TEXT_MUTED,
@@ -261,7 +245,9 @@ class DependencyPicker(ctk.CTkFrame):
         else:
             self.empty.grid(row=0, column=0, sticky="w", padx=8, pady=4)
         for choice_id, var in self.vars.items():
-            var.set(choice_id in keep)
+            selected_now = choice_id in keep
+            if var.get() != selected_now:
+                var.set(selected_now)
         self._missing = [choice_id for choice_id in keep if choice_id not in self.vars]
 
     def selected(self) -> tuple[uuid.UUID, ...]:
@@ -273,8 +259,8 @@ class DependencyPicker(ctk.CTkFrame):
 class TaskEditor(Card):
     """Add or edit one flexible task or fixed block; `on_submit(draft)` saves it, `on_cancel()` leaves edit mode."""
 
-    FIELD_NAMES = ("name", "category", "date", "duration", "priority", "window_start", "window_end", "deadline_date",
-                   "deadline_time", "start", "end")
+    FIELD_NAMES = ("name", "category", "duration", "priority", "points", "window_start", "window_end",
+                   "deadline_date", "deadline_time", "start", "end")
 
     def __init__(self, parent, *, on_submit: Callable[[TaskDraft], None], on_cancel: Callable[[], None],
                  productivity_controller=None) -> None:
@@ -283,6 +269,8 @@ class TaskEditor(Card):
         self._on_submit, self._on_cancel = on_submit, on_cancel
         self.kind = "task"
         self.editing = False
+        #: The ISO date the task/block belongs to: the page's selected date, or an edited record's own ("" = any date).
+        self.date_text = ""
         self.options = EditorOptions(timezone="UTC")
         self._project_ids: dict[str, uuid.UUID | None] = {NO_PROJECT: None}
 
@@ -305,10 +293,19 @@ class TaskEditor(Card):
         self.name_field = LabeledEntry(body, "Name", placeholder="e.g. Study math")
         self.name_field.entry.bind("<Return>", lambda _e: (self.submit(), "break")[1], add="+")
         self.category_select = LabeledSelect(body, "Category", CATEGORIES)
-        self.date_field = DateField(body, "Date", optional=True)
+        self.date_display = date_display = ctk.CTkFrame(body, fg_color="transparent")
+        date_display.columnconfigure(0, weight=1)
+        ctk.CTkLabel(date_display, text="Date", text_color=theme.TEXT_MUTED, font=font(theme.SIZE_SMALL, "bold"),
+                     anchor="w").grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        self.date_label = ctk.CTkLabel(date_display, text="", text_color=theme.TEXT_PRIMARY, anchor="w",
+                                       font=font(theme.SIZE_BODY, "bold"), height=theme.CONTROL_HEIGHT)
+        self.date_label.grid(row=1, column=0, sticky="ew")
+        self.date_hint = ctk.CTkLabel(date_display, text="", text_color=theme.TEXT_MUTED, anchor="w", justify="left",
+                                      font=font(theme.SIZE_CAPTION), wraplength=130)
+        self.date_hint.grid(row=2, column=0, sticky="ew")
         self.name_field.grid(row=0, column=0, columnspan=2, sticky="ew", pady=4)
         self.category_select.grid(row=1, column=0, sticky="new", padx=(0, 6), pady=4)
-        self.date_field.grid(row=1, column=1, sticky="new", padx=(6, 0), pady=4)
+        date_display.grid(row=1, column=1, sticky="new", padx=(6, 0), pady=4)
 
         # Flexible task fields
         self.task_frame = ctk.CTkFrame(body, fg_color="transparent")
@@ -318,6 +315,11 @@ class TaskEditor(Card):
         self.priority_select.variable.set("5")
         self.duration_field.grid(row=0, column=0, sticky="new", padx=(0, 6), pady=4)
         self.priority_select.grid(row=0, column=1, sticky="new", padx=(6, 0), pady=4)
+        self.points_field = LabeledEntry(self.task_frame, "Points", placeholder="e.g. 1",
+                                         hint="What finishing it is worth to you (0-1000). Not used by the scheduler.",
+                                         wraplength=280)
+        self.points_field.variable.set(str(DEFAULT_TASK_POINTS))
+        self.points_field.grid(row=1, column=0, columnspan=2, sticky="new", pady=4)
         self.required_var = tk.BooleanVar(value=False)
         self.pin_var = tk.BooleanVar(value=False)
         self.required_check = ctk.CTkCheckBox(self.task_frame, text="Required (must be scheduled)",
@@ -325,37 +327,38 @@ class TaskEditor(Card):
                                               fg_color=theme.ACCENT)
         self.pin_check = ctk.CTkCheckBox(self.task_frame, text="Only on this date", variable=self.pin_var,
                                          text_color=theme.TEXT_PRIMARY, fg_color=theme.ACCENT)
-        for row, box in enumerate((self.required_check, self.pin_check), start=1):
+        for row, box in enumerate((self.required_check, self.pin_check), start=2):
             box.grid(row=row, column=0, columnspan=2, sticky="w", pady=3)
             make_keyboard_accessible(box, activate=box.toggle, ring=False)
         self.tag_input = TagInput(self.task_frame)
-        self.tag_input.grid(row=3, column=0, columnspan=2, sticky="ew", pady=4)
+        self.tag_input.grid(row=4, column=0, columnspan=2, sticky="ew", pady=4)
         self.more_button = AppButton(self.task_frame, "More options ▸", self.toggle_more, variant="ghost",
                                      height=30)
-        self.more_button.grid(row=4, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        self.more_button.grid(row=5, column=0, columnspan=2, sticky="w", pady=(4, 0))
         self.more_frame = ctk.CTkFrame(self.task_frame, fg_color="transparent")
         self.more_frame.columnconfigure((0, 1), weight=1, uniform="more")
-        self.window_start = TimeField(self.more_frame, "Preferred from")
-        self.window_end = TimeField(self.more_frame, "Preferred until", end_of_interval=True, default=600)
-        self.window_start.grid(row=0, column=0, sticky="new", padx=(0, 6), pady=4)
-        self.window_end.grid(row=0, column=1, sticky="new", padx=(6, 0), pady=4)
+        # One time input per row: [hh]:[mm][AM/PM] stays whole even in the narrow form column.
+        self.window_start = ClockInput(self.more_frame, "Preferred from")
+        self.window_end = ClockInput(self.more_frame, "Preferred until", end_of_interval=True)
+        self.window_start.grid(row=0, column=0, columnspan=2, sticky="new", pady=4)
+        self.window_end.grid(row=1, column=0, columnspan=2, sticky="new", pady=4)
         self.deadline_date = DateField(self.more_frame, "Deadline date", optional=True)
-        self.deadline_time = TimeField(self.more_frame, "Deadline time", default=1020)
-        self.deadline_date.grid(row=1, column=0, sticky="new", padx=(0, 6), pady=4)
-        self.deadline_time.grid(row=1, column=1, sticky="new", padx=(6, 0), pady=4)
+        self.deadline_time = ClockInput(self.more_frame, "Deadline time")
+        self.deadline_date.grid(row=2, column=0, columnspan=2, sticky="new", pady=4)
+        self.deadline_time.grid(row=3, column=0, columnspan=2, sticky="new", pady=4)
         self.project_select = LabeledSelect(self.more_frame, "Project", [NO_PROJECT])
-        self.project_select.grid(row=2, column=0, columnspan=2, sticky="ew", pady=4)
+        self.project_select.grid(row=4, column=0, columnspan=2, sticky="ew", pady=4)
         self.dependency_picker = DependencyPicker(self.more_frame)
-        self.dependency_picker.grid(row=3, column=0, columnspan=2, sticky="ew", pady=4)
+        self.dependency_picker.grid(row=5, column=0, columnspan=2, sticky="ew", pady=4)
         self.more_open = False
 
         # Fixed block fields
         self.block_frame = ctk.CTkFrame(body, fg_color="transparent")
         self.block_frame.columnconfigure((0, 1), weight=1, uniform="block")
-        self.start_field = TimeField(self.block_frame, "Start")
-        self.end_field = TimeField(self.block_frame, "End", end_of_interval=True, default=600)
-        self.start_field.grid(row=0, column=0, sticky="new", padx=(0, 6), pady=4)
-        self.end_field.grid(row=0, column=1, sticky="new", padx=(6, 0), pady=4)
+        self.start_field = ClockInput(self.block_frame, "Start")
+        self.end_field = ClockInput(self.block_frame, "End", end_of_interval=True)
+        self.start_field.grid(row=0, column=0, columnspan=2, sticky="new", pady=4)
+        self.end_field.grid(row=1, column=0, columnspan=2, sticky="new", pady=4)
 
         self.timezone_label = ctk.CTkLabel(body, text="", text_color=theme.TEXT_MUTED, font=font(theme.SIZE_CAPTION),
                                            anchor="w")
@@ -380,7 +383,7 @@ class TaskEditor(Card):
             self.duration_suggestion = DurationSuggestionWidget(
                 self.task_frame, productivity_controller, get_context=context,
                 apply_duration=lambda minutes: self.duration_field.show(minutes))
-            self.duration_suggestion.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+            self.duration_suggestion.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(4, 0))
 
         self.notice = Notice(self, wraplength=280)
         self.notice.grid(row=3, column=0, sticky="ew", padx=theme.SPACE_L, pady=(8, 0))
@@ -395,8 +398,8 @@ class TaskEditor(Card):
     # ------------------------------------------------------------------ fields
 
     @property
-    def fields(self) -> dict[str, LabeledEntry]:
-        return {"name": self.name_field, "date": self.date_field, "duration": self.duration_field,
+    def fields(self) -> dict[str, LabeledEntry | ClockInput]:
+        return {"name": self.name_field, "duration": self.duration_field, "points": self.points_field,
                 "window_start": self.window_start, "window_end": self.window_end,
                 "deadline_date": self.deadline_date, "deadline_time": self.deadline_time,
                 "start": self.start_field, "end": self.end_field}
@@ -415,18 +418,35 @@ class TaskEditor(Card):
             self.block_frame.grid_remove()
             self.task_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
             self.name_field.label.configure(text="Name")
-            self.date_field.hint_label.configure(text="Empty: any date.")
         else:
             self.task_frame.grid_remove()
             self.block_frame.grid(row=3, column=0, columnspan=2, sticky="ew")
             self.name_field.label.configure(text="Label")
-            self.date_field.hint_label.configure(text="")
         self._title()
+
+    def set_date(self, day: date | str | None) -> None:
+        """The date a new task/block gets (the page's selected date); an edited record's own date while editing."""
+        text = day.isoformat() if isinstance(day, date) else (day or "").strip()
+        self.date_text = text
+        if text:
+            try:
+                value = date.fromisoformat(text)
+                shown = f"{value:%a}, {value:%b} {value.day}, {value.year}"
+            except ValueError:
+                shown = text
+        else:
+            shown = "Any date"
+        self.date_label.configure(text=shown)
+        if self.editing:
+            hint = "The record's own date." if text else "Not tied to a date."
+        else:
+            hint = "The selected day."
+        self.date_hint.configure(text=hint)
 
     def toggle_more(self) -> None:
         self.more_open = not self.more_open
         if self.more_open:
-            self.more_frame.grid(row=5, column=0, columnspan=2, sticky="ew")
+            self.more_frame.grid(row=6, column=0, columnspan=2, sticky="ew")
         else:
             self.more_frame.grid_remove()
         self.more_button.configure(text="Fewer options ▾" if self.more_open else "More options ▸")
@@ -456,8 +476,9 @@ class TaskEditor(Card):
     def draft(self) -> TaskDraft:
         project_label = self.project_select.get()
         return TaskDraft(
-            kind=self.kind, name=self.name_field.get(), category=self.category_select.get(), date=self.date_field.get(),
-            duration=self.duration_field.get(), priority=self.priority_select.get(), required=self.required_var.get(),
+            kind=self.kind, name=self.name_field.get(), category=self.category_select.get(), date=self.date_text,
+            duration=self.duration_field.get(), priority=self.priority_select.get(), points=self.points_field.get(),
+            required=self.required_var.get(),
             pin_to_date=self.pin_var.get(), window_start=self.window_start.get(), window_end=self.window_end.get(),
             deadline_date=self.deadline_date.get(), deadline_time=self.deadline_time.get(),
             dependency_ids=self.dependency_picker.selected(), project_id=self._project_ids.get(project_label),
@@ -474,9 +495,11 @@ class TaskEditor(Card):
         if draft.category not in self.category_select.values:
             self.category_select.set_values([*self.category_select.values, draft.category])
         self.category_select.variable.set(draft.category)
-        self.date_field.variable.set(draft.date)
+        # Editing shows the record's own date; a new blank draft without one keeps the page's selected day.
+        self.set_date(draft.date if editing or draft.date else self.date_text)
         self.duration_field.variable.set(draft.duration)
         self.priority_select.variable.set(draft.priority if draft.priority in PRIORITIES else "5")
+        self.points_field.variable.set(draft.points)
         self.required_var.set(draft.required)
         self.pin_var.set(draft.pin_to_date)
         self.window_start.variable.set(draft.window_start)

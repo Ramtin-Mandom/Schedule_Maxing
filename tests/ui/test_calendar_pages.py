@@ -101,7 +101,8 @@ def test_week_shows_real_dates_colors_past_days_and_creates_on_the_selected_date
             label="Swim", category="exercise", planned_date=date(2024, 6, 4), timezone="UTC",
             planned_start=datetime(2024, 6, 4, 7, tzinfo=UTC), planned_end=datetime(2024, 6, 4, 8, tzinfo=UTC)))
         week.select_date(date(2024, 6, 6))
-        assert week.form.date_field.get() == "2024-06-06"  # the form follows the selected date
+        assert week.form.date_text == "2024-06-06"  # the form follows the selected date (nothing to type)
+        assert week.form.date_label.cget("text") == "Thu, Jun 6, 2024"
         week.form.name_field.variable.set("Plan trip")
         week.form.duration_field.variable.set("25 min")
         week.form.submit_button.invoke()
@@ -115,7 +116,8 @@ def test_week_shows_real_dates_colors_past_days_and_creates_on_the_selected_date
         box = week.calendar.canvas.find_withtag("item:2024-06-04:Swim")[0]
         assert week.calendar.canvas.itemcget(box, "fill") == theme.resolve(theme.category_style("exercise").fill)
         assert swim[3] - swim[1] == 36  # one hour on the time axis
-        assert cell_fill(week, date(2024, 6, 3)) == theme.resolve(theme.CANVAS_BG)  # a past day: muted, still drawn
+        # A past day is tinted by how it went (here: nothing was scheduled -- the neutral dark tint), still drawn.
+        assert cell_fill(week, date(2024, 6, 3)) == theme.resolve(theme.DAY_STATUS_FILLS["no_tasks"])
         assert cell_fill(week, date(2024, 6, 6)) == theme.resolve(theme.CARD_BG)
 
         # Reset Week asks first; cancelling deletes nothing.

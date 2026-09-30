@@ -53,6 +53,7 @@ from app.ui.calendar_model import WEEKDAY_NAMES
 from app.ui.components import Card
 from app.ui.day_timeline import hour_label
 from app.ui.layout import Coalescer
+from app.productivity.day_summary import DAY_STATUS_SHORT
 from app.ui.time_fields import format_clock
 
 AXIS_WIDTH = 58
@@ -231,9 +232,16 @@ class CalendarView(Card):
             self._paint_month(self.snapshot)
 
     def _day_colors(self, cell: CalendarDay) -> tuple[str, str]:
-        """(background, text) of a day: out-of-month and past days are quieter but readable."""
+        """
+        (background, text) of a day: a past day of the period is tinted by its
+        scheduled-task outcome (theme.DAY_STATUS_FILLS); out-of-month days are
+        quieter; today and future days keep their normal look.
+        """
         if not cell.in_period:
             return theme.resolve(theme.SUBTLE_BG), theme.resolve(theme.TEXT_MUTED)
+        status = cell.status_class
+        if status is not None:
+            return theme.resolve(theme.DAY_STATUS_FILLS[status.value]), theme.resolve(theme.TEXT_PRIMARY)
         if cell.is_past:
             return theme.resolve(theme.CANVAS_BG), theme.resolve(theme.TEXT_MUTED)
         return theme.resolve(theme.CARD_BG), theme.resolve(theme.TEXT_PRIMARY)
@@ -292,7 +300,10 @@ class CalendarView(Card):
             label += " · today" if cell.is_today else " · past" if cell.is_past else ""
             header.create_text((x0 + x1) / 2, 14, text=label, font=(theme.FONT_FAMILY, 9, "bold"),
                                fill=theme.resolve(theme.ACCENT) if cell.is_today else header_color, tags=(tag,))
-            if cell.freshness_label:
+            if cell.status_class is not None:  # the colour's meaning in words, too
+                header.create_text((x0 + x1) / 2, 30, text=DAY_STATUS_SHORT[cell.status_class],
+                                   font=(theme.FONT_FAMILY, 7, "bold"), fill=header_color, tags=(tag,))
+            elif cell.freshness_label:
                 header.create_text((x0 + x1) / 2, 30, text=cell.freshness_label, font=(theme.FONT_FAMILY, 7),
                                    fill=muted if cell.freshness_label == "Current" else theme.resolve(theme.WARNING),
                                    tags=(tag,))
@@ -362,7 +373,10 @@ class CalendarView(Card):
             canvas.create_text(x0 + 14 if cell.is_today else x0 + 6, y0 + 12, text=number,
                                anchor="center" if cell.is_today else "w", font=(theme.FONT_FAMILY, 9, "bold"),
                                fill=theme.resolve(theme.TEXT_ON_ACCENT) if cell.is_today else text_color, tags=(tag,))
-            if cell.freshness_label:
+            if cell.status_class is not None:  # the colour's meaning in words, too
+                canvas.create_text(x1 - 4, y0 + 12, text=DAY_STATUS_SHORT[cell.status_class], anchor="e",
+                                   font=(theme.FONT_FAMILY, 7, "bold"), fill=text_color, tags=(tag,))
+            elif cell.freshness_label:
                 canvas.create_text(x1 - 4, y0 + 12, text=cell.freshness_label, anchor="e", font=(theme.FONT_FAMILY, 7),
                                    fill=muted if cell.freshness_label == "Current" else theme.resolve(theme.WARNING),
                                    tags=(tag,))

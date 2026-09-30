@@ -33,6 +33,8 @@ from tkinter import ttk
 
 import customtkinter as ctk
 
+from app.ui.paint_widgets import AppScrollableFrame
+
 from app.sync.engine import AssociationError, AssociationPreview
 from app.ui import theme
 from app.ui.account_controller import (
@@ -75,7 +77,7 @@ class AccountPage(ctk.CTkFrame):
                     "kept on this computer." if self.direct else
                     "Connect to a backend to sign in and synchronize. Everything also works offline.")
         PageHeader(self, "Account", subtitle).grid(row=0, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(22, 12))
-        self.body = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.body = AppScrollableFrame(self, fg_color="transparent")
         self.body.grid(row=1, column=0, sticky="nsew", padx=theme.SPACE_M, pady=(0, theme.SPACE_L))
         self.body.columnconfigure(0, weight=1)
 

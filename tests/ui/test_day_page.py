@@ -4,7 +4,7 @@ page opens on the date, fixed blocks appear at once in their category's color, M
 Engine choice beside Make Schedule saves only this date and is disabled while saving,
 Day Preferences edits the date layer natively, everything survives a reopen, Reset Day asks
 first and can be cancelled, CSV v2 export/import goes through native dialogs with a preview,
-Week -> Day keeps the way back, and Execute stays reachable. Skipped without a display
+Week -> Day keeps the way back, and the scheduled tasks reach the status board. Skipped without a display
 (see tests/ui/test_desktop_app.py)."""
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from pathlib import Path
 from app.planning.preferences import OptimizerMode
 from app.ui import theme
 from app.ui.day_timeline import TimelineGeometry
+from app.execution.lifecycle import TaskOutcome
 from tests.ui.test_desktop_app import WEDNESDAY, close_app, fill_form, open_app, pump, tree_names
 from tests.ui.test_desktop_app import dialogs as dialogs  # noqa: F401 - the dialog-recorder fixture
 from tests.ui.test_desktop_app import pytestmark as pytestmark  # noqa: F401 - skip without a display
@@ -101,7 +102,9 @@ def test_the_persisted_day_flow(tmp_path: Path, dialogs) -> None:
         day.form.submit_button.invoke()
         run_make_schedule(app, day)
         assert item_named(day, "Essay").start_minute % 15 == 0
-        assert day.execution_panel is not None and len(day.snapshot.executables) == 2  # Execute stays reachable
+        pump(app)
+        assert len(day.snapshot.executables) == 2  # both scheduled tasks wait in the board's Tasks column
+        assert sorted(card.name for card in day.status_board.board.column(TaskOutcome.PENDING)) == ["Essay", "Read"]
 
         # Day Preferences: a native editor of the date layer, inherited values shown.
         day.open_preferences()

@@ -82,8 +82,9 @@ def _require_aware(value: datetime, field_name: str) -> datetime:
 class ExecutionStatus(str, Enum):
     """Lifecycle status of a TaskExecution. See service.py for the transition rules.
 
-    completed, skipped, and cancelled are all terminal: no action is
-    allowed out of any of them (see service.py's _TRANSITIONS).
+    completed, skipped, and cancelled are terminal for work; only "reopen"
+    (completed/skipped -> pending, the Day board's "back to Tasks") leaves
+    one, and nothing leaves cancelled (see app/execution/lifecycle.py).
     """
 
     SCHEDULED = "scheduled"
@@ -145,6 +146,9 @@ class TaskExecution(BaseModel):
     planned_end: int | None = None
     planned_duration: int
     priority: int = Field(ge=1, le=10)
+    #: The task's points when this execution was created (a snapshot, like priority), so later edits of the
+    #: task never rewrite what an answered attempt was worth. None for executions created before points existed.
+    points: int | None = Field(default=None, ge=0)
 
     status: ExecutionStatus
     created_at: str

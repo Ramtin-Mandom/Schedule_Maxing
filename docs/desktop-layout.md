@@ -13,10 +13,11 @@ It opens on **Day Schedule** with the sidebar collapsed.
 
 | Page | What it is now |
 | --- | --- |
-| Day Schedule | The day workspace ([desktop-day.md](desktop-day.md)): the horizontal timeline, available tasks, the task form, the Engine choice beside Make Schedule, Day Preferences, CSV, Reset Day, the task list and the **Execute** tab |
+| Day Schedule | Today's workspace ([desktop-day.md](desktop-day.md)): the Day Window, the horizontal timeline, available tasks, the task form, the Engine choice beside Make Schedule, Day Preferences, CSV, Reset Day, the task list and the **Execute** tab |
 | Week / Month Schedule | Real calendar week and month ([desktop-calendar.md](desktop-calendar.md)): select a day, **Open Day**, the task form on the selected date, Reset Week/Month, the task list |
 | Project Schedule / Allocation Planning | Persisted project CRUD, project tasks, date-only allocation previews and selected-date scheduling ([details](desktop-projects-allocation.md)) |
 | Account | Registration/sign-in, explicit local-data association, profile, sync status and conflict resolution |
+| How to Use | The in-app guide: what the app does and how every view and feature works (`app/ui/guide_page.py`, text in `app/ui/guide_content.py`) |
 | About | Project purpose and creator attribution |
 | Productivity | The existing productivity analytics (scrolls on small windows) |
 | Settings | English, appearance, interface size, persisted default engine and active scheduling preferences ([details](desktop-settings.md)) |
@@ -25,7 +26,8 @@ It opens on **Day Schedule** with the sidebar collapsed.
   appears as a tooltip on hover or focus).
 - The ☰ button opens it with labels. It is reachable with Tab and works with
   Enter or Space. **Ctrl+B** also opens and closes it.
-- **Ctrl+1 … Ctrl+9** jump to the pages in the order above.
+- **Ctrl+1 … Ctrl+9** jump to the first nine pages of the sidebar (Day … How to Use; About is reached from
+  the sidebar). Choosing Day Schedule this way, or in the sidebar, shows today.
 - The active page has a bar at its left edge as well as the highlight color.
 - On a narrow window the sidebar closes after you pick a page. **Escape**
   also closes it there.
@@ -117,14 +119,16 @@ Reusable widgets live in `app/ui/components.py`:
 ## Keyboard use of tasks
 
 The Day timeline and the Week/Month calendars are keyboard-operable too
-([desktop-day.md](desktop-day.md), [desktop-calendar.md](desktop-calendar.md)). You act on tasks in
-the task list (**Tasks this week/month** on Week/Month, **Tasks on this date** on Day):
+([desktop-day.md](desktop-day.md), [desktop-calendar.md](desktop-calendar.md)). On the Day timeline:
 
-- The arrow keys select a task.
-- **Enter** edits the selected task.
+- Left/Right/Home/End select an item.
+- **Enter** edits the selected item.
 - **Delete** removes it.
-- The Menu key or **Shift+F10** opens its actions: Edit, Remove, Use as
-  dependencies and, on Week/Month, Open date in Day Schedule.
+- The Menu key or **Shift+F10** opens its actions: Edit and Remove.
+
+The Uncompleted | Tasks | Completed board's × and → buttons and Week/Month's
+All Tasks Complete / No Tasks Complete are reached with Tab and pressed with
+Enter or Space.
 
 ## Background work
 

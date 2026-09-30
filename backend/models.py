@@ -168,6 +168,8 @@ class _TaskContent:
     category: Mapped[str] = mapped_column(String(100), nullable=False)
     estimated_duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     priority: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: The user's productivity value (app.planning.models.Task.points); not a scheduling input.
+    points: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     required: Mapped[bool] = mapped_column(Boolean, nullable=False)
     required_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     preferred_window_start_minute: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -189,6 +191,7 @@ def _task_checks(table: str) -> tuple:
         CheckConstraint("length(category) > 0", name=f"ck_{table}_category"),
         CheckConstraint("estimated_duration_minutes > 0", name=f"ck_{table}_duration"),
         CheckConstraint("priority BETWEEN 1 AND 10", name=f"ck_{table}_priority"),
+        CheckConstraint("points BETWEEN 0 AND 1000", name=f"ck_{table}_points"),
         CheckConstraint(
             "(preferred_window_start_minute IS NULL) = (preferred_window_end_minute IS NULL)", name=f"ck_{table}_window"
         ),
@@ -349,6 +352,8 @@ class _ExecutionContent:
     planned_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
     planned_duration: Mapped[int] = mapped_column(Integer, nullable=False)
     priority: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: The task's points when the execution was created (a snapshot); NULL when unknown (older executions).
+    points: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     actual_active_duration_minutes: Mapped[float | None] = mapped_column(Float, nullable=True)
     duration_variance_minutes: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -369,6 +374,7 @@ def _execution_checks(table: str) -> tuple:
     return (
         CheckConstraint(_in("status", EXECUTION_STATUSES), name=f"ck_{table}_status"),
         CheckConstraint("priority BETWEEN 1 AND 10", name=f"ck_{table}_priority"),
+        CheckConstraint("points IS NULL OR points >= 0", name=f"ck_{table}_points"),
         CheckConstraint("focus_rating IS NULL OR focus_rating BETWEEN 1 AND 5", name=f"ck_{table}_focus"),
         CheckConstraint("energy_rating IS NULL OR energy_rating BETWEEN 1 AND 5", name=f"ck_{table}_energy"),
         CheckConstraint("interruption_count IS NULL OR interruption_count >= 0", name=f"ck_{table}_interruptions"),

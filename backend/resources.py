@@ -50,7 +50,7 @@ from sqlalchemy.orm import Session
 
 from app.planning import fixed_block_rules
 from app.planning.models import FixedBlock as CanonicalFixedBlock
-from app.planning.models import LocalTimeWindow, RecurrenceSpec
+from app.planning.models import DEFAULT_TASK_POINTS, MAX_TASK_POINTS, LocalTimeWindow, RecurrenceSpec
 from app.planning.models import PlacementRemovalReason
 from app.planning.models import ScheduledTask as CanonicalPlacement
 from app.planning.models import Task as CanonicalTask
@@ -127,6 +127,8 @@ class TaskFields(Strict):
     tags: list[str] = Field(default_factory=list)
     estimated_duration_minutes: int = Field(gt=0)
     priority: int = Field(ge=1, le=10)
+    #: The user's productivity value (not the optimizer's placement score); omitted by older clients: the default.
+    points: int = Field(default=DEFAULT_TASK_POINTS, ge=0, le=MAX_TASK_POINTS)
     required: bool = False
     required_date: date_ | None = None
     preferred_dates: list[date_] = Field(default_factory=list)

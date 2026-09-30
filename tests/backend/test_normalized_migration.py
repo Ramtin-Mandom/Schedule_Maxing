@@ -443,14 +443,25 @@ def as_instants(value):
 #: Placement fields added by revision 0007 (docs/execution-rescheduling.md). A record written before it has
 #: them all null: an unknown category snapshot and removal provenance are never back-filled or guessed.
 PLACEMENT_FIELDS_SINCE_0007 = {"task_category": None, "removal_reason": None, "superseded_by_id": None}
+#: 0008: an existing task gets the default points; an existing execution's snapshot is unknown.
+TASK_FIELDS_SINCE_0008 = {"points": 1}
+EXECUTION_FIELDS_SINCE_0008 = {"points": None}
 
 
 def as_of_head(value):
-    """The fixture (as the 0003 API wrote it) as today's API returns it: placements gain the 0007 fields, null."""
+    """
+    The fixture (as the 0003 API wrote it) as today's API returns it:
+    placements gain the 0007 fields (null), tasks their 0008 points (the
+    default) and executions their 0008 points snapshot (null).
+    """
     if isinstance(value, dict):
         converted = {key: as_of_head(item) for key, item in value.items()}
         if {"task_id", "planned_start", "optimization_metadata"} <= set(value):
             converted = {**PLACEMENT_FIELDS_SINCE_0007, **converted}
+        if {"estimated_duration_minutes", "priority", "dependency_ids"} <= set(value):
+            converted = {**TASK_FIELDS_SINCE_0008, **converted}
+        if {"task_name", "planned_duration", "status"} <= set(value):
+            converted = {**EXECUTION_FIELDS_SINCE_0008, **converted}
         return converted
     if isinstance(value, list):
         return [as_of_head(item) for item in value]
@@ -641,7 +652,7 @@ def test_an_empty_database_upgrades_and_a_disposable_one_downgrades_losslessly(p
 
 
 def test_the_previous_head_upgrades_to_0007_keeping_every_record_and_replay(predecessor) -> None:
-    """0006 (the Milestone 4 head, populated) -> 0007: history, change feed and recorded outcomes survive."""
+    """0006 (the Milestone 4 head, populated) -> 0007 -> head: history, change feed and recorded outcomes survive."""
     upgrade(predecessor, "0006")
     tables = ("placements", "executions", "work_sessions", "change_log", "sync_operations", "record_revisions")
     with predecessor.connect() as connection:
@@ -650,7 +661,7 @@ def test_the_previous_head_upgrades_to_0007_keeping_every_record_and_replay(pred
 
     upgrade(predecessor)
     with predecessor.connect() as connection:
-        assert current_revision(connection) == head_revision() == "0007"
+        assert current_revision(connection) == head_revision()
         assert {table: connection.execute(sa.text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
                 for table in tables} == before
         assert [tuple(row) for row in connection.execute(sa.text("SELECT id, change_seq FROM users ORDER BY id"))] == users
@@ -674,6 +685,25 @@ def test_the_previous_head_upgrades_to_0007_keeping_every_record_and_replay(pred
         for record in (EXEC1, EXEC2, EXEC3, EXEC4, EXEC5):  # sessions, legacy ids and owners kept
             response = client.get(f"/executions/{record['id']}", params={"include_deleted": True}, headers=headers)
             assert_same_at_head(response.json(), record)
+
+
+def test_0008_adds_points_without_touching_any_record(predecessor) -> None:
+    """0007 -> 0008: every row stays; tasks (and their revisions) get the default points, executions none."""
+    upgrade(predecessor, "0007")
+    tables = ("tasks", "task_revisions", "executions", "execution_revisions", "change_log", "record_revisions")
+    with predecessor.connect() as connection:
+        before = {table: connection.execute(sa.text(f"SELECT COUNT(*) FROM {table}")).scalar_one() for table in tables}
+    upgrade(predecessor, "0008")
+    with predecessor.connect() as connection:
+        assert current_revision(connection) == "0008"
+        assert {table: connection.execute(sa.text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
+                for table in tables} == before
+        for table in ("tasks", "task_revisions"):
+            assert connection.execute(sa.text(f"SELECT COUNT(*) FROM {table} WHERE points <> 1")).scalar_one() == 0
+        for table in ("executions", "execution_revisions"):  # the snapshot is unknown, never back-filled
+            assert connection.execute(sa.text(f"SELECT COUNT(*) FROM {table} WHERE points IS NOT NULL")).scalar_one() == 0
+    with predecessor.begin() as connection, pytest.raises(sa.exc.IntegrityError):
+        connection.execute(sa.text("UPDATE tasks SET points = -1"))
 
 
 def test_a_failing_0007_rolls_back_to_a_working_0006(blank_engine) -> None:

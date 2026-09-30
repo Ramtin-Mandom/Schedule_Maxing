@@ -8,10 +8,11 @@ versions to type) and how it becomes a canonical Task or FixedBlock
 draft and the same rules.
 
 Flexible task fields: name, category, estimated duration (minutes, typed
-freely), priority 1-10, the date it is planned for (optional: an undated
-task can go on any date), "pin to this date" (required_date), "required"
-(must be scheduled), a preferred time window, a deadline (date and time),
-dependencies, a project and ordered tags.
+freely), priority 1-10, points (the user's own productivity value, 0-1000 --
+never the optimizer's placement score), the date it is planned for (the
+page's selected date; an imported task may be undated), "pin to this date"
+(required_date), "required" (must be scheduled), a preferred time window, a
+deadline (date and time), dependencies, a project and ordered tags.
 
 Fixed block fields: label, category, date, start and end. A fixed block is
 not a disguised flexible task, and neither kind is converted into the other.
@@ -39,7 +40,7 @@ from typing import Literal
 
 from pydantic import ValidationError
 
-from app.planning.models import FixedBlock, LocalTimeWindow, Task
+from app.planning.models import DEFAULT_TASK_POINTS, MAX_TASK_POINTS, FixedBlock, LocalTimeWindow, Task
 from app.planning.time import (
     AmbiguousLocalTimeError,
     LocalDayWindow,
@@ -82,6 +83,7 @@ class TaskDraft:
     # -- flexible task ---------------------------------------------------------------
     duration: str = ""
     priority: str = "5"
+    points: str = str(DEFAULT_TASK_POINTS)
     required: bool = False
     pin_to_date: bool = False
     window_start: str = ""
@@ -128,6 +130,7 @@ def draft_from_task(task: Task, timezone_name: str) -> TaskDraft:
     return TaskDraft(
         kind="task", name=task.name, category=task.category, date=format_date(planned),
         duration=format_duration(task.estimated_duration_minutes), priority=str(task.priority),
+        points=str(task.points),
         required=task.required, pin_to_date=task.required_date is not None,
         window_start=format_clock(window.start_minute) if window else "",
         window_end=format_clock(window.end_minute) if window else "",
@@ -170,6 +173,8 @@ def build_task(draft: TaskDraft, *, timezone_name: str, existing: Task | None = 
     else:
         priority = int(draft.priority)
 
+    points = _field(errors, "points", lambda: parse_points(draft.points))
+
     planned: date_ | None = None
     if draft.date.strip():
         planned = _field(errors, "date", lambda: parse_date(draft.date))
@@ -204,6 +209,7 @@ def build_task(draft: TaskDraft, *, timezone_name: str, existing: Task | None = 
     tags = [" ".join(tag.split()) for tag in draft.tags if tag.strip()]
     fields: dict = dict(
         name=name, category=draft.category.strip(), estimated_duration_minutes=duration, priority=priority,
+        points=points,
         required=draft.required, preferred_time_window=window, deadline=deadline,
         dependency_ids=list(dict.fromkeys(draft.dependency_ids)), project_id=draft.project_id, tags=tags,
     )
@@ -268,6 +274,19 @@ def build_block(draft: TaskDraft, *, timezone_name: str, existing: FixedBlock | 
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
+
+
+def parse_points(text: str) -> int:
+    """A task's points as typed: a whole number from 0 to 1000 (empty: the default)."""
+    raw = (text or "").strip()
+    if not raw:
+        return DEFAULT_TASK_POINTS
+    if not raw.isdigit():
+        raise FieldError(f"Points are a whole number from 0 to {MAX_TASK_POINTS}, like {DEFAULT_TASK_POINTS} or 5.")
+    value = int(raw)
+    if value > MAX_TASK_POINTS:
+        raise FieldError(f"Points go up to {MAX_TASK_POINTS}.")
+    return value
 
 
 def _field(errors: dict[str, str], name: str, read):

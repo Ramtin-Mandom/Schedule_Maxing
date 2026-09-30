@@ -14,11 +14,12 @@ show the date, and a short id suffix where names and dates still collide.
 | Field | Meaning |
 | --- | --- |
 | Name, Category | Required. A category the list lacks, for example an imported one, is kept and offered for that record. It is never renamed |
-| Date | Becomes the first preferred date. Editing replaces the previously displayed date and preserves additional preferred dates; the calendar uses the earliest preferred date. Clearing this field removes all preferred dates, making the task undated |
+| Date | Not typed. A new task gets the date the page has selected -- Day: the date shown (today unless opened for another date); Week/Month: the selected day -- and the form shows it. That real date becomes the first preferred date. Editing keeps the record's own date (and its other preferred dates); an undated imported task stays undated |
 | Only on this date | Pins the task to the date (`required_date`, a hard constraint). Other preferred dates it already had are kept |
 | Required | The task must be scheduled (`required`) |
 | Duration | Whole minutes, from 1 minute to 24 h: `13`, `13 min`, `1 h 13 min`, `1h13m`, `1:13` |
 | Priority | 1 (low) to 10 (high) |
+| Points | 0 to 1000, default 1: what finishing the task is worth to the user, for productivity analytics. Not a scheduling input (the inputs fingerprint excludes it) and never the optimizer's placement `score`. Each execution snapshots the task's points when it is created |
 | Tags | An ordered list. **Enter** adds the typed tag as a chip and never submits the task. A chip's ✕ removes it, and **Backspace** in the empty tag field removes the last one. Blank and repeated tags are ignored. There is no mandatory tag. The scoring adapter still reads only the first tag, and the engine is unchanged |
 | More options → Preferred from / until | An optional preferred window. Leave both empty for "any time" |
 | More options → Deadline | Date and time. Both are needed if either is given |
@@ -26,7 +27,7 @@ show the date, and a short id suffix where names and dates still collide.
 
 ## Fixed block
 
-Label, category, date, start and end.
+Label, category, start and end, on the page's selected date (as for a task, the date is not typed).
 
 - A fixed block is not a disguised flexible task, and editing never turns
   one kind into the other. To change the kind, remove the record and add the
@@ -40,17 +41,23 @@ Label, category, date, start and end.
 
 ## Times
 
-- Times display as **h:mm AM/PM** and are exact to the minute. You never type
-  minutes from midnight.
-- Accepted input: `10:13`, `10:13 AM`, `10:13pm`, `10 am`, `22:13`, `noon`,
-  `midnight`.
-- **Up/Down**, the mouse wheel, or the ▲▼ buttons step a time by 1 minute, or
-  15 with **Shift**. Typing and stepping give the same values. Dates step by
-  a day, or a week with Shift.
-- Noon is `12:00 PM`, and the start of the day is `12:00 AM`.
-- An **end** time of `12:00 AM` (or `midnight` or `24:00`) means the
-  following midnight and is shown as `12:00 AM (next day)`. An interval can
-  never end at the start of its own day.
+- Every clock time (preferred window, deadline time, fixed-block start/end,
+  the Day Window, the Settings default day window, category preferred times,
+  Reschedule) is entered in one shared input (`app/ui/clock_input.py`):
+  **[ Hour ] : [ Minute ] [ AM/PM ]**. The hour is 1-12, the minute 00-59
+  (shown with two digits once you leave the input), and the AM/PM button
+  starts at AM and toggles on each click (typing `a` or `p` in either field
+  sets it too). Typing a colon, two hour digits, or an hour digit 2-9 moves to
+  the minutes. There are no spinners and you never type minutes from midnight.
+- The conversions are `app/ui/time_fields.py`'s `clock_to_minutes`,
+  `minutes_to_clock` and `parse_clock_parts`: 12:00 AM = 0, 12:30 AM = 30,
+  1:00 AM = 60, 12:00 PM = 720, 1:15 PM = 795, 11:59 PM = 1439. Times are
+  exact to the minute; nothing is rounded to a grid.
+- Noon is `12:00 PM`, and the start of the day is `12:00 AM`. The optional
+  deadline date is still typed as YYYY-MM-DD.
+- An **end** time of `12:00 AM` means the following midnight; the input
+  says "next day" beside it. An interval can never end at the start of its
+  own day.
 - Times are in the page's planning timezone, which the form shows. An
   existing block in another zone is edited in its own zone.
 
@@ -73,13 +80,14 @@ adjusted:
 
 ## Actions on tasks
 
-Actions are in the task list (**Tasks this week/month** or **Tasks on this
-date**; on the Day page also on the timeline and the available-task buttons). They are shared by
-every page (`app/ui/task_actions.py`):
+Actions are on the Day page: the timeline (fixed blocks and scheduled tasks)
+and the available-task buttons (unscheduled tasks). They are shared by every
+page (`app/ui/task_actions.py`); Week and Month open a date there with Open Day.
 
-- **Enter** or **Edit Selected** edits the selected task.
-- **Delete** or **Remove Selected** removes it. The Menu key or
-  **Shift+F10** opens the same actions.
+- **Enter** (or a double-click) on a timeline item, or an available-task
+  button, edits it.
+- **Delete** on a timeline item removes it. The Menu key or **Shift+F10**
+  opens the same actions.
 
 Removal first asks for confirmation and says what goes with the task: its
 saved schedule entries do, while execution history is kept. A task that

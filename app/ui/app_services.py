@@ -110,6 +110,19 @@ class AppServices:
     _switch_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     # ------------------------------------------------------------------
+    # Reset All Task Data (Settings)
+    # ------------------------------------------------------------------
+
+    def reset_task_data(self) -> dict[str, int]:
+        """
+        Remove the current workspace's task, schedule and execution data: on
+        the server first for an account (nothing local changes if that fails),
+        then on this device (SyncService.reset_task_data). Call from a worker:
+        it uses the network. Rebuild the workspace's pages afterwards.
+        """
+        return self.sync_service.reset_task_data()
+
+    # ------------------------------------------------------------------
     # Workspace
     # ------------------------------------------------------------------
 

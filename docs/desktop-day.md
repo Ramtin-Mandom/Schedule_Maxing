@@ -14,9 +14,15 @@ HTTP call and no local server.
 
 ## Opening a date
 
-- The app opens on **today's real date in the planning timezone**
-  (`SCHEDULE_MAXING_TIMEZONE`, default UTC), not the computer's local date.
+- The Day page is **today**: the app opens on today's real date, and
+  choosing Day Schedule in the navigation (or Ctrl+1) returns to today. Today
+  comes from the computer's clock in the planning timezone, which is the
+  computer's own time zone (`app/planning/system_clock.py`; override with
+  `SCHEDULE_MAXING_TIMEZONE`). A Vancouver user at 11 PM sees that evening's
+  date, not UTC's next day.
 - Saved data is loaded at once.
+- The task form has no date field: a task or fixed block added here belongs to
+  the date shown.
 - Navigate with **‹ Previous day**, the date field (**Go** or Enter),
   **Today** and **Next day ›**.
 - A date opened from Week or Month (**Open Day**, or the task list's **Open
@@ -34,7 +40,30 @@ HTTP call and no local server.
   never renamed.
 - **Scheduled tasks** appear after Make Schedule. A schedule that is out of
   date has a dashed warning outline and says "Out of date".
-- The part of the day outside the effective **scheduling window** is shaded.
+- The part of the day outside the effective **day window** is shaded.
+
+## The Day Window
+
+Above the timeline (and above the Week/Month calendars, for the selected day)
+the **Day Window** bar shows the date's start and end of the usable day in the
+shared [hour]:[minute] [AM/PM] input (`app/ui/day_window_bar.py`,
+`app/ui/day_window.py`):
+
+- Every date starts with the **default** from Settings (Default scheduling
+  preferences → Day window); the badge says **Default**.
+- **Apply to this date** saves an override for that date only (**Custom for
+  this date**). It is the `day_window` field of the date's own preference
+  layer -- the same record that is stored locally, synchronized to the
+  server's PostgreSQL, or written directly with direct storage -- and every
+  other field of that layer (the engine, category values) is kept.
+- Changing the default in Settings moves every date without an override;
+  customised dates keep theirs. **Use default** removes the override.
+- Refused, with nothing saved: an end not after the start, an unreadable time,
+  a time that does not exist on that date (daylight saving), or a window that
+  would leave one of the date's fixed blocks outside it.
+- Make Schedule places flexible work only inside the date's effective window.
+  Saved work that no longer fits makes the schedule out of date; Make Schedule
+  then reports it instead of moving anything silently.
   **Free time** inside the window is drawn with a dashed outline. Free time is
   calculated for display only and is never saved as a task.
 - Items that overlap (possible only for out-of-date work) get their own row.
@@ -44,7 +73,8 @@ HTTP call and no local server.
 - The selected item's details are written out below the strip, with h:mm
   AM/PM times, duration, kind and category. With nothing selected, the line
   lists the window and the free time.
-- The task list (**Tasks on this date**) offers the same actions.
+- The Available tasks buttons open unscheduled tasks for editing; scheduled tasks
+  are marked done or not done on the Uncompleted | Tasks | Completed board below.
 
 ## Available tasks
 
@@ -188,38 +218,41 @@ An out-of-date schedule says why:
   **Replace** choice and a confirmation.
 - Other pages re-read their data when shown.
 
-## Execute (Milestone 5)
+## Uncompleted | Tasks | Completed
 
-The Execute tab beside "Tasks on this date" works on the date's saved
-placements, by identity (two tasks with the same name stay two items).
+Below the actions, one board of three rounded columns replaces the former
+"Tasks on this date" list and Execute tab (`app/ui/task_status_board.py`,
+Tk-free model `app/ui/task_status.py`). It holds **only tasks the saved
+schedule placed on the date** -- its live placements. A task the scheduler
+could not place was never scheduled: it stays in **Available tasks** with its
+reason and never appears in any column.
 
-- **Viewing writes nothing.** Selecting, refreshing or opening the page only
-  looks up the placement's execution. The execution is created by the first
-  action the user takes (Start, Skip or Cancel).
-- **Legal actions only** (the lifecycle table, docs/execution-rescheduling.md):
-  not started -> Start, Skip, Cancel, Reschedule; in progress -> Pause,
-  Finish, Skip, Cancel; paused -> Resume, Finish, Skip, Cancel; completed,
-  skipped and cancelled -> none. Finish and Skip ask for optional feedback.
-- **Reschedule** asks for `HH:MM` (same date) or `YYYY-MM-DD HH:MM`, keeps the
-  duration, and runs the validated, atomic move; a refusal says why (overlap,
-  outside the day window, deadline, dependencies, ...). Started or finished
-  work is never moved: the tab says that it stays in history.
-- **State now**: "Upcoming", "Due now", or "Overdue: ... and not started" for
-  work without a start -- derived from the time and the saved outcome, never
-  stored. In-progress or paused work past its planned end keeps its state and
-  says by how much it is running late.
-- **Details**: the planned interval and estimate in the plan's timezone (which
-  is named), the actual first start and final end, and active time (sessions
-  only; pauses excluded, live while in progress). "This date" lists every
-  saved placement with its state.
-- **Where it is saved**: "Saved on this device only (no account)", "Saved on
-  this device; not yet confirmed by the server" (a local commit waiting for
-  synchronization), "Confirmed by the server", "Conflicts with the server's
-  copy -- resolve it on the Account page", or, in direct mode, "Saved on the
-  server".
-- While an action runs every button is disabled; a change made elsewhere
-  meanwhile (another device, a sync) is reported and the saved state reloaded.
-  After a sync that pulled changes, the visible page re-reads its records.
+| Column | The placement's execution |
+| --- | --- |
+| **Tasks** | none yet, `scheduled`, `in_progress` or `paused` |
+| **Completed** | `completed` |
+| **Uncompleted** | `skipped` (a `cancelled` attempt is shown here too, and cannot be moved) |
+
+Controls: in Tasks, **×** marks a task uncompleted and **→** completed; in
+Uncompleted, **→** brings it back to Tasks; in Completed, **×** brings it
+back. Each move is one persisted change of the placement's TaskExecution --
+the lifecycle actions `complete` (allowed from `scheduled`: done without
+timing, so no duration metrics), `skip` and `reopen` -- in one transaction,
+with the execution version on screen as the precondition (a change made on
+another device is reported and reloaded, never overwritten). There is no
+second status store; see docs/execution-rescheduling.md section 2.
+
+**Make Schedule again keeps every status.** The column is read from the
+placement's execution by placement id -- never by task name or position -- and
+generation never writes executions: placements whose attempts were answered
+(completed, skipped) or started are kept in place with their ids by every
+generation, and an incremental Make Schedule keeps every placement that still
+fits. Only newly placed tasks appear, in Tasks. Duplicate names and the
+occurrences of a recurring task each have their own placement and status. A
+removed task leaves the board; its execution stays as history.
+
+Viewing the board writes nothing; the first move creates the placement's
+execution (never a second one).
 
 The Productivity page adds "Schedule follow-through" (the schedule cohort of
 docs/analytics.md: due completion with numerator and denominator, the date

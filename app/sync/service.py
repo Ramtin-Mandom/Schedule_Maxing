@@ -127,6 +127,7 @@ class SyncService:
         pull_page_size: int = 200,
     ) -> None:
         self._engine = SyncEngine(connection, clock)
+        self._connection = connection
         self._transport = transport
         self._interval = interval
         self._backoff_base = backoff_base
@@ -414,6 +415,36 @@ class SyncService:
             self._reachable(True)
             self._engine.store.set_last_synced(key, self._clock().isoformat())
             return self._finish(SyncReport("ok", pushed, pulled, conflicts))
+
+    def reset_task_data(self) -> dict[str, int]:
+        """
+        Settings' "Reset All Task Data" for the workspace this device works in:
+
+        - an account workspace: the server's reset first (POST
+          /me/task-data/reset, one transaction there); only when it answers,
+          this device's copy of the account's task data and its sync
+          bookkeeping are deleted and the pull cursor moves past the reset
+          (app/planning/task_data_reset.py). Held under the sync lock, so no
+          push or pull runs in between. Not signed in, unreachable or
+          refused: the error is raised and NOTHING local changes;
+        - the ownerless local workspace (no account): only local data exists,
+          and it is deleted.
+
+        Returns the number of local rows removed per record type.
+        """
+        from app.planning.task_data_reset import wipe_task_data
+
+        account = self.workspace_account()
+        if account is None:
+            return wipe_task_data(self._connection, OwnerScope.ownerless())
+        with self._state_lock:
+            transport, token, key = self._transport, self._token, self._account_key
+        if transport is None or token is None or key != account.account_key:
+            raise RuntimeError("Sign in to your account first: its task data is also stored on the server.")
+        with self._sync_lock:
+            result = self._authorized(token, lambda: transport.reset_task_data(token))
+            return wipe_task_data(self._connection, OwnerScope.account(uuid.UUID(account.user_id)),
+                                  account_key=account.account_key, cursor=int(result["cursor"]))
 
     def status(self) -> SyncStatus:
         with self._state_lock:

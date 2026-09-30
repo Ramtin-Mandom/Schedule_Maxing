@@ -50,7 +50,7 @@ from app.execution.errors import (
     ExecutionVersionConflictError,
     InvalidTransitionError,
 )
-from app.execution.lifecycle import TRANSITIONS
+from app.execution.lifecycle import TRANSITIONS, BulkOutcomeResult, OutcomeChangeError, TaskOutcome
 from app.execution.models import ExecutionStatus, TaskExecution, WorkSession
 from app.execution.service import build_canonical_execution, check_feedback
 from app.models import ScheduledTask
@@ -65,6 +65,7 @@ from backend.executions import ActionIn, ExecutionCreate, FeedbackIn
 from backend.executions import to_task_execution as to_execution
 from backend.executions import to_work_session as to_session
 from backend.mutations import mutation
+from backend.outcomes import OutcomeIn, set_placement_outcome, set_placements_outcome
 
 
 def _execution_uuid(execution_id: str) -> uuid.UUID:
@@ -133,6 +134,8 @@ class DirectExecutionService:
             if error.code == "invalid_transition" and action is not None:
                 current = ExecutionStatus(error.details["current"]["status"])
                 return InvalidTransitionError(str(execution_id), current, TRANSITIONS[action][1])
+            if error.code == "invalid_transition":
+                return OutcomeChangeError(error.message)
             if error.code == "invalid_reference":
                 return ExecutionLinkError(error.message)
             if error.status == 409:
@@ -252,6 +255,26 @@ class DirectExecutionService:
     def cancel(self, execution_id: str, *, expected_version: int | None = None) -> TaskExecution:
         return self._action(execution_id, "cancel", expected_version)
 
+    def reopen(self, execution_id: str, *, expected_version: int | None = None) -> TaskExecution:
+        return self._action(execution_id, "reopen", expected_version)
+
+    def set_outcome(self, task: CanonicalTask, placement: CanonicalScheduledTask, outcome: TaskOutcome | str, *,
+                    expected_version: int | None = None, require_version: bool = False) -> TaskExecution | None:
+        """As ExecutionService.set_outcome, through the server's one implementation (backend/outcomes.py)."""
+        fields = {"outcome": TaskOutcome(outcome)}
+        if require_version:
+            fields["base_version"] = expected_version  # present, even None: the precondition
+        request = OutcomeIn(**fields)
+        with self._account.operation(self._translate(str(placement.id), expected_version)) as session:
+            with mutation(session, self._account.user_id, self._account.clock) as mutator:
+                set_placement_outcome(mutator, placement.id, request)
+            row = session.scalars(select(models.Execution).where(
+                models.Execution.user_id == self._account.user_id,
+                models.Execution.scheduled_task_id == placement.id,
+                models.Execution.deleted_at.is_(None),
+            ).execution_options(populate_existing=True)).first()
+            return to_execution(row) if row is not None else None
+
     def record_feedback(self, execution_id: str, *, expected_version: int, focus_rating: int | None = None,
                         energy_rating: int | None = None, interruption_count: int | None = None,
                         note: str | None = None) -> TaskExecution:
@@ -298,6 +321,25 @@ class DirectExecutionService:
                 models.Execution.deleted_at.is_(None),
             )).first()
             return to_execution(row) if row is not None else None
+
+    def set_outcomes(self, items, outcome: TaskOutcome | str) -> BulkOutcomeResult:
+        """As ExecutionService.set_outcomes: one transaction through the server's own batch (backend/outcomes.py)."""
+        with self._account.operation(self._translate(None)) as session:
+            with mutation(session, self._account.user_id, self._account.clock) as mutator:
+                return set_placements_outcome(mutator, [placement.id for _, placement in items], TaskOutcome(outcome))
+
+    def executions_for_placements(self, placement_ids) -> dict[uuid.UUID, TaskExecution]:
+        """The live executions of these placements, by placement id, in one query."""
+        ids = [uuid.UUID(str(value)) for value in placement_ids]
+        if not ids:
+            return {}
+        with self._account.operation(self._translate(None)) as session:
+            rows = session.scalars(select(models.Execution).where(
+                models.Execution.user_id == self._account.user_id,
+                models.Execution.scheduled_task_id.in_(ids),
+                models.Execution.deleted_at.is_(None),
+            ))
+            return {row.scheduled_task_id: to_execution(row) for row in rows}
 
     def list_executions(self, status: ExecutionStatus | None = None) -> list[TaskExecution]:
         with self._account.operation(self._translate(None)) as session:

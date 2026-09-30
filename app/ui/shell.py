@@ -20,7 +20,10 @@ Stable layout while moving/resizing/minimizing:
   sidebar is destroyed.
 
 Pages may implement on_show(), set_layout(mode) and on_appearance_changed();
-the host calls them when relevant.
+the host calls them when relevant. A page chosen by the user from the
+navigation (sidebar or Ctrl+number) also goes to `on_navigate(key)` after it
+is shown -- e.g. the Day page then shows today -- while pages shown by the
+app itself (Open Day from Week/Month) do not.
 """
 
 from __future__ import annotations
@@ -168,7 +171,9 @@ class AppShell(ctk.CTkFrame):
         self._scaling = scaling
         self.columnconfigure(1, weight=1)
         self.rowconfigure(0, weight=1)
-        self.sidebar = Sidebar(self, state, on_select=self.show_page, on_toggle=self.toggle_sidebar)
+        #: Called with the key of a page the user chose from the navigation, after it is shown.
+        self.on_navigate: Callable[[str], None] | None = None
+        self.sidebar = Sidebar(self, state, on_select=self.navigate, on_toggle=self.toggle_sidebar)
         self.sidebar.grid(row=0, column=0, sticky="ns")
         self.host = ctk.CTkFrame(self, fg_color=theme.APP_BG, corner_radius=0)
         self.host.grid(row=0, column=1, sticky="nsew")
@@ -184,13 +189,19 @@ class AppShell(ctk.CTkFrame):
         root.bind("<Control-b>", lambda _e: (self.toggle_sidebar(), "break")[1], add="+")
         root.bind("<Control-B>", lambda _e: (self.toggle_sidebar(), "break")[1], add="+")
         for index, item in enumerate(NAV_ITEMS[:9], start=1):
-            root.bind(f"<Control-Key-{index}>", lambda _e, key=item.key: (self.show_page(key), "break")[1], add="+")
+            root.bind(f"<Control-Key-{index}>", lambda _e, key=item.key: (self.navigate(key), "break")[1], add="+")
         root.bind("<Escape>", self._escape, add="+")
 
     # -- pages ------------------------------------------------------------------------
 
     def add_page(self, key: str, page: ctk.CTkFrame) -> None:
         self.pages[key] = page
+
+    def navigate(self, key: str) -> None:
+        """The user chose `key` from the navigation: show it, then tell on_navigate."""
+        self.show_page(key)
+        if self.on_navigate is not None:
+            self.on_navigate(key)
 
     def show_page(self, key: str) -> None:
         if key not in self.pages:

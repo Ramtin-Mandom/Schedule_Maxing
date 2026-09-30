@@ -10,6 +10,22 @@ Two views over the same persisted history, deliberately kept apart:
 Both are read-only and deterministic; neither creates executions. There is
 no ML in either (the experimental predictor stays inactive).
 
+## 0. Day aggregates of scheduled work (foundation)
+
+`app/productivity/day_summary.py` computes, per date, from the date's live
+placements only (tasks the scheduler did not place never count):
+`scheduled_count`, `completed_count`, `uncompleted_count`, `pending_count`;
+planned minutes of each (`*_minutes`, the placements' own intervals);
+`points_scheduled` / `_completed` / `_uncompleted` / `_pending`;
+`completed_actual_minutes` and `timed_completed_count` (recorded active time
+of completions that were timed -- planned and actual stay separate); and
+the classification `status_class`. The outcome is the placement's execution
+status (completed; skipped = uncompleted; anything else or none = pending).
+Points come from the execution's snapshot when it has one, else from the
+task. Clients: the desktop Week/Month pages (`DayOutcomeController`) and
+`GET /days/summary`. Answered placements are never moved or replaced by a
+re-run (history protection), so past aggregates stay stable.
+
 ## 1. Terminal-outcome statistics (compatible)
 
 Unchanged formulas and filters (`app/productivity/stats.py`):

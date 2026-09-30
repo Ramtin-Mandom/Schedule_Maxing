@@ -19,6 +19,7 @@ import binascii
 import unicodedata
 import uuid
 from collections.abc import Iterator
+from datetime import date as date_
 from datetime import datetime
 from typing import Any
 
@@ -35,6 +36,9 @@ from backend.errors import ApiError, not_found, unauthenticated, version_conflic
 from backend.executions import ACTIONS, EXECUTIONS, ActionIn, ExecutionCreate, ExecutionOut, FeedbackIn
 from backend.migrate import current_revision, head_revision
 from backend.mutations import mutation
+from backend.days import DayOutcomeIn, DayOutcomeOut, day_summaries, set_day_outcome
+from backend.task_data_reset import ResetTaskDataIn, ResetTaskDataOut, reset_task_data
+from backend.outcomes import OutcomeIn, OutcomeOut, set_placement_outcome
 from backend.resources import CRUD_RESOURCES, ResourceSpec
 from backend.security import (
     MAX_PASSWORD_LENGTH,
@@ -289,6 +293,24 @@ def update_me(
     return _user_out(user)
 
 
+@auth.post("/me/task-data/reset", response_model=ResetTaskDataOut,
+           summary="Remove all of the authenticated account's task, schedule and execution data.")
+def reset_my_task_data(
+    payload: ResetTaskDataIn,
+    request: Request,
+    user_id: uuid.UUID = Depends(current_user_id),
+    session: Session = Depends(get_session),
+) -> dict:
+    """
+    One transaction under the account's lock (backend/task_data_reset.py). The account is the token's; no
+    user id is accepted from the request. The account, its credentials and its scheduling settings stay.
+    """
+    if not payload.confirm:
+        raise ApiError(422, "validation_error", "Set confirm to true to reset all task data.")
+    with mutation(session, user_id, request.app.state.clock) as mutator:
+        return reset_task_data(mutator)
+
+
 # -----------------------------------------------------------------------------
 # Resources
 # -----------------------------------------------------------------------------
@@ -471,6 +493,52 @@ def execution_action(
         return mutator.execution_action(record_id, action, payload)
 
 
+#: The Day page's Uncompleted | Tasks | Completed outcome of one saved placement (backend/outcomes.py).
+placement_outcomes = APIRouter(prefix="/placements", tags=["executions"])
+
+
+@placement_outcomes.post("/{placement_id}/outcome", response_model=OutcomeOut, operation_id="placement_outcome")
+def placement_outcome(
+    placement_id: uuid.UUID,
+    payload: OutcomeIn,
+    request: Request,
+    user_id: uuid.UUID = Depends(current_user_id),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Move one of the caller's placements to pending, completed or uncompleted (its execution's actions)."""
+    with mutation(session, user_id, request.app.state.clock) as mutator:
+        return set_placement_outcome(mutator, placement_id, payload)
+
+
+#: Date-level views of the caller's scheduled work (backend/days.py).
+days = APIRouter(prefix="/days", tags=["days"])
+
+
+@days.get("/summary", operation_id="day_summaries")
+def get_day_summaries(
+    request: Request,
+    start_date: date_ = Query(),
+    end_date: date_ = Query(),
+    user_id: uuid.UUID = Depends(current_user_id),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Every date's scheduled/completed/uncompleted/pending counts, minutes, points and status class."""
+    return {"days": day_summaries(session, user_id, request.app.state.clock, start_date, end_date)}
+
+
+@days.post("/{day}/outcome", response_model=DayOutcomeOut, operation_id="day_outcome")
+def post_day_outcome(
+    day: date_,
+    payload: DayOutcomeIn,
+    request: Request,
+    user_id: uuid.UUID = Depends(current_user_id),
+    session: Session = Depends(get_session),
+) -> dict:
+    """All of the date's scheduled tasks completed (or uncompleted, or back to pending), atomically."""
+    with mutation(session, user_id, request.app.state.clock) as mutator:
+        return set_day_outcome(mutator, day, payload)
+
+
 @executions.post("/{record_id}/feedback", response_model=ExecutionOut, operation_id="execution_feedback")
 def execution_feedback(
     record_id: uuid.UUID,
@@ -553,6 +621,8 @@ def install_routes(app: FastAPI) -> None:
     for spec in CRUD_RESOURCES:
         app.include_router(_crud_router(spec))
     app.include_router(executions)
+    app.include_router(placement_outcomes)
+    app.include_router(days)
     app.include_router(changes)
 
 
