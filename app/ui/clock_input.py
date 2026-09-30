@@ -232,7 +232,8 @@ class ClockInput(ctk.CTkFrame):
 
     def _hour_typed(self, event) -> None:
         """Two hour digits (or one that cannot start a two-digit hour, 2-9) move on to the minutes."""
-        if not getattr(event, "char", "").isdigit():
+        # The keysym, not event.char: X11 Tk leaves the char of every KeyRelease empty.
+        if not getattr(event, "keysym", "").removeprefix("KP_").isdigit():
             return
         text = self.hour_var.get().strip()
         if text.isdigit() and (len(text) >= 2 or int(text) >= 2):
