@@ -5,13 +5,15 @@ Typing and showing times, durations and dates in the desktop forms
 (Milestone 4, Prompt 3). Tk-free (tests/ui/test_task_form_model.py).
 
 Times are shown as "h:mm AM/PM" and are exact to the minute; nobody types
-minutes-from-midnight. Accepted input: "10:13", "10:13 AM", "10:13pm",
-"10 am", "22:13", "noon", "midnight". A time is a minute of the day (0..1439).
-An *end* time may also be the following midnight (1440), shown as
+minutes-from-midnight. Every form types a time in the shared
+[ Hour ] : [ Minute ] [ AM/PM ] input (app/ui/clock_input.py), whose parts
+are converted by clock_to_minutes / minutes_to_clock / parse_clock_parts
+below. The forms carry the result as "h:mm AM/PM" text, read back by
+parse_clock, which also accepts "10:13", "10:13pm", "10 am", "22:13",
+"noon" and "midnight" (e.g. from an import). A time is a minute of the day
+(0..1439). An *end* time may also be the following midnight (1440), shown as
 "12:00 AM (next day)" and typed as "12:00 AM", "midnight" or "24:00" --
-an interval can never end at the start of its own day. Arrow keys and the
-mouse wheel step a time by one minute (15 with Shift), wrapping within the
-day; stepping and typing produce the same values.
+an interval can never end at the start of its own day.
 
 Durations are whole minutes from 1 to 24 hours: "13", "13 min", "1 h",
 "1 h 13 min", "1h13m", "1:13". Dates are ISO "YYYY-MM-DD".
@@ -83,11 +85,79 @@ def parse_clock(text: str, *, end_of_interval: bool = False) -> int:
     return minutes
 
 
-def step_clock(minutes: int, delta: int, *, end_of_interval: bool = False) -> int:
-    """`minutes` moved by `delta`, wrapping around the day (1..1440 for an end time, 0..1439 otherwise)."""
-    if end_of_interval:
-        return (minutes - 1 + delta) % MINUTES_PER_DAY + 1
-    return (minutes + delta) % MINUTES_PER_DAY
+# -----------------------------------------------------------------------------
+# [ Hour ] : [ Minute ] [ AM/PM ] -- the parts of the shared time input
+# (app/ui/clock_input.py). Every clock time the desktop asks for is typed as
+# an hour 1-12, a minute 00-59 and an AM/PM toggle; these functions are the
+# one conversion to and from the engine's minutes from local midnight.
+# -----------------------------------------------------------------------------
+
+AM, PM = "AM", "PM"
+MERIDIEMS = (AM, PM)
+
+
+def toggle_meridiem(meridiem: str) -> str:
+    """AM -> PM, PM -> AM."""
+    return PM if meridiem == AM else AM
+
+
+def clock_to_minutes(hour: int, minute: int, meridiem: str, *, end_of_interval: bool = False) -> int:
+    """
+    12-hour clock parts as minutes from midnight: 12:00 AM -> 0, 12:30 AM ->
+    30, 1:00 AM -> 60, 12:00 PM -> 720, 1:15 PM -> 795, 11:59 PM -> 1439.
+    With end_of_interval, 12:00 AM is the following midnight (1440).
+    """
+    if meridiem not in MERIDIEMS:
+        raise FieldError("Choose AM or PM.")
+    if not 1 <= hour <= 12:
+        raise FieldError("The hour goes from 1 to 12.")
+    if not 0 <= minute <= 59:
+        raise FieldError("Minutes go from 00 to 59.")
+    minutes = (hour % 12 + (12 if meridiem == PM else 0)) * 60 + minute
+    if end_of_interval and minutes == 0:
+        return MINUTES_PER_DAY
+    return minutes
+
+
+def minutes_to_clock(minutes: int) -> tuple[int, int, str]:
+    """Minutes from midnight (0..1440) as (hour 1-12, minute, AM/PM); 1440 is 12:00 AM of the next day."""
+    if not 0 <= minutes <= MINUTES_PER_DAY:
+        raise ValueError(f"minutes must be within [0, {MINUTES_PER_DAY}]")
+    hour, minute = divmod(minutes % MINUTES_PER_DAY, 60)
+    return (hour % 12) or 12, minute, AM if hour < 12 else PM
+
+
+def parse_clock_parts(hour_text: str, minute_text: str, meridiem: str, *, end_of_interval: bool = False) -> int:
+    """
+    The typed parts of the time input as minutes from midnight. An empty
+    minute means :00; an empty hour is refused. Raises FieldError with what
+    to type instead -- never rounds.
+    """
+    hour_raw, minute_raw = (hour_text or "").strip(), (minute_text or "").strip()
+    if not hour_raw:
+        raise FieldError("Enter the hour (1 to 12)." if minute_raw else "Enter a time, like 10:13 AM.")
+    if not hour_raw.isdigit():
+        raise FieldError("The hour is a number from 1 to 12.")
+    if minute_raw and not minute_raw.isdigit():
+        raise FieldError("The minutes are a number from 00 to 59.")
+    if len(minute_raw) > 2:
+        raise FieldError("Minutes go from 00 to 59.")
+    return clock_to_minutes(int(hour_raw), int(minute_raw or 0), meridiem, end_of_interval=end_of_interval)
+
+
+def clock_parts_text(hour_text: str, minute_text: str, meridiem: str, *, end_of_interval: bool = False) -> str:
+    """
+    The parts as the text the forms carry: "" when nothing was typed, the
+    canonical "h:mm AM/PM" when they are valid, else the raw parts (which
+    parse_clock then refuses with its own message; nothing is guessed).
+    """
+    hour_raw, minute_raw = (hour_text or "").strip(), (minute_text or "").strip()
+    if not hour_raw and not minute_raw:
+        return ""
+    try:
+        return format_clock(parse_clock_parts(hour_raw, minute_raw, meridiem, end_of_interval=end_of_interval))
+    except FieldError:
+        return f"{hour_raw}:{minute_raw.zfill(2) if minute_raw.isdigit() else minute_raw} {meridiem}"
 
 
 def format_duration(minutes: int) -> str:

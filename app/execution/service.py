@@ -69,7 +69,7 @@ sessions, feedback -- changes. record_feedback and delete_execution
 transitions it is optional: the transition table itself is checked against
 the stored status inside the same transaction, so a stale transition can
 never apply to a state it was not valid for; callers that display an
-execution (the desktop Execute tab) still pass the version they show.
+execution (the Day page's Uncompleted | Tasks | Completed board) still pass the version they show.
 """
 
 from __future__ import annotations
@@ -84,9 +84,15 @@ from pathlib import Path
 from app.execution.db import get_connection
 from app.execution.errors import ExecutionVersionConflictError, InvalidFeedbackError, InvalidTransitionError
 from app.execution.lifecycle import (  # noqa: F401 - re-exported for existing callers
+    REOPEN_CLEARED_FIELDS,
     TRANSITIONS as _TRANSITIONS,
+    BulkOutcomeResult,
+    OutcomeChangeError,
+    TaskOutcome,
     compute_active_duration_minutes,
     compute_start_delay_minutes,
+    outcome_actions,
+    reopen_target,
 )
 from app.execution.models import ExecutionStatus, TaskExecution, WorkSession
 from app.execution.repository import ExecutionRepository
@@ -363,9 +369,13 @@ class ExecutionService:
     @_atomic
     def complete(self, execution_id: str, *, expected_version: int | None = None) -> TaskExecution:
         """
-        (in_progress | paused) -> completed.
+        (scheduled | in_progress | paused) -> completed.
 
-        Closes any open work session, then computes actual_active_duration_minutes,
+        From scheduled (no work sessions: the user reports it done without
+        timing it), only actual_final_end_at is recorded; the duration
+        metrics stay None -- unknown, never a fabricated 0.
+
+        Otherwise closes any open work session, then computes actual_active_duration_minutes,
         duration_variance_minutes, and start_delay_minutes from all sessions,
         and records actual_final_end_at.
 
@@ -381,6 +391,9 @@ class ExecutionService:
         self._close_open_session(execution_id)
 
         sessions = self._repository.list_sessions(execution_id)
+        if not sessions:
+            execution = execution.model_copy(update={"actual_final_end_at": self._clock()})
+            return self._commit(original, execution)
         active_duration = compute_active_duration_minutes(sessions)
         variance = round(active_duration - execution.planned_duration, 2)
 
@@ -419,12 +432,87 @@ class ExecutionService:
         return self._commit(original, execution)
 
     @_atomic
+    def reopen(self, execution_id: str, *, expected_version: int | None = None) -> TaskExecution:
+        """
+        (completed | skipped) -> pending: scheduled, or paused when work
+        sessions were recorded. Sessions and actual_first_start_at are kept;
+        only the finishing marker and the completion metrics are withdrawn
+        (lifecycle.REOPEN_CLEARED_FIELDS) -- the next complete recomputes them.
+        """
+        original = self._load(execution_id, expected_version)
+        execution = self._transition(original, "reopen")
+        has_sessions = bool(self._repository.list_sessions(execution_id))
+        update = {name: None for name in REOPEN_CLEARED_FIELDS}
+        update["status"] = reopen_target(has_sessions)
+        return self._commit(original, execution.model_copy(update=update))
+
+    @_atomic
+    def set_outcome(
+        self,
+        task: CanonicalTask,
+        placement: CanonicalScheduledTask,
+        outcome: TaskOutcome | str,
+        *,
+        expected_version: int | None = None,
+        require_version: bool = False,
+    ) -> TaskExecution | None:
+        """
+        Put one saved placement in the Uncompleted / Tasks / Completed column
+        `outcome`, in one transaction: the placement's execution is created
+        when it has none (never duplicated) and driven there with the
+        lifecycle actions of lifecycle.outcome_actions. With require_version,
+        expected_version is the execution version the caller showed (None:
+        it showed no execution), and anything else stored now is a conflict
+        -- nothing changes. Returns the execution (None when a placement
+        without one stays pending).
+        """
+        target = TaskOutcome(outcome)
+        existing = self.find_execution_for_placement(placement.id)
+        stored_version = existing.version if existing is not None else None
+        if require_version and stored_version != expected_version:
+            raise ExecutionVersionConflictError(
+                existing.id if existing is not None else str(placement.id),
+                expected_version=expected_version, current_version=stored_version)
+        actions = outcome_actions(existing.status if existing is not None else None, target)
+        if not actions:
+            return existing
+        execution = existing or self.get_or_create_canonical_execution(task, placement)
+        for action in actions:
+            execution = getattr(self, action)(execution.id, expected_version=execution.version)
+        return execution
+
+    @_atomic
+    def set_outcomes(self, items, outcome: TaskOutcome | str) -> BulkOutcomeResult:
+        """
+        Put every (task, placement) of `items` in the `outcome` column, all
+        in ONE transaction (the Week/Month bulk actions): each is exactly
+        set_outcome without a precondition. A cancelled attempt is left as
+        it is and reported in `skipped`; any other failure rolls the whole
+        batch back.
+        """
+        target = TaskOutcome(outcome)
+        changed, unchanged, skipped = [], [], []
+        for task, placement in items:
+            existing = self.find_execution_for_placement(placement.id)
+            try:
+                actions = outcome_actions(existing.status if existing is not None else None, target)
+            except OutcomeChangeError:
+                skipped.append(placement.id)
+                continue
+            if not actions:
+                unchanged.append(placement.id)
+                continue
+            self.set_outcome(task, placement, target)
+            changed.append(placement.id)
+        return BulkOutcomeResult(changed=tuple(changed), unchanged=tuple(unchanged), skipped=tuple(skipped))
+
+    @_atomic
     def cancel(self, execution_id: str, *, expected_version: int | None = None) -> TaskExecution:
         """
         (scheduled | in_progress | paused) -> cancelled. Closes any open
         session; no completion metrics are computed, mirroring skip().
-        cancelled is terminal: no action is allowed out of it, same as
-        completed/skipped (see _TRANSITIONS).
+        cancelled is terminal: no action (not even reopen) is allowed out
+        of it (see _TRANSITIONS).
         """
         original = self._load(execution_id, expected_version)
         execution = self._transition(original, "cancel")
@@ -497,6 +585,10 @@ class ExecutionService:
     def find_execution_for_placement(self, scheduled_task_id: uuid.UUID) -> TaskExecution | None:
         """The existing execution for a canonical placement, or None -- never creates one."""
         return self._repository.find_by_scheduled_task_id(str(scheduled_task_id))
+
+    def executions_for_placements(self, placement_ids) -> dict[uuid.UUID, TaskExecution]:
+        """The live executions of these placements, by placement id, in one read (never creates any)."""
+        return self._repository.find_by_scheduled_task_ids([str(value) for value in placement_ids])
 
     def list_executions(self, status: ExecutionStatus | None = None) -> list[TaskExecution]:
         return self._repository.list_executions(status)
@@ -600,6 +692,7 @@ def build_canonical_execution(
         planned_end=None,
         planned_duration=planned_duration_minutes,
         priority=task.priority,
+        points=task.points,
         status=ExecutionStatus.SCHEDULED,
         created_at=now_iso,
         updated_at=now_iso,

@@ -72,8 +72,9 @@ _ADHD = frozenset({OptimizerMode.ADHD_FRIENDLY})
 
 #: The fields every scope shows (category fields are added per category by field_specs).
 BASE_FIELDS: tuple[FieldSpec, ...] = (
-    FieldSpec("day_window", "Scheduling window",
-              "Flexible tasks are placed only inside this part of the day. Fixed blocks are shown either way.",
+    FieldSpec("day_window", "Day window (start and end of the day)",
+              "Flexible tasks are placed only inside this part of the day; fixed blocks must lie inside it too. "
+              "Also shown above the Day, Week and Month schedules.",
               "window", "Day"),
     FieldSpec("reward.weight_importance", "Priority weight",
               "How strongly higher-priority tasks win the better times.", "number", "Scoring"),

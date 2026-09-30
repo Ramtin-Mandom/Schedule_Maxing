@@ -114,8 +114,9 @@ sent as a server precondition.
   never push the stored version forward.
 - **Executions** (`ExecutionService`). Each logical mutation adds exactly 1
   to `version`, however many rows it writes. The logical mutations are
-  start, pause, resume, complete, skip, cancel, record_feedback, and
-  delete_execution. For example, start writes the status change, a new
+  start, pause, resume, complete, skip, cancel, reopen, record_feedback,
+  and delete_execution (ExecutionService.set_outcome is a sequence of these,
+  each counted). For example, start writes the status change, a new
   work session, and the first-start time, and still adds only 1. Creation
   stores version 1.
 - **Preconditions.** Every update and delete takes `expected_version`: the
@@ -130,8 +131,8 @@ sent as a server precondition.
     information.
 
   `record_feedback` and `delete_execution` require a precondition. The
-  execution state transitions accept one (the desktop Execute tab passes
-  the version it shows). Without one, the transition table is still
+  execution state transitions accept one (the Day page's status board
+  passes the version it shows). Without one, the transition table is still
   checked against the stored status inside the same transaction.
 - **Range operations.** Reset (`clear_range`) and range rescheduling read
   whatever is stored inside one transaction. Rescheduling requires the

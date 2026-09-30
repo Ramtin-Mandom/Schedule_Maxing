@@ -6,7 +6,9 @@ PreferencesEditor shows one row per field of app/ui/preferences_model.py:
 the value scheduling uses, where it comes from (set for this layer,
 inherited, or explicitly cleared), an input pre-filled with it, and the
 actions Save, Use inherited and -- for per-category fields -- No
-preference. It only calls back; saving goes through the page's presenter.
+preference. Window fields (the day window, category preferred times) use the
+shared [ Hour ] : [ Minute ] [ AM/PM ] input (app/ui/clock_input.py). It
+only calls back; saving goes through the page's presenter.
 DayPreferencesDialog hosts it for one date; the later Settings page hosts
 the same editor for the default (user) layer.
 """
@@ -18,16 +20,19 @@ from collections.abc import Callable
 
 import customtkinter as ctk
 
+from app.ui.paint_widgets import AppScrollableFrame
+
 from app.planning.errors import PlanningError
 from app.ui import theme
 from app.ui.background import run_io
+from app.ui.clock_input import ClockInput
 from app.ui.components import AppButton, LabeledEntry, ModalDialog, Notice, font
 from app.ui.preferences_model import FieldInput, PreferenceRow
 
 _STATE_WORDS = {"set": "set here", "inherited": "inherited", "cleared": "cleared here"}
 
 
-class PreferencesEditor(ctk.CTkScrollableFrame):
+class PreferencesEditor(AppScrollableFrame):
     """The field rows; on_save(key, value), on_inherit(key) and on_clear(key) do the work."""
 
     def __init__(self, parent, *, on_save: Callable[[str, FieldInput], None], on_inherit: Callable[[str], None],
@@ -36,7 +41,7 @@ class PreferencesEditor(ctk.CTkScrollableFrame):
         self.columnconfigure(0, weight=1)
         self._on_save, self._on_inherit, self._on_clear = on_save, on_inherit, on_clear
         self.rows: dict[str, PreferenceRow] = {}
-        self.inputs: dict[str, tuple[LabeledEntry, ...]] = {}
+        self.inputs: dict[str, tuple[LabeledEntry | ClockInput, ...]] = {}
         self.buttons: dict[str, dict[str, AppButton]] = {}
         self.error_labels: dict[str, ctk.CTkLabel] = {}
         self.value_labels: dict[str, ctk.CTkLabel] = {}
@@ -82,10 +87,13 @@ class PreferencesEditor(ctk.CTkScrollableFrame):
         inputs.grid(row=4, column=0, columnspan=2, sticky="ew", padx=6, pady=(2, 6))
         inputs.columnconfigure((0, 1), weight=1)
         if isinstance(row.edit, tuple):
-            start = LabeledEntry(inputs, "From", tk.StringVar(value=row.edit[0]), placeholder="9:00 AM")
-            end = LabeledEntry(inputs, "Until", tk.StringVar(value=row.edit[1]), placeholder="5:00 PM")
-            start.grid(row=0, column=0, sticky="ew", padx=4)
-            end.grid(row=0, column=1, sticky="ew", padx=4)
+            start_label, end_label = ("Start", "End") if spec.kind == "window" else ("From", "Until")
+            start = ClockInput(inputs, start_label)
+            end = ClockInput(inputs, end_label, end_of_interval=True)
+            start.variable.set(row.edit[0])
+            end.variable.set(row.edit[1])
+            start.grid(row=0, column=0, sticky="w", padx=4)
+            end.grid(row=0, column=1, sticky="w", padx=4)
             self.inputs[key] = (start, end)
         else:
             entry = LabeledEntry(inputs, "Value" + (" (minutes)" if spec.kind == "minutes" else ""),
@@ -113,7 +121,9 @@ class PreferencesEditor(ctk.CTkScrollableFrame):
         error.grid(row=6, column=0, columnspan=2, sticky="ew", padx=10)
         self.error_labels[key] = error
         for field in self.inputs[key]:
-            field.entry.bind("<Return>", lambda _e: (self.save(key), "break")[1], add="+")
+            entries = (field.hour_entry, field.minute_entry) if isinstance(field, ClockInput) else (field.entry,)
+            for entry in entries:
+                entry.bind("<Return>", lambda _e: (self.save(key), "break")[1], add="+")
         return frame
 
     def value_of(self, key: str) -> FieldInput:

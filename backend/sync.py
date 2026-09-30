@@ -98,7 +98,7 @@ class SyncOperationIn(BaseModel):
     entity_id: uuid.UUID
     kind: Literal["create", "update", "delete", "action", "feedback"]
     base_version: int | None = Field(default=None, gt=0)
-    action: Literal["start", "pause", "resume", "complete", "skip", "cancel", "reschedule"] | None = None
+    action: Literal["start", "pause", "resume", "complete", "skip", "cancel", "reopen", "reschedule"] | None = None
     payload: dict[str, Any] | None = None
     group: uuid.UUID | None = None
 

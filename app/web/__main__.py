@@ -37,7 +37,8 @@ def main(argv: list[str] | None = None) -> int:
     location = parser.add_mutually_exclusive_group()
     location.add_argument("--db-path", type=Path, help="The SQLite database file (default: the desktop app's).")
     location.add_argument("--data-dir", type=Path, help="A data directory; its executions.db is used.")
-    parser.add_argument("--timezone", help="IANA timezone to plan in (default: SCHEDULE_MAXING_TIMEZONE or UTC).")
+    parser.add_argument("--timezone", help="IANA timezone to plan in (default: SCHEDULE_MAXING_TIMEZONE, "
+                                             "else this computer's time zone).")
     parser.add_argument("--host", default="127.0.0.1", help="A loopback address (default 127.0.0.1).")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--backend-url", help="Synchronize with this backend (saved for next time).")

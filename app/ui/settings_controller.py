@@ -17,6 +17,37 @@ class DefaultPreferencesView:
     timezone: str
 
 
+class TaskDataResetController:
+    """
+    Settings' "Reset All Task Data" (Tk-free): runs the services' reset and
+    turns every failure into a message that says nothing was deleted. The
+    services do the server part first and touch local data only after it
+    succeeded (AppServices / DirectAppServices.reset_task_data).
+    """
+
+    def __init__(self, services) -> None:
+        self._services = services
+
+    def reset(self) -> ControllerResult:
+        from app.persistence.errors import NotSignedInError
+        from app.sync.transport import AuthenticationError, ProtocolError, TransportError
+
+        try:
+            return ControllerResult.success(self._services.reset_task_data())
+        except TransportError as error:
+            return ControllerResult.failure("The server could not be reached, so nothing was deleted -- not on the "
+                                            "server and not on this device. Try again when you are online.", error)
+        except (AuthenticationError, NotSignedInError) as error:
+            return ControllerResult.failure("Your sign-in has expired. Sign in again on the Account page, then reset. "
+                                            "Nothing was deleted.", error)
+        except ProtocolError as error:
+            return ControllerResult.failure(f"The server refused the reset: {error}. Nothing was deleted.", error)
+        except RuntimeError as error:
+            return ControllerResult.failure(f"{error} Nothing was deleted.", error)
+        except Exception as error:  # noqa: BLE001 - the reset is transactional: a failure changed nothing
+            return ControllerResult.failure(f"The reset failed and nothing was deleted: {error}", error)
+
+
 class SettingsController:
     def __init__(self, planning, *, today=date.today):
         self.planning, self.today = planning, today

@@ -297,6 +297,20 @@ class AccountSession(_Services):
         self.require_active()
         return self._backend.operation(translate)
 
+    def reset_task_data(self) -> dict[str, int]:
+        """
+        Remove this account's task, schedule and execution data in one
+        transaction under its lock -- the server's own implementation
+        (backend/task_data_reset.py); the account and its settings stay.
+        Returns how many live records of each type were removed.
+        """
+        from backend.mutations import mutation
+        from backend.task_data_reset import reset_task_data
+
+        with self.operation() as session:
+            with mutation(session, self.user_id, self.clock) as mutator:
+                return reset_task_data(mutator)["removed"]
+
     def profile(self) -> accounts.AccountIdentity:
         """The account as stored now (display name, version), re-read."""
         with self.operation() as session:

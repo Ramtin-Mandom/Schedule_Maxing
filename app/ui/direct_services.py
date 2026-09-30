@@ -115,6 +115,18 @@ class DirectAppServices:
             raise direct_errors.NotSignedInError()
         return account.profile()
 
+    def reset_task_data(self) -> dict[str, int]:
+        """
+        Settings' "Reset All Task Data": the signed-in account's task data in
+        the database, in one transaction under the account's lock -- the
+        server's own implementation (backend/task_data_reset.py). This device
+        keeps no copy of its own. Call from a worker; rebuild the pages after.
+        """
+        account = self.account
+        if account is None:
+            raise direct_errors.NotSignedInError()
+        return account.reset_task_data()
+
     # ------------------------------------------------------------------
     # Workspace (the same contract as AppServices)
     # ------------------------------------------------------------------

@@ -16,7 +16,11 @@ difference between the last acknowledged server state (the shadow) and the
 local aggregate as that sequence of actions (with the local session times
 as `at`) followed by feedback; the engine sends them as one atomic group.
 Local history that cannot be expressed that way (sessions that differ from
-the server's) is reported as DivergedHistory.
+the server's) is reported as DivergedHistory. An attempt the server has as
+completed/skipped that this device reopened (the Day page's "back to
+Tasks") starts with the lifecycle action "reopen"; one that was reopened
+and finished again differs from the server's in its status or its finish
+time, and is sent as reopen followed by the new finishing action.
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ from datetime import datetime
 from typing import Any
 
 from app.execution.errors import ExecutionNotFoundError
+from app.execution.lifecycle import TRANSITIONS, reopen_target
 from app.execution.models import TERMINAL_STATUSES, ExecutionStatus, TaskExecution
 from app.execution.repository import ExecutionRepository
 from app.planning.models import FixedBlock, Project, ScheduledTask, Task
@@ -38,7 +43,8 @@ from app.planning.repository import PlanningRepository
 ENTITY_ORDER = ("project", "task", "fixed_block", "placement", "preference", "schedule_generation", "execution")
 
 _TASK_FIELDS = (
-    "project_id", "name", "category", "tags", "estimated_duration_minutes", "priority", "required", "required_date",
+    "project_id", "name", "category", "tags", "estimated_duration_minutes", "priority", "points", "required",
+    "required_date",
     "preferred_dates", "preferred_time_window", "dependency_ids", "deadline", "recurrence",
 )
 _BLOCK_FIELDS = ("label", "category", "planned_date", "timezone", "planned_start", "planned_end")
@@ -53,7 +59,7 @@ _GENERATION_FIELDS = (
 )
 _EXECUTION_FIELDS = (
     "task_name", "category", "tag", "planned_date", "planned_start", "planned_end", "planned_duration", "priority",
-    "actual_active_duration_minutes", "duration_variance_minutes", "start_delay_minutes", "focus_rating",
+    "points", "actual_active_duration_minutes", "duration_variance_minutes", "start_delay_minutes", "focus_rating",
     "energy_rating", "interruption_count", "note", "canonical_planned_date", "canonical_timezone",
     "canonical_planned_start", "canonical_planned_end", "actual_first_start_at", "actual_final_end_at",
 )
@@ -252,6 +258,19 @@ def _local_text(value: str | None) -> str | None:
     return _instant(value).isoformat() if value is not None else None
 
 
+def _reopened_here(shadow: dict, execution: TaskExecution) -> bool:
+    """Whether this device reopened an attempt the server has as finished (completed/skipped)."""
+    if execution.status not in TERMINAL_STATUSES:
+        return True
+    if execution.status.value != shadow["status"]:
+        return True  # finished differently after a reopen (e.g. completed, then back, then uncompleted)
+    remote_final = shadow.get("actual_final_end_at")
+    local_final = execution.actual_final_end_at
+    if remote_final is None or local_final is None:
+        return False
+    return abs((local_final - _instant(remote_final)).total_seconds()) >= 1  # finished again, at a new time
+
+
 def execution_changes(shadow: dict, local: LocalRecord) -> list[tuple[str, str | None, dict]]:
     """
     (kind, action, payload) operations that turn the server aggregate `shadow`
@@ -270,6 +289,10 @@ def execution_changes(shadow: dict, local: LocalRecord) -> list[tuple[str, str |
     status = ExecutionStatus(shadow["status"])
     final = execution.actual_final_end_at
     operations: list[tuple[str, str | None, dict]] = []
+
+    if status in TRANSITIONS["reopen"][0] and _reopened_here(shadow, execution):
+        operations.append(("action", "reopen", {}))
+        status = reopen_target(bool(remote_sessions))
 
     def close(at: str, is_last: bool) -> None:
         nonlocal status

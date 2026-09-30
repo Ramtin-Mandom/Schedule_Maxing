@@ -7,7 +7,8 @@ Shell pages that are not schedule pages (Milestone 4 desktop):
   step. It says so plainly and links to what already works; it never shows
   controls that do nothing.
 - SettingsPage: device appearance and interface size plus persisted user
-  scheduling defaults through SettingsController and the shared editor.
+  scheduling defaults through SettingsController and the shared editor, and
+  the destructive "Reset All Task Data" (confirmed first; the app runs it).
 
 Both only call the callbacks they are given.
 """
@@ -18,6 +19,8 @@ from collections.abc import Callable
 
 import customtkinter as ctk
 
+from app.ui.paint_widgets import AppScrollableFrame
+
 from app.persistence.errors import NotSignedInError
 from app.ui import theme
 from app.ui.background import run_io
@@ -27,6 +30,16 @@ from app.ui.preferences_editor import PreferencesEditor
 from app.ui.ui_settings import SCALES, LANGUAGES, UISettings
 
 APPEARANCE_LABELS = {"light": "Light", "dark": "Dark"}
+
+
+#: The "Reset All Task Data" confirmation: what goes, where, what stays, and that it cannot be undone.
+RESET_TASK_DATA_MESSAGE = (
+    "This permanently removes all of your tasks, fixed blocks, projects, schedules, and completion and "
+    "execution history, with the productivity data they give -- from this account on every device, and "
+    "from this computer. It cannot be undone.\n\n"
+    "Kept: your account and sign-in, and your settings (appearance, default scheduling preferences and "
+    "day windows)."
+)
 
 
 def scale_label(scale: float) -> str:
@@ -44,7 +57,7 @@ class PageHeader(ctk.CTkFrame):
                          justify="left", wraplength=520).grid(row=1, column=0, sticky="ew", pady=(2, 0))
 
 
-class ScrollPage(ctk.CTkScrollableFrame):
+class ScrollPage(AppScrollableFrame):
     """
     Hosts a page whose content can be taller than a small window, so every
     control stays reachable by scrolling. build(parent) makes the content;
@@ -101,8 +114,11 @@ class SettingsPage(ctk.CTkFrame):
         on_scale: Callable[[float], bool],
         controller=None,
         background_io: bool = False,
+        on_reset_task_data: Callable[[Callable], None] | None = None,
     ) -> None:
         super().__init__(parent, fg_color=theme.APP_BG, corner_radius=0)
+        #: Runs the reset in a worker and calls back with its ControllerResult (the app wires TaskDataResetController).
+        self._on_reset_task_data = on_reset_task_data
         #: Direct PostgreSQL storage: the defaults are read and saved in workers (app/ui/background.run_io).
         self.background_io = background_io
         self.columnconfigure(0, weight=1)
@@ -114,7 +130,7 @@ class SettingsPage(ctk.CTkFrame):
         PageHeader(self, "Settings", "Appearance on this device and scheduling defaults for your workspace."
                    ).grid(row=0, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(22, 12))
 
-        body = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        body = AppScrollableFrame(self, fg_color="transparent")
         body.grid(row=1, column=0, sticky="nsew", padx=theme.SPACE_M, pady=(0, theme.SPACE_L))
         body.columnconfigure(0, weight=1)
 
@@ -165,6 +181,21 @@ class SettingsPage(ctk.CTkFrame):
         self.editor.grid(row=5, column=0, sticky="ew", padx=8)
         self.reset_button = AppButton(defaults, "Reset default overrides…", self.reset_defaults, variant="danger")
         self.reset_button.grid(row=6, column=0, sticky="w", padx=16, pady=12)
+
+        danger = Card(body, border_color=theme.DANGER)
+        danger.grid(row=2, column=0, sticky="ew", padx=theme.SPACE_S, pady=(0, theme.SPACE_M))
+        danger.columnconfigure(0, weight=1)
+        SectionTitle(danger, "Reset all task data",
+                     "Removes every task, fixed block, project, schedule and completion record of this workspace "
+                     "-- on the server for an account, and on this device. Your account and settings stay.",
+                     wraplength=440).grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 6))
+        self.reset_data_button = AppButton(danger, "Reset All Task Data", self.reset_task_data, variant="danger")
+        self.reset_data_button.grid(row=1, column=0, sticky="w", padx=16, pady=(0, 8))
+        self.reset_data_notice = Notice(danger, wraplength=450)
+        self.reset_data_notice.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 12))
+        self.reset_data_notice.hide()
+        if on_reset_task_data is None:
+            self.reset_data_button.configure(state="disabled")
 
     def _io(self, work, done):
         run_io(self, work, done, background=self.background_io)
@@ -226,6 +257,32 @@ class SettingsPage(ctk.CTkFrame):
                 confirm_text="Reset defaults", danger=True):
             view = self.view
             self._io(lambda: self.controller.reset(view), self.apply_result)
+
+    def reset_task_data(self) -> None:
+        """Confirm (destructive: Enter does not confirm), then reset; the result is said here either way."""
+        if self._on_reset_task_data is None:
+            return
+        if not ask_confirm(self, title="Reset all task data?", message=RESET_TASK_DATA_MESSAGE,
+                           confirm_text="Reset All Task Data", danger=True):
+            self.reset_data_notice.show("info", "Reset cancelled; nothing was deleted.")
+            return
+        self.reset_data_button.configure(state="disabled", text="Resetting...")
+        self.reset_data_notice.hide()
+        self._on_reset_task_data(self._task_data_reset)
+
+    def _task_data_reset(self, result) -> None:
+        if not self.winfo_exists():
+            return
+        self.reset_data_button.configure(state="normal", text="Reset All Task Data")
+        if not result.ok:
+            self.reset_data_notice.show("error", result.error or "The reset failed; nothing was deleted.")
+            return
+        removed = result.value or {}
+        parts = [f"{removed.get('task', 0)} task(s)", f"{removed.get('fixed_block', 0)} fixed block(s)",
+                 f"{removed.get('placement', 0)} scheduled entr(ies)", f"{removed.get('execution', 0)} completion "
+                 "record(s)", f"{removed.get('project', 0)} project(s)"]
+        self.reset_data_notice.show("success", "All task data was removed: " + ", ".join(parts) + ". Your account "
+                                               "and settings were kept.")
 
     def _appearance_chosen(self, label: str) -> None:
         mode = next(key for key, value in APPEARANCE_LABELS.items() if value == label)

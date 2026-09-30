@@ -179,6 +179,11 @@ class Project(BaseModel):
 # -----------------------------------------------------------------------------
 
 
+#: Task.points: the default of a new task, and the largest value accepted.
+DEFAULT_TASK_POINTS = 1
+MAX_TASK_POINTS = 1000
+
+
 class Task(BaseModel):
     """
     A canonical planning task.
@@ -202,6 +207,9 @@ class Task(BaseModel):
 
     estimated_duration_minutes: int = Field(gt=0)
     priority: int = Field(ge=1, le=10)
+    #: The user's own productivity value of the task (the task form's "Points"): what finishing it is worth to
+    #: them, for analytics. Not a scheduling input and unrelated to a placement's optimizer `score`.
+    points: int = Field(default=DEFAULT_TASK_POINTS, ge=0, le=MAX_TASK_POINTS)
 
     required: bool = False
     required_date: date_ | None = None

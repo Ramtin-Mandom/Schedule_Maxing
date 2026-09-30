@@ -7,8 +7,9 @@ window width calls for, and the date each page last showed.
 
 Navigation: Day, Week and Month Schedule, Project Schedule, Allocation
 Planning, Productivity (the existing execution analytics; Execute stays in
-each schedule page), Settings, Account and About. The app starts on Day with
-the sidebar collapsed; the sidebar's open state is never persisted.
+each schedule page), Settings, Account, How to Use (the in-app guide) and
+About. The app starts on Day with the sidebar collapsed; the sidebar's open
+state is never persisted.
 
 Layout: the page width (in logical pixels, i.e. divided by the interface
 scale) picks WIDE / MEDIUM / NARROW. A small hysteresis band keeps a window
@@ -43,6 +44,7 @@ NAV_ITEMS: tuple[NavItem, ...] = (
     NavItem("productivity", "Productivity", "%"),
     NavItem("settings", "Settings", "S"),
     NavItem("account", "Account", "@", placeholder=True),
+    NavItem("guide", "How to Use", "?"),
     NavItem("about", "About", "i", placeholder=True),
 )
 NAV_KEYS = tuple(item.key for item in NAV_ITEMS)

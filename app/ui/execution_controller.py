@@ -19,6 +19,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 
 from app.execution.errors import ExecutionError, ExecutionVersionConflictError, InvalidTransitionError
+from app.execution.lifecycle import TaskOutcome
 from app.execution.models import ExecutionStatus, TaskExecution
 from app.execution.service import ExecutionService, compute_active_duration_minutes
 from app.planning.models import ScheduledTask as CanonicalScheduledTask
@@ -26,8 +27,9 @@ from app.planning.models import Task as CanonicalTask
 from app.ui.background import ControllerResult
 from app.ui.execution_workflow import ExecutionItemView, describe_item
 
-#: Lifecycle actions the Execute tab runs through ExecutionController.perform.
-LIFECYCLE_ACTIONS = ("start", "pause", "resume", "complete", "skip", "cancel")
+#: Lifecycle actions ExecutionController.perform runs (the Tk-free API for timed work; the Day page's board
+#: moves tasks with set_outcome instead).
+LIFECYCLE_ACTIONS = ("start", "pause", "resume", "complete", "skip", "cancel", "reopen")
 
 # Which of start/pause/resume/complete/skip are valid from each status. This
 # is a UI-facing view of app.execution.service's own transition rules (see
@@ -36,11 +38,11 @@ LIFECYCLE_ACTIONS = ("start", "pause", "resume", "complete", "skip", "cancel")
 # inside ExecutionService. Keep this in sync if the service's transition
 # table ever changes.
 _AVAILABLE_ACTIONS: dict[ExecutionStatus, tuple[str, ...]] = {
-    ExecutionStatus.SCHEDULED: ("start", "skip"),
+    ExecutionStatus.SCHEDULED: ("start", "complete", "skip"),
     ExecutionStatus.IN_PROGRESS: ("pause", "complete", "skip"),
     ExecutionStatus.PAUSED: ("resume", "complete", "skip"),
-    ExecutionStatus.COMPLETED: (),
-    ExecutionStatus.SKIPPED: (),
+    ExecutionStatus.COMPLETED: ("reopen",),
+    ExecutionStatus.SKIPPED: ("reopen",),
     # cancelled is terminal, same as completed/skipped. Listed explicitly
     # (rather than relying on a .get(..., ()) default) so a cancelled
     # execution loaded by the still-legacy UI (e.g. one created through the
@@ -67,7 +69,7 @@ class ExecutionController:
 
     def describe(self, placement: CanonicalScheduledTask, execution: TaskExecution | None
                  ) -> ControllerResult[ExecutionItemView]:
-        """The Execute tab's view of a saved placement now (reads only; never creates an execution)."""
+        """A saved placement's execution state in words (reads only; never creates an execution)."""
 
         def op() -> ExecutionItemView:
             now = self._clock()
@@ -111,6 +113,32 @@ class ExecutionController:
             return result
 
         return self._call(op)
+
+    def set_outcome(
+        self,
+        task: CanonicalTask,
+        placement: CanonicalScheduledTask,
+        outcome: TaskOutcome | str,
+        *,
+        expected_version: int | None,
+    ) -> ControllerResult[TaskExecution | None]:
+        """
+        Move a saved placement to the Uncompleted / Tasks / Completed column
+        (its execution's lifecycle actions, one transaction; see
+        ExecutionService.set_outcome). expected_version is the execution
+        version on screen (None: none was shown), so a change made elsewhere
+        is reported and reloaded, never overwritten.
+        """
+        return self._call(lambda: self._service.set_outcome(task, placement, outcome, expected_version=expected_version,
+                                                            require_version=True))
+
+    def set_outcomes(self, items, outcome: TaskOutcome | str) -> ControllerResult:
+        """Every (task, placement) of `items` to the column `outcome`, in one transaction (a BulkOutcomeResult)."""
+        return self._call(lambda: self._service.set_outcomes(list(items), outcome))
+
+    def executions_for_placements(self, placement_ids) -> ControllerResult[dict[uuid.UUID, TaskExecution]]:
+        """The live executions of these placements, by placement id (one read; never creates any)."""
+        return self._call(lambda: self._service.executions_for_placements(list(placement_ids)))
 
     def _active_minutes(self, execution_id: str, now: datetime) -> float:
         sessions = self._service.list_sessions(execution_id)
@@ -166,6 +194,9 @@ class ExecutionController:
 
     def skip(self, execution_id: str, *, expected_version: int | None = None) -> ControllerResult[TaskExecution]:
         return self._call(lambda: self._service.skip(execution_id, expected_version=expected_version))
+
+    def reopen(self, execution_id: str, *, expected_version: int | None = None) -> ControllerResult[TaskExecution]:
+        return self._call(lambda: self._service.reopen(execution_id, expected_version=expected_version))
 
     def cancel(self, execution_id: str, *, expected_version: int | None = None) -> ControllerResult[TaskExecution]:
         """Not yet wired to a UI control (see Task 6); exposed so callers/tests can exercise it."""

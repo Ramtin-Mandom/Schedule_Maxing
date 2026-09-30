@@ -10,9 +10,10 @@ Writes are deliberately narrow so history cannot be corrupted:
       order and non-overlapping; only an in-progress execution has an open
       session, and it is the last one; a scheduled execution has no
       sessions). This is how existing local history is uploaded.
-    - lifecycle actions (start/pause/resume/complete/skip/cancel): the same
-      transition table and completion metrics as the desktop
-      (app/execution/lifecycle.py); terminal statuses allow no action.
+    - lifecycle actions (start/pause/resume/complete/skip/cancel/reopen): the
+      same transition table and completion metrics as the desktop
+      (app/execution/lifecycle.py); only reopen leaves completed/skipped,
+      keeping the sessions.
     - feedback: ratings, interruption count, note.
     - delete: a tombstone; sessions stay.
 There is no generic update: the planned snapshot, the task/placement
@@ -59,6 +60,8 @@ class ExecutionFields(Strict):
     planned_end: int | None = None
     planned_duration: int = Field(ge=0)
     priority: int = Field(ge=1, le=10)
+    #: The task's points when the execution was created (a snapshot); omitted/None when unknown.
+    points: int | None = Field(default=None, ge=0)
     status: ExecutionStatus = ExecutionStatus.SCHEDULED
     sessions: list[SessionIn] = Field(default_factory=list)
     actual_active_duration_minutes: float | None = None
@@ -132,7 +135,7 @@ class FeedbackIn(Strict, BaseVersion):
     note: str | None = None
 
 
-ACTIONS = ("start", "pause", "resume", "complete", "skip", "cancel")
+ACTIONS = ("start", "pause", "resume", "complete", "skip", "cancel", "reopen")
 
 
 class _ExecutionSpec:
@@ -167,7 +170,7 @@ EXECUTIONS = _ExecutionSpec()
 #: The execution snapshot columns a TaskExecution carries (the rest are ids, status and audit fields).
 SNAPSHOT_FIELDS = (
     "task_name", "category", "tag", "planned_date", "planned_start", "planned_end", "planned_duration", "priority",
-    "actual_active_duration_minutes", "duration_variance_minutes", "start_delay_minutes", "focus_rating",
+    "points", "actual_active_duration_minutes", "duration_variance_minutes", "start_delay_minutes", "focus_rating",
     "energy_rating", "interruption_count", "note", "task_id", "scheduled_task_id", "canonical_planned_date",
     "canonical_timezone", "canonical_planned_start", "canonical_planned_end", "actual_first_start_at",
     "actual_final_end_at",

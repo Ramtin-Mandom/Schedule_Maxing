@@ -1,7 +1,8 @@
 """
 app/ui/execution_workflow.py
 
-The Tk-free presentation rules of the Day page's Execute tab (Milestone 5):
+The Tk-free presentation rules of timed execution (Milestone 5; ExecutionController.describe) -- no longer
+shown as a Day page tab since the Uncompleted | Tasks | Completed board replaced it:
 what a saved placement's state is *now*, which actions are legal, and the
 planned/actual/active texts -- derived from the persisted placement, its
 execution (if any) and an explicit `now`, never stored.
@@ -31,7 +32,7 @@ from app.planning.models import ScheduledTask
 from app.planning.occurrence import HISTORY_PROTECTED_STATUSES
 from app.planning.time import elapsed_minutes
 
-#: The Execute tab's actions, in button order. "complete" is shown as Finish.
+#: The timed-execution actions, in order ("complete" is worded as Finish).
 ACTIONS = ("start", "pause", "resume", "complete", "skip", "cancel", "reschedule")
 ACTION_LABELS = {"start": "Start", "pause": "Pause", "resume": "Resume", "complete": "Finish", "skip": "Skip",
                  "cancel": "Cancel", "reschedule": "Reschedule..."}

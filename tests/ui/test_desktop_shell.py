@@ -3,7 +3,7 @@ database: the app opens on Day with a collapsed, keyboard-operable sidebar; ever
 reachable and the old workflows (Execute, Productivity, legacy reward config) remain;
 selected dates survive navigation; light/dark and the interface size persist; moving,
 resizing, minimizing and scaling settle into a stable layout without redraw loops or
-clipped pages; dialogs, drawers and the task list work from the keyboard.
+clipped pages; dialogs, drawers and the Day timeline work from the keyboard.
 
 Skipped automatically when no display is available (see tests/ui/test_desktop_app.py);
 the headless parts are in tests/ui/test_shell_foundation.py.
@@ -87,7 +87,7 @@ def test_the_app_opens_on_day_with_a_collapsed_keyboard_operable_sidebar(tmp_pat
         assert shell.current == "day"
 
         day = app.pages["day"]
-        assert day.execution_panel is not None  # Execute stays inside each schedule page
+        assert day.status_board.winfo_manager() == "grid"  # Uncompleted | Tasks | Completed replaces Execute
         app.show_page("settings")
         assert app.pages["settings"].engine_select.values == ["Normal", "ADHD friendly"]
         assert "reward" not in app.pages  # unsupported legacy weights are not exposed in the native app
@@ -254,20 +254,20 @@ def test_dialogs_drawers_and_the_task_list_work_from_the_keyboard(tmp_path: Path
         state.error("Offline", retry=lambda: None)
         assert state.message_label.cget("text") == "Error: Offline"
 
-        # The task list is the keyboard way to act on tasks: Enter edits, Delete removes, the menu lists both.
-        fill_form(day, name="Read")
+        # The Day timeline is the keyboard way to act on scheduled items: Enter edits, Delete removes, the
+        # menu lists both.
+        fill_form(day, name="Read", fixed=True, start="540", end="600")
         day.form.submit_button.invoke()
-        tree = day.added_tasks_panel.tree
-        item = tree.get_children()[0]
-        tree.selection_set(item)
-        tree.focus(item)
-        assert [entry.label for entry in day.added_tasks_panel._menu_items(None)] == [
-            "Edit...", "Remove...", "Use as dependencies"]
-        key(tree, "Return")
+        settle(app, 0.2)
+        timeline = day.schedule_canvas
+        timeline.canvas.focus_force()
+        key(timeline.canvas, "Home")
+        assert [entry.label for entry in timeline._menu_items(None)] == ["Edit...", "Remove..."]
+        key(timeline.canvas, "Return")
         assert day.form.editing and day.form.name_field.get() == "Read"
         day.cancel_edit()
-        tree.selection_set(item)
-        key(tree, "Delete")
+        key(timeline.canvas, "Home")
+        key(timeline.canvas, "Delete")
         assert tree_names(day) == [] and dialogs.errors == []
     finally:
         close_app(app)

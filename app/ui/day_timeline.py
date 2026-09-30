@@ -221,7 +221,7 @@ class DayTimeline(Card):
         parts = []
         if snapshot.window is not None:
             start, end = snapshot.window
-            parts.append(f"Scheduling window {format_clock(start)} – {format_clock(end)}")
+            parts.append(f"Day window {format_clock(start)} – {format_clock(end)}")
         if snapshot.free_gaps:
             parts.append("free: " + "; ".join(gap.text.removeprefix("Free ") for gap in snapshot.free_gaps))
         if not snapshot.timeline:
