@@ -151,6 +151,24 @@ def category_style(category: str | None) -> CategoryStyle:
 
 
 # -----------------------------------------------------------------------------
+# Historical day colours (Week/Month): a PAST date's scheduled-task outcome,
+# keyed by app.productivity.day_summary.DayStatusClass values. Soft enough for
+# the calm palette, with red/green still told apart; the page always says the
+# meaning in words too (legend, selected-day panel, cell text).
+# -----------------------------------------------------------------------------
+
+DAY_STATUS_FILLS: dict[str, Color] = {
+    "no_tasks": ("#E1E5EB", "#2B323D"),
+    "mostly_uncompleted_strong": ("#F2C4C0", "#6E2B2B"),
+    "mostly_completed_strong": ("#BDE3C8", "#205B37"),
+    "mostly_uncompleted": ("#F8DCD9", "#4B2A2A"),
+    "mostly_completed": ("#DAF0E0", "#27412F"),
+    "mostly_pending": ("#FFFFFF", "#1C2430"),
+    "mixed": ("#F9F0CC", "#4C4324"),
+}
+
+
+# -----------------------------------------------------------------------------
 # Resolving tokens for raw Tk widgets
 # -----------------------------------------------------------------------------
 

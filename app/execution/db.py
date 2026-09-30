@@ -940,6 +940,15 @@ _V7_STATEMENTS: tuple[str, ...] = (
 )
 
 
+# Version 8: the task's points (the user's own productivity value; 0..1000, default 1 -- existing tasks get the
+# default) and each execution's snapshot of them (NULL for executions created before: unknown, never back-filled).
+# ADD COLUMN writes no row, so the capture triggers record nothing. Additive only.
+_V8_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE tasks ADD COLUMN points INTEGER NOT NULL DEFAULT 1 CHECK (points BETWEEN 0 AND 1000)",
+    "ALTER TABLE executions ADD COLUMN points INTEGER CHECK (points IS NULL OR points >= 0)",
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     (
         1,
@@ -997,6 +1006,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     (5, _V5_STATEMENTS),
     (6, _V6_STATEMENTS),
     (7, _V7_STATEMENTS),
+    (8, _V8_STATEMENTS),
 )
 
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1][0]

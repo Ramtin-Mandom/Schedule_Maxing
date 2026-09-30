@@ -12,7 +12,7 @@ class DesktopCollection:
     """While Tk is alive, collect cycles on its thread rather than on sync workers.
 
     Reference counting still works normally. Only automatic cyclic collection is
-    replaced by a bounded main-thread timer; the original GC mode is restored when
+    replaced by an allocation-driven main-thread timer; the original GC mode is restored when
     the last desktop closes. Multiple test windows share this lifetime policy.
     """
     def __init__(self, root):
@@ -26,7 +26,15 @@ class DesktopCollection:
 
     def collect(self):
         if not self.closed:
-            gc.collect()
+            # Match generational allocation pressure, not elapsed wall time. A full
+            # heap scan every two seconds stalls even an entirely idle desktop.
+            # Collection stays on Tk's owner thread: worker finalizers may call Tcl.
+            counts, thresholds = gc.get_count(), gc.get_threshold()
+            if thresholds[0] and counts[0] >= thresholds[0]:
+                generation = 0
+                if counts[1] >= thresholds[1]:
+                    generation = 2 if counts[2] >= thresholds[2] else 1
+                gc.collect(generation)
             self.timer = self.root.after(2000, self.collect)
 
     def close(self):

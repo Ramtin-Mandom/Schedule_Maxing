@@ -102,8 +102,13 @@ operations. Each operation has this shape:
 ```json
 {"op_id": "<uuid>", "entity_type": "task", "entity_id": "<uuid>",
  "kind": "create|update|delete|action|feedback", "base_version": 3,
- "action": "start|pause|resume|complete|skip|cancel|reschedule", "payload": {...}, "group": "<uuid>|null"}
+ "action": "start|pause|resume|complete|skip|cancel|reopen|reschedule", "payload": {...}, "group": "<uuid>|null"}
 ```
+
+An execution the server has as `completed` or `skipped` that a device moved
+back to the Day board's Tasks column is sent as `reopen` (then, if it was
+finished again differently, the new `complete` or `skip`); see
+`app/sync/mapping.execution_changes`.
 
 `reschedule` is the one placement action (Milestone 5,
 [execution-rescheduling.md](execution-rescheduling.md#7-synchronization)):

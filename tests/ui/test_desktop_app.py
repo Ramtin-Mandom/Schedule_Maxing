@@ -24,6 +24,7 @@ from app.execution.service import ExecutionService
 from app.planning.application import PlanningService
 from app.planning.repository import PlanningRepository
 from app.ui import background
+from app.ui.schedule_page_controller import RowRef
 
 
 def _display_available() -> bool:
@@ -52,9 +53,7 @@ class Dialogs:
         import app.app as app_module
         import app.ui.calendar_page as calendar_module
         import app.ui.day_page as day_module
-        import app.ui.execution_panel as panel_module
-
-        for module in (app_module, panel_module):
+        for module in (app_module,):
             monkeypatch.setattr(module.messagebox, "showerror", lambda title, message, **_: self.errors.append(message))
             monkeypatch.setattr(module.messagebox, "showinfo", lambda title, message, **_: self.infos.append(message))
             monkeypatch.setattr(module.messagebox, "askyesno", lambda title, message, **_: self.confirm)
@@ -102,28 +101,58 @@ def close_app(app) -> None:
 
 
 def fill_form(page, *, name: str, day: str = "1", fixed: bool = False, start="480", end="720", duration="60") -> None:
-    """Fill the task editor like a user: day N of the page, times in minutes turned into typed h:mm AM/PM text."""
-    from app.ui.time_fields import format_clock
+    """
+    Fill the task editor like a user: select day N of the page (the form has no date field; a Week/Month
+    task gets the selected day, a Day task the page's date), then enter times as hour, minute and AM/PM.
+    """
+    from app.ui.time_fields import minutes_to_clock
 
+    target = page.page_controller.anchor_date + timedelta(days=int(day) - 1)
+    if hasattr(page, "select_date"):
+        page.select_date(target)
+    else:
+        assert target == page.page_controller.anchor_date, "the Day page adds to the date it shows"
     form = page.form
     form.set_kind("block" if fixed else "task")
     form.name_field.variable.set(name)
     form.category_select.variable.set("study")
-    form.date_field.variable.set((page.page_controller.anchor_date + timedelta(days=int(day) - 1)).isoformat())
+
+    def enter(field, minutes: int) -> None:
+        hour, minute, meridiem = minutes_to_clock(minutes)
+        field.hour_var.set(str(hour))
+        field.minute_var.set(f"{minute:02d}")
+        if field.meridiem != meridiem:
+            field.meridiem_button.invoke()  # AM/PM is a toggle, as a user clicks it
+
     if fixed:
-        form.start_field.variable.set(format_clock(int(start)))
-        form.end_field.variable.set(format_clock(int(end)))
+        enter(form.start_field, int(start))
+        enter(form.end_field, int(end))
     else:
         form.duration_field.variable.set(duration)
         form.priority_select.variable.set("5")
-        form.window_start.variable.set(format_clock(int(start)))
-        form.window_end.variable.set(format_clock(int(end)))
+        enter(form.window_start, int(start))
+        enter(form.window_end, int(end))
         form.tag_input.set_tags(["tag"])
 
 
 def tree_names(page) -> list[str]:
-    tree = page.added_tasks_panel.tree
-    return [tree.item(item_id, "values")[1] for item_id in tree.get_children()]
+    """The names of the saved tasks and fixed blocks of the page's dates, as the page last read them."""
+    return [row.name for row in page.snapshot.rows]
+
+
+def board_names(page) -> dict[str, list[str]]:
+    """The Day page's Uncompleted | Tasks | Completed columns, by name."""
+    from app.execution.lifecycle import TaskOutcome
+
+    board = page.status_board.board
+    return {outcome.value: sorted(card.name for card in board.column(outcome)) for outcome in TaskOutcome}
+
+
+def press(app, page, name: str, side: str) -> None:
+    """Click a card's left (x) or right (arrow) control on the Day board and wait for the saved state."""
+    card = next(card for card in page.status_board.board.cards if card.name == name)
+    page.status_board.card_widgets[card.key][side].invoke()
+    pump(app)
 
 
 def stored_tasks(db_path: Path):
@@ -152,10 +181,9 @@ def test_create_edit_delete_schedule_execute_close_reopen_reset(tmp_path: Path, 
     assert sorted(tree_names(week)) == ["Lecture", "Study", "Study"]
     assert [task.name for task in stored_tasks(db_path)] == ["Study", "Study"]
 
-    # Edit the Tuesday "Study" selected by its UUID row id.
+    # Edit the Tuesday "Study" by its id (as its Day page's Available-task button does).
     tuesday_task = next(t for t in stored_tasks(db_path) if t.preferred_dates == [date(2024, 6, 4)])
-    week.added_tasks_panel.tree.selection_set(f"task:{tuesday_task.id}")
-    week.edit_selected_task()
+    week.edit_ref(RowRef("task", tuesday_task.id, tuesday_task.version))
     assert week.form.submit_button.cget("text") == "Save changes"
     week.form.name_field.variable.set("Review")
     week.form.submit_button.invoke()
@@ -163,11 +191,11 @@ def test_create_edit_delete_schedule_execute_close_reopen_reset(tmp_path: Path, 
     assert {t.id: t.name for t in stored_tasks(db_path)}[tuesday_task.id] == "Review"
 
     # Delete it again, by id.
-    week.added_tasks_panel.tree.selection_set(f"task:{tuesday_task.id}")
-    week.remove_selected_task()
+    stored = next(t for t in stored_tasks(db_path) if t.id == tuesday_task.id)
+    week.remove_ref(RowRef("task", stored.id, stored.version))
     assert sorted(tree_names(week)) == ["Lecture", "Study"]
 
-    # Scheduling happens on Day: Open Day, Make Schedule (in the background), then Execute there.
+    # Scheduling happens on Day: Open Day, Make Schedule (in the background), then mark it done there.
     week.select_date(date(2024, 6, 3))
     week.open_day_button.invoke()
     day = app.pages["day"]
@@ -176,19 +204,17 @@ def test_create_edit_delete_schedule_execute_close_reopen_reset(tmp_path: Path, 
     pump(app, until=lambda: not day._busy)
     assert dialogs.errors == []
     assert day.freshness_badge.cget("text") == "Current"
-    panel = day.execution_panel
-    pump(app, until=lambda: "loading" not in panel.status_label.cget("text"))
-    assert panel.status_label.cget("text").endswith("Not started")
-
-    panel._action_buttons["start"].invoke()
-    pump(app, until=lambda: "In progress" in panel.status_label.cget("text"))
+    pump(app)
+    assert board_names(day) == {"pending": ["Study"], "completed": [], "uncompleted": []}
+    press(app, day, "Study", "right")
+    assert board_names(day) == {"pending": [], "completed": ["Study"], "uncompleted": []}
     day.back_button.invoke()
     assert app.shell.current == "week"
     assert week.snapshot.day(date(2024, 6, 3)).freshness_label == "Current"
     close_app(app)
     assert app.services.closed
 
-    # Reopen: tasks, fixed blocks, placements and the running execution are restored.
+    # Reopen: tasks, fixed blocks, placements and the completed status are restored.
     app = open_app(db_path, tmp_path)
     try:
         week = app.pages["week"]
@@ -197,8 +223,8 @@ def test_create_edit_delete_schedule_execute_close_reopen_reset(tmp_path: Path, 
         assert week.snapshot.day(date(2024, 6, 3)).freshness_label == "Current"
         day = app.pages["day"]
         day.open_date(date(2024, 6, 3))
-        panel = day.execution_panel
-        pump(app, until=lambda: "In progress" in panel.status_label.cget("text"))
+        pump(app)
+        assert board_names(day)["completed"] == ["Study"]
 
         # Reset Week: previewed and confirmed; execution history is kept.
         week.reset_button.invoke()
@@ -211,7 +237,7 @@ def test_create_edit_delete_schedule_execute_close_reopen_reset(tmp_path: Path, 
     connection = get_connection(db_path)
     try:
         [execution] = ExecutionService(ExecutionRepository(connection)).list_executions()
-        assert execution.status.value == "in_progress" and execution.task_name == "Study"
+        assert execution.status.value == "completed" and execution.task_name == "Study"
     finally:
         connection.close()
 
@@ -221,10 +247,10 @@ def test_invalid_input_shows_an_error_and_saves_nothing(tmp_path: Path, dialogs:
     try:
         day = app.pages["day"]
         fill_form(day, name="Bad", duration="0")
-        day.form.window_start.variable.set("25:00")
+        day.form.window_start.hour_var.set("13")  # hours are 1-12 beside the AM/PM toggle
         day.form.submit_button.invoke()
         assert day.form.duration_field.error == "A task takes at least 1 minute."  # shown next to its field
-        assert "hour goes from 0 to 23" in day.form.window_start.error
+        assert "hour goes from 1 to 12" in day.form.window_start.error
         assert day.form.notice.text.startswith("Error:")
         assert tree_names(day) == []
         assert day.form.name_field.get() == "Bad"  # the user's input is kept for correction

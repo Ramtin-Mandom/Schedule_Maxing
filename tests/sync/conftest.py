@@ -33,6 +33,7 @@ from app.sync.transport import (
     profile_via,
     pull_via,
     register_via,
+    reset_task_data_via,
     update_profile_via,
 )
 from app.ui.planning_controller import PlanningController
@@ -80,6 +81,9 @@ class InProcessTransport:
 
     def update_profile(self, token: str, base_version: int, display_name) -> dict:
         return update_profile_via(self._request, token, base_version, display_name)
+
+    def reset_task_data(self, token: str) -> dict:
+        return reset_task_data_via(self._request, token)
 
     def health(self) -> dict:
         return health_via(self._request)

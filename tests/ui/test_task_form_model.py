@@ -32,11 +32,15 @@ from app.ui.task_form_model import (
 )
 from app.ui.time_fields import (
     FieldError,
+    clock_parts_text,
+    clock_to_minutes,
     format_clock,
     format_duration,
+    minutes_to_clock,
     parse_clock,
+    parse_clock_parts,
     parse_duration,
-    step_clock,
+    toggle_meridiem,
 )
 
 DAY = date(2026, 9, 23)
@@ -73,11 +77,57 @@ def test_unreadable_times_say_what_to_type(text: str, message: str) -> None:
         parse_clock(text)
 
 
-def test_stepping_and_typing_give_the_same_minutes() -> None:
-    assert step_clock(parse_clock("10:12 AM"), 1) == parse_clock("10:13 AM")
-    assert step_clock(0, -1) == 1439 and step_clock(1439, 1) == 0  # wraps within the day
-    assert step_clock(1440, 1, end_of_interval=True) == 1 and step_clock(1, -1, end_of_interval=True) == 1440
-    assert step_clock(parse_clock("9:58 AM"), 15) == parse_clock("10:13 AM")
+# -----------------------------------------------------------------------------
+# [ Hour ] : [ Minute ] [ AM/PM ] -- the shared time input's conversions
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("hour, minute, meridiem, minutes", [
+    (12, 0, "AM", 0), (12, 30, "AM", 30), (1, 0, "AM", 60), (11, 59, "AM", 719), (12, 0, "PM", 720),
+    (12, 59, "PM", 779), (1, 15, "PM", 795), (11, 59, "PM", 1439), (10, 13, "AM", 613),
+])
+def test_twelve_hour_parts_convert_to_minutes_from_midnight_and_back(hour, minute, meridiem, minutes) -> None:
+    assert clock_to_minutes(hour, minute, meridiem) == minutes
+    assert minutes_to_clock(minutes) == (hour, minute, meridiem)
+    assert parse_clock_parts(str(hour), f"{minute:02d}", meridiem) == minutes
+    assert parse_clock(clock_parts_text(str(hour), str(minute), meridiem)) == minutes  # the text the forms carry
+
+
+def test_midnight_and_noon_edges() -> None:
+    assert clock_to_minutes(12, 0, "AM") == 0  # 12 AM is the start of the day, not noon
+    assert clock_to_minutes(12, 0, "PM") == 720  # 12 PM is noon, not midnight
+    assert clock_to_minutes(12, 0, "AM", end_of_interval=True) == 1440  # an end at 12 AM is the next midnight
+    assert clock_to_minutes(12, 1, "AM", end_of_interval=True) == 1  # only exactly midnight moves
+    assert minutes_to_clock(1440) == (12, 0, "AM")
+    assert clock_parts_text("12", "00", "AM", end_of_interval=True) == "12:00 AM (next day)"
+    assert parse_clock(clock_parts_text("12", "00", "AM", end_of_interval=True), end_of_interval=True) == 1440
+
+
+def test_am_pm_toggles_and_a_blank_minute_is_on_the_hour() -> None:
+    assert toggle_meridiem("AM") == "PM" and toggle_meridiem(toggle_meridiem("AM")) == "AM"
+    assert parse_clock_parts("9", "", "PM") == 1260
+    assert parse_clock_parts(" 9 ", " 5 ", "AM") == 545  # a one-digit minute is minute 5, shown as 9:05
+    assert clock_parts_text("9", "5", "AM") == "9:05 AM"
+    assert clock_parts_text("", "", "PM") == ""  # nothing typed: no time, whatever the toggle says
+
+
+@pytest.mark.parametrize("hour, minute, meridiem, message", [
+    ("0", "30", "AM", "hour goes from 1 to 12"), ("13", "00", "PM", "hour goes from 1 to 12"),
+    ("24", "00", "AM", "hour goes from 1 to 12"), ("7", "60", "AM", "Minutes go from 00 to 59"),
+    ("7", "123", "AM", "Minutes go from 00 to 59"), ("x", "00", "AM", "hour is a number"),
+    ("7", "3o", "PM", "minutes are a number"), ("", "30", "AM", "Enter the hour"), ("", "", "AM", "Enter a time"),
+    ("-1", "00", "AM", "hour is a number"), ("7", "00", "XM", "Choose AM or PM"),
+])
+def test_invalid_hours_and_minutes_are_refused_with_what_to_type(hour, minute, meridiem, message) -> None:
+    with pytest.raises(FieldError, match=message):
+        parse_clock_parts(hour, minute, meridiem)
+
+
+def test_invalid_parts_are_never_turned_into_a_time() -> None:
+    for hour, minute in (("13", "00"), ("7", "60"), ("x", "5")):
+        text = clock_parts_text(hour, minute, "PM")
+        with pytest.raises(FieldError):
+            parse_clock(text)  # the form refuses it; nothing is rounded or guessed
 
 
 @pytest.mark.parametrize("text, minutes", [

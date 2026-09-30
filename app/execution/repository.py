@@ -91,6 +91,7 @@ _EXECUTION_COLUMNS = (
     "actual_final_end_at",
     "version",
     "deleted_at",
+    "points",
 )
 
 
@@ -336,6 +337,23 @@ class ExecutionRepository:
             ).fetchone()
         return _row_to_execution(row) if row is not None else None
 
+    def find_by_scheduled_task_ids(self, scheduled_task_ids: list[str]) -> dict[uuid.UUID, TaskExecution]:
+        """The live executions of these placement ids, keyed by placement id (lookup only)."""
+        found: dict[uuid.UUID, TaskExecution] = {}
+        owner_sql, owner_params = self._owner_sql()
+        with self._read():
+            for start in range(0, len(scheduled_task_ids), 500):  # well under SQLite's parameter limit
+                chunk = scheduled_task_ids[start:start + 500]
+                marks = ", ".join("?" for _ in chunk)
+                rows = self._connection.execute(
+                    f"SELECT * FROM executions WHERE scheduled_task_id IN ({marks}) AND deleted_at IS NULL{owner_sql}",
+                    (*chunk, *owner_params),
+                ).fetchall()
+                for row in rows:
+                    execution = _row_to_execution(row)
+                    found[execution.scheduled_task_id] = execution
+        return found
+
     def list_executions(self, status: ExecutionStatus | None = None) -> list[TaskExecution]:
         """Return all live executions, optionally filtered by status, oldest first."""
         owner_sql, owner_params = self._owner_sql()
@@ -531,6 +549,7 @@ def _execution_to_row(execution: TaskExecution) -> tuple:
         _iso_or_none(execution.actual_final_end_at),
         execution.version,
         execution.deleted_at,
+        execution.points,
     )
 
 

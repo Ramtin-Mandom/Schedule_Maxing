@@ -16,6 +16,8 @@ from tkinter import messagebox
 
 import customtkinter as ctk
 
+from app.ui.paint_widgets import AppOptionMenu
+
 from app.ui import theme
 
 RATING_OPTIONS = ["(none)", "1", "2", "3", "4", "5"]
@@ -95,7 +97,7 @@ class FeedbackDialog(ctk.CTkToplevel):
         ctk.CTkLabel(self, text=label, text_color=theme.TEXT_MUTED, anchor="w").grid(
             row=row, column=0, sticky="ew", padx=18, pady=(4, 0)
         )
-        ctk.CTkOptionMenu(self, variable=variable, values=RATING_OPTIONS).grid(
+        AppOptionMenu(self, variable=variable, values=RATING_OPTIONS).grid(
             row=row, column=0, sticky="e", padx=18, pady=(0, 6)
         )
 

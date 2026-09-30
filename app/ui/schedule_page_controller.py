@@ -141,7 +141,7 @@ class CanvasItem:
 
 @dataclass(frozen=True)
 class ExecutablePlacement:
-    """A saved flexible placement the Execute tab can track, by identity."""
+    """A saved flexible placement whose execution the Day page's status board tracks, by identity."""
 
     task: Task
     placement: ScheduledTask
@@ -237,7 +237,7 @@ class SchedulePageController:
 
     @property
     def planning(self) -> PlanningController:
-        """The planning controller this page works through (e.g. for the Execute tab's reschedule)."""
+        """The planning controller this page works through."""
         return self._planning
 
     @property
@@ -314,9 +314,14 @@ class SchedulePageController:
     # The reusable task form (app/ui/task_form_model.py)
     # ------------------------------------------------------------------
 
+    @property
+    def form_date(self) -> date_:
+        """The real date a task or fixed block added on this page gets (the Day page's date)."""
+        return self._anchor
+
     def blank_draft(self, kind: str = "task") -> TaskDraft:
-        """An empty form for this page: dated on the page's (first) date."""
-        return TaskDraft(kind=kind, date=self._anchor.isoformat())
+        """An empty form for this page, dated on form_date."""
+        return TaskDraft(kind=kind, date=self.form_date.isoformat())
 
     def editor_options(self, editing: RowRef | None = None, *, category: str | None = None,
                        project_id: uuid.UUID | None = None) -> ControllerResult[EditorOptions]:

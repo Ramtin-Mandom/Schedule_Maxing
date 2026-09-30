@@ -61,6 +61,33 @@ def column_names(connection, table: str) -> list[str]:
 
 #: Placement columns added by schema v7 (Milestone 5); Milestone 3 code neither had nor wrote them.
 V7_PLACEMENT_COLUMNS = ("task_category", "removal_reason", "superseded_by_id")
+#: Schema v8 (task points and the execution snapshot of them) -- absent from a Milestone 3 database.
+V8_COLUMNS = ("points",)
+
+
+@contextmanager
+def pre_v8_writers():
+    """The planning and execution repositories as they were before schema v8: no points columns."""
+    from app.execution import repository as execution_repository
+    from app.planning import repository as planning_repository
+
+    with pytest.MonkeyPatch.context() as patch:
+        for module, columns_name, to_row_name, from_row_name in (
+            (planning_repository, "_TASK_COLUMNS", "_task_to_row", None),
+            (execution_repository, "_EXECUTION_COLUMNS", "_execution_to_row", "_row_to_execution"),
+        ):
+            columns, to_row = getattr(module, columns_name), getattr(module, to_row_name)
+            patch.setattr(module, columns_name, tuple(c for c in columns if c not in V8_COLUMNS))
+            patch.setattr(module, to_row_name, lambda record, columns=columns, to_row=to_row: tuple(
+                value for column, value in zip(columns, to_row(record)) if column not in V8_COLUMNS))
+            if from_row_name is not None:
+                from_row = getattr(module, from_row_name)
+                patch.setattr(module, from_row_name, lambda row, from_row=from_row: from_row(
+                    {**dict(row), **{column: None for column in V8_COLUMNS}}))
+        original_row_to_task = planning_repository._row_to_task
+        patch.setattr(planning_repository, "_row_to_task", lambda row, *rest: original_row_to_task(
+            {**dict(row), "points": 1}, *rest))
+        yield
 
 
 @contextmanager
@@ -85,6 +112,8 @@ def build_milestone3_database(db_path: Path, project_root: Path) -> dict:
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     initialize_schema(connection, target_version=5)
+    older_code = pre_v8_writers()
+    older_code.__enter__()
     connection.execute(
         "INSERT INTO sync_accounts (account_key, backend_url, user_id, email, pull_cursor, active, associated_at, "
         "created_at) VALUES (?, 'https://backend.test', ?, 'alice@example.com', 42, 1, ?, ?)",
@@ -127,6 +156,7 @@ def build_milestone3_database(db_path: Path, project_root: Path) -> dict:
         "INSERT INTO sync_outbox (op_id, account_key, entity_type, entity_id, local_id, kind, base_version, payload, "
         "local_rev, state, created_at) VALUES ('op-1', ?, 'task', ?, ?, 'update', 7, '{}', 3, 'pending', ?)",
         (ACCOUNT_KEY, str(outline.id), str(outline.id), "2024-06-02T10:00:00+00:00"))
+    older_code.__exit__(None, None, None)
     connection.close()
     return {"placement_id": placement.id, "execution_id": execution.id, "outline_id": outline.id}
 

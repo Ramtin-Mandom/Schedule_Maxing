@@ -61,6 +61,7 @@ except ImportError as error:  # pragma: no cover - runtime dependency message
         "pip install customtkinter"
     ) from error
 
+from app.ui.paint_widgets import AppScrollableFrame
 from app.execution.db import resolve_db_path
 from app.sync.transport import HttpTransport, SyncTransport
 from app.ui import theme
@@ -88,13 +89,14 @@ from app.ui.components import (
     font,
 )
 from app.ui.execution_controller import ExecutionController
+from app.ui.guide_page import GuidePage
 from app.ui.pages import PageHeader, PlaceholderPage, ScrollPage, SettingsPage
 from app.ui.productivity_controller import ProductivityController
 from app.ui.productivity_page import ProductivityPage
 from app.ui.shell import AppShell
 from app.ui.shell_state import ShellState
 from app.ui.ui_settings import UISettings, UISettingsStore, settings_path_for
-from app.ui.settings_controller import SettingsController
+from app.ui.settings_controller import SettingsController, TaskDataResetController
 from app.ui.tk_lifecycle import DesktopCollection, release_resources
 from config import settings
 
@@ -161,7 +163,7 @@ class RewardConfigPage(ctk.CTkFrame):
         body.grid(row=1, column=0, sticky="nsew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_XL))
         body.columnconfigure(0, weight=1)
         body.rowconfigure(0, weight=1)
-        scroll = ctk.CTkScrollableFrame(body, fg_color="transparent")
+        scroll = AppScrollableFrame(body, fg_color="transparent")
         scroll.grid(row=0, column=0, sticky="nsew", padx=16, pady=16)
         scroll.columnconfigure((0, 1), weight=1)
         for index, field_name in enumerate(self.REWARD_FIELDS):
@@ -309,6 +311,13 @@ class ScheduleOptimizerApp(ctk.CTk):
         if self.shell is not None:
             self.shell.show_page(page_name)
 
+    def _navigated(self, page_name: str) -> None:
+        """A page chosen from the navigation: Day Schedule always opens on today."""
+        if page_name == "day":
+            page = self.pages.get("day")
+            if page is not None:
+                page.show_today()
+
     def today(self) -> date:
         """Today's real date in the planning timezone (a fixed date when the app was opened with one)."""
         if self._today_override is not None:
@@ -334,6 +343,29 @@ class ScheduleOptimizerApp(ctk.CTk):
         self.shell_state.remember("day_return", context)
         page.open_date(day, return_to=context)
         self.show_page("day")
+
+    def reset_task_data(self, done: Callable) -> None:
+        """
+        Settings' "Reset All Task Data" (already confirmed): in a worker, the
+        services reset the server first and this device only after it
+        succeeded (TaskDataResetController). On success every page re-reads
+        its now empty data; on failure nothing changed and done() shows why.
+        """
+        services = self.services
+
+        def finished(result) -> None:
+            if result.ok:
+                self._task_data_was_reset()
+            done(result)
+
+        run_in_background(self, TaskDataResetController(services).reset, finished)
+
+    def _task_data_was_reset(self) -> None:
+        for key in ("day", "week", "month", "projects", "allocation", "productivity"):
+            page = self.pages.get(key)
+            if page is not None and hasattr(page, "on_show") and not getattr(page, "_busy", False):
+                page.on_show()  # re-read now: nothing stale stays on any page
+        self.refresh_status()
 
     def close_services(self) -> None:
         """Wait for background work, then close the database (idempotent)."""
@@ -483,6 +515,7 @@ class ScheduleOptimizerApp(ctk.CTk):
         services = self.services
         self.shell = shell = AppShell(self, self.shell_state, scaling=lambda: self.ui_settings.ui_scale)
         shell.grid(row=0, column=0, sticky="nsew")
+        shell.on_navigate = self._navigated
         shell.sidebar.set_footer(services.location_label())
         host = shell.host
 
@@ -498,6 +531,7 @@ class ScheduleOptimizerApp(ctk.CTk):
         shell.status_bar.account_button.configure(command=lambda: self.show_page("account"))
         links = [("Open Day Schedule", lambda: self.show_page("day")),
                  ("Open Productivity", lambda: self.show_page("productivity"))]
+        shell.add_page("guide", GuidePage(host))
         for key, (title, message) in _PLACEHOLDERS.items():
             shell.add_page(key, PlaceholderPage(host, title, message, links))
         self.refresh_status()
@@ -533,7 +567,8 @@ class ScheduleOptimizerApp(ctk.CTk):
             add(mode_name, CalendarPage(
                 shell.host, mode_name,
                 CalendarController(services.planning_controller, mode=mode_name, selected=remembered or today,
-                                   timezone=services.timezone, today=self.today),
+                                   timezone=services.timezone, today=self.today,
+                                   executions=services.execution_controller),
                 services.productivity_controller, on_anchor_changed=self.shell_state.remember,
                 on_open_day=lambda day, mode_name=mode_name: self.open_day(day, return_to=mode_name),
                 background_io=self.direct,
@@ -548,7 +583,8 @@ class ScheduleOptimizerApp(ctk.CTk):
             on_open_day=lambda day: self.open_day(day, return_to="allocation")))
         add("settings", SettingsPage(
             shell.host, self.ui_settings, on_appearance=self.set_appearance, on_scale=self.set_ui_scale,
-            controller=SettingsController(services.planning_controller, today=self.today), background_io=self.direct))
+            controller=SettingsController(services.planning_controller, today=self.today), background_io=self.direct,
+            on_reset_task_data=self.reset_task_data))
 
 
 def main(argv: list[str] | None = None) -> None:

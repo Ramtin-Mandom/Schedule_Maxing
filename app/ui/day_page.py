@@ -12,14 +12,23 @@ on wide and medium windows, one on narrow ones):
 - Header: date navigation (previous / date / Today / next), the planning
   timezone, "Back to Week/Month" when the date was opened from there, and
   the freshness of the saved schedule (Current / Out of date and why).
+  The Day page shows today (the computer's date) when it is opened from the
+  navigation; another date only when opened for it (Week, Month, Projects,
+  Allocation) or moved to with the date controls.
+- The Day Window (app/ui/day_window_bar.py): the date's start and end of
+  the usable day -- the Settings default, or the date's own override.
 - The horizontal timeline (app/ui/day_timeline.py): fixed blocks in their
   category color, scheduled work at its exact minutes, free gaps.
 - Available tasks: the date's tasks (and undated ones) that are not on the
   schedule, as buttons that open them for editing, with genuine reasons.
 - Add Task (the reusable app/ui/task_editor.TaskEditor), and the actions:
   the Engine choice right beside Make Schedule, Regenerate, Day Preferences,
-  Import CSV, Export CSV and Reset Day; then the date's task list and the
-  Execute tab.
+  Import CSV, Export CSV and Reset Day.
+- The scheduled-task board (app/ui/task_status_board.py): Uncompleted |
+  Tasks | Completed, for the tasks the saved schedule placed on the date.
+  Each move is the placement's TaskExecution changing state
+  (app/ui/task_status.py), so it persists and synchronizes; tasks the
+  scheduler could not place stay in Available tasks, never Uncompleted.
 
 Generation and engine saves run in background workers; while one runs the
 controls that could change its inputs are disabled, and a result that
@@ -37,20 +46,25 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
+from app.ui.paint_widgets import AppScrollableFrame
+
 from app.planning.csv_import import ImportMode
 from app.planning.workflow import Freshness
 from app.ui import theme
 from app.ui.background import ControllerResult, run_in_background
-from app.ui.components import AppButton, Card, ChoiceDialog, LabeledSelect, Notice, SectionTitle, ask_confirm, font
+from app.ui.components import AppButton, Card, ChoiceDialog, LabeledSelect, Notice, SectionTitle, ask_confirm, font, focus_target
 from app.ui.day_controller import DayRun, DayScheduleController, DaySnapshot, TimelineItem, engine_label
 from app.ui.day_timeline import DayTimeline
-from app.ui.execution_panel import ExecutionPanel
+from app.ui.day_window import DayWindowController
+from app.ui.day_window_bar import DayWindowActions, DayWindowBar
+from app.ui.layout import Coalescer
 from app.ui.preferences_editor import DayPreferencesDialog
 from app.ui.schedule_page_controller import day_label
 from app.ui.shell_state import LayoutMode
 from app.ui.task_actions import TaskFormActions
 from app.ui.task_editor import TaskEditor
-from app.ui.task_list import AddedTasksPanel
+from app.ui.task_status import TaskStatusController
+from app.ui.task_status_board import TaskStatusBoard
 
 _FRESHNESS_TONE = {Freshness.CURRENT: "success", Freshness.STALE: "warning", Freshness.NONE: "info"}
 _CHIP_COLUMNS = {LayoutMode.WIDE: 3, LayoutMode.MEDIUM: 2, LayoutMode.NARROW: 1}
@@ -59,7 +73,7 @@ _RETURN_NAMES = {"week": "Week", "month": "Month"}
 _HEADER_WRAP = {LayoutMode.WIDE: 760, LayoutMode.MEDIUM: 560, LayoutMode.NARROW: 400}
 
 
-class DaySchedulePage(TaskFormActions, ctk.CTkFrame):
+class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
     mode_name = "day"
 
     def __init__(
@@ -90,21 +104,31 @@ class DaySchedulePage(TaskFormActions, ctk.CTkFrame):
         self.layout: LayoutMode | None = None
         self._engine_labels = {option.label: option for option in page_controller.engine_options()}
         self.chips: list[AppButton] = []
+        self.day_window = DayWindowController(page_controller.planning)
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
         self._build_header()
-        self.body = ctk.CTkScrollableFrame(self, fg_color="transparent", scrollbar_button_color=theme.SECONDARY_HOVER)
+        self.body = AppScrollableFrame(self, fg_color="transparent", scrollbar_button_color=theme.SECONDARY_HOVER)
         self.body.grid(row=1, column=0, sticky="nsew")
         self.body.columnconfigure(0, weight=1)
+        self.window_bar = DayWindowBar(self.body, on_apply=self.apply_day_window,
+                                       on_default=self.use_default_day_window)
+        self.window_bar.grid(row=0, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_M))
         self.schedule_canvas = DayTimeline(self.body, on_edit=lambda item: self.edit_ref(item.ref),
                                            on_remove=lambda item: self.remove_item(item))
-        self.schedule_canvas.grid(row=0, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_M))
+        self.schedule_canvas.grid(row=1, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_M))
         self._build_available()
         self._build_lower()
         self.set_layout(LayoutMode.WIDE)
         self.reload()
         self._reset_editor()
+
+    def destroy(self) -> None:
+        refresh = getattr(self, "_chip_refresh", None)
+        if refresh is not None:
+            refresh.cancel()
+        super().destroy()
 
     # ----------------------------- Building -----------------------------
 
@@ -154,7 +178,7 @@ class DaySchedulePage(TaskFormActions, ctk.CTkFrame):
 
     def _build_available(self) -> None:
         self.available_card = card = Card(self.body)
-        card.grid(row=1, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_M))
+        card.grid(row=2, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_M))
         card.columnconfigure(0, weight=1)
         SectionTitle(card, "Available tasks", "Tasks for this date (or any date) that are not on the schedule. "
                                               "Select one to edit it.", wraplength=620).grid(
@@ -162,19 +186,31 @@ class DaySchedulePage(TaskFormActions, ctk.CTkFrame):
         self.available_note = ctk.CTkLabel(card, text="", font=font(theme.SIZE_SMALL), text_color=theme.TEXT_MUTED,
                                            anchor="w", justify="left", wraplength=760)
         self.available_note.grid(row=1, column=0, sticky="ew", padx=theme.SPACE_L)
-        self.chip_area = ctk.CTkScrollableFrame(card, fg_color="transparent", height=110)
+        self.chip_area = AppScrollableFrame(card, fg_color="transparent", height=110)
         self.chip_area.grid(row=2, column=0, sticky="ew", padx=theme.SPACE_S, pady=(4, theme.SPACE_M))
         self.chip_area.grid_remove()  # shown only when there is something to list
+        self._available_tasks = []
+        self._chip_rows = 0
+        self._chip_scale = self.chip_area._get_widget_scaling()
+        self._chip_refresh = Coalescer(self.chip_area, self._render_available)
+        canvas = self.chip_area._parent_canvas
+
+        def scrolled(first, last):
+            self.chip_area._scrollbar.set(first, last)
+            self._chip_refresh.request()
+
+        canvas.configure(yscrollcommand=scrolled)
+        canvas.bind("<Configure>", lambda event: self._chip_refresh.request(), add="+")
 
     def _build_lower(self) -> None:
         self.lower = lower = ctk.CTkFrame(self.body, fg_color="transparent")
-        lower.grid(row=2, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_XL))
+        lower.grid(row=3, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_XL))
         self.form = TaskEditor(lower, on_submit=self.submit_task, on_cancel=self.cancel_edit,
                                productivity_controller=self.productivity_controller)
         self.side = side = ctk.CTkFrame(lower, fg_color="transparent")
         side.columnconfigure(0, weight=1)
         self._build_actions(side)
-        self._build_tasks(side)
+        self._build_status_board(lower)
 
     def _build_actions(self, parent) -> None:
         self.actions_card = card = Card(parent)
@@ -224,34 +260,18 @@ class DaySchedulePage(TaskFormActions, ctk.CTkFrame):
         self.reset_button.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         self.upload_button = self.import_button  # the previous name of the import action
 
-    def _build_tasks(self, parent) -> None:
-        self.right_card = card = Card(parent)
-        card.grid(row=1, column=0, sticky="ew", pady=(theme.SPACE_M, 0))
-        card.columnconfigure(0, weight=1)
-        self.right_tabs = ctk.CTkTabview(
-            card, height=330, fg_color=theme.SUBTLE_BG, segmented_button_fg_color=theme.SECONDARY_BG,
-            segmented_button_selected_color=theme.ACCENT, segmented_button_selected_hover_color=theme.ACCENT_HOVER,
-            segmented_button_unselected_color=theme.SECONDARY_BG,
-            segmented_button_unselected_hover_color=theme.SECONDARY_HOVER, text_color=theme.TEXT_PRIMARY,
-            corner_radius=16,
-        )
-        self.right_tabs.grid(row=0, column=0, sticky="ew", padx=theme.SPACE_L, pady=theme.SPACE_L)
-        tasks_tab = self.right_tabs.add("Tasks on this date")
-        tasks_tab.columnconfigure(0, weight=1)
-        tasks_tab.rowconfigure(0, weight=1)
-        self.added_tasks_panel = AddedTasksPanel(tasks_tab, on_remove_task=self.remove_selected_task,
-                                                 on_edit_task=self.edit_selected_task,
-                                                 on_use_as_dependencies=self.use_selected_as_dependencies)
-        self.added_tasks_panel.grid(row=0, column=0, sticky="nsew")
-        self.execution_panel = None
-        if self.execution_controller is not None:
-            execute_tab = self.right_tabs.add("Execute")
-            execute_tab.columnconfigure(0, weight=1)
-            execute_tab.rowconfigure(0, weight=1)
-            self.execution_panel = ExecutionPanel(
-                execute_tab, self.execution_controller, planning_controller=self.page_controller.planning,
-                on_schedule_changed=self.reload)
-            self.execution_panel.grid(row=0, column=0, sticky="nsew")
+    def _build_status_board(self, parent) -> None:
+        self.status_controller = (TaskStatusController(self.execution_controller)
+                                  if self.execution_controller is not None else None)
+        self.status_board = TaskStatusBoard(parent, on_move=self.move_task)
+        self.status_board.observe_viewport(self.body._parent_canvas)
+
+        def scrolled(first, last):
+            self.body._scrollbar.set(first, last)
+            self.status_board.viewport_updates.request()
+
+        self.body._parent_canvas.configure(yscrollcommand=scrolled)
+        self._board_token = 0
 
     # ----------------------------- Layout -----------------------------
 
@@ -263,21 +283,30 @@ class DaySchedulePage(TaskFormActions, ctk.CTkFrame):
         lower = self.lower
         self.form.grid_forget()
         self.side.grid_forget()
+        self.status_board.grid_forget()
         for index in range(2):
             lower.columnconfigure(index, weight=0, minsize=0)
         pad = theme.SPACE_XL if mode != LayoutMode.NARROW else theme.SPACE_M
-        for widget in (self.header, self.schedule_canvas, self.available_card, self.lower):
+        for widget in (self.header, self.window_bar, self.schedule_canvas, self.available_card, self.lower):
             widget.grid_configure(padx=pad)
+        self.window_bar.set_layout(mode)
         self.status_label.configure(wraplength=_HEADER_WRAP[mode])
+        self.status_board.set_layout(mode)
         if mode == LayoutMode.NARROW:
             lower.columnconfigure(0, weight=1)
             self.form.grid(row=0, column=0, sticky="new", pady=(0, theme.SPACE_M))
             self.side.grid(row=1, column=0, sticky="new")
+            self.status_board.grid(in_=lower, row=2, column=0, sticky="new", pady=(theme.SPACE_M, 0))
         else:
             lower.columnconfigure(0, minsize=340)
             lower.columnconfigure(1, weight=1)
             self.form.grid(row=0, column=0, sticky="new", padx=(0, theme.SPACE_M))
             self.side.grid(row=0, column=1, sticky="new")
+            if mode == LayoutMode.WIDE:  # the three columns sit right under the actions, beside the form
+                self.status_board.grid(in_=self.side, row=1, column=0, sticky="new", pady=(theme.SPACE_M, 0))
+            else:  # medium: full width below, so each column keeps a readable width
+                self.status_board.grid(in_=lower, row=1, column=0, columnspan=2, sticky="new",
+                                       pady=(theme.SPACE_M, 0))
         self._place_chips()
 
     def show_panel(self, key: str) -> None:
@@ -290,7 +319,6 @@ class DaySchedulePage(TaskFormActions, ctk.CTkFrame):
 
     def on_appearance_changed(self) -> None:
         self.schedule_canvas.request_redraw()
-        self.added_tasks_panel.retag()
         if self.snapshot is not None:
             self._show_freshness(self.snapshot)
 
@@ -323,6 +351,19 @@ class DaySchedulePage(TaskFormActions, ctk.CTkFrame):
 
     def go_today(self) -> None:
         self._go_to(self.page_controller.today())
+
+    def show_today(self) -> None:
+        """Opened from the navigation: the Day page is today (the computer's date), without a way back."""
+        if self._busy:
+            return
+        today = self.page_controller.today()
+        if today == self.page_controller.anchor_date and self.return_context is None:
+            return
+        self.return_context = None
+        self._go_to(today)
+
+    def _window_day(self) -> date:
+        return self.page_controller.anchor_date
 
     def open_date(self, day: date, *, return_to: tuple[str, date] | None = None) -> None:
         """Show `day`; with return_to=(page, its date) a Back button returns to that Week/Month view."""
@@ -560,7 +601,6 @@ class DaySchedulePage(TaskFormActions, ctk.CTkFrame):
                                         f"{snapshot.start_date.year}   ·   times in {snapshot.timezone}")
         self._show_freshness(snapshot)
         self._show_return()
-        self.added_tasks_panel.refresh(snapshot.rows)
         if not self._editing:
             self._refresh_options()
         self.schedule_canvas.draw(snapshot)
@@ -568,8 +608,44 @@ class DaySchedulePage(TaskFormActions, ctk.CTkFrame):
         self._show_available(snapshot)
         self.regenerate_button.configure(
             state="normal" if snapshot.freshness != Freshness.NONE and not self._busy else "disabled")
-        if self.execution_panel is not None:
-            self.execution_panel.set_scheduled_tasks(snapshot.executables)
+        self._refresh_status_board(snapshot)
+        self._refresh_day_window()
+
+    # ----------------------------- Scheduled-task board -----------------------------
+
+    def _refresh_status_board(self, snapshot: DaySnapshot) -> None:
+        """Re-read the statuses of the date's saved placements (only the newest read is shown)."""
+        if self.status_controller is None:
+            return
+        self._board_token += 1
+        token, day, executables = self._board_token, snapshot.day, list(snapshot.executables)
+
+        def done(result) -> None:
+            if token != self._board_token:
+                return
+            if result.ok:
+                self.status_board.render(result.value)
+            else:
+                self.status_board.notice.show("error", result.error or "The task statuses could not be read.")
+
+        self._io(lambda: self.status_controller.board(day, executables), done, blocking=False)
+
+    def move_task(self, card, target) -> None:
+        """Persist one card's move to another column, then redraw the board from what was saved."""
+        if self.status_controller is None or self._refuse_while_busy():
+            return
+        self.status_board.set_busy(True)
+
+        def done(result) -> None:
+            self.status_board.set_busy(False)
+            if result.ok:
+                self.status_board.notice.hide()
+            else:
+                self.status_board.notice.show("error", result.error or "The status was not changed.")
+            if self.snapshot is not None:
+                self._refresh_status_board(self.snapshot)
+
+        self._io(lambda: self.status_controller.move(card, target), done)
 
     def _show_freshness(self, snapshot: DaySnapshot) -> None:
         tone = theme.TONES[_FRESHNESS_TONE[snapshot.freshness]]
@@ -599,17 +675,9 @@ class DaySchedulePage(TaskFormActions, ctk.CTkFrame):
             state="normal" if engine.overridden and not self._busy else "disabled")
 
     def _show_available(self, snapshot: DaySnapshot) -> None:
-        for chip in self.chips:
-            chip.destroy()
-        self.chips = []
-        for task in snapshot.unplaced:
-            text = task.text + (f"\n{task.reason}" if task.reason else "")
-            chip = AppButton(self.chip_area, text, lambda ref=task.ref: self.edit_ref(ref), variant="secondary",
-                             height=44, font=font(theme.SIZE_SMALL))
-            chip.task = task
-            self.chips.append(chip)
+        self._available_tasks = list(snapshot.unplaced)
         self._place_chips()
-        if self.chips:
+        if self._available_tasks:
             self.chip_area.grid()
         else:
             self.chip_area.grid_remove()
@@ -623,12 +691,84 @@ class DaySchedulePage(TaskFormActions, ctk.CTkFrame):
                          "schedule.")
         self.available_note.configure(text=" ".join(notes))
 
+    def _render_available(self) -> None:
+        """Keep only the viewport and one spare row of large lists as Tk buttons."""
+        if self._chip_scale != self.chip_area._get_widget_scaling():
+            self._place_chips()
+            return
+        tasks = self._available_tasks
+        columns = _CHIP_COLUMNS.get(self.layout, 1)
+        first, last = 0, len(tasks)
+        if len(tasks) > 24:
+            canvas = self.chip_area._parent_canvas
+            row_height = round(50 * self.chip_area._get_widget_scaling())
+            row = max(0, int(canvas.canvasy(0) / row_height))
+            first = max(0, row - 1) * columns
+            last = min(len(tasks), (row + int(canvas.winfo_height() / row_height) + 3) * columns)
+        previous = self.chips
+        by_ref = {chip.task.ref: chip for chip in previous}
+        chips = []
+        for index, task in enumerate(tasks[first:last], start=first):
+            text = task.text + (f"\n{task.reason}" if task.reason else "")
+            chip = by_ref.pop(task.ref, None)
+            if chip is None:
+                chip = AppButton(self.chip_area, text, lambda ref=task.ref: self.edit_ref(ref), variant="secondary",
+                                 height=44, font=font(theme.SIZE_SMALL))
+                target = focus_target(chip)
+                for key, direction in (("Up", -1), ("Down", 1)):
+                    target.bind(f"<{key}>", lambda event, chip=chip, direction=direction:
+                                self._focus_available(chip.task.ref, direction), add="+")
+            else:
+                # RowRef equality deliberately ignores version; refresh the edit
+                # precondition even when this task's displayed text is unchanged.
+                if chip.cget("text") != text:
+                    chip.configure(text=text)
+                if chip.task.ref.version != task.ref.version:
+                    chip.configure(command=lambda ref=task.ref: self.edit_ref(ref))
+            chip.task = task
+            cell = (index // columns, index % columns)
+            if getattr(chip, "_task_cell", None) != cell:
+                chip.grid(row=cell[0], column=cell[1], sticky="ew", padx=4, pady=3)
+                chip._task_cell = cell
+            chips.append(chip)
+        for chip in by_ref.values():
+            chip.destroy()
+        self.chips = chips
+
+    def _focus_available(self, ref, direction):
+        """Arrow navigation can reach tasks beyond the currently instantiated rows."""
+        index = next((i for i, task in enumerate(self._available_tasks) if task.ref == ref), None)
+        if index is None:
+            return "break"
+        index = max(0, min(len(self._available_tasks) - 1, index + direction))
+        task = self._available_tasks[index]
+        if not any(chip.task.ref == task.ref for chip in self.chips):
+            columns = _CHIP_COLUMNS.get(self.layout, 1)
+            rows = (len(self._available_tasks) + columns - 1) // columns
+            self.chip_area._parent_canvas.yview_moveto((index // columns) / max(1, rows))
+            self._render_available()
+        for chip in self.chips:
+            if chip.task.ref == task.ref:
+                focus_target(chip).focus_set()
+                break
+        return "break"
+
     def _place_chips(self) -> None:
         columns = _CHIP_COLUMNS.get(self.layout, 1)
         for column in range(3):
             self.chip_area.columnconfigure(column, weight=1 if column < columns else 0, uniform="chip")
-        for index, chip in enumerate(self.chips):
-            chip.grid(row=index // columns, column=index % columns, sticky="ew", padx=4, pady=3)
+        virtual = len(self._available_tasks) > 24
+        self._chip_scale = self.chip_area._get_widget_scaling()
+        rows = (len(self._available_tasks) + columns - 1) // columns if virtual else 0
+        height = round(50 * self._chip_scale)
+        for row in range(max(rows, self._chip_rows)):
+            self.chip_area.rowconfigure(row, minsize=height if row < rows else 0)
+        self._chip_rows = rows
+        # Retain the full scroll extent without constructing offscreen controls.
+        tk.Frame.grid_propagate(self.chip_area, not virtual)
+        if virtual:
+            tk.Frame.configure(self.chip_area, height=max(1, rows * height))
+        self._render_available()
 
     # ----------------------------- Busy state -----------------------------
 
@@ -641,6 +781,8 @@ class DaySchedulePage(TaskFormActions, ctk.CTkFrame):
         for button in (self.preferences_button, self.import_button, self.reset_button, self.prev_button,
                        self.next_button, self.today_button, self.go_button):
             button.configure(state=state)
+        self.window_bar.set_enabled(not busy)
+        self.status_board.set_busy(busy)
         self.regenerate_button.configure(state="disabled" if busy or self.snapshot is None
                                          or self.snapshot.freshness == Freshness.NONE else "normal")
         self.use_default_engine_button.configure(

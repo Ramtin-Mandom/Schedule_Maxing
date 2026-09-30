@@ -78,11 +78,11 @@ def test_get_or_create_execution_survives_a_schedule_refresh_simulation(
 @pytest.mark.parametrize(
     ("status", "expected"),
     [
-        (ExecutionStatus.SCHEDULED, ("start", "skip")),
+        (ExecutionStatus.SCHEDULED, ("start", "complete", "skip")),
         (ExecutionStatus.IN_PROGRESS, ("pause", "complete", "skip")),
         (ExecutionStatus.PAUSED, ("resume", "complete", "skip")),
-        (ExecutionStatus.COMPLETED, ()),
-        (ExecutionStatus.SKIPPED, ()),
+        (ExecutionStatus.COMPLETED, ("reopen",)),
+        (ExecutionStatus.SKIPPED, ("reopen",)),
     ],
 )
 def test_available_actions_per_status(

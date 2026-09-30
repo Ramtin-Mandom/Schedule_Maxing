@@ -1,5 +1,6 @@
 # Virtual environment
 .venv/
+.diagnostic-deps/
 
 # =========================
 # Environment Variables
@@ -22,6 +23,12 @@ Thumbs.db
 
 # Generated outputs
 exports/
+
+# Generated desktop responsiveness telemetry (keep the comparison source fixture)
+/benchmarks/desktop-*.json
+/benchmarks/round2-*.json
+!/benchmarks/round2-baseline-ui.json
+/benchmarks/round2-*.prof
 
 # Local execution-tracking database (runtime data, not a fixture)
 /data/

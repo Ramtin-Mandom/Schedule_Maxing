@@ -31,6 +31,8 @@ from dataclasses import dataclass
 
 import customtkinter as ctk
 
+from app.ui.paint_widgets import AppScrollableFrame, AppOptionMenu
+
 from app.ui import theme
 
 # -----------------------------------------------------------------------------
@@ -304,7 +306,7 @@ class LabeledSelect(ctk.CTkFrame):
                        dropdown_text_color=theme.TEXT_PRIMARY)
         if width:
             options["width"] = width
-        self.menu = ctk.CTkOptionMenu(self, **options)
+        self.menu = AppOptionMenu(self, **options)
         self.menu.grid(row=1, column=0, sticky="ew")
         target = make_keyboard_accessible(self.menu, ring=False)
         self._target = target
@@ -661,7 +663,7 @@ class Drawer(Card):
                      anchor="w").grid(row=0, column=0, sticky="ew")
         self.close_button = AppButton(header, "Close", self.close, variant="ghost", width=80, height=30)
         self.close_button.grid(row=0, column=1)
-        self.body = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.body = AppScrollableFrame(self, fg_color="transparent")
         self.body.grid(row=1, column=0, sticky="nsew", padx=theme.SPACE_S, pady=(0, theme.SPACE_L))
         self.body.columnconfigure(0, weight=1)
         # One permanent handler (Tkinter's unbind(sequence, funcid) would drop every Escape binding of the window).

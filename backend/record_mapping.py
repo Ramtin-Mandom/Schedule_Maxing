@@ -81,6 +81,7 @@ def write_task(row, task) -> None:
     row.estimated_duration_minutes, row.priority, row.required = (
         task.estimated_duration_minutes, task.priority, task.required,
     )
+    row.points = task.points
     row.required_date = task.required_date
     row.preferred_window_start_minute = window.start_minute if window else None
     row.preferred_window_end_minute = window.end_minute if window else None
@@ -122,6 +123,7 @@ def task_content(row) -> dict:
         "project_id": row.project_id, "name": row.name, "category": row.category,
         "tags": [item.tag for item in row.tag_rows],
         "estimated_duration_minutes": row.estimated_duration_minutes, "priority": row.priority,
+        "points": row.points,
         "required": row.required, "required_date": row.required_date,
         "preferred_dates": [item.preferred_date for item in row.preferred_date_rows],
         "preferred_time_window": window,

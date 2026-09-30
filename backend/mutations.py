@@ -52,7 +52,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import StaleDataError
 
-from app.execution.lifecycle import TRANSITIONS, compute_active_duration_minutes, compute_start_delay_minutes
+from app.execution.lifecycle import (
+    REOPEN_CLEARED_FIELDS,
+    TRANSITIONS,
+    compute_active_duration_minutes,
+    compute_start_delay_minutes,
+    reopen_target,
+)
 from app.execution.models import ExecutionStatus
 from app.execution.models import WorkSession as CanonicalSession
 from app.planning.models import PlacementRemovalReason
@@ -100,6 +106,11 @@ class Mutator:
         ))
         self.revisions[(entity_type, revision.entity_id, revision.version)] = revision
         return snapshots.decode(revision)
+
+    @property
+    def change_seq(self) -> int:
+        """The user's change-log position including this mutation's entries so far."""
+        return self._seq
 
     def _finish(self) -> None:
         self.session.execute(
@@ -321,6 +332,15 @@ class Mutator:
         row.status = target.value
         self.session.flush()
 
+        if action == "reopen":  # back to pending: sessions and first start stay; the finishing marker goes
+            row.status = reopen_target(bool(sessions)).value
+            for name in REOPEN_CLEARED_FIELDS:
+                setattr(row, name, None)
+            return self._commit_execution(row)
+        if action == "complete" and not sessions:
+            # Reported done without timing: no duration metrics (unknown, never 0).
+            row.actual_final_end_at = at
+            return self._commit_execution(row)
         if action == "complete":
             sessions = EXECUTIONS.sessions(self.session, self.user_id, row.id)
             canonical = [

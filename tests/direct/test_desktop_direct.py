@@ -227,3 +227,34 @@ def test_shutdown_waits_for_workers_before_closing_the_database(desktop) -> None
     thread.join(10)
     assert services.close(timeout=5) is True and services.backend.closed
     assert not services.planning_controller.list_tasks().ok  # after shutdown nothing reaches the database
+
+
+def test_reset_all_task_data_in_direct_storage_is_one_transaction_for_the_signed_in_account(desktop) -> None:
+    from app.planning.models import Task
+    from app.planning.preferences import DayWindowSpec, PreferenceOverrides
+    from app.ui.settings_controller import TaskDataResetController
+
+    services, account = desktop
+    refused = TaskDataResetController(services).reset()
+    assert not refused.ok and "Nothing was deleted" in refused.error  # signed out: refused, nothing touched
+
+    sign_in(services, account, "other@example.com")
+    assert services.planning_controller.add_or_update_task(Task(
+        name="Someone else's", category="study", estimated_duration_minutes=30, priority=5)).ok
+    account.sign_out()
+    services.switch_workspace()
+    sign_in(services, account, "ada@example.com")
+    planning = services.planning_controller
+    assert planning.add_or_update_task(Task(name="Mine", category="study", estimated_duration_minutes=30,
+                                            priority=5, preferred_dates=[MON])).ok
+    assert planning.set_user_overrides(PreferenceOverrides(day_window=DayWindowSpec(start_minute=480,
+                                                                                     end_minute=1200))).ok
+    result = TaskDataResetController(services).reset()
+    assert result.ok and result.value["task"] == 1
+    assert planning.list_tasks().value == []
+    assert planning.user_preferences().value.overrides.day_window.start_minute == 480  # settings kept
+
+    account.sign_out()
+    services.switch_workspace()
+    sign_in(services, account, "other@example.com", register=False)
+    assert [task.name for task in services.planning_controller.list_tasks().value] == ["Someone else's"]

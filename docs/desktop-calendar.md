@@ -1,7 +1,10 @@
 # Week and Month (Milestone 4, Prompt 5)
 
-Week and Month are real calendar views in the planning timezone
-(`SCHEDULE_MAXING_TIMEZONE`, default UTC). You don't make schedules here: you
+Week and Month are real calendar views in the planning timezone (the
+computer's own zone unless `SCHEDULE_MAXING_TIMEZONE` is set). Above the
+calendar, the selected day's **Day Window** can be changed for that date
+([desktop-day.md](desktop-day.md#the-day-window)). The task form has no date
+field: a new task gets the selected day. You don't make schedules here: you
 pick a day and **Open Day**, and the Day page makes its schedule
 ([desktop-day.md](desktop-day.md)).
 
@@ -65,6 +68,34 @@ pick a day and **Open Day**, and the Day page makes its schedule
   Back returns to this page with its week or month and its selected day.
 - **Adding tasks:** the task form below the calendar starts on the selected
   date. Selecting another day moves the form's date unless you are editing.
+
+## Selected day, bulk actions and historical colours
+
+The right side of Week and Month is the **Selected day** panel
+(`app/ui/selected_day_panel.py`, model `app/ui/day_outcomes.py`); it replaces
+the former "Tasks this week/month" list. For the selected date it lists the
+**scheduled** tasks (live placements) with their outcome -- Completed,
+Uncompleted, or Tasks (pending) -- and the day's counts, planned hours and
+points. Editing single tasks happens on the Day page (Open Day).
+
+- **All Tasks Complete** marks every scheduled task of the date completed;
+  **No Tasks Complete** marks them all uncompleted. One transaction
+  (`ExecutionController.set_outcomes`); the same TaskExecution state as the
+  Day page's board, so Day, Week and Month always agree. Tasks the scheduler
+  did not place are never touched; a cancelled attempt is left as it is.
+- **Past dates are tinted** by the one shared classification
+  (`app/productivity/day_summary.classify_day`, colours
+  `theme.DAY_STATUS_FILLS`). Only in-period dates before today; today, future
+  dates and a month grid's neighbouring days keep their look. Precedence:
+  no scheduled tasks (neutral dark tint) → uncompleted ≥ 80% (dark red) →
+  completed ≥ 80% (dark green) → uncompleted ≥ 60% (light red) → completed
+  ≥ 60% (light green) → pending ≥ 50% (light white) → otherwise yellow.
+  Percentages are of the date's scheduled tasks, compared exactly.
+- The colour is never the only cue: each coloured day says its class in
+  words, the legend under the calendar lists every colour's meaning, and the
+  panel names it.
+- Reads are batched: the whole week or month grid costs one planning range
+  load and one execution query (never one read per date).
 
 ## Reset Week / Month
 
