@@ -146,8 +146,30 @@ refused for started or finished work.
 
 - `POST /executions` uploads a whole aggregate, including sessions, as long
   as it is consistent.
-- `POST /executions/{id}/actions/{start|pause|resume|complete|skip|cancel}`
+- `POST /executions/{id}/actions/{start|pause|resume|complete|skip|cancel|reopen}`
   takes `{base_version, at?}`.
+- `POST /me/task-data/reset` takes `{confirm: true}` and, in one transaction,
+  tombstones every live execution, placement (`removal_reason` "reset"),
+  schedule record, fixed block, task and project of the token's account
+  (`backend/task_data_reset.py`); the account and its preference settings
+  stay. Answers `{removed: {type: count}, cursor}` -- the change-log position
+  a device that wiped its copy continues from.
+- `GET /days/summary?start_date=&end_date=` (at most 366 days) answers
+  `{days: [...]}`: for every date its scheduled / completed / uncompleted /
+  pending counts, planned minutes of each, points of each, recorded actual
+  minutes of timed completions, and `status_class`
+  (`app/productivity/day_summary.py`) -- one request for a whole month.
+- `POST /days/{date}/outcome` takes `{outcome}` and moves every live
+  placement of that date in one transaction (`backend/days.py`), answering
+  `{date, outcome, changed, unchanged, skipped, summary}` (`skipped`:
+  cancelled attempts, never reopened).
+- `POST /placements/{id}/outcome` takes `{outcome: pending|completed|uncompleted,
+  base_version?}` and moves one of the caller's placements between the Day
+  board's columns in one transaction (creating its execution on first use,
+  then `complete` / `skip` / `reopen`; `backend/outcomes.py`). A present
+  `base_version` is the precondition (`null`: the client showed no
+  execution); another user's placement id is a 404. Answers
+  `{placement_id, outcome, execution}`.
 - `POST /executions/{id}/feedback` takes `{base_version, ...}`.
 - `DELETE /executions/{id}?base_version=N` soft-deletes the execution.
 

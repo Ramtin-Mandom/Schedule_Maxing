@@ -280,6 +280,7 @@ def _parse_task(row: dict[str, str]) -> Task:
         tags=[str(tag) for tag in _json(row, "tags", list, empty=[])],
         estimated_duration_minutes=_int(row, "duration_minutes"),
         priority=_int(row, "priority"),
+        **({"points": _int(row, "points")} if _text(row, "points") else {}),
         required=required_text == "true",
         required_date=_date(row, "required_date", required=False),
         preferred_dates=[date_.fromisoformat(str(day)) for day in _json(row, "preferred_dates", list, empty=[])],

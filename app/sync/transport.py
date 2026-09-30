@@ -81,6 +81,9 @@ class SyncTransport(Protocol):
 
     def health(self) -> dict: ...
 
+    #: Remove all of the account's task data on the server ({removed, cursor}); see backend/task_data_reset.py.
+    def reset_task_data(self, token: str) -> dict: ...
+
 
 def _classify(status: int, body: dict | None) -> Exception:
     code = ((body or {}).get("error") or {}).get("code", "")
@@ -118,6 +121,10 @@ def update_profile_via(request, token: str, base_version: int, display_name: str
 
 def health_via(request) -> dict:
     return request("GET", "/health", None, None)
+
+
+def reset_task_data_via(request, token: str) -> dict:
+    return request("POST", "/me/task-data/reset", token, {"confirm": True})
 
 
 def pull_via(request, token: str, after: int, limit: int) -> PullPage:
@@ -174,3 +181,6 @@ class HttpTransport:
 
     def health(self) -> dict:
         return health_via(self._request)
+
+    def reset_task_data(self, token: str) -> dict:
+        return reset_task_data_via(self._request, token)

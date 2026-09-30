@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import customtkinter as ctk
 
+from app.ui.paint_widgets import AppScrollableFrame
+
 from app.ui import theme
 from app.ui.allocation_controller import filter_view
 from app.ui.background import run_in_background
@@ -17,7 +19,7 @@ class PlanningPage(ctk.CTkFrame):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
         self._busy = False
-        self.surface = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.surface = AppScrollableFrame(self, fg_color="transparent")
         self.surface.grid(row=0, column=0, sticky="nsew")
         self.surface.columnconfigure(0, weight=1)
         header = PageHeader(self.surface, title, subtitle)

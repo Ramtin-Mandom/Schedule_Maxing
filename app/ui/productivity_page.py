@@ -27,6 +27,8 @@ from typing import Literal
 
 import customtkinter as ctk
 
+from app.ui.paint_widgets import AppOptionMenu, AppTextbox
+
 from app.persistence.errors import NotSignedInError
 from app.productivity.buckets import TimeBucket
 from app.productivity.filters import ObservationFilters
@@ -102,7 +104,7 @@ class ProductivityPage(ctk.CTkFrame):
                      font=ctk.CTkFont(size=13, weight="bold"), text_color=theme.TEXT_PRIMARY).grid(
             row=0, column=0, columnspan=4, sticky="w", padx=14, pady=(12, 2))
         self.cohort_window_var = tk.StringVar(value="Last 7 days")
-        ctk.CTkOptionMenu(card, variable=self.cohort_window_var, values=list(_WINDOW_OPTIONS),
+        AppOptionMenu(card, variable=self.cohort_window_var, values=list(_WINDOW_OPTIONS),
                           command=lambda _value: self.refresh_cohort()).grid(
             row=0, column=len(_COHORT_TILES) - 1, sticky="e", padx=14, pady=(12, 2))
         self.cohort_basis_label = ctk.CTkLabel(card, text="", font=ctk.CTkFont(size=11), text_color=theme.TEXT_MUTED,
@@ -137,10 +139,10 @@ class ProductivityPage(ctk.CTkFrame):
         self.history_category_menu = self._filter_menu(filters, 2, "Category", self.history_category_var, [_ANY])
         self.history_category_menu.configure(command=lambda _value: self.refresh_history())
         self.history_entry_var = tk.StringVar(value=_NO_ENTRY)
-        self.history_entry_menu = ctk.CTkOptionMenu(card, variable=self.history_entry_var, values=[_NO_ENTRY],
+        self.history_entry_menu = AppOptionMenu(card, variable=self.history_entry_var, values=[_NO_ENTRY],
                                                     command=self._show_history_entry)
         self.history_entry_menu.grid(row=3, column=0, columnspan=3, sticky="ew", padx=10, pady=(0, 6))
-        self.history_detail = ctk.CTkTextbox(card, height=170, wrap="word")
+        self.history_detail = AppTextbox(card, height=170, wrap="word")
         self.history_detail.grid(row=4, column=0, columnspan=3, sticky="ew", padx=10, pady=(0, 12))
         self.history_detail.configure(state="disabled")
 
@@ -191,11 +193,11 @@ class ProductivityPage(ctk.CTkFrame):
 
     def _filter_menu(
         self, parent: tk.Widget, column: int, label: str, variable: tk.StringVar, values: list[str]
-    ) -> ctk.CTkOptionMenu:
+    ) -> AppOptionMenu:
         ctk.CTkLabel(parent, text=label, text_color=theme.TEXT_MUTED, font=ctk.CTkFont(size=11, weight="bold")).grid(
             row=0, column=column, sticky="w", padx=10, pady=(10, 2)
         )
-        menu = ctk.CTkOptionMenu(parent, variable=variable, values=values)
+        menu = AppOptionMenu(parent, variable=variable, values=values)
         menu.grid(row=1, column=column, sticky="ew", padx=10, pady=(0, 12))
         return menu
 

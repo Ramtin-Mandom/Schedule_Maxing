@@ -1,6 +1,6 @@
 # Schedule Maxing
 
-The native desktop UI includes Day, Week, Month, Project Schedule and Allocation Planning.
+The native desktop UI includes Day, Week, Month, Project Schedule and Allocation Planning, plus an in-app **How to Use** guide (before About).
 See [Projects and Allocation Planning](docs/desktop-projects-allocation.md) for date-only
 previews, selected-day scheduling, project assignment and display filters.
 The optional web/server adapters remain independently launched components; desktop
@@ -260,7 +260,7 @@ Contains the CustomTkinter desktop UI. On startup it opens the application datab
 - An Added Tasks table keyed by task/fixed-block id (Edit Selected / Remove Selected), so duplicate names are fine.
 - **Make Schedule**, which allocates the page's dates, generates each date with the canonical day engine, and saves the whole range in one transaction.
 - **Upload CSV...** (append or replace), **Export CSV...**, and a **Reset...** with explicit scope.
-- An Execute tab for the saved placements, and the Productivity page.
+- The Uncompleted | Tasks | Completed board for the saved placements (Day), the selected-day panel with All Tasks Complete / No Tasks Complete (Week/Month), and the Productivity page.
 
 Every widget callback is a thin call into a Tk-free presenter (`app/ui/schedule_page_controller.py`); the page is then redrawn from a fresh read of SQLite. Widgets contain no SQL and no scheduling logic.
 
@@ -540,9 +540,9 @@ The left sidebar starts collapsed; open it with the ☰ button (keyboard: Tab, t
 
 The **Account** page connects to an optional backend: register, sign in and out, associate this device's records with your account (only after you confirm a preview), see pending changes, conflicts and the last successful sync (also in the status bar above every page), run **Sync now**, and decide conflicts. Scheduling never needs an account or internet. Details and recovery steps: [docs/desktop-accounts.md](docs/desktop-accounts.md).
 
-Tasks and fixed blocks are entered with one reusable form on Day, Week and Month: minute-precise times shown as h:mm AM/PM (type `10:13` or step with the arrow keys), free durations such as `13 min` or `1 h 13 min`, tags added with Enter, and optional preferred windows, deadlines, projects and dependencies. Field meanings and time limitations: [docs/desktop-task-form.md](docs/desktop-task-form.md).
+Tasks and fixed blocks are entered with one reusable form on Day, Week and Month. It has no date field -- a new task gets the page's selected real date (Day: today unless opened for another date; Week/Month: the selected day) -- and every clock time is entered as **[hour] : [minute] [AM/PM]**, exact to the minute. It takes free durations such as `13 min` or `1 h 13 min`, tags added with Enter, and optional preferred windows, deadlines, projects and dependencies. Field meanings and time limitations: [docs/desktop-task-form.md](docs/desktop-task-form.md).
 
-The **Day Schedule** opens on today's date in the planning timezone. It shows a horizontal timeline with every fixed block (in its category's color) and scheduled task at its exact minutes, the free time inside the scheduling window, and the tasks not yet scheduled. The **Engine** choice beside **Make Schedule** picks **Normal** (tasks may start at any minute) or **ADHD friendly** (tasks over 30 minutes start on the quarter hour) for that date only. Make Schedule keeps saved work that still fits, and an unchanged day is not regenerated. **Day Preferences**, **Import/Export CSV** (canonical format v2, previewed first) and a previewed **Reset Day** complete the page. Details: [docs/desktop-day.md](docs/desktop-day.md).
+The **Day Schedule** opens on today's date (from the computer's clock and time zone). A **Day Window** bar above the Day, Week and Month schedules sets the selected date's start and end of the usable day: the Settings default, or an override for that date only. The Day page shows a horizontal timeline with every fixed block (in its category's color) and scheduled task at its exact minutes, the free time inside the scheduling window, and the tasks not yet scheduled. The **Engine** choice beside **Make Schedule** picks **Normal** (tasks may start at any minute) or **ADHD friendly** (tasks over 30 minutes start on the quarter hour) for that date only. Make Schedule keeps saved work that still fits, and an unchanged day is not regenerated. **Day Preferences**, **Import/Export CSV** (canonical format v2, previewed first) and a previewed **Reset Day** complete the page. Details: [docs/desktop-day.md](docs/desktop-day.md).
 
 **Week** and **Month** are real calendar views (Monday-first weeks; true 28/29/30/31-day months with a month choice for the current year). They show fixed blocks and scheduled work at their actual times and unscheduled tasks in entry order, and they mute past days without hiding them. Select a day and **Open Day** to schedule it; **Back** returns to the same week or month. Details: [docs/desktop-calendar.md](docs/desktop-calendar.md).
 
@@ -560,7 +560,7 @@ python -m app.app --storage postgres --env-file .env
 
 The app opens on the Account page: create an account or sign in, and every page then works on that account's records in PostgreSQL. There is no offline copy, no synchronization and no fallback to the local database: if the database cannot be reached, the app says so and saves nothing. `DATABASE_URL` alone never switches the app away from local storage. **The `.env` file gives full access to every account's data**, so this mode is for your own machine only, never for distribution to other users (they should use the HTTP API, which serves the same schema and services). Details: [docs/direct-postgres.md](docs/direct-postgres.md); for a Render Postgres database, including the opt-in `python -m app.persistence.verify_render` check, see [docs/render-direct-desktop.md](docs/render-direct-desktop.md).
 
-Times you enter are wall-clock minutes in the planning timezone: `UTC` unless you set `SCHEDULE_MAXING_TIMEZONE` (e.g. `SCHEDULE_MAXING_TIMEZONE=America/Toronto`). Set it to your own zone so start-delay statistics compare against real local times.
+Times you enter are wall-clock minutes in the planning timezone: the computer's own time zone (read from the operating system; see `app/planning/system_clock.py`) unless you set `SCHEDULE_MAXING_TIMEZONE` (e.g. `SCHEDULE_MAXING_TIMEZONE=America/Toronto`).
 
 ---
 
@@ -749,7 +749,7 @@ On the Productivity page's **Data** section:
 
 ### Screenshots
 
-This README does not embed screenshots of the desktop UI. To add your own: run `python -m app.app`, open the Execute tab and the Productivity page, and use your OS's screenshot tool (Windows: `Win+Shift+S`; macOS: `Cmd+Shift+4`), then reference the saved image(s) here with standard Markdown image syntax, e.g. `![Productivity page](docs/screenshots/productivity.png)`.
+This README does not embed screenshots of the desktop UI. To add your own: run `python -m app.app`, open the Day page's status board and the Productivity page, and use your OS's screenshot tool (Windows: `Win+Shift+S`; macOS: `Cmd+Shift+4`), then reference the saved image(s) here with standard Markdown image syntax, e.g. `![Productivity page](docs/screenshots/productivity.png)`.
 
 ---
 
@@ -927,11 +927,11 @@ Project Schedule manages persisted projects and task assignments; calendar and a
 
 **Backups and shutdown.** Closing the window waits for background work, such as a running Make Schedule, then closes the database cleanly. To back up, close the app (and any CLI run), then copy `executions.db`. The WAL/journal side files (`-wal`, `-shm`, `-journal`) exist only while the database is in use.
 
-**Visual check.** The desktop flow was smoke-tested on Windows with a display: create, edit, and delete; Make Schedule; Start in the Execute tab; close and reopen with the tasks, schedule, and "In progress" execution restored; Reset; CSV import and export. `tests/ui/test_desktop_app.py` automates the same flow wherever a display exists. Manual checklist for other platforms:
+**Visual check.** The desktop flow was smoke-tested on Windows with a display: create, edit, and delete; Make Schedule; mark a task completed on the Day board; close and reopen with the tasks, schedule, and completed status restored; Reset; CSV import and export. `tests/ui/test_desktop_app.py` automates the same flow wherever a display exists. Manual checklist for other platforms:
 1. `python -m app.app` opens on the Day page for today, with no sample data.
 2. Add a fixed block and two tasks with the same name, edit one, delete one, and pick a dependency from the table.
 3. Run Make Schedule; the status says the saved schedule is current.
-4. Start a task in the Execute tab, close the app, and reopen it. The tasks and schedule are there, the schedule is labelled current (nothing changed), and the execution is still "In progress". Edit a task, and the schedule is labelled out of date.
+4. Mark a scheduled task completed (→ on the Day board), close the app, and reopen it. The tasks and schedule are there, the schedule is labelled current (nothing changed), and the task is still in Completed. Edit a task, and the schedule is labelled out of date.
 5. Upload a CSV with Append and then Replace, try an invalid CSV (nothing changes), use Export CSV..., and use Reset... with each scope.
 
 ---
@@ -947,7 +947,7 @@ Project Schedule manages persisted projects and task assignments; calendar and a
 - `weight_category_bonus` is loaded from YAML (`weights.category_bonus`) into `RewardSettings` but is not read anywhere in `calculate_task_score` — only the separate `category_weights` per-category multiplier dict actually affects scoring. `tests/test_reward.py` characterizes this as current behavior.
 - Fixed-block validation (`app.constraints.validate_fixed_blocks`) is now enforced by the shared optimizer (`app/optimizer.py`'s `optimize_day_schedule`/`combine_fixed_and_optimized_scheduled_tasks`) in addition to the desktop UI's own pre-existing checks: overlapping, non-positive, or out-of-day-window fixed blocks are rejected with a `ValueError` before scheduling begins, for both the CLI and UI entry points.
 - Legacy executions (created before Milestone 2, or through `ExecutionService.create_execution`) are still identified by their planned snapshot, and their weekday statistics use when the record was created. Desktop executions are now canonical: identified by task/placement id, with real planned dates.
-- The planning timezone defaults to `UTC` (Python's standard library cannot reliably detect your IANA zone on Windows); set `SCHEDULE_MAXING_TIMEZONE`.
+- The planning timezone defaults to the computer's own zone. On Windows it is mapped from the registry's zone name with CLDR's table; an unknown name falls back to a whole-hour `Etc/GMT` zone from the current offset (no daylight-saving rules), else `UTC`. Set `SCHEDULE_MAXING_TIMEZONE` to choose one explicitly.
 - A schedule counts as out of date when anything in its date range changes, even a change that would not move any of its placements.
 - The desktop Account page provides sign-in, explicit local-data association, sync status and conflict resolution. Each workspace shows only its owner's records. The access token stays in memory, so sign in again after restarting to resume sync; the active workspace remains available offline. See [desktop accounts](docs/desktop-accounts.md).
 - `keep_local` cannot be used against a record deleted on the server; only `accept_remote` is offered. Recreating such a record under a new id is not automated. Local execution history that the server cannot express as lifecycle actions (sessions that differ from the server's) is reported as a `diverged_history` rejection and must be resolved with `accept_remote`.

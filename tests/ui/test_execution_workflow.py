@@ -82,7 +82,8 @@ def stack(tmp_path: Path):
 def test_legal_actions_and_derived_states(stack: Stack) -> None:
     task, placement = stack.planned()
     upcoming = describe_item(placement, None, now=at(8))
-    assert upcoming.actions == ("start", "skip", "cancel", "reschedule") and upcoming.timing_text == "Upcoming."
+    assert upcoming.actions == ("start", "complete", "skip", "cancel", "reschedule")  # done without timing too
+    assert upcoming.timing_text == "Upcoming."
     assert "America/Vancouver" in upcoming.planned_text and "60 min estimate" in upcoming.planned_text
     overdue = describe_item(placement, None, now=at(11))
     assert overdue.overdue and overdue.status_text == "Not started" and overdue.timing_text.startswith("Overdue")

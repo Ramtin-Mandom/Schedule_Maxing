@@ -2,11 +2,10 @@
 app/ui/task_actions.py
 
 The task-form actions every schedule page shares (Day, Week, Month): add or
-save the form's task/fixed block, edit or remove a row (by its RowRef, from
-the task list, the Day timeline or an available-task chip), and use rows as
-dependencies. The page provides `page_controller` (a SchedulePageController),
-`form` (app/ui/task_editor.TaskEditor), `added_tasks_panel`
-(app/ui/task_list.AddedTasksPanel), `_editing`, `_render(snapshot)`,
+save the form's task/fixed block (on the page's selected date), and edit or
+remove a record by its RowRef (from the Day timeline or an available-task
+button). The page provides `page_controller` (a SchedulePageController),
+`form` (app/ui/task_editor.TaskEditor), `_editing`, `_render(snapshot)`,
 `reload()`, `show_panel(key)` and `_refuse_while_busy()`. Persistence and
 validation stay in the presenter and the planning services.
 
@@ -18,6 +17,7 @@ storage, a failed save keeps everything typed in the form.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from tkinter import messagebox
 
 from app.persistence.errors import NotSignedInError
@@ -54,10 +54,17 @@ class TaskFormActions:
         messagebox.showerror("Could Not Load Saved Data", result.error or "Unknown error.", parent=self)
 
     def submit_task(self, draft: TaskDraft) -> None:
-        """Add (or, in edit mode, save) the form's task/fixed block through the presenter and services."""
+        """
+        Add (or, in edit mode, save) the form's task/fixed block through the
+        presenter and services. A new record always gets the page's selected
+        date (page_controller.form_date) -- the form has no date to type; an
+        edit keeps the record's own date.
+        """
         if self._refuse_while_busy():
             return
         editing = self._editing
+        if not editing:
+            draft = replace(draft, date=self.page_controller.form_date.isoformat())
         self._io(lambda: self.page_controller.save_draft(draft, editing=editing),
                  lambda result: self._task_saved(draft, result))
 
@@ -71,22 +78,13 @@ class TaskFormActions:
             return
         saved_date = draft.date.strip()
         self._leave_edit_mode()
-        self.form.reset_for_next(saved_date or self.page_controller.anchor_date.isoformat())
+        self.form.reset_for_next(self.page_controller.form_date.isoformat())
         if saved_date and saved_date not in {day.isoformat() for day in self.page_controller.dates}:
             self.form.notice.show("info", f"Saved for {saved_date}, which is outside the dates shown here.")
 
     # Kept for callers of the previous API name.
     def add_task(self, draft: TaskDraft) -> None:
         self.submit_task(draft)
-
-    def edit_selected_task(self) -> None:
-        if self._refuse_while_busy():
-            return
-        refs = self.added_tasks_panel.selected_refs()
-        if len(refs) != 1:
-            messagebox.showinfo("Edit Task", "Select exactly one task or fixed block to edit.", parent=self)
-            return
-        self.edit_ref(refs[0])
 
     def edit_ref(self, ref: RowRef) -> None:
         """Load one saved task/fixed block into the form for editing."""
@@ -136,29 +134,6 @@ class TaskFormActions:
                 self.form.set_options(options.value)
 
         self._io(self.page_controller.editor_options, apply, blocking=False)
-
-    def use_selected_as_dependencies(self) -> None:
-        refs = self.added_tasks_panel.selected_refs()
-        task_ids = [ref.id for ref in refs if ref.kind == "task"]
-        if len(task_ids) != len(refs):
-            messagebox.showinfo("Dependencies", "Fixed blocks cannot be dependencies; they were ignored.", parent=self)
-        if self.form.kind != "task":
-            messagebox.showinfo("Dependencies", "Only a flexible task has dependencies.", parent=self)
-            return
-        self.form.set_dependencies(task_ids)
-        self.show_panel("input")
-
-    def remove_selected_task(self) -> None:
-        if self._refuse_while_busy():
-            return
-        refs = self.added_tasks_panel.selected_refs()
-        if not refs:
-            messagebox.showinfo("No Selection", "Select a task to remove first.", parent=self)
-            return
-        if len(refs) > 1:
-            messagebox.showinfo("Remove Task", "Remove one task or fixed block at a time.", parent=self)
-            return
-        self.remove_ref(refs[0])
 
     def remove_ref(self, ref: RowRef) -> None:
         """Remove one saved task/fixed block after confirming what goes with it."""

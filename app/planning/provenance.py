@@ -65,7 +65,9 @@ from app.planning.preferences import DayPreferences, OptimizerMode
 FINGERPRINT_VERSION = 1
 
 #: Fields that describe a record's bookkeeping rather than its scheduling content.
-_NON_CONTENT_FIELDS = {"created_at", "updated_at", "version", "deleted_at", "user_id"}
+#: Not scheduling inputs: audit fields, the owner, and a task's points (analytics only -- changing them must not
+#: make a saved schedule look out of date, and adding the field left every existing fingerprint unchanged).
+_NON_CONTENT_FIELDS = {"created_at", "updated_at", "version", "deleted_at", "user_id", "points"}
 
 
 class StaleReason(str, Enum):

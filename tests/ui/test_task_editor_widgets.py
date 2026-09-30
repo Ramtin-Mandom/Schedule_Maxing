@@ -1,9 +1,9 @@
 """The reusable task form as real widgets (Milestone 4, Prompt 3), against a temporary
-database: typed and stepped minute-precise times agree, tags are added with Enter without
-submitting and removed again, a 13-minute task at 10:13 is saved exactly, a fixed-block
-overlap is refused with the form kept and nothing written, an edit keeps recurrence and
-hidden fields, removal asks first, and everything survives a reopen. Skipped without a
-display (tests/ui/test_desktop_app.py)."""
+database: times are entered as [hour]:[minute] [AM/PM] (no spinners, no date field -- the
+page's date is used), tags are added with Enter without submitting and removed again, a
+13-minute task at 10:13 is saved exactly, a fixed-block overlap is refused with the form kept
+and nothing written, an edit keeps recurrence and hidden fields, removal asks first, and
+everything survives a reopen. Skipped without a display (tests/ui/test_desktop_app.py)."""
 
 from __future__ import annotations
 
@@ -53,23 +53,34 @@ def test_times_tags_and_a_minute_precise_task(tmp_path: Path, dialogs) -> None:
     try:
         day = app.pages["day"]
         form = day.form
-        assert form.date_field.get() == WEDNESDAY.isoformat()  # a new task starts on the page's date
+        assert not hasattr(form, "date_field")  # no date to type: a new task starts on the page's date
+        assert form.date_text == WEDNESDAY.isoformat() and form.date_label.cget("text") == "Wed, Jun 5, 2024"
         form.toggle_more()
 
         start = form.window_start
-        start.variable.set("10:12")
-        key(start.entry, "Up")
-        assert start.get() == "10:13 AM"  # typed then stepped: one minute
-        key(start.entry, "Shift-Up")
-        assert start.get() == "10:28 AM"
-        start.down_button.invoke()
-        key(start.entry, "Shift-Down")
-        assert start.get() == "10:12 AM"
-        start.up_button.invoke()
-        assert start.value() == 613  # the buttons, keys and typing all land on the same minute
-        form.window_end.variable.set("12:00 AM")
-        form.window_end.normalize()
-        assert form.window_end.get() == "12:00 AM (next day)"
+        assert not hasattr(start, "up_button") and start.meridiem == "AM"  # no spinner; AM by default
+        start.hour_var.set("10")
+        start.minute_var.set("13")
+        assert start.get() == "10:13 AM" and start.value() == 613
+        start.meridiem_button.invoke()
+        assert start.get() == "10:13 PM" and start.value() == 1333  # AM -> PM
+        start.meridiem_button.invoke()
+        assert start.value() == 613  # PM -> AM again
+        start.minute_var.set("7")
+        start.normalize()
+        assert start.minute_var.get() == "07" and start.get() == "10:07 AM"  # two-digit minutes once normalized
+        start.hour_var.set("13")
+        start.normalize()
+        assert "hour goes from 1 to 12" in start.error
+        start.hour_var.set("10")
+        start.minute_var.set("13")
+        start.normalize()
+        assert start.error == ""
+        end = form.window_end
+        end.hour_var.set("12")
+        end.minute_var.set("00")
+        assert end.meridiem == "AM" and end.get() == "12:00 AM (next day)" and end.value() == 1440
+        assert end.next_day_label.winfo_manager() == "grid"  # it says so beside the input
 
         tags = form.tag_input
         for text in ("focus", "math", "focus"):
@@ -92,7 +103,8 @@ def test_times_tags_and_a_minute_precise_task(tmp_path: Path, dialogs) -> None:
         assert task.estimated_duration_minutes == 13
         assert (task.preferred_time_window.start_minute, task.preferred_time_window.end_minute) == (613, 1440)
         assert task.tags == ["reading"] and task.preferred_dates == [WEDNESDAY]
-        assert form.name_field.get() == "" and form.date_field.get() == WEDNESDAY.isoformat()  # ready for the next
+        assert form.name_field.get() == "" and form.date_text == WEDNESDAY.isoformat()  # ready for the next
+        assert form.window_start.get() == "" and form.window_start.meridiem == "AM"
     finally:
         close_app(app)
 
@@ -103,7 +115,7 @@ def test_overlap_refusal_keeps_the_form_and_writes_nothing(tmp_path: Path, dialo
         day = app.pages["day"]
         form = day.form
         form.set_kind("block")
-        for label, start, end in (("Lecture", "9:00 AM", "10:30 AM"), ("Gym", "10:13 AM", "11:00 AM")):
+        for label, start, end in (("Lecture", "9:00 AM", "10:30 AM"), ("Gym", "10:13 AM", "11:00 AM")):  # via text
             form.name_field.variable.set(label)
             form.start_field.variable.set(start)
             form.end_field.variable.set(end)
@@ -132,8 +144,7 @@ def test_edit_keeps_hidden_fields_remove_asks_and_everything_survives_a_reopen(t
             recurrence=RecurrenceSpec(frequency=RecurrenceFrequency.WEEKLY, weekdays=[2])))
         day = app.pages["day"]
         day.reload()
-        day.added_tasks_panel.tree.selection_set(f"task:{gym.id}")
-        day.edit_selected_task()
+        day.edit_ref(RowRef("task", gym.id, gym.version))  # as its Available-task button does
         form = day.form
         assert form.editing and form.category_select.get() == "Volunteering"  # an unknown category is kept
         assert form.kind_buttons["block"].cget("state") == "disabled"  # a task stays a task
@@ -148,12 +159,11 @@ def test_edit_keeps_hidden_fields_remove_asks_and_everything_survives_a_reopen(t
         form.load(TaskDraft(name="Temp", duration="5", date=WEDNESDAY.isoformat()), editing=False)
         form.submit_button.invoke()
         temp = stored(app)["Temp"]
-        day.added_tasks_panel.tree.selection_set(f"task:{temp.id}")
         dialogs.confirm = False
-        day.remove_selected_task()
+        day.remove_ref(RowRef("task", temp.id, temp.version))
         assert "Temp" in stored(app)  # declined: nothing removed
         dialogs.confirm = True
-        day.remove_selected_task()
+        day.remove_ref(RowRef("task", temp.id, temp.version))
         assert "Temp" not in stored(app)
     finally:
         close_app(app)
@@ -173,10 +183,16 @@ def test_week_and_month_use_the_same_form_with_real_dates(tmp_path: Path, dialog
         week = app.pages["week"]
         assert type(week.form) is type(app.pages["day"].form) is type(app.pages["month"].form)
         friday = date(2024, 6, 7)
-        week.form.load(TaskDraft(name="Report", duration="2 h", date=friday.isoformat(), pin_to_date=True),
-                       editing=False)
+        week.select_date(friday)  # selecting the day is how a Week task gets its date
+        week.form.load(TaskDraft(name="Report", duration="2 h", pin_to_date=True), editing=False)
+        assert week.form.date_text == friday.isoformat()
         week.form.submit_button.invoke()
         assert stored(app)["Report"].required_date == friday and "Report" in tree_names(week)
+        # A date carried by a draft never overrides the selected day for a new task.
+        week.form.load(TaskDraft(name="Elsewhere", duration="5", date="2030-01-01"), editing=False)
+        week.form.set_date(friday)
+        week.form.submit_button.invoke()
+        assert stored(app)["Elsewhere"].preferred_dates == [friday]
         settle(app, 0.1)
     finally:
         close_app(app)

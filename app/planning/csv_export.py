@@ -51,6 +51,7 @@ order, so readers of version 1 keep working; version 2 appends seven.
     task_category   placement: its task's category when it was saved (a snapshot), or empty if unknown
     removal_reason  placement tombstone: why it was removed (app.planning.models.PlacementRemovalReason), or empty
     superseded_by_id  placement tombstone: the placement that replaced it, or empty
+    points          task: its points (0..1000); optional on import (missing: the default, 1)
 
 Rows are ordered: projects and tasks by (created_at, id), then fixed
 blocks and placements by (date, start, id). Instants are exact to the
@@ -99,7 +100,7 @@ COLUMNS_V2 = COLUMNS_V1 + (
 
 #: Written by this version: version 2 plus the placement history columns appended in Milestone 5. They are
 #: optional on import (an earlier version 2 file has none: the history is then unknown, never guessed).
-COLUMNS = COLUMNS_V2 + ("task_category", "removal_reason", "superseded_by_id")
+COLUMNS = COLUMNS_V2 + ("task_category", "removal_reason", "superseded_by_id", "points")
 
 
 @dataclass(frozen=True)
@@ -231,6 +232,7 @@ def _task_row(task: Task) -> dict[str, str]:
         "tags": json.dumps(task.tags),
         "duration_minutes": str(task.estimated_duration_minutes),
         "priority": str(task.priority),
+        "points": str(task.points),
         "required": "true" if task.required else "false",
         "required_date": task.required_date.isoformat() if task.required_date else "",
         "preferred_dates": json.dumps([day.isoformat() for day in task.preferred_dates]),

@@ -50,3 +50,40 @@ def test_native_default_settings_persist_and_preserve_typed_errors(tmp_path, dia
         assert app.services.planning_controller.date_preferences(WEDNESDAY).value is not None
     finally:
         close_app(app)
+
+
+def test_reset_all_task_data_asks_first_then_clears_every_page(tmp_path, dialogs, monkeypatch):
+    from app.ui import pages
+    from tests.ui.test_desktop_app import fill_form, pump
+
+    app = open_app(tmp_path / "reset.db", tmp_path)
+    try:
+        day = app.pages["day"]
+        fill_form(day, name="Study", duration="30")
+        day.form.submit_button.invoke()
+        day.make_schedule_button.invoke()
+        pump(app, until=lambda: not day._busy)
+        assert app.services.planning_controller.list_tasks().value
+        settings = app.pages["settings"]
+        app.show_page("settings")
+        asked = []
+
+        monkeypatch.setattr(pages, "ask_confirm", lambda parent, **kw: (asked.append(kw), False)[1])
+        settings.reset_data_button.invoke()
+        assert asked[0]["title"] == "Reset all task data?" and asked[0]["danger"] is True
+        assert "cannot be undone" in asked[0]["message"] and "Kept: your account" in asked[0]["message"]
+        assert "nothing was deleted" in settings.reset_data_notice.text  # cancelled
+        assert app.services.planning_controller.list_tasks().value
+
+        monkeypatch.setattr(pages, "ask_confirm", lambda parent, **kw: True)
+        settings.reset_data_button.invoke()
+        pump(app, until=lambda: settings.reset_data_button.cget("text") == "Reset All Task Data")
+        assert "All task data was removed: 1 task(s)" in settings.reset_data_notice.text
+        assert app.services.planning_controller.list_tasks().value == []
+        assert app.services.execution_controller.list_executions().value == []
+        pump(app)
+        app.show_page("day")
+        pump(app)
+        assert day.snapshot.rows == [] and day.status_board.board.cards == []  # no page shows stale data
+    finally:
+        close_app(app)

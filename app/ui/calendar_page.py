@@ -12,10 +12,18 @@ on wide and medium windows and one on narrow ones):
 - Header: the period's name (for Month, the month and year, prominently),
   Previous / Today / Next, a choice of the current year's months (Month),
   a date field, and the period's status.
+- The selected day's Day Window (app/ui/day_window_bar.py): its start and
+  end of the usable day, the Settings default or its own override.
 - The calendar, then the selected day's exact, ordered details with an
   explicit **Open Day** button (a double-click is only a shortcut).
-- The reusable task form, creating on the selected date; **Reset Week /
-  Month...** (previewed, confirmed, atomic); the period's task list.
+- The reusable task form, creating on the selected date (the form has no
+  date field: selecting a day is how a task gets its date); **Reset Week /
+  Month...** (previewed, confirmed, atomic); and the selected day's panel
+  (app/ui/selected_day_panel.py): its scheduled tasks and their outcomes,
+  counts, hours and points, and "All Tasks Complete" / "No Tasks Complete".
+- Past dates are tinted by their scheduled-task outcome (one shared
+  classification, app/productivity/day_summary.py), with the meaning in
+  words in each cell, in the legend and in the selected-day panel.
 
 Scheduling is done on the Day page: Open Day shows the date there with a
 way back to this page, which keeps its week/month and selected day.
@@ -35,22 +43,27 @@ from tkinter import messagebox
 
 import customtkinter as ctk
 
+from app.ui.paint_widgets import AppScrollableFrame
+
 from app.ui import theme
 from app.ui.background import ControllerResult, run_in_background
 from app.ui.calendar_controller import CalendarController, CalendarSnapshot
 from app.ui.calendar_model import Period
 from app.ui.calendar_view import CalendarView
 from app.ui.components import AppButton, Card, LabeledSelect, Notice, SectionTitle, ask_confirm, font
+from app.ui.day_window import DayWindowController
+from app.ui.day_window_bar import DayWindowActions, DayWindowBar
 from app.ui.shell_state import LayoutMode
 from app.ui.task_actions import TaskFormActions
 from app.ui.task_editor import TaskEditor
-from app.ui.task_list import AddedTasksPanel
+from app.execution.lifecycle import TaskOutcome
+from app.ui.selected_day_panel import DayStatusLegend, SelectedDayPanel
 from app.ui.projects_controller import project_choices
 
 _HEADER_WRAP = {LayoutMode.WIDE: 760, LayoutMode.MEDIUM: 560, LayoutMode.NARROW: 400}
 
 
-class CalendarPage(TaskFormActions, ctk.CTkFrame):
+class CalendarPage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
     def __init__(
         self,
         parent: tk.Widget,
@@ -77,16 +90,21 @@ class CalendarPage(TaskFormActions, ctk.CTkFrame):
         self._unfiltered = None
         self._project_choices = {}
         self.layout: LayoutMode | None = None
-        self.execution_panel = None  # Execute is on the Day page (Open Day)
+        self.day_window = DayWindowController(page_controller.planning)
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
         self._build_header()
-        self.body = ctk.CTkScrollableFrame(self, fg_color="transparent", scrollbar_button_color=theme.SECONDARY_HOVER)
+        self.body = AppScrollableFrame(self, fg_color="transparent", scrollbar_button_color=theme.SECONDARY_HOVER)
         self.body.grid(row=1, column=0, sticky="nsew")
         self.body.columnconfigure(0, weight=1)
+        self.window_bar = DayWindowBar(self.body, on_apply=self.apply_day_window,
+                                       on_default=self.use_default_day_window)
+        self.window_bar.grid(row=0, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_M))
         self.schedule_canvas = self.calendar = CalendarView(self.body, mode=mode_name, on_select=self.select_date,
                                                             on_open=self.open_day)
-        self.calendar.grid(row=0, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_M))
+        self.calendar.grid(row=1, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, 4))
+        self.legend = DayStatusLegend(self.body)
+        self.legend.grid(row=2, column=0, sticky="w", padx=theme.SPACE_XL, pady=(0, theme.SPACE_M))
         self._build_details()
         self._build_lower()
         self.set_layout(LayoutMode.WIDE)
@@ -146,7 +164,7 @@ class CalendarPage(TaskFormActions, ctk.CTkFrame):
 
     def _build_details(self) -> None:
         self.details_card = card = Card(self.body)
-        card.grid(row=1, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_M))
+        card.grid(row=3, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_M))
         card.columnconfigure(0, weight=1)
         top = ctk.CTkFrame(card, fg_color="transparent")
         top.grid(row=0, column=0, sticky="ew", padx=theme.SPACE_L, pady=(theme.SPACE_L, 4))
@@ -163,7 +181,7 @@ class CalendarPage(TaskFormActions, ctk.CTkFrame):
 
     def _build_lower(self) -> None:
         self.lower = lower = ctk.CTkFrame(self.body, fg_color="transparent")
-        lower.grid(row=2, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_XL))
+        lower.grid(row=4, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_XL))
         self.form = TaskEditor(lower, on_submit=self.submit_task, on_cancel=self.cancel_edit,
                                productivity_controller=self.productivity_controller)
         self.side = side = ctk.CTkFrame(lower, fg_color="transparent")
@@ -180,16 +198,10 @@ class CalendarPage(TaskFormActions, ctk.CTkFrame):
         self.notice = Notice(actions, wraplength=420)
         self.notice.grid(row=2, column=0, sticky="ew", padx=theme.SPACE_L, pady=(8, theme.SPACE_L))
         self.notice.hide()
-        self.right_card = tasks = Card(side)
-        tasks.grid(row=1, column=0, sticky="ew", pady=(theme.SPACE_M, 0))
-        tasks.columnconfigure(0, weight=1)
-        SectionTitle(tasks, f"Tasks this {unit}", "", wraplength=420).grid(
-            row=0, column=0, sticky="ew", padx=theme.SPACE_L, pady=(theme.SPACE_L, 0))
-        self.added_tasks_panel = AddedTasksPanel(tasks, on_remove_task=self.remove_selected_task,
-                                                 on_edit_task=self.edit_selected_task,
-                                                 on_use_as_dependencies=self.use_selected_as_dependencies,
-                                                 on_open_date=self.open_day)
-        self.added_tasks_panel.grid(row=1, column=0, sticky="ew", padx=theme.SPACE_S, pady=(0, theme.SPACE_L))
+        self.day_panel = SelectedDayPanel(side, on_all_complete=lambda: self.set_day_outcome(TaskOutcome.COMPLETED),
+                                          on_none_complete=lambda: self.set_day_outcome(TaskOutcome.UNCOMPLETED))
+        self.day_panel.grid(row=1, column=0, sticky="ew", pady=(theme.SPACE_M, 0))
+        self._panel_token = 0
 
     # ----------------------------- Layout -----------------------------
 
@@ -202,8 +214,10 @@ class CalendarPage(TaskFormActions, ctk.CTkFrame):
         for index in range(2):
             self.lower.columnconfigure(index, weight=0, minsize=0)
         pad = theme.SPACE_XL if mode != LayoutMode.NARROW else theme.SPACE_M
-        for widget in (self.header, self.calendar, self.details_card, self.lower):
+        for widget in (self.header, self.window_bar, self.calendar, self.legend, self.details_card, self.lower):
             widget.grid_configure(padx=pad)
+        self.day_panel.set_wraplength(_HEADER_WRAP[mode] - 340 if mode == LayoutMode.WIDE else _HEADER_WRAP[mode])
+        self.window_bar.set_layout(mode)
         self.status_label.configure(wraplength=_HEADER_WRAP[mode])
         self.details_label.configure(wraplength=_HEADER_WRAP[mode])
         if mode == LayoutMode.NARROW:  # the date field moves under the buttons instead of widening the page
@@ -229,7 +243,6 @@ class CalendarPage(TaskFormActions, ctk.CTkFrame):
 
     def on_appearance_changed(self) -> None:
         self.calendar.request_redraw()
-        self.added_tasks_panel.retag()
 
     # ----------------------------- Loading and navigation -----------------------------
 
@@ -278,12 +291,12 @@ class CalendarPage(TaskFormActions, ctk.CTkFrame):
 
     def _moved(self, reload_needed: bool) -> None:
         self._remember()
+        if not self._editing:
+            self.form.set_date(self.page_controller.selected_date)
         if reload_needed:
             self._load_async()
         else:
             self._show_selection()
-        if not self._editing:
-            self.form.date_field.variable.set(self.page_controller.selected_date.isoformat())
 
     def select_date(self, day: date) -> None:
         self._moved(self.page_controller.select(day))
@@ -319,6 +332,9 @@ class CalendarPage(TaskFormActions, ctk.CTkFrame):
         self._remember()
         if self._on_open_day is not None:
             self._on_open_day(day)
+
+    def _window_day(self) -> date:
+        return self.page_controller.selected_date
 
     def _remember(self) -> None:
         if self._on_anchor_changed is not None:
@@ -372,7 +388,6 @@ class CalendarPage(TaskFormActions, ctk.CTkFrame):
         undated = f" {snapshot.undated_count} task(s) have no date; they are offered on every Day page." \
             if snapshot.undated_count else ""
         self.status_label.configure(text=snapshot.status_text + undated)
-        self.added_tasks_panel.refresh(snapshot.rows)
         if not self._editing:
             self._refresh_options()
         self.calendar.draw(snapshot, self.page_controller.selected_date)
@@ -385,6 +400,8 @@ class CalendarPage(TaskFormActions, ctk.CTkFrame):
     def _show_selection(self) -> None:
         selected = self.page_controller.selected_date
         self.start_date_var.set(selected.isoformat())
+        if not self._editing:
+            self.form.set_date(selected)  # a new task belongs to the selected day
         self.calendar.set_selected(selected)
         cell = self.snapshot.day(selected) if self.snapshot is not None else None
         notes = []
@@ -402,6 +419,52 @@ class CalendarPage(TaskFormActions, ctk.CTkFrame):
         else:
             text = "\n".join(item.text for item in cell.items)
         self.details_label.configure(text=text)
+        self._refresh_day_window()
+        self._refresh_day_panel()
+
+    # ----------------------------- Selected day: outcomes -----------------------------
+
+    def _refresh_day_panel(self) -> None:
+        """Re-read the selected date's scheduled tasks and aggregates (only the newest read is shown)."""
+        outcomes = self.page_controller.outcomes
+        if outcomes is None:
+            return
+        self._panel_token += 1
+        token, day = self._panel_token, self.page_controller.selected_date
+        self.day_panel.show_loading(day)
+
+        def done(result) -> None:
+            if token != self._panel_token:
+                return
+            if result.ok:
+                self.day_panel.render(result.value, today=self.page_controller.today())
+            else:
+                self.day_panel.notice.show("error", result.error or "The day could not be read.")
+
+        self._io(lambda: outcomes.detail(day), done, blocking=False)
+
+    def set_day_outcome(self, outcome: TaskOutcome) -> None:
+        """All Tasks Complete / No Tasks Complete: every scheduled task of the selected day, in one transaction."""
+        outcomes = self.page_controller.outcomes
+        if outcomes is None or self._refuse_while_busy():
+            return
+        day = self.page_controller.selected_date
+        self.day_panel.set_busy(True)
+
+        def done(result) -> None:
+            self.day_panel.set_busy(False)
+            if not result.ok:
+                self.day_panel.notice.show("error", f"{result.error} Nothing was changed.")
+                return
+            run = result.value
+            word = "completed" if outcome == TaskOutcome.COMPLETED else "uncompleted"
+            message = f"{len(run.result.changed) + len(run.result.unchanged)} scheduled task(s) are {word}."
+            if run.result.skipped:
+                message += f" {len(run.result.skipped)} cancelled attempt(s) were left as they are."
+            self.day_panel.notice.show("success", message)
+            self.reload()  # the colours and details follow the saved state
+
+        self._io(lambda: outcomes.set_day(day, outcome), done)
 
     # ----------------------------- Busy state -----------------------------
 

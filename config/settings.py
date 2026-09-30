@@ -145,9 +145,22 @@ DATA_DIR, DATA_DIR_OVERRIDDEN = resolve_data_dir()
 LEGACY_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
 # IANA timezone the desktop app plans in: a legacy "minutes from midnight"
-# form value on a page date is a wall-clock time in this zone. Override with
-# SCHEDULE_MAXING_TIMEZONE (e.g. "America/Toronto").
-DEFAULT_TIMEZONE = os.environ.get("SCHEDULE_MAXING_TIMEZONE") or "UTC"
+# form value on a page date is a wall-clock time in this zone, and "today"
+# is this zone's calendar date. Defaults to the zone the computer itself is
+# set to (app/planning/system_clock.py; UTC only if none can be found).
+# Override with SCHEDULE_MAXING_TIMEZONE (e.g. "America/Toronto").
+TIMEZONE_ENV_VAR = "SCHEDULE_MAXING_TIMEZONE"
+
+
+def resolve_default_timezone(environ: Mapping[str, str] | None = None) -> str:
+    """SCHEDULE_MAXING_TIMEZONE if set, else the computer's own IANA zone."""
+    from app.planning.system_clock import detect_system_timezone
+
+    environ = os.environ if environ is None else environ
+    return environ.get(TIMEZONE_ENV_VAR) or detect_system_timezone(environ=environ)
+
+
+DEFAULT_TIMEZONE = resolve_default_timezone()
 
 # The application database. The historical filename is kept so existing
 # SCHEDULE_MAXING_DATA_DIR overrides keep pointing at the same file.
