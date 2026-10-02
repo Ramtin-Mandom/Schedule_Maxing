@@ -106,6 +106,8 @@ from app.planning.scope import OwnerScope
 from app.planning.service import DayResultStatus, SelectedDayState, initial_state
 from app.planning.time import local_instant
 from app.reward import load_reward_settings
+from app.planning import series as series_ops
+from app.planning.series import EditScope, ExpansionResult, SeriesChange
 from app.planning.workflow import (
     AllocationPreview,
     DayFreshness,
@@ -124,8 +126,14 @@ class RangeScheduleResult:
     allocation: AllocationResult
     outputs: dict[date_, DayScheduleOutput]
     replacement: PlacementReplacement
-    #: Active placements outside the range that this run superseded (removed).
+    #: Always empty since Milestone 6: a run never removes placements outside its range (kept for compatibility).
     superseded_ids: list[uuid.UUID] = field(default_factory=list)
+    #: The recurrence expansion of the range that ran first (docs/recurrence.md).
+    expansion: ExpansionResult | None = None
+    #: Range task id -> its occurrence's live placement outside the range, left there and not placed again.
+    kept_elsewhere: dict[uuid.UUID, ScheduledTask] = field(default_factory=dict)
+    #: Per date: non-blocking problems of kept history (it stays exactly as recorded).
+    notices: dict[date_, list] = field(default_factory=dict)
 
 
 def _scheduling_failure_message(selected_date: date_, error: MandatoryTaskSchedulingError) -> str:
@@ -210,8 +218,60 @@ class PlanningController:
 
         return self._call(op)
 
+    # ------------------------------------------------------------------
+    # Recurring series (app/planning/series.py; docs/recurrence.md)
+    # ------------------------------------------------------------------
+
+    def list_series(self) -> ControllerResult[list[Task]]:
+        """The workspace's live series definitions (configured or needing configuration)."""
+        return self._call(self._service.list_series)
+
+    def expand_range(self, start_date: date_, end_date: date_) -> ControllerResult[ExpansionResult]:
+        """Materialize the range's recurring occurrences (bounded, idempotent); generation also does this first."""
+        def op() -> ExpansionResult:
+            result = workflow.expand_range(self._service, start_date, end_date)
+            if result.created:
+                self._invalidate_generated_results()
+            return result
+
+        return self._call(op)
+
+    def edit_occurrence(self, task: Task, *, expected_version: int) -> ControllerResult[SeriesChange]:
+        """"This occurrence": save one occurrence on its own (it becomes MODIFIED; a new date moves it)."""
+        return self._series_call(lambda: series_ops.edit_occurrence(self._service, task, expected_version=expected_version))
+
+    def edit_series(
+        self, definition: Task, *, expected_version: int, scope: EditScope, cutoff: date_ | None = None
+    ) -> ControllerResult[SeriesChange]:
+        """The entire series, or this and every later occurrence (from `cutoff`, an original slot date)."""
+        return self._series_call(lambda: series_ops.edit_series(
+            self._service, definition, expected_version=expected_version, scope=scope, cutoff=cutoff))
+
+    def delete_occurrence(self, task_id: uuid.UUID, *, expected_version: int, skip: bool = False
+                          ) -> ControllerResult[SeriesChange]:
+        """Skip or delete one occurrence; its slot stays reserved (never regenerated)."""
+        return self._series_call(lambda: series_ops.delete_occurrence(
+            self._service, task_id, expected_version=expected_version, skip=skip))
+
+    def delete_series(self, series_id: uuid.UUID, *, expected_version: int, scope: EditScope,
+                      cutoff: date_ | None = None) -> ControllerResult[SeriesChange]:
+        """Delete this and every later occurrence (FUTURE, from `cutoff`) or the entire series (SERIES)."""
+        return self._series_call(lambda: series_ops.delete_series(
+            self._service, series_id, expected_version=expected_version, scope=scope, cutoff=cutoff))
+
+    def _series_call(self, operation) -> ControllerResult[SeriesChange]:
+        def op() -> SeriesChange:
+            change = operation()
+            self._invalidate_generated_results()
+            return change
+
+        return self._call(op)
+
     def get_task(self, task_id: uuid.UUID) -> ControllerResult[Task | None]:
         return self._call(lambda: self._service.get_task(task_id))
+
+    def get_task_including_deleted(self, task_id: uuid.UUID) -> ControllerResult[Task | None]:
+        return self._call(lambda: self._service.get_tasks_including_deleted([task_id]).get(task_id))
 
     def get_tasks(self, task_ids: list[uuid.UUID]) -> ControllerResult[TaskRegistry]:
         return self._call(lambda: self._service.get_tasks(task_ids))
@@ -477,6 +537,22 @@ class PlanningController:
         """The stored (last generated and saved) placements for one date."""
         return self._call(lambda: self._service.placements_for_date(day))
 
+    def preserved_placement_ids(self, placements: list[ScheduledTask]) -> ControllerResult[set[uuid.UUID]]:
+        """Which of `placements` generation keeps as the user's manual intent (PlanningService.preserved_placement_ids)."""
+        return self._call(lambda: self._service.preserved_placement_ids(placements))
+
+    def release_manual_placement(self, placement_id: uuid.UUID, *, expected_version: int) -> ControllerResult[ScheduledTask]:
+        """
+        Release a placement's manual intent (PlanningService.release_manual_placement):
+        it stays where it is, but the next Make Schedule may replace it.
+        """
+        result = self._call(lambda: self._service.release_manual_placement(placement_id,
+                                                                          expected_version=expected_version))
+        if not result.ok and isinstance(result.cause, VersionConflictError):
+            return ControllerResult.failure("It was moved, changed or removed elsewhere since it was shown. The "
+                                            "schedule has been reloaded; check it and try again.", result.cause)
+        return result
+
     # ------------------------------------------------------------------
     # Preferences
     # ------------------------------------------------------------------
@@ -639,6 +715,7 @@ class PlanningController:
         self, start_date: date_, end_date: date_, *, scope: RangeScope = RangeScope.ELIGIBLE
     ) -> ControllerResult[AllocationResult]:
         def op() -> AllocationResult:
+            workflow.expand_range(self._service, start_date, end_date)  # occurrences first (docs/recurrence.md)
             inputs = self._scheduling_inputs(start_date, end_date, scope)
             result = workflow.allocate(inputs)
             self._allocation, self._allocation_inputs = result, inputs
@@ -694,7 +771,6 @@ class PlanningController:
             # the day's result.
             outcome = workflow.generate_from(
                 self._service, allocation, inputs, [selected_date], template=self._yaml_overrides,
-                protect_history=True,
             )
             return outcome.outputs[selected_date]
 
@@ -712,17 +788,19 @@ class PlanningController:
         """
 
         def op() -> RangeScheduleResult:
+            # The range's recurring occurrences are materialized first (bounded, idempotent; docs/recurrence.md).
+            expansion = workflow.expand_range(self._service, start_date, end_date)
             inputs = self._scheduling_inputs(start_date, end_date, scope)
             allocation = workflow.allocate(inputs)
             outcome = workflow.generate_from(
                 self._service, allocation, inputs, _range_dates(start_date, end_date), template=self._yaml_overrides,
-                protect_history=True,
             )
             # Committed: only now does the new allocation become the current one.
             self._allocation, self._allocation_inputs = allocation, inputs
             return RangeScheduleResult(
                 allocation=allocation, outputs=outcome.outputs, replacement=outcome.reschedule.replacement,
-                superseded_ids=outcome.reschedule.superseded_ids,
+                superseded_ids=outcome.reschedule.superseded_ids, expansion=expansion,
+                kept_elsewhere=outcome.kept_elsewhere, notices=outcome.notices,
             )
 
         return self._generation_call(op, lambda: start_date)
@@ -736,7 +814,6 @@ class PlanningController:
         generate_end: date_ | None = None,
         scope: RangeScope = RangeScope.PLANNED,
         mode: GenerationMode = GenerationMode.FULL,
-        protect_history: bool = True,
         expected_fingerprint: str | None = None,
         preserve_on_empty: bool = False,
     ) -> ControllerResult[GenerationOutcome]:
@@ -751,8 +828,9 @@ class PlanningController:
               schedules only new work around it; a kept placement that no
               longer fits fails with cause RegenerationRequiredError (its
               .problems say which and why) -- regenerate explicitly with FULL;
-            - protect_history (default) never moves or duplicates work whose
-              execution started or finished;
+            - work whose execution started or finished, and manual
+              placements (until released), are never moved or duplicated;
+              work live outside the generated dates is left there;
             - inputs changed meanwhile (or since the preview whose fingerprint
               is passed) -> cause StaleInputsError; the old schedule stays;
             - preserve_on_empty: a run that would place nothing while saved
@@ -765,7 +843,7 @@ class PlanningController:
             return workflow.generate(
                 self._service, range_start=start_date, range_end=end_date, generate_start=generate_start,
                 generate_end=generate_end, scope=scope, timezone_name=self._timezone, mode=mode,
-                protect_history=protect_history, expected_fingerprint=expected_fingerprint,
+                expected_fingerprint=expected_fingerprint,
                 template=self._yaml_overrides, preserve_on_empty=preserve_on_empty,
             )
 

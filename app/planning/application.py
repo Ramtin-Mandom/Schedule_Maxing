@@ -172,9 +172,12 @@ from app.planning.external_dependencies import (
     external_dependency_ids,
     resolve_external_dependencies,
 )
+from app.execution.models import CancelReason
 from app.planning.models import (
     DayScheduleOutput,
     FixedBlock,
+    OccurrenceState,
+    PlacementOrigin,
     PlacementRemovalReason,
     Project,
     ScheduledTask,
@@ -246,6 +249,8 @@ _PLACEMENT_HISTORY_FIELDS = ("task_category", "removal_reason", "superseded_by_i
 def _with_placement_history(item: ScheduledTask, stored: ScheduledTask) -> ScheduledTask:
     """`item` with the stored history fields it does not carry itself (a CSV row has none of them)."""
     missing = {name: getattr(stored, name) for name in _PLACEMENT_HISTORY_FIELDS if getattr(item, name) is None}
+    if item.origin is None:  # a file without origins keeps the stored origin and manual intent
+        missing.update(origin=stored.origin, preserved=stored.preserved)
     return item.model_copy(update=missing) if missing else item
 
 
@@ -273,6 +278,9 @@ class PlanningRange:
     #: Every date in the range is a key, even when it has no entries.
     fixed_blocks_by_date: dict[date_, list[FixedBlock]]
     placements_by_date: dict[date_, list[ScheduledTask]]
+    #: The series definitions of the range's scope: never scheduled themselves (their occurrences are, among
+    #: `tasks`), but an input of the range all the same -- the inputs fingerprint includes them.
+    series: TaskRegistry = field(default_factory=TaskRegistry)
 
 
 @dataclass(frozen=True)
@@ -321,6 +329,8 @@ class PlacementReschedule:
     replacement: ScheduledTask
     #: The never-started ('scheduled') execution of the previous placement that the move cancelled, if any.
     cancelled_execution_id: str | None
+    #: A recurring occurrence moved to another date: the occurrence task, re-dated in the same transaction.
+    updated_task: Task | None = None
 
 
 @dataclass(frozen=True)
@@ -637,13 +647,26 @@ class PlanningService:
         expected_versions: dict[uuid.UUID, int],
         *,
         cascade_reason: PlacementRemovalReason = PlacementRemovalReason.TASK_DELETED,
+        occurrence_state: OccurrenceState = OccurrenceState.DELETED,
     ) -> int:
         # Caller holds a repository transaction. The tasks' live placements go with them (cascade_reason).
+        # A deleted occurrence's tombstone records occurrence_state and keeps its slot reserved.
         ids = set(expected_versions)
+        dependents_of = self._repository.dependents_of(ids)
+        involved = self._repository.get_tasks(
+            ids | {dependent for group in dependents_of.values() for dependent in group}, include_deleted=True
+        )
+
+        def slot_edge(dependency_id: uuid.UUID, dependent_id: uuid.UUID) -> bool:
+            # An occurrence's same-slot edge never blocks skipping/deleting its prerequisite occurrence: the
+            # dependent stays and reports its prerequisite as missing (docs/recurrence.md).
+            dependency, dependent = involved.get(dependency_id), involved.get(dependent_id)
+            return dependency is not None and dependent is not None and dependency.is_occurrence and dependent.is_occurrence
+
         blocking = {
-            dependency_id: dependents - ids
-            for dependency_id, dependents in self._repository.dependents_of(ids).items()
-            if dependents - ids
+            dependency_id: remaining
+            for dependency_id, dependents in dependents_of.items()
+            if (remaining := {d for d in dependents - ids if not slot_edge(dependency_id, d)})
         }
         if blocking:
             dependents = set().union(*blocking.values())
@@ -670,7 +693,10 @@ class PlanningService:
 
         now = self._clock()
         for task_id in live:
-            if not self._repository.soft_delete_task(task_id, deleted_at=now, expected_version=expected_versions[task_id]):
+            state = occurrence_state if involved.get(task_id) is not None and involved[task_id].is_occurrence else None
+            if not self._repository.soft_delete_task(
+                task_id, deleted_at=now, expected_version=expected_versions[task_id], occurrence_state=state
+            ):
                 self._check_version("task", task_id, expected_versions[task_id])
         placements = self._repository.active_placements_for_tasks(live)
         self._repository.soft_delete_placements(
@@ -678,6 +704,64 @@ class PlanningService:
             removal_reason=cascade_reason,
         )
         return len(live)
+
+    # ------------------------------------------------------------------
+    # Recurring series (app/planning/series.py drives these; docs/recurrence.md)
+    # ------------------------------------------------------------------
+
+    def list_series(self, *, include_deleted: bool = False) -> list[Task]:
+        """Series definitions in this scope, by (created_at, id)."""
+        return self._repository.list_series(include_deleted=include_deleted)
+
+    def occurrences_of_series(
+        self, series_ids: Iterable[uuid.UUID], *, include_deleted: bool = True
+    ) -> dict[uuid.UUID, list[Task]]:
+        """{series id: its materialized occurrences, by slot} (tombstones included by default)."""
+        return self._repository.occurrences_of_series(series_ids, include_deleted=include_deleted)
+
+    def occurrences_in_slot_range(
+        self, series_ids: Iterable[uuid.UUID], first: date_, last: date_
+    ) -> dict[uuid.UUID, list[Task]]:
+        """Materialized occurrences (tombstones included) whose original slot lies in [first, last]."""
+        return self._repository.occurrences_in_slot_range(series_ids, first, last)
+
+    def series_successors(self, series_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, list[Task]]:
+        """{series id: the segments continuing it}, tombstones included."""
+        return self._repository.series_successors(series_ids)
+
+    def execution_statuses_for_tasks(self, task_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, set[str]]:
+        """{task id: the statuses of its live executions} for the tasks that have any."""
+        return {
+            task_id: {fact.status for fact in facts}
+            for task_id, facts in self._repository.execution_facts_for_tasks(task_ids).items()
+        }
+
+    def materialize_occurrences(self, occurrences: Iterable[Task]) -> list[Task]:
+        """
+        Create materialized occurrences, atomically (a create of each: the
+        recurrence rules of _check_recurrence_rules apply -- a live series of
+        the same owner, a derived id; an existing id is a DuplicateEntityError).
+        """
+        with self._repository.transaction():
+            return self._write_tasks(list(occurrences), {})
+
+    def refresh_occurrences(self, occurrences: Iterable[Task], *, expected_versions: Mapping[uuid.UUID, int]) -> list[Task]:
+        """Update occurrences to their series' current definition (a series-wide edit): not marked MODIFIED."""
+        occurrences = list(occurrences)
+        if any(not task.is_occurrence or task.id not in expected_versions for task in occurrences):
+            raise InvalidEntityError("refresh_occurrences updates stored occurrences only.")
+        with self._repository.transaction():
+            return self._write_tasks(occurrences, dict(expected_versions), mark_modified=False)
+
+    def delete_occurrences(self, expected_versions: Mapping[uuid.UUID, int], *, state: OccurrenceState) -> int:
+        """Tombstone occurrences (each at its expected version) recording why; their slots stay reserved."""
+        if state == OccurrenceState.MODIFIED:
+            raise InvalidEntityError("a deleted occurrence is skipped, deleted or superseded, not modified.")
+        with self._repository.transaction():
+            stored = self._repository.get_tasks(expected_versions, include_deleted=True)
+            if any(not task.is_occurrence for task in stored.values()):
+                raise InvalidEntityError("delete_occurrences deletes occurrences only; delete other tasks with delete_tasks.")
+            return self._delete_tasks(dict(expected_versions), occurrence_state=state)
 
     # ------------------------------------------------------------------
     # Projects
@@ -961,15 +1045,22 @@ class PlanningService:
         self._repository.soft_delete_placements(
             removed, deleted_at=now, removal_reason=PlacementRemovalReason.REGENERATED, superseded_by=superseded_by
         )
+        # A removed placement's never-started attempt is withdrawn with it -- a system cancellation (SUPERSEDED), never
+        # a user skip -- so it is not actionable as current work. Started or finished attempts are never touched.
+        for placement_id in sorted(removed, key=str):
+            self._repository.cancel_unstarted_execution(placement_id, at=now, reason=CancelReason.SUPERSEDED)
 
         for placement in placements:
             stored = stored_by_id.get(placement.id)
-            # A new placement snapshots its task's category now; a kept one keeps its original snapshot.
+            # A new placement snapshots its task's category now; a kept one keeps its original snapshot, origin and
+            # manual intent. A new one without an origin is generated output.
             placement = placement.model_copy(update={
                 "user_id": tasks[placement.task_id].user_id, "deleted_at": None, "removal_reason": None,
                 "superseded_by_id": None,
                 "task_category": stored.task_category if stored is not None else (
                     placement.task_category or tasks[placement.task_id].category),
+                "origin": stored.origin if stored is not None else (placement.origin or PlacementOrigin.GENERATED),
+                "preserved": stored.preserved if stored is not None else placement.preserved,
             })
             if stored is None:
                 self._repository.insert_placement(placement)
@@ -1006,13 +1097,18 @@ class PlanningService:
            provided the range's live placements are still exactly
            `expected_versions` (the ones the generation read as its previous
            result) -- otherwise VersionConflictError and nothing changes;
-        2. remove (tombstone) active placements *outside* the range that a
-           new placement supersedes (same occurrence key, see
-           app/planning/occurrence.py), except history-protected ones whose
-           execution has started or finished;
-        3. save one GenerationRecord per date of the range -- including
+           a removed placement's never-started execution is cancelled
+           (CancelReason.SUPERSEDED);
+        2. save one GenerationRecord per date of the range -- including
            dates whose successful result placed nothing -- with the inputs
            fingerprint and the committed placements' digest.
+
+        Placements dated outside the range are never touched (Milestone 6,
+        docs/execution-rescheduling.md "Scope"): a generation does not place
+        an occurrence that is live elsewhere -- it reports it -- so nothing
+        outside the range is superseded; moving work across dates is the
+        explicit reschedule. `superseded_ids` and `history_protected_ids` stay
+        in the result for compatibility and are always empty.
 
         `outputs` must contain exactly the dates of [start_date, end_date].
         """
@@ -1027,25 +1123,6 @@ class PlanningService:
         with self._repository.transaction():
             replacement = self._replace_range(start_date, end_date, placements, expected_versions)
             now = self._clock()
-
-            new_placements = replacement.placements
-            tasks = self._repository.get_tasks({placement.task_id for placement in new_placements})
-            new_keys = {occurrence_key(placement, tasks[placement.task_id]) for placement in new_placements}
-            candidates = [
-                placement
-                for group in self._repository.active_placements_for_tasks(tasks).values()
-                for placement in group
-                if not start_date <= placement.planned_date <= end_date
-                and occurrence_key(placement, tasks[placement.task_id]) in new_keys
-            ]
-            statuses = self._repository.placement_execution_statuses(placement.id for placement in candidates)
-            protected = [p.id for p in candidates if statuses.get(p.id) in HISTORY_PROTECTED_STATUSES]
-            superseded = [p for p in candidates if statuses.get(p.id) not in HISTORY_PROTECTED_STATUSES]
-            successors = _successors(new_placements, tasks)
-            self._repository.soft_delete_placements(
-                [p.id for p in superseded], deleted_at=now, removal_reason=PlacementRemovalReason.REGENERATED,
-                superseded_by={p.id: successors[occurrence_key(p, tasks[p.task_id])] for p in superseded},
-            )
 
             existing = {record.planned_date: record for record in self._repository.list_generations(start_date, end_date)}
             generations: list[GenerationRecord] = []
@@ -1081,12 +1158,8 @@ class PlanningService:
                         )
                 generations.append(record)
 
-            return RescheduleResult(
-                replacement=replacement,
-                superseded_ids=sorted((p.id for p in superseded), key=str),
-                history_protected_ids=sorted(protected, key=str),
-                generations=generations,
-            )
+            return RescheduleResult(replacement=replacement, superseded_ids=[], history_protected_ids=[],
+                                    generations=generations)
 
     def placements_for_date(self, day: date_) -> list[ScheduledTask]:
         return self._repository.list_placements(day, day)
@@ -1102,6 +1175,52 @@ class PlanningService:
     def get_placement(self, placement_id: uuid.UUID, *, include_deleted: bool = False) -> ScheduledTask | None:
         placement_id = uuid.UUID(str(placement_id))
         return self._repository.get_placements([placement_id], include_deleted=include_deleted).get(placement_id)
+
+    # ------------------------------------------------------------------
+    # Manual intent (docs/execution-rescheduling.md, "Manual placements")
+    # ------------------------------------------------------------------
+
+    def preserved_placement_ids(self, placements: Iterable[ScheduledTask]) -> set[uuid.UUID]:
+        """
+        The placements among `placements` whose manual intent generation keeps:
+        those recorded as preserved, and -- for a placement saved before
+        origins were recorded (origin unknown) -- one whose recorded lineage
+        proves it is the destination of an explicit reschedule (it superseded
+        a RESCHEDULED tombstone). Nothing is inferred from coordinates.
+        """
+        placements = list(placements)
+        found = {placement.id for placement in placements if placement.preserved}
+        unknown = [placement.id for placement in placements if placement.origin is None and not placement.deleted_at]
+        if unknown:
+            predecessors = self._repository.placements_superseded_by(unknown)
+            found |= {
+                placement_id for placement_id, previous in predecessors.items()
+                if any(item.removal_reason == PlacementRemovalReason.RESCHEDULED for item in previous)
+            }
+        return found
+
+    def release_manual_placement(self, placement_id: uuid.UUID, *, expected_version: int) -> ScheduledTask:
+        """
+        Release the manual intent of one live placement (one logical mutation:
+        version + 1): it stays where it is, but the next generation may
+        replace it like generated work. Its execution, if started or finished,
+        stays protected as history -- only the manual intent is released.
+        InvalidEntityError when it carries no manual intent.
+        """
+        placement_id = uuid.UUID(str(placement_id))
+        with self._repository.transaction():
+            stored = self.get_placement(placement_id)
+            if stored is None or stored.version != expected_version:
+                self._check_version("placement", placement_id, expected_version)
+            if placement_id not in self.preserved_placement_ids([stored]):
+                raise InvalidEntityError(f"placement {placement_id} has no manual intent to release.")
+            released = stored.model_copy(update={
+                "origin": PlacementOrigin.MANUAL, "preserved": False, "updated_at": self._clock(),
+                "version": expected_version + 1,
+            })
+            if not self._repository.update_placement(released, expected_version=expected_version):
+                self._check_version("placement", placement_id, expected_version)
+            return self.get_placement(placement_id)
 
     def placements_superseded_by(self, placement_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, list[ScheduledTask]]:
         """{placement id: the tombstones it superseded} -- one step back along a chain of moves/regenerations."""
@@ -1184,12 +1303,15 @@ class PlanningService:
                 removal_reason=PlacementRemovalReason.RESCHEDULED, superseded_by_id=replacement.id,
             ):
                 self._check_version("placement", placement_id, expected_version)
+            # The destination of a deliberate move is manual and preserved: generation keeps it until released.
             self._repository.insert_placement(replacement.model_copy(update={
                 "user_id": task.user_id, "task_category": replacement.task_category or task.category,
                 "removal_reason": None, "superseded_by_id": None, "deleted_at": None,
+                "origin": PlacementOrigin.MANUAL, "preserved": True,
                 "created_at": now, "updated_at": now, "version": 1,
             }))
-            cancelled = self._repository.cancel_unstarted_execution(placement_id, at=at or now)
+            cancelled = self._repository.cancel_unstarted_execution(placement_id, at=at or now,
+                                                                    reason=CancelReason.RESCHEDULED)
             stored = self._repository.get_placements([placement_id, replacement.id], include_deleted=True)
             return PlacementReschedule(
                 previous=stored[placement_id], replacement=stored[replacement.id], cancelled_execution_id=cancelled
@@ -1341,6 +1463,9 @@ class PlanningService:
                 tasks = self._repository.list_tasks_planned_in_range(start_date, end_date, timezone_name=timezone_name)
             else:
                 tasks = self._repository.list_tasks_eligible_for_range(start_date, end_date, timezone_name=timezone_name)
+            # A series definition is never scheduled itself: its materialized occurrences are (docs/recurrence.md).
+            series = [task for task in tasks if task.is_series]
+            tasks = [task for task in tasks if not task.is_series]
             fixed_blocks = self._repository.list_fixed_blocks(start_date, end_date)
             placements = self._repository.list_placements(start_date, end_date)
 
@@ -1351,6 +1476,7 @@ class PlanningService:
             tasks=TaskRegistry(tasks={task.id: task for task in tasks}),
             fixed_blocks_by_date=_group_by_date(fixed_blocks, start_date, end_date),
             placements_by_date=_group_by_date(placements, start_date, end_date),
+            series=TaskRegistry(tasks={task.id: task for task in series}),
         )
 
     def external_dependencies(
@@ -1367,7 +1493,8 @@ class PlanningService:
         if not dependency_ids:
             return {}
         with self._repository.transaction():
-            persisted = self._repository.existing_task_ids(dependency_ids)
+            stored = self._repository.get_tasks(dependency_ids)
+            persisted = set(stored)
             placements = self._repository.active_placements_for_tasks(persisted)
             executions = self._repository.execution_facts_for_tasks(persisted)
         return resolve_external_dependencies(
@@ -1378,6 +1505,7 @@ class PlanningService:
             persisted_task_ids=persisted,
             placements_by_task=placements,
             executions_by_task=executions,
+            series_ids={task_id for task_id, task in stored.items() if task.is_series},
         )
 
     # ------------------------------------------------------------------
@@ -1761,6 +1889,10 @@ class PlanningService:
             raise VersionConflictError(label, item.id, expected_version=item.version, current_version=stored.version)
         if kind == "placement" and item.task_id != stored.task_id:
             raise InvalidEntityError(f"placement {item.id} cannot be moved to another task.")
+        if kind == "task" and ((item.series_id, item.occurrence_slot, item.series_predecessor_id)
+                               != (stored.series_id, stored.occurrence_slot, stored.series_predecessor_id)):
+            raise InvalidEntityError(f"task {item.id}: an occurrence's series and slot, and a segment's lineage, "
+                                     "never change.")
         return ("delete" if item.deleted_at is not None else "update", item, stored)
 
     def _check_batch_references(self, records: dict, plans: dict, owner) -> None:
@@ -1801,6 +1933,17 @@ class PlanningService:
         task_refs |= {placement.task_id for placement in live_placements}
         missing_tasks = task_refs - final_live("task", task_refs)
         if missing_tasks:
+            # An occurrence's same-slot edge may name a skipped prerequisite occurrence (docs/recurrence.md).
+            batch_tasks_all = {item.id: item for _, item, _ in plans["task"]}
+            targets = {**self._repository.get_tasks(missing_tasks - set(batch_tasks_all), include_deleted=True),
+                       **{key: value for key, value in batch_tasks_all.items() if key in missing_tasks}}
+            placement_refs = {placement.task_id for placement in live_placements}
+            missing_tasks = {
+                missing for missing in missing_tasks
+                if missing in placement_refs or missing not in targets or not targets[missing].is_occurrence
+                or not all(task.is_occurrence for task in live_tasks if missing in task.dependency_ids)
+            }
+        if missing_tasks:
             raise InvalidReferenceError(
                 "dependency/placement task references point at tasks that do not exist (in the batch or stored): "
                 + ", ".join(sorted(map(str, missing_tasks))),
@@ -1808,6 +1951,19 @@ class PlanningService:
             )
 
         batch_tasks = {item.id: item for _, item, _ in plans["task"]}
+        series_refs = {item.series_id for item in batch_tasks.values() if item.series_id is not None}
+        stored_series = self._repository.get_tasks(series_refs - set(batch_tasks), include_deleted=True)
+        for item in batch_tasks.values():
+            if item.series_id is None:
+                continue
+            series = batch_tasks.get(item.series_id) or stored_series.get(item.series_id)
+            if series is None or not series.is_series:
+                raise InvalidReferenceError(
+                    f"occurrence {item.id}: series_id must name a recurring series (in the batch or stored).",
+                    {item.series_id},
+                )
+            if series.user_id != item.user_id:
+                raise InvalidEntityError(f"occurrence {item.id} must have the same owner as its series.")
         for placement in (item for _, item, _ in plans["placement"]):
             task = batch_tasks.get(placement.task_id) or self._repository.get_task(placement.task_id, include_deleted=True)
             if task is not None and task.user_id != placement.user_id:
@@ -1847,10 +2003,19 @@ class PlanningService:
     def _validate_batch_result(self, plans: dict, touched_dates: set[date_]) -> None:
         deleted_tasks = [item.id for action, item, _ in plans["task"] if action == "delete" or (
             action == "insert" and item.deleted_at is not None)]
+        dependents_of = self._repository.dependents_of(deleted_tasks)
+        involved = self._repository.get_tasks(
+            set(deleted_tasks) | {dependent for group in dependents_of.values() for dependent in group},
+            include_deleted=True,
+        )
         blockers = {
-            dependency: dependents
-            for dependency, dependents in self._repository.dependents_of(deleted_tasks).items()
-            if dependents
+            dependency: remaining
+            for dependency, dependents in dependents_of.items()
+            if (remaining := {
+                dependent for dependent in dependents
+                if not (involved.get(dependency) is not None and involved[dependency].is_occurrence
+                        and involved.get(dependent) is not None and involved[dependent].is_occurrence)
+            })
         }
         if blockers:
             dependents = set().union(*blockers.values())
@@ -1905,8 +2070,12 @@ class PlanningService:
     # Internals
     # ------------------------------------------------------------------
 
-    def _write_tasks(self, tasks: list[Task], expected_versions: dict[uuid.UUID, int]) -> list[Task]:
+    def _write_tasks(
+        self, tasks: list[Task], expected_versions: dict[uuid.UUID, int], *, mark_modified: bool = True
+    ) -> list[Task]:
         # Caller holds a repository transaction. Everything is validated before anything is written.
+        # mark_modified: an occurrence whose content an update changes becomes MODIFIED (a manual override);
+        # app/planning/series.py's own series-wide refresh passes False.
         ids = [task.id for task in tasks]
         if len(set(ids)) != len(ids):
             raise InvalidEntityError("duplicate task ids in one save.")
@@ -1916,6 +2085,14 @@ class PlanningService:
 
         dependency_ids = {dependency for task in tasks for dependency in task.dependency_ids} - batch_ids
         missing_dependencies = dependency_ids - self._repository.existing_task_ids(dependency_ids)
+        if missing_dependencies:
+            # An occurrence may keep its same-slot edge to a prerequisite occurrence that was skipped or
+            # deleted (a tombstone): the dependency then blocks it, explicitly (docs/recurrence.md).
+            tombstoned = self._repository.get_tasks(missing_dependencies, include_deleted=True)
+            missing_dependencies -= {
+                dependency for dependency, target in tombstoned.items()
+                if target.is_occurrence and all(task.is_occurrence for task in tasks if dependency in task.dependency_ids)
+            }
         if missing_dependencies:
             raise InvalidReferenceError(
                 "dependency_ids reference tasks that are not persisted: "
@@ -1944,6 +2121,8 @@ class PlanningService:
             if task.user_id != stored.user_id:
                 raise InvalidEntityError(f"task {task.id}: its owner (user_id) cannot be changed by an update.")
 
+        self._check_recurrence_rules(tasks, stored_by_id)
+
         now = self._clock()
         for task in tasks:
             if task.id not in expected_versions:
@@ -1952,6 +2131,9 @@ class PlanningService:
             stored = stored_by_id[task.id]
             if _same_content(stored, task):
                 continue
+            if (mark_modified and task.is_occurrence and task.occurrence_state is None
+                    and stored.occurrence_state is None and not _same_occurrence_content(stored, task)):
+                task = task.model_copy(update={"occurrence_state": OccurrenceState.MODIFIED})
             expected = expected_versions[task.id]
             to_store = task.model_copy(update={"created_at": stored.created_at, "updated_at": now, "version": expected + 1})
             if not self._repository.update_task(to_store, expected_version=expected):
@@ -1959,6 +2141,90 @@ class PlanningService:
 
         saved = self._repository.get_tasks(ids)
         return [saved[task_id] for task_id in ids]
+
+    def _check_recurrence_rules(self, tasks: list[Task], stored_by_id: Mapping[uuid.UUID, Task]) -> None:
+        """
+        The recurrence invariants of a task save (docs/recurrence.md), checked
+        before anything is written:
+
+            - an occurrence's identity (series_id, occurrence_slot) and a
+              segment's lineage (series_predecessor_id) never change; a series
+              with occurrences stays a series;
+            - a new occurrence names a live series definition of the same owner;
+            - a *new* dependency on a series definition is a series-to-series
+              dependency with a compatible cadence (same-slot resolution); a
+              one-off task or an occurrence must name one concrete occurrence
+              instead. Edges stored before these rules are left as they are;
+            - series definitions never depend on each other in a cycle.
+        """
+        batch = {task.id: task for task in tasks}
+        for task in tasks:
+            stored = stored_by_id.get(task.id)
+            if stored is None:
+                continue
+            if (stored.series_id, stored.occurrence_slot) != (task.series_id, task.occurrence_slot):
+                raise InvalidEntityError(f"task {task.id}: an occurrence's series and original slot never change.")
+            if stored.series_predecessor_id != task.series_predecessor_id:
+                raise InvalidEntityError(f"task {task.id}: a series segment's lineage never changes.")
+            if stored.is_series and not task.is_series and self._repository.occurrences_of_series([task.id]):
+                raise InvalidEntityError(
+                    f"{task.name!r} has materialized occurrences, so it stays a recurring series; end or delete the "
+                    "series instead."
+                )
+
+        new_occurrences = [task for task in tasks if task.is_occurrence and task.id not in stored_by_id]
+        referenced = {task.series_id for task in new_occurrences} | {
+            dependency for task in tasks for dependency in task.dependency_ids
+            if task.id not in stored_by_id or dependency not in stored_by_id[task.id].dependency_ids
+        }
+        known = self._repository.get_tasks(set(referenced) - set(batch), include_deleted=True)
+        known.update(batch)
+
+        for task in new_occurrences:
+            series = known.get(task.series_id)
+            if series is None or not series.is_series or series.deleted_at is not None:
+                raise InvalidReferenceError(
+                    f"occurrence {task.id}: series_id must name a live recurring series.", {task.series_id}
+                )
+            if series.user_id != task.user_id:
+                raise InvalidEntityError(f"occurrence {task.id} must belong to its series' owner.")
+
+        from app.planning.recurrence import SeriesRule, cadence_problem
+
+        for task in tasks:
+            stored = stored_by_id.get(task.id)
+            for dependency in task.dependency_ids:
+                if stored is not None and dependency in stored.dependency_ids:
+                    continue
+                target = known.get(dependency)
+                if target is None or not target.is_series:
+                    continue
+                if not task.is_series:
+                    raise InvalidReferenceError(
+                        f"{task.name!r} cannot depend on the recurring series {target.name!r} itself: choose one "
+                        "concrete occurrence of it (a series only depends on a series occurrence by occurrence).",
+                        {dependency},
+                    )
+                if task.recurrence.configured and target.recurrence.configured:
+                    problem = cadence_problem(SeriesRule.of(task.recurrence), SeriesRule.of(target.recurrence))
+                    if problem is not None:
+                        raise InvalidReferenceError(
+                            f"{task.name!r} cannot depend on the series {target.name!r}: {problem}", {dependency}
+                        )
+
+        if any(task.is_series for task in tasks):
+            series = {task.id: task for task in self._repository.list_series()}
+            series.update({task.id: task for task in tasks if task.is_series})
+            if has_cycle_by_id(series):
+                raise InvalidEntityError("recurring series cannot depend on each other in a cycle.")
+
+
+#: Task fields that are an occurrence's bookkeeping rather than its content (see _same_occurrence_content).
+_OCCURRENCE_BOOKKEEPING = {*_AUDIT_FIELDS, "occurrence_state", "series_version"}
+
+
+def _same_occurrence_content(stored: Task, incoming: Task) -> bool:
+    return stored.model_dump(exclude=_OCCURRENCE_BOOKKEEPING) == incoming.model_dump(exclude=_OCCURRENCE_BOOKKEEPING)
 
 
 @contextmanager

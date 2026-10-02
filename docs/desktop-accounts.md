@@ -134,6 +134,7 @@ There is no merge, and nothing is overwritten silently (no last-write-wins).
 | What you see | What to do |
 | --- | --- |
 | "Session ended — sign in again to synchronize" | Sign in again. Queued changes are sent afterwards |
+| Forgot your password | **Forgot password?** under Sign in: request a recovery link, then paste the link (or its code) and choose a new password. The answer never says whether the account exists. Every older session ends; sign in again, and your unsynced work is still here. A device that only works offline has no account password to recover |
 | "backend unreachable" | Keep working offline. Changes are queued, and **Check connection** or **Sync now** retries later |
 | "The backend refused the request: …" | The server rejected that request. The message names the reason |
 | "Your local records changed since this preview" | Review the updated preview and confirm again |

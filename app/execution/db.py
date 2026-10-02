@@ -96,6 +96,17 @@ duplicate that synchronization discarded no longer blocks the execution the
 server kept (creation of a new execution for a placement whose execution was
 deleted is still refused by the repository).
 
+Version 8: Task.points and each execution's snapshot of them.
+
+Version 9 (docs/recurrence.md): recurrence expansion -- a series' explicit
+anchor date and time zone, each materialized occurrence's immutable
+(series_id, occurrence_slot) identity with a unique index (tombstones
+included, so suppressed slots stay reserved), its exception state and
+provenance, and series lineage. See _V9_STATEMENTS.
+
+Version 10: placement origin and manual intent (preserved), and the reason
+of an execution's cancellation. See _V10_STATEMENTS.
+
 Execution <-> planning links (the legacy compatibility strategy):
     executions.task_id / scheduled_task_id are *historical identity*: they
     record which task/placement an execution was created for, alongside the
@@ -949,6 +960,103 @@ _V8_STATEMENTS: tuple[str, ...] = (
 )
 
 
+#: app.planning.models.OccurrenceState values, for the v9 CHECK.
+OCCURRENCE_STATES = ("modified", "skipped", "deleted", "superseded")
+
+# Version 9 (docs/recurrence.md): recurrence expansion. A series definition's
+# explicit anchor (recurrence_start_date, a local date) and IANA time zone;
+# a materialized occurrence's immutable identity (series_id -- the series
+# task -- and occurrence_slot, its original local slot date), its exception
+# state and its provenance (series_version); a series segment's lineage
+# (series_predecessor_id). One row per (series, slot), tombstones included,
+# so a skipped, deleted or superseded slot stays reserved and expansion can
+# never mint it again. Existing rows get NULL everywhere: a template stored
+# before this has no anchor and needs configuration (nothing is guessed),
+# and no occurrence, placement, execution, id or snapshot is rewritten --
+# legacy template placements are mapped to occurrences by identity
+# (app/planning/occurrence.py), not by editing them. ADD COLUMN writes no
+# row, so the capture triggers record nothing. Additive only.
+_V9_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE tasks ADD COLUMN recurrence_start_date TEXT",
+    "ALTER TABLE tasks ADD COLUMN recurrence_timezone TEXT CHECK ((recurrence_timezone IS NULL) = "
+    "(recurrence_start_date IS NULL) AND (recurrence_timezone IS NULL OR recurrence_frequency IS NOT NULL))",
+    "ALTER TABLE tasks ADD COLUMN series_id TEXT REFERENCES tasks(id) DEFERRABLE INITIALLY DEFERRED",
+    "ALTER TABLE tasks ADD COLUMN occurrence_slot TEXT CHECK ((occurrence_slot IS NULL) = (series_id IS NULL) "
+    "AND (series_id IS NULL OR (recurrence_frequency IS NULL AND series_id <> id)))",
+    "ALTER TABLE tasks ADD COLUMN occurrence_state TEXT CHECK (occurrence_state IS NULL OR (series_id IS NOT NULL "
+    f"AND occurrence_state IN ({', '.join(repr(state) for state in OCCURRENCE_STATES)}) "
+    "AND (occurrence_state = 'modified' OR deleted_at IS NOT NULL)))",
+    "ALTER TABLE tasks ADD COLUMN series_version INTEGER CHECK (series_version IS NULL OR "
+    "(series_id IS NOT NULL AND series_version > 0))",
+    "ALTER TABLE tasks ADD COLUMN series_predecessor_id TEXT CHECK (series_predecessor_id IS NULL OR "
+    "(recurrence_start_date IS NOT NULL AND series_predecessor_id <> id))",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_occurrence_slot ON tasks(series_id, occurrence_slot) "
+    "WHERE series_id IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_tasks_series_predecessor ON tasks(series_predecessor_id) "
+    "WHERE series_predecessor_id IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_tasks_series_definitions ON tasks(recurrence_frequency) "
+    "WHERE recurrence_frequency IS NOT NULL",
+)
+
+
+#: app.planning.models.PlacementOrigin / app.execution.models.CancelReason values, for the v10 CHECKs.
+PLACEMENT_ORIGINS = ("generated", "manual")
+CANCEL_REASONS = ("user", "rescheduled", "superseded")
+
+# Version 10 (docs/execution-rescheduling.md, "Manual placements"): a
+# placement's origin (generated / manual; NULL = unknown, saved before
+# origins were recorded) and its manual intent (`preserved`: schedule
+# generation keeps it until the intent is released), and why a cancelled
+# execution was cancelled (user / rescheduled / superseded; NULL = unknown).
+# Nothing is back-filled into rows: a live placement that an explicit
+# reschedule produced is recognized from its recorded lineage when it is
+# read (PlanningService.preserved_placement_ids), the same way on every
+# device. ADD COLUMN writes no row, so the capture triggers record nothing.
+_V10_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE scheduled_tasks ADD COLUMN origin TEXT CHECK (origin IS NULL OR "
+    f"origin IN ({', '.join(repr(value) for value in PLACEMENT_ORIGINS)}))",
+    "ALTER TABLE scheduled_tasks ADD COLUMN preserved INTEGER NOT NULL DEFAULT 0 CHECK (preserved IN (0, 1) AND "
+    "(preserved = 0 OR (origin IS NOT NULL AND origin = 'manual')))",
+    "ALTER TABLE executions ADD COLUMN cancel_reason TEXT CHECK (cancel_reason IS NULL OR (status = 'cancelled' AND "
+    f"cancel_reason IN ({', '.join(repr(value) for value in CANCEL_REASONS)})))",
+)
+
+
+# Schema v11 (scheduling modes, docs/scheduling-modes.md): preference layers may choose the three new modes.
+# SQLite cannot change a column CHECK, so preference_overrides is rebuilt with its rows unchanged (ids, owners,
+# versions, documents), its live-scope index and its change-capture triggers. Copying into the new table
+# fires no trigger (the new table has none yet), and DROP TABLE fires none, so nothing is marked for
+# synchronization by the upgrade itself.
+SCHEDULING_MODES = ("precise_greedy", "adhd_friendly", "early_finish", "night_owl", "catch_up")
+_V11_STATEMENTS: tuple[str, ...] = (
+    f"""
+    CREATE TABLE preference_overrides_v11 (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        scope TEXT NOT NULL CHECK (scope IN ('user', 'date')),
+        scope_date TEXT,
+        optimizer_mode TEXT CHECK (optimizer_mode IS NULL OR optimizer_mode IN
+            ({', '.join(repr(mode) for mode in SCHEDULING_MODES)})),
+        overrides TEXT NOT NULL DEFAULT '{{}}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        version INTEGER NOT NULL CHECK (version > 0),
+        deleted_at TEXT,
+        CHECK ((scope = 'date') = (scope_date IS NOT NULL))
+    )
+    """,
+    "INSERT INTO preference_overrides_v11 (id, user_id, scope, scope_date, optimizer_mode, overrides, created_at, "
+    "updated_at, version, deleted_at) SELECT id, user_id, scope, scope_date, optimizer_mode, overrides, created_at, "
+    "updated_at, version, deleted_at FROM preference_overrides",
+    "DROP TABLE preference_overrides",
+    "ALTER TABLE preference_overrides_v11 RENAME TO preference_overrides",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_preference_overrides_live_scope "
+    "ON preference_overrides(COALESCE(user_id, ''), scope, COALESCE(scope_date, '')) WHERE deleted_at IS NULL",
+    *(statement for statement in _v5_capture_triggers()
+      if "trg_sync_preference_overrides_" in statement),
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     (
         1,
@@ -1007,6 +1115,9 @@ MIGRATIONS: tuple[Migration, ...] = (
     (6, _V6_STATEMENTS),
     (7, _V7_STATEMENTS),
     (8, _V8_STATEMENTS),
+    (9, _V9_STATEMENTS),
+    (10, _V10_STATEMENTS),
+    (11, _V11_STATEMENTS),
 )
 
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1][0]

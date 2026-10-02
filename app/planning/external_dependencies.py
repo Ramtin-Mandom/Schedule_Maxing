@@ -16,7 +16,12 @@ Greedy Optimizer v1 are untouched.
 States, checked in this order (the first that applies wins):
 
     MISSING         no live persisted task has this id (never stored, or
-                    deleted). Blocks its dependents.
+                    deleted -- e.g. a skipped prerequisite occurrence of a
+                    recurring series). Blocks its dependents.
+    SERIES          the id names a recurring series definition, which is
+                    never scheduled itself (docs/recurrence.md): a dependency
+                    stored before occurrences existed. Blocks its dependents
+                    until they name one concrete occurrence instead.
     COMPLETED       some live execution of the task is `completed`.
                     Satisfied at the earliest completion instant
                     (actual_final_end_at).
@@ -54,6 +59,7 @@ from app.planning.models import ScheduledTask, Task
 
 class ExternalDependencyState(str, Enum):
     MISSING = "missing"
+    SERIES = "series"
     COMPLETED = "completed"
     SCHEDULED = "scheduled"
     SCHEDULED_LATER = "scheduled_later"
@@ -66,6 +72,9 @@ _SATISFYING = {ExternalDependencyState.COMPLETED, ExternalDependencyState.SCHEDU
 
 _EXPLANATIONS = {
     ExternalDependencyState.MISSING: "does not exist (it was never saved, or it was deleted)",
+    ExternalDependencyState.SERIES: (
+        "is a recurring series, which is never scheduled itself; depend on one of its occurrences instead"
+    ),
     ExternalDependencyState.SCHEDULED_LATER: "is only scheduled after this date range",
     ExternalDependencyState.SKIPPED: "was skipped, so it is not done",
     ExternalDependencyState.CANCELLED: "was cancelled, so it is not done",
@@ -128,6 +137,7 @@ def resolve_external_dependencies(
     persisted_task_ids: set[uuid.UUID],
     placements_by_task: Mapping[uuid.UUID, list[ScheduledTask]],
     executions_by_task: Mapping[uuid.UUID, list[ExecutionFact]],
+    series_ids: set[uuid.UUID] = frozenset(),
 ) -> dict[uuid.UUID, ExternalDependency]:
     """Classify each external dependency (see the module docstring). Pure: reads only its arguments."""
     zone = ZoneInfo(timezone_name)
@@ -136,6 +146,9 @@ def resolve_external_dependencies(
     for dependency_id in sorted(set(dependency_ids), key=str):
         if dependency_id not in persisted_task_ids:
             resolved[dependency_id] = ExternalDependency(dependency_id, ExternalDependencyState.MISSING)
+            continue
+        if dependency_id in series_ids:
+            resolved[dependency_id] = ExternalDependency(dependency_id, ExternalDependencyState.SERIES)
             continue
 
         executions = executions_by_task.get(dependency_id, [])

@@ -22,6 +22,7 @@ from tkinter import messagebox
 
 from app.persistence.errors import NotSignedInError
 from app.ui.background import ControllerResult, run_io
+from app.ui.components import ChoiceDialog
 from app.ui.schedule_page_controller import RowRef
 from app.ui.task_form_model import FormErrors, TaskDraft
 
@@ -65,7 +66,19 @@ class TaskFormActions:
         editing = self._editing
         if not editing:
             draft = replace(draft, date=self.page_controller.form_date.isoformat())
-        self._io(lambda: self.page_controller.save_draft(draft, editing=editing),
+        if editing and draft.recurrence_role == "occurrence":
+            # One occurrence of a repeating task: ask what the change applies to (docs/recurrence.md).
+            ChoiceDialog(self, title="Change a repeating task", prompt="Apply this change to:", options=[
+                ("occurrence", "Only this occurrence"),
+                ("future", "This and every later occurrence"),
+                ("series", "Every occurrence (the entire series)"),
+            ], note="Occurrences already started or finished, and ones edited on their own, are kept as they are.",
+                on_choose=lambda scope: self._save_with_scope(draft, editing, scope))
+            return
+        self._save_with_scope(draft, editing, None)
+
+    def _save_with_scope(self, draft: TaskDraft, editing, scope: str | None) -> None:
+        self._io(lambda: self.page_controller.save_draft(draft, editing=editing, scope=scope),
                  lambda result: self._task_saved(draft, result))
 
     def _task_saved(self, draft: TaskDraft, result) -> None:
@@ -139,17 +152,26 @@ class TaskFormActions:
         """Remove one saved task/fixed block after confirming what goes with it."""
         if self._refuse_while_busy():
             return
-        self._io(lambda: self.page_controller.delete_description(ref), lambda description: self._confirm_removal(
-            ref, description))
+        self._io(lambda: (self.page_controller.delete_description(ref), self.page_controller.removal_choices(ref)),
+                 lambda loaded: self._confirm_removal(ref, *loaded))
 
-    def _confirm_removal(self, ref: RowRef, description) -> None:
+    def _confirm_removal(self, ref: RowRef, description, choices=None) -> None:
         if not description.ok:
             messagebox.showerror("Could Not Remove", description.error or "Unknown error.", parent=self)
             self.reload()
             return
+        if choices is not None and choices.ok and len(choices.value) > 1:
+            # One occurrence of a repeating task: skip/delete it, it and every later one, or the series.
+            ChoiceDialog(self, title="Remove a repeating task", prompt=description.value, options=choices.value,
+                         danger=True, on_choose=lambda scope: self._remove_with_scope(ref, scope))
+            return
         if not messagebox.askyesno("Remove?", description.value, icon="warning", parent=self):
             return
-        self._io(lambda: self.page_controller.delete(ref), lambda result: self._removed(ref, result))
+        scope = choices.value[0][0] if choices is not None and choices.ok and choices.value else None
+        self._remove_with_scope(ref, scope)
+
+    def _remove_with_scope(self, ref: RowRef, scope: str | None) -> None:
+        self._io(lambda: self.page_controller.delete(ref, scope=scope), lambda result: self._removed(ref, result))
 
     def _removed(self, ref: RowRef, result) -> None:
         self._render_result(result, "Could Not Remove Task")

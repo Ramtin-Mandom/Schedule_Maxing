@@ -77,6 +77,31 @@ Accepting the server's state for a placement this device had rescheduled
 also undoes the rest of that local move: its replacement (which the server
 never accepted) is discarded, and the execution the move cancelled goes
 back to its server state (or, never synchronized, to `scheduled`).
+
+Milestone 6 (docs/sync-protocol.md, "Conflicts"):
+    series_changed   an occurrence expanded here from an older (or since
+                     deleted) series. One that only followed its series (no
+                     exception state) follows the server's series at once,
+                     without a conflict -- re-derived and sent again, or
+                     retired -- and the members of its unit that failed only
+                     with it are sent again. Otherwise (a local exception, or
+                     a pending local change of the series) it is a conflict:
+                     keep_local is refused (it would get
+                     around the series edit); accept_remote takes the
+                     server's series (unless it has its own pending change)
+                     and re-derives the occurrence from it -- sent again --
+                     or, when its date is no longer one of the series' or
+                     the series is gone, retires it here (superseded; its
+                     never-synchronized placements without work go with it).
+    execution        accept_remote never deletes work sessions only this
+                     device recorded: they are kept as a separate historical
+                     execution (sent as a create) before the server's
+                     version replaces the local one. keep_local is refused
+                     when the local sessions do not continue the server's.
+    refused request  a push the server refuses as a whole (malformed,
+                     4xx) is narrowed to the units at fault
+                     (SyncService), which become push_rejected conflicts --
+                     actionable, never retried automatically.
 """
 
 from __future__ import annotations
@@ -91,9 +116,18 @@ from datetime import datetime, timezone
 from app.execution.db import SYNC_TABLES
 from app.execution.models import ExecutionStatus
 from app.execution.repository import ExecutionRepository
-from app.planning.models import PlacementRemovalReason
+from app.planning.models import OccurrenceState, PlacementRemovalReason
+from app.planning.recurrence import RecurrenceError, SeriesRule
 from app.planning.repository import PlanningRepository
-from app.sync.mapping import ENTITY_ORDER, DivergedHistory, LocalRecord, LocalRecords, execution_changes
+from app.planning.series import SERIES_CONTENT_FIELDS
+from app.sync.mapping import (
+    ENTITY_ORDER,
+    OCCURRENCE_BOOKKEEPING,
+    DivergedHistory,
+    LocalRecord,
+    LocalRecords,
+    execution_changes,
+)
 from app.sync.store import Account, Conflict, SyncStore
 from app.sync.transport import PullPage
 
@@ -109,6 +143,24 @@ _GENERATION_COLLISIONS = (
     "ON theirs.planned_date = mine.planned_date WHERE mine.user_id IS NULL AND theirs.user_id = ? "
     "AND mine.deleted_at IS NULL AND theirs.deleted_at IS NULL"
 )
+
+
+#: A compound series change larger than this is sent as independent operations (one push carries at most 200).
+_MAX_GROUP_OPERATIONS = 150
+
+
+@dataclass
+class _SeriesGroup:
+    """The pending task operations of one recurring lineage (see SyncEngine._series_groups)."""
+
+    root: str
+    upserts: list = field(default_factory=list)
+    reschedules: list = field(default_factory=list)
+    deletes: list = field(default_factory=list)
+
+    @property
+    def size(self) -> int:
+        return len(self.upserts) + len(self.reschedules) + len(self.deletes)
 
 
 class AssociationError(Exception):
@@ -148,6 +200,8 @@ class PushOutcome:
     sent: int = 0
     applied: int = 0
     conflicts: int = 0
+    #: Occurrences this device only expanded that followed a changed series at once (series_changed).
+    followed: int = 0
 
 
 @dataclass
@@ -161,12 +215,21 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _moment(value) -> datetime:
+    """An ISO 8601 instant (text or datetime) for comparison."""
+    if isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+
 class SyncEngine:
     def __init__(self, connection, clock: Callable[[], datetime] = _utcnow) -> None:
         self.store = SyncStore(connection)
         self.records = LocalRecords(PlanningRepository(connection), ExecutionRepository(connection))
         self._connection = connection
         self._clock = clock
+        #: Records the last prepare() held back for a server without recurrence support.
+        self.held = 0
 
     # ------------------------------------------------------------------
     # Ownerless local data
@@ -244,13 +307,26 @@ class SyncEngine:
     def _waiting(self, key: str, entity_type: str, wire_id: str) -> bool:
         return self.store.has_ops(key, entity_type, wire_id) or self.store.open_conflict(key, entity_type, wire_id) is not None
 
-    def prepare(self, account: Account) -> int:
-        """Materialize operations for the account's dirty records (see the module docstring). Returns how many."""
+    def prepare(self, account: Account, *, recurrence: bool = True, manual_placements: bool = True,
+                scheduling_modes: bool = True) -> int:
+        """
+        Materialize operations for the account's dirty records (see the module
+        docstring). Returns how many. recurrence=False (a server without the
+        "recurrence_occurrences" feature, app/sync/service.py) holds back every
+        record carrying recurrence data -- series anchors, occurrences and what
+        refers to them -- instead of letting an older server drop those fields;
+        they stay dirty and are counted in self.held. manual_placements=False
+        (a server without "manual_placements") leaves placement origin/manual
+        intent and cancel reasons out of the payloads.
+        """
         key = account.account_key
+        self.held = 0
+        self.records.manual_placements = manual_placements
         with self.store.transaction():
             upserts: list[tuple[LocalRecord, object]] = []
             reschedules: list[tuple[LocalRecord, object, int]] = []
             histories: list[LocalRecord] = []
+            reserved: list[LocalRecord] = []
             # (type, wire id, local id, rev, shadow, payload)
             deletes: list[tuple[str, str, str, int, object, dict | None]] = []
             for entity_type, local_id, rev in self.store.dirty():
@@ -270,6 +346,12 @@ class SyncEngine:
                     continue
                 if local.owner != account.user_id or self._waiting(key, entity_type, local.wire_id):
                     continue
+                if not recurrence and self._needs_recurrence_support(local):
+                    self.held += 1
+                    continue
+                if not scheduling_modes and self._uses_new_mode(local):
+                    self.held += 1  # an older server refuses the value: wait for it to be upgraded
+                    continue
                 if self._part_of_pending_reschedule(key, local):
                     continue
                 shadow = self.store.shadow(key, entity_type, local.wire_id)
@@ -278,10 +360,13 @@ class SyncEngine:
                         if self._is_rescheduled(local):
                             reschedules.append((local, shadow, rev))
                         else:
-                            payload = self.records.placement_removal(local) if entity_type == "placement" else None
+                            payload = (self.records.placement_removal(local) if entity_type == "placement"
+                                       else self.records.task_removal(local) if entity_type == "task" else None)
                             deletes.append((entity_type, local.wire_id, local_id, rev, shadow, payload))
                     elif shadow is None and self._is_lineage_history(local):
                         histories.append(local)
+                    elif shadow is None and entity_type == "task" and local.model.is_occurrence:
+                        reserved.append(local)  # a slot suppressed before it ever reached the server
                     else:
                         self.store.clear_dirty(entity_type, local_id, if_rev=rev)
                 elif shadow is not None and shadow.deleted:
@@ -293,11 +378,35 @@ class SyncEngine:
                 else:
                     upserts.append((local, shadow))
 
+            groups = self._series_groups(upserts, reschedules, deletes)
+            grouped_upserts = {id(item) for group in groups for item in group.upserts}
+            grouped_reschedules = {id(item) for group in groups for item in group.reschedules}
+            grouped_deletes = {id(item) for group in groups for item in group.deletes}
+            upserts = [item for item in upserts if id(item) not in grouped_upserts]
+            reschedules = [item for item in reschedules if id(item) not in grouped_reschedules]
+            deletes = [item for item in deletes if id(item) not in grouped_deletes]
+
             count = 0
             rank = {entity_type: index for index, entity_type in enumerate(ENTITY_ORDER)}
             ordered = self._ordered_upserts(upserts)
+            before_tasks = [item for item in ordered if rank[item[0].entity_type] < rank["task"]]
+            tasks = [item for item in ordered if item[0].entity_type == "task"]
+            after_tasks = [item for item in ordered if rank["task"] < rank[item[0].entity_type] <= rank["placement"]]
+            for local, shadow in before_tasks:
+                count += self._materialize(key, local, shadow)
+            # Tasks and compound series changes (each one atomic group), references first.
+            for unit in self._ordered_task_units(tasks, groups):
+                if isinstance(unit, _SeriesGroup):
+                    count += self._materialize_group(key, unit)
+                else:
+                    count += self._materialize(key, *unit)
+            for local in sorted(reserved, key=lambda item: item.wire_id):
+                self.store.add_op(key, "task", local.wire_id, local.local_id, "create",
+                                  payload=self.records.reserved_slot_payload(local),
+                                  local_rev=self.store.dirty_rev("task", local.local_id) or 1)
+                count += 1
             # Moves go after the placement creates/updates (their tasks exist) and before executions.
-            for local, shadow in (item for item in ordered if rank[item[0].entity_type] <= rank["placement"]):
+            for local, shadow in after_tasks:
                 count += self._materialize(key, local, shadow)
             for local, shadow, rev in sorted(reschedules, key=lambda item: item[0].wire_id):
                 count += self._materialize_reschedule(key, local, shadow, rev)
@@ -313,6 +422,168 @@ class SyncEngine:
                                   payload=payload, local_rev=rev)
                 count += 1
             return count
+
+    # ------------------------------------------------------------------
+    # Recurring series (docs/recurrence.md)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _uses_new_mode(local: LocalRecord) -> bool:
+        """Whether a preference layer or schedule record names a mode added with docs/scheduling-modes.md."""
+        if local.entity_type == "preference":
+            mode = local.payload.get("overrides", {}).get("optimizer_mode") if local.payload else None
+        elif local.entity_type == "schedule_generation":
+            mode = local.payload.get("engine_mode") if local.payload else None
+        else:
+            return False
+        return mode in ("early_finish", "night_owl", "catch_up")
+
+    def _needs_recurrence_support(self, local: LocalRecord) -> bool:
+        """Whether this record (or the task it belongs to) carries recurrence data an older server would drop."""
+        if local.entity_type == "task":
+            task = local.model
+            return bool(task.series_id or task.series_predecessor_id
+                        or (task.recurrence is not None and task.recurrence.configured))
+        task_id = None
+        if local.entity_type == "placement":
+            task_id = local.model.task_id
+        elif local.entity_type == "execution":
+            task_id = local.model.task_id
+        if task_id is None:
+            return False
+        task = self.records.planning.get_task(task_id, include_deleted=True)
+        return task is not None and task.is_occurrence
+
+    def _series_root(self, task, cache: dict) -> str | None:
+        """The first segment of the lineage a series or occurrence belongs to (None for other tasks)."""
+        if task.id in cache:
+            return cache[task.id]
+        current = task
+        if task.is_occurrence:
+            current = self.records.planning.get_task(task.series_id, include_deleted=True)
+        root = None
+        steps = 0
+        while current is not None and current.is_series and steps < 64:
+            root = str(current.id)
+            if current.series_predecessor_id is None:
+                break
+            current = self.records.planning.get_task(current.series_predecessor_id, include_deleted=True)
+            steps += 1
+        cache[task.id] = root
+        return root
+
+    def _series_groups(self, upserts, reschedules, deletes) -> list["_SeriesGroup"]:
+        """
+        The compound changes of recurring series: every pending task operation
+        of one lineage (its segments and their occurrences) -- updates,
+        creates, the moves of its occurrences and the deletes of superseded
+        occurrences with their placements -- when there is more than one. Each
+        becomes one atomic group, so a split ("this and every later
+        occurrence") never half-applies on the server. A lineage with more
+        operations than fit one push is sent ungrouped.
+        """
+        cache: dict = {}
+        families: dict[str, _SeriesGroup] = {}
+
+        def family(task) -> "_SeriesGroup | None":
+            root = self._series_root(task, cache) if task is not None else None
+            return None if root is None else families.setdefault(root, _SeriesGroup(root))
+
+        for item in upserts:
+            if item[0].entity_type == "task" and (group := family(item[0].model)) is not None:
+                group.upserts.append(item)
+        for item in reschedules:
+            task = self.records.planning.get_task(item[0].model.task_id, include_deleted=True)
+            if task is not None and task.is_occurrence and (group := family(task)) is not None:
+                group.reschedules.append(item)
+        deleted_tasks: dict[str, _SeriesGroup] = {}
+        for item in deletes:
+            if item[0] != "task":
+                continue
+            task = self.records.planning.get_task(uuid.UUID(item[2]), include_deleted=True)
+            if task is not None and (group := family(task)) is not None:
+                group.deletes.append(item)
+                deleted_tasks[str(task.id)] = group
+        for item in deletes:
+            if item[0] != "placement":
+                continue
+            placement = self.records.planning.get_placements([uuid.UUID(item[2])], include_deleted=True).get(
+                uuid.UUID(item[2]))
+            if placement is not None and str(placement.task_id) in deleted_tasks:
+                deleted_tasks[str(placement.task_id)].deletes.append(item)
+        return [group for group in families.values() if 1 < group.size <= _MAX_GROUP_OPERATIONS]
+
+    def _ordered_task_units(self, tasks, groups) -> list:
+        """Single task upserts and series groups, each after the tasks (or groups) it references."""
+        units: dict[str, object] = {}
+        unit_of: dict[str, str] = {}
+        for item in tasks:
+            units[item[0].wire_id] = item
+            unit_of[item[0].wire_id] = item[0].wire_id
+        for group in groups:
+            units[f"group:{group.root}"] = group
+            for local, _ in group.upserts:
+                unit_of[local.wire_id] = f"group:{group.root}"
+
+        def references(unit) -> set[str]:
+            locals_ = [unit[0]] if isinstance(unit, tuple) else [local for local, _ in unit.upserts]
+            found = set()
+            for local in locals_:
+                refs = list(local.payload.get("dependency_ids") or [])
+                refs += [local.payload.get("series_id"), local.payload.get("series_predecessor_id")]
+                found.update(unit_of[ref] for ref in refs if ref and ref in unit_of)
+            return found
+
+        ordered: list = []
+        done: set[str] = set()
+        visiting: set[str] = set()
+
+        def visit(name: str) -> None:
+            if name in done or name in visiting:
+                return
+            visiting.add(name)
+            for reference in sorted(references(units[name]) - {name}):
+                visit(reference)
+            visiting.discard(name)
+            done.add(name)
+            ordered.append(units[name])
+
+        for name in sorted(units):
+            visit(name)
+        return ordered
+
+    def _materialize_group(self, key: str, group: "_SeriesGroup") -> int:
+        group_id = str(uuid.uuid4())
+        count = 0
+        for local, shadow in self._ordered_upserts(group.upserts):
+            count += self._materialize(key, local, shadow, group_id=group_id)
+        for local, shadow, rev in sorted(group.reschedules, key=lambda item: item[0].wire_id):
+            payload = self.records.reschedule_payload(local)
+            if payload is None:
+                self.store.add_op(key, "placement", local.wire_id, local.local_id, "delete",
+                                  base_version=shadow.server_version, local_rev=rev, group_id=group_id)
+            else:
+                self.store.add_op(key, "placement", local.wire_id, local.local_id, "action", action="reschedule",
+                                  base_version=shadow.server_version, payload=payload, local_rev=rev,
+                                  group_id=group_id)
+            count += 1
+        for entity_type, wire_id, local_id, rev, shadow, payload in self._ordered_deletes(group.deletes):
+            self.store.add_op(key, entity_type, wire_id, local_id, "delete", base_version=shadow.server_version,
+                              payload=payload, local_rev=rev, group_id=group_id)
+            count += 1
+        return count
+
+    def _converges(self, local: LocalRecord, record: dict) -> bool:
+        """
+        A pulled occurrence that equals this device's own pending copy of the
+        same slot (both devices expanded it): nothing to merge or conflict on.
+        """
+        if local.entity_type != "task" or not local.model.is_occurrence:
+            return False
+        if local.deleted != (record.get("deleted_at") is not None):
+            return False
+        return all(local.payload.get(name) == record.get(name) for name in local.payload
+                   if name not in OCCURRENCE_BOOKKEEPING)
 
     @staticmethod
     def _is_lineage_history(local: LocalRecord) -> bool:
@@ -402,8 +673,11 @@ class SyncEngine:
             if task_id in visiting or task_id not in tasks or tasks[task_id] in ordered_tasks:
                 return
             visiting.add(task_id)
-            for dependency in tasks[task_id][0].payload["dependency_ids"]:
-                visit(dependency)
+            payload = tasks[task_id][0].payload
+            # Dependencies, an occurrence's series and a segment's predecessor exist on the server first.
+            for reference in [*payload["dependency_ids"], payload.get("series_id"), payload.get("series_predecessor_id")]:
+                if reference:
+                    visit(reference)
             ordered_tasks.append(tasks[task_id])
 
         for task_id in sorted(tasks):
@@ -429,18 +703,19 @@ class SyncEngine:
 
         return sorted(deletes, key=lambda item: (-rank[item[0]], -depth(item[1]) if item[0] == "task" else 0))
 
-    def _materialize(self, key: str, local: LocalRecord, shadow) -> int:
+    def _materialize(self, key: str, local: LocalRecord, shadow, *, group_id: str | None = None) -> int:
         rev = self.store.dirty_rev(local.entity_type, local.local_id) or 1
         add = self.store.add_op
         if shadow is None:
             payload = dict(local.payload)
             if local.entity_type == "execution":
                 payload["historical_reference"] = not self.records.links_resolve(local)
-            add(key, local.entity_type, local.wire_id, local.local_id, "create", payload=payload, local_rev=rev)
+            add(key, local.entity_type, local.wire_id, local.local_id, "create", payload=payload, local_rev=rev,
+                group_id=group_id)
             return 1
         if local.entity_type != "execution":
             add(key, local.entity_type, local.wire_id, local.local_id, "update", base_version=shadow.server_version,
-                payload=local.payload, local_rev=rev)
+                payload=local.payload, local_rev=rev, group_id=group_id)
             return 1
         try:
             changes = execution_changes(shadow.record, local)
@@ -492,18 +767,89 @@ class SyncEngine:
                         self.store.clear_dirty(op.entity_type, op.local_id, if_rev=op.local_rev)
                 else:
                     failed_entities.setdefault((op.entity_type, op.entity_id), []).append((op, result))
-            for (entity_type, entity_id), failures in failed_entities.items():
-                op, result = next(((o, r) for o, r in failures if r["error"].get("code") != "group_failed"), failures[0])
-                local = self.records.read(entity_type, op.local_id)
-                self.store.add_conflict(
-                    key, entity_type, entity_id, op.local_id,
-                    "push_conflict" if result["status"] == "conflict" else "push_rejected",
-                    op_id=op.op_id, base_version=op.base_version, local_record=local.payload if local else None,
-                    remote_record=result["error"].get("current"), error=result["error"],
-                )
-                self.store.delete_entity_ops(key, entity_type, entity_id)
-                outcome.conflicts += 1
+            # Units refused because the series of an occurrence they create changed: series id -> group ids.
+            changed: dict[str, set] = {}
+            for entity, failures in list(failed_entities.items()):
+                culprit = next((op for op, r in failures if r["error"].get("code") == "series_changed"), None)
+                if culprit is not None and culprit.group_id is not None:
+                    changed.setdefault((culprit.payload or {}).get("series_id"), set()).add(culprit.group_id)
+                if self._follow_changed_series(account, failures):
+                    del failed_entities[entity]
+                    outcome.followed += 1
+            for entity, failures in list(failed_entities.items()):
+                # A create of another occurrence of that same series, refused only because its unit was: sent
+                # again on its own next round (it then succeeds, follows the series, or conflicts itself). Members
+                # of any other compound change are never re-sent without the rest of their unit.
+                if all(r["error"].get("code") == "group_failed" and op.kind == "create"
+                       and (op.payload or {}).get("series_id") is not None
+                       and op.group_id in changed.get((op.payload or {}).get("series_id"), ())
+                       for op, r in failures):
+                    self.store.delete_entity_ops(key, *entity)
+                    self.store.ensure_dirty(entity[0], failures[0][0].local_id)
+                    del failed_entities[entity]
+            outcome.conflicts += self._record_failures(key, failed_entities)
         return outcome
+
+    def _follow_changed_series(self, account: Account, failures: list) -> bool:
+        """
+        An occurrence this device only expanded (no exception state of its
+        own) that the server refused as series_changed is not a user's
+        intent: it follows the server's series at once (re-derived and sent
+        again, or retired when its date is gone) -- unless this device has
+        its own pending change of that series, which then conflicts
+        normally. Anything else stays a conflict for the user to decide.
+        """
+        op, result = next(((o, r) for o, r in failures if r["error"].get("code") == "series_changed"), (None, None))
+        if op is None or op.entity_type != "task":
+            return False
+        key, series = account.account_key, result["error"].get("current")
+        local = self.records.read("task", op.local_id)
+        if local is None or local.deleted or local.model.occurrence_state is not None or series is None:
+            return False
+        series_local = self.records.read("task", self.records.local_id_for("task", series))
+        if series_local is not None and (self.store.dirty_rev("task", series_local.local_id) is not None
+                                         or self.store.has_ops(key, "task", series_local.wire_id)):
+            return False
+        with self.store.applying_remote():
+            self.records.store("task", series, account.user_id,
+                               (series_local.model.version + 1) if series_local else 1)
+            self.store.put_shadow(key, "task", series)
+            resend = self._follow_series(account, local)
+        self.store.delete_entity_ops(key, "task", op.entity_id)
+        if resend:
+            self.store.ensure_dirty("task", op.local_id)
+        else:
+            self.store.clear_dirty("task", op.local_id)
+        return True
+
+    def refuse(self, account: Account, batch: list, message: str) -> PushOutcome:
+        """
+        The server refused `batch` as a whole (a 4xx that is not an
+        authentication failure) and it cannot be narrowed further: each of its
+        records becomes a push_rejected conflict (code request_refused) and
+        leaves the outbox, so the user sees it and decides -- it is never
+        retried automatically, and nothing else waits behind it.
+        """
+        failures: dict[tuple[str, str], list[tuple[object, dict]]] = {}
+        for op in batch:
+            failures.setdefault((op.entity_type, op.entity_id), []).append(
+                (op, {"status": "rejected", "error": {"code": "request_refused", "message": message}}))
+        with self.store.transaction():
+            conflicts = self._record_failures(account.account_key, failures)
+        return PushOutcome(sent=len(batch), conflicts=conflicts)
+
+    def _record_failures(self, key: str, failed_entities: dict) -> int:
+        for (entity_type, entity_id), failures in failed_entities.items():
+            op, result = next(((o, r) for o, r in failures if r["error"].get("code") != "group_failed"), failures[0])
+            local = self.records.read(entity_type, op.local_id)
+            self.store.add_conflict(
+                key, entity_type, entity_id, op.local_id,
+                "push_conflict" if result["status"] == "conflict" else "push_rejected",
+                op_id=op.op_id, base_version=op.base_version, local_record=local.payload if local else None,
+                remote_record=result["error"].get("current"), error=result["error"],
+            )
+            self.store.delete_entity_ops(key, entity_type, entity_id)
+        return len(failed_entities)
 
     # ------------------------------------------------------------------
     # Pull
@@ -542,6 +888,13 @@ class SyncEngine:
             self._pull_conflict(key, entity_type, wire_id, local_id, shadow, local, record, "owned_by_another_account")
             outcome.conflicts.append(wire_id)
             return
+        if local is not None and pending and self._converges(local, record):
+            # Both devices materialized the same occurrence: adopt the server's version as the base, keep ours.
+            self.store.put_shadow(key, entity_type, record)
+            self.store.clear_dirty(entity_type, local_id)
+            self.store.delete_entity_ops(key, entity_type, wire_id)
+            outcome.skipped += 1
+            return
         if local is not None and pending:
             self._pull_conflict(key, entity_type, wire_id, local_id, shadow, local, record, "concurrent_change")
             outcome.conflicts.append(wire_id)
@@ -565,8 +918,13 @@ class SyncEngine:
         """
         A removed placement never seen here is still stored when it is part of a
         lineage (a later placement superseded it) and its task is here: the
-        original plan of a moved or regenerated occurrence stays readable.
+        original plan of a moved or regenerated occurrence stays readable. A
+        removed occurrence of a series this device has is stored too: its slot
+        stays reserved here, so a local expansion never mints it again
+        (docs/recurrence.md).
         """
+        if entity_type == "task" and record.get("series_id"):
+            return self.records.planning.get_task(uuid.UUID(record["series_id"]), include_deleted=True) is not None
         if entity_type != "placement" or not record.get("superseded_by_id"):
             return False
         return self.records.planning.get_task(uuid.UUID(record["task_id"]), include_deleted=True) is not None
@@ -617,11 +975,31 @@ class SyncEngine:
             or self.records.local_id_for(conflict.entity_type, remote) != conflict.local_id
         )
         keep_local = None
-        if remote is not None and remote.get("deleted_at") is not None:
-            keep_local = "The record was deleted on the server; keeping the local version would bring it back."
+        code = (conflict.error or {}).get("code")
+        if code == "series_changed":
+            keep_local = ("The recurring series changed on the server after this occurrence was created here; "
+                          "keeping the local copy would get around that change. Accept the server's series: the "
+                          "occurrence then follows it.")
+        elif remote is not None and remote.get("deleted_at") is not None:
+            keep_local = ("The record was deleted on the server; keeping the local version would bring it back. "
+                          "Accept the deletion instead.")
         elif collision:
             keep_local = "Another record owns this scope on the server."
+        elif conflict.entity_type == "execution" and remote is not None and self._diverged(conflict, remote):
+            keep_local = ("The work sessions recorded here do not continue the server's, so they cannot be sent as "
+                          "changes. Accept the server's version: the sessions only this device has are kept as a "
+                          "separate record.")
         return {"accept_remote": None, "keep_local": keep_local}
+
+    def _diverged(self, conflict: Conflict, remote: dict) -> bool:
+        local = self.records.read("execution", conflict.local_id)
+        if local is None:
+            return False
+        try:
+            execution_changes(remote, local)
+        except DivergedHistory:
+            return True
+        return False
 
     def resolve(self, account: Account, conflict_id: str, choice: str) -> Conflict:
         conflict = self.store.conflict(conflict_id)
@@ -631,6 +1009,11 @@ class SyncEngine:
             raise ConflictResolutionError("The conflict is already resolved.")
         if choice not in ("accept_remote", "keep_local"):
             raise ConflictResolutionError("Choose accept_remote or keep_local.")
+        refused = self.allowed_resolutions(conflict).get(choice)
+        if refused is not None:
+            raise ConflictResolutionError(refused)
+        if (conflict.error or {}).get("code") == "series_changed":
+            return self._resolve_series_change(account, conflict)
         remote = conflict.remote_record
         # A collision: the server's record for this scope is a *different* record than the local one.
         collision = remote is not None and (
@@ -652,17 +1035,131 @@ class SyncEngine:
                 self.store.ensure_dirty(entity_type, conflict.local_id)
             else:
                 before = self.records.read(entity_type, conflict.local_id) if entity_type == "placement" else None
+                kept_history = None
                 with self.store.applying_remote():
+                    if entity_type == "execution":
+                        kept_history = self._keep_unacknowledged_history(
+                            account, self.records.read("execution", conflict.local_id), remote)
                     self._accept_remote(account, conflict, remote, collision)
                     if before is not None and self._is_rescheduled(before):
                         self._undo_local_move(account, before)
                 self.store.clear_dirty(entity_type, conflict.local_id)
+                if kept_history is not None:
+                    self.store.ensure_dirty("execution", kept_history)  # sent as a create of its own
             self.store.delete_entity_ops(key, entity_type, conflict.entity_id)
-            self.store.resolve_conflict(conflict_id, {
+            resolution = {
                 "choice": choice, "decided_at": self._clock().isoformat(),
                 "base_version": conflict.base_version, "remote_version": remote.get("version") if remote else None,
-            })
+            }
+            if choice == "accept_remote" and kept_history is not None:
+                resolution["kept_history_execution_id"] = kept_history
+            self.store.resolve_conflict(conflict_id, resolution)
         return self.store.conflict(conflict_id)
+
+    def _keep_unacknowledged_history(self, account: Account, local: LocalRecord | None, remote: dict | None) -> str | None:
+        """
+        Before the server's version of an execution replaces the local one:
+        the work sessions only this device recorded are kept as a separate
+        historical execution (same snapshot, no placement link, those
+        sessions; derived metrics unknown), so accepting the server never
+        deletes actual work. Returns its id, or None when there is nothing
+        only this device has.
+        """
+        if local is None or local.deleted or remote is None:
+            return None
+        known = {_moment(work["started_at"]) for work in remote.get("sessions") or []}
+        extra = [(started, ended) for started, ended in (local.sessions or []) if _moment(started) not in known]
+        if not extra:
+            return None
+        execution = local.model
+        if extra[-1][1] is None:
+            status = ExecutionStatus.IN_PROGRESS
+        elif execution.status in (ExecutionStatus.COMPLETED, ExecutionStatus.SKIPPED, ExecutionStatus.CANCELLED):
+            status = execution.status
+        else:
+            status = ExecutionStatus.PAUSED
+        task_id = execution.task_id
+        if task_id is not None and self.records.planning.get_task(uuid.UUID(str(task_id))) is None:
+            task_id = None  # its task is gone here: the copy is history only
+        now = self._clock().isoformat()
+        copy = execution.model_copy(update={
+            "id": str(uuid.uuid4()), "scheduled_task_id": None, "task_id": task_id, "status": status,
+            "cancel_reason": execution.cancel_reason if status == ExecutionStatus.CANCELLED else None,
+            "actual_first_start_at": _moment(extra[0][0]), "actual_final_end_at": _moment(extra[-1][1]) if status in (
+                ExecutionStatus.COMPLETED, ExecutionStatus.SKIPPED, ExecutionStatus.CANCELLED) else None,
+            "actual_active_duration_minutes": None, "duration_variance_minutes": None, "start_delay_minutes": None,
+            "created_at": now, "updated_at": now, "version": 1, "deleted_at": None,
+        })
+        self.records.executions.store_synced(copy, extra)
+        return copy.id
+
+    def _resolve_series_change(self, account: Account, conflict: Conflict) -> Conflict:
+        """accept_remote for series_changed (see the module docstring); keep_local was refused before."""
+        key, remote = account.account_key, conflict.remote_record
+        resend = False
+        with self.store.transaction():
+            local = self.records.read("task", conflict.local_id)
+            with self.store.applying_remote():
+                if remote is not None:
+                    series_local = self.records.read("task", self.records.local_id_for("task", remote))
+                    if series_local is None or not (self.store.dirty_rev("task", series_local.local_id) is not None
+                                                    or self.store.has_ops(key, "task", series_local.wire_id)):
+                        # The server's series, unless it has a pending change of its own (its own conflict decides).
+                        self.records.store("task", remote, account.user_id,
+                                           (series_local.model.version + 1) if series_local else 1)
+                        self.store.put_shadow(key, "task", remote)
+                if local is not None and not local.deleted:
+                    resend = self._follow_series(account, local)
+            self.store.delete_entity_ops(key, "task", conflict.entity_id)
+            if resend:
+                self.store.ensure_dirty("task", conflict.local_id)
+            else:
+                self.store.clear_dirty("task", conflict.local_id)
+            self.store.resolve_conflict(conflict.id, {
+                "choice": "accept_remote", "decided_at": self._clock().isoformat(),
+                "base_version": conflict.base_version, "remote_version": remote.get("version") if remote else None,
+                "occurrence": "follows_series" if resend else "retired",
+            })
+        return self.store.conflict(conflict.id)
+
+    def _follow_series(self, account: Account, local: LocalRecord) -> bool:
+        """
+        Re-derive an occurrence created here from its series as stored now:
+        True when it follows the series again (to be sent anew); False when it
+        was retired here -- its date is no longer one of the series' or the
+        series is gone -- together with its never-synchronized placements that
+        have no recorded work (anything with work stays, visible).
+        """
+        occurrence = local.model
+        series = self.records.planning.get_task(occurrence.series_id, include_deleted=True)
+        now = self._clock()
+        valid = False
+        if series is not None and series.deleted_at is None and series.recurrence is not None:
+            try:
+                valid = SeriesRule.of(series.recurrence).is_slot(occurrence.occurrence_slot)
+            except RecurrenceError:
+                valid = False
+        if valid:
+            update = {"updated_at": now, "version": occurrence.version + 1, "series_version": series.version}
+            if occurrence.occurrence_state is None:  # an exception (modified) keeps its own content
+                update.update({name: getattr(series, name) for name in SERIES_CONTENT_FIELDS})
+            self.records.planning.store_synced("task", occurrence.model_copy(update=update))
+            return True
+        self.records.planning.store_synced("task", occurrence.model_copy(update={
+            "deleted_at": now, "updated_at": now, "version": occurrence.version + 1,
+            "occurrence_state": OccurrenceState.SUPERSEDED,
+        }))
+        key = account.account_key
+        for placement in self.records.planning.active_placements_for_tasks([occurrence.id]).get(occurrence.id, []):
+            if self.store.shadow(key, "placement", str(placement.id)) is not None:
+                continue
+            execution = self.records.executions.find_by_scheduled_task_id(str(placement.id))
+            if execution is not None and self.records.executions.list_sessions(execution.id):
+                continue
+            self._discard(account, self.records.read("placement", str(placement.id)))
+            self.store.clear_dirty("placement", str(placement.id))
+            self.store.delete_entity_ops(key, "placement", str(placement.id))
+        return False
 
     def _accept_remote(self, account: Account, conflict: Conflict, remote: dict | None, collision: bool) -> None:
         local = self.records.read(conflict.entity_type, conflict.local_id)

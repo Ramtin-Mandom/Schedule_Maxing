@@ -116,7 +116,8 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
                                        on_default=self.use_default_day_window)
         self.window_bar.grid(row=0, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_M))
         self.schedule_canvas = DayTimeline(self.body, on_edit=lambda item: self.edit_ref(item.ref),
-                                           on_remove=lambda item: self.remove_item(item))
+                                           on_remove=lambda item: self.remove_item(item),
+                                           on_release=lambda item: self.release_item(item))
         self.schedule_canvas.grid(row=1, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_M))
         self._build_available()
         self._build_lower()
@@ -589,6 +590,29 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
 
     def remove_item(self, item: TimelineItem) -> None:
         self.remove_ref(item.ref)
+
+    def release_item(self, item: TimelineItem) -> None:
+        """Release a manual placement's intent (in the background): it stays put; Make Schedule may replace it."""
+        if self._refuse_while_busy():
+            return
+        day = self.page_controller.anchor_date
+        self._set_busy(True)
+
+        def finish(result: ControllerResult[DaySnapshot]) -> None:
+            self._set_busy(False)
+            if day != self.page_controller.anchor_date:
+                self.reload()
+                return
+            if result.value is not None:
+                self._render(result.value)
+            if not result.ok:
+                self.notice.show("error", result.error or "The placement could not be released.")
+                return
+            self.notice.show("success", f"{item.name} was released: it stays where it is, but Make Schedule may "
+                                        "now replace it like generated work.")
+
+        if not run_in_background(self, lambda: self.page_controller.release_manual_placement(item), finish):
+            self._set_busy(False)
 
     # ----------------------------- Rendering -----------------------------
 

@@ -80,11 +80,15 @@ class AccountIdentity:
     version: int
     created_at: datetime
     updated_at: datetime
+    #: The credential epoch read together with the password check: a token or session issued for this
+    #: identity carries it, so a password reset after the check makes that token useless (backend/recovery.py).
+    credential_epoch: int = 0
 
 
 def _identity(user: models.User) -> AccountIdentity:
     return AccountIdentity(id=user.id, email=user.email, username=user.username, display_name=user.display_name,
-                           version=user.version, created_at=user.created_at, updated_at=user.updated_at)
+                           version=user.version, created_at=user.created_at, updated_at=user.updated_at,
+                           credential_epoch=user.credential_epoch or 0)
 
 
 def check_email(email: str) -> str:

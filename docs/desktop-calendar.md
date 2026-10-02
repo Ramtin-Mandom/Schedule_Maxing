@@ -139,6 +139,8 @@ points. Editing single tasks happens on the Day page (Open Day).
   headless callers (`PlanningController.schedule_range`,
   `SchedulePageController.make_schedule`) and the CLI.
 - CSV import/export is on the Day page (canonical v2).
-- Recurring tasks are not expanded into occurrences on the calendar.
+- Recurring series are listed as "repeats" rows (or "needs setup"); their
+  occurrences appear as "repeat" rows once a range is scheduled -- Make
+  Schedule materializes them first ([recurrence.md](recurrence.md)).
 - On a daylight-saving change day, positions on the Week time axis are
   elapsed minutes from local midnight.

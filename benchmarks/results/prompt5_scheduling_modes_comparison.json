@@ -1,0 +1,842 @@
+{
+  "environment": "Python 3.10.11 on Windows-10-10.0.19045-SP0",
+  "note": "Objectives of different modes are not comparable on one scale; no global optimum is claimed. Normal/ADHD equality with the pre-change engine: benchmarks/scheduling_mode_baseline.py --check.",
+  "scenarios": {
+    "constrained_breaks_deadlines_dependencies": {
+      "adhd_friendly": {
+        "adhd_component": 0.0,
+        "baseline_reward": 100.0,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 0,
+        "fixed_minutes": 120,
+        "idle_gap_minutes": 30,
+        "last_finish_minute": 360,
+        "mode_component": 0.0,
+        "objective": 100.0,
+        "runtime_ms": {
+          "max": 1.29,
+          "median": 1.142,
+          "min": 1.069,
+          "runs": 5
+        },
+        "scheduled": 4,
+        "scheduled_minutes": 210,
+        "status": "generated",
+        "stored_insertion_score": 100.0,
+        "unscheduled": 0,
+        "unscheduled_minutes": 0,
+        "unscheduled_reasons": []
+      },
+      "catch_up": {
+        "adhd_component": 0.0,
+        "baseline_reward": 100.0,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 0,
+        "fixed_minutes": 120,
+        "idle_gap_minutes": 30,
+        "last_finish_minute": 360,
+        "mode_component": 2.2059,
+        "objective": 102.2059,
+        "runtime_ms": {
+          "max": 1.45,
+          "median": 1.308,
+          "min": 1.227,
+          "runs": 5
+        },
+        "scheduled": 4,
+        "scheduled_minutes": 210,
+        "status": "generated",
+        "stored_insertion_score": 100.0,
+        "unscheduled": 0,
+        "unscheduled_minutes": 0,
+        "unscheduled_reasons": []
+      },
+      "early_finish": {
+        "adhd_component": 0.0,
+        "baseline_reward": 100.0,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 0,
+        "fixed_minutes": 120,
+        "idle_gap_minutes": 30,
+        "last_finish_minute": 360,
+        "mode_component": 13.8802,
+        "objective": 113.8802,
+        "runtime_ms": {
+          "max": 2.095,
+          "median": 1.91,
+          "min": 1.852,
+          "runs": 5
+        },
+        "scheduled": 4,
+        "scheduled_minutes": 210,
+        "status": "generated",
+        "stored_insertion_score": 100.0,
+        "unscheduled": 0,
+        "unscheduled_minutes": 0,
+        "unscheduled_reasons": []
+      },
+      "night_owl": {
+        "adhd_component": 0.0,
+        "baseline_reward": 104.0,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 405,
+        "fixed_minutes": 120,
+        "idle_gap_minutes": 105,
+        "last_finish_minute": 720,
+        "mode_component": 13.9167,
+        "objective": 117.9167,
+        "runtime_ms": {
+          "max": 2.073,
+          "median": 1.954,
+          "min": 1.855,
+          "runs": 5
+        },
+        "scheduled": 4,
+        "scheduled_minutes": 210,
+        "status": "generated",
+        "stored_insertion_score": 104.0,
+        "unscheduled": 0,
+        "unscheduled_minutes": 0,
+        "unscheduled_reasons": []
+      },
+      "precise_greedy": {
+        "adhd_component": 0.0,
+        "baseline_reward": 100.0,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 0,
+        "fixed_minutes": 120,
+        "idle_gap_minutes": 30,
+        "last_finish_minute": 360,
+        "mode_component": 0.0,
+        "objective": 100.0,
+        "runtime_ms": {
+          "max": 1.279,
+          "median": 1.201,
+          "min": 1.07,
+          "runs": 5
+        },
+        "scheduled": 4,
+        "scheduled_minutes": 210,
+        "status": "generated",
+        "stored_insertion_score": 100.0,
+        "unscheduled": 0,
+        "unscheduled_minutes": 0,
+        "unscheduled_reasons": []
+      }
+    },
+    "infeasible_required_work": {
+      "adhd_friendly": {
+        "reasons": [
+          "no_valid_slot"
+        ],
+        "runtime_ms": {
+          "max": 0.044,
+          "median": 0.036,
+          "min": 0.035,
+          "runs": 5
+        },
+        "status": "infeasible (required work cannot fit)"
+      },
+      "catch_up": {
+        "reasons": [
+          "no_valid_slot"
+        ],
+        "runtime_ms": {
+          "max": 0.041,
+          "median": 0.038,
+          "min": 0.036,
+          "runs": 5
+        },
+        "status": "infeasible (required work cannot fit)"
+      },
+      "early_finish": {
+        "reasons": [
+          "no_valid_slot"
+        ],
+        "runtime_ms": {
+          "max": 0.064,
+          "median": 0.042,
+          "min": 0.036,
+          "runs": 5
+        },
+        "status": "infeasible (required work cannot fit)"
+      },
+      "night_owl": {
+        "reasons": [
+          "no_valid_slot"
+        ],
+        "runtime_ms": {
+          "max": 0.047,
+          "median": 0.037,
+          "min": 0.036,
+          "runs": 5
+        },
+        "status": "infeasible (required work cannot fit)"
+      },
+      "precise_greedy": {
+        "reasons": [
+          "no_valid_slot"
+        ],
+        "runtime_ms": {
+          "max": 0.076,
+          "median": 0.04,
+          "min": 0.038,
+          "runs": 5
+        },
+        "status": "infeasible (required work cannot fit)"
+      }
+    },
+    "large_recurring_workload": {
+      "adhd_friendly": {
+        "adhd_component": 0.0,
+        "baseline_reward": 437.0,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 0,
+        "fixed_minutes": 60,
+        "idle_gap_minutes": 305,
+        "last_finish_minute": 950,
+        "mode_component": 0.0,
+        "objective": 437.0,
+        "runtime_ms": {
+          "max": 44.929,
+          "median": 39.715,
+          "min": 38.254,
+          "runs": 5
+        },
+        "scheduled": 15,
+        "scheduled_minutes": 585,
+        "status": "generated",
+        "stored_insertion_score": 431.0,
+        "unscheduled": 5,
+        "unscheduled_minutes": 215,
+        "unscheduled_reasons": [
+          "no_valid_slot"
+        ]
+      },
+      "catch_up": {
+        "adhd_component": 0.0,
+        "baseline_reward": 487.0,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 0,
+        "fixed_minutes": 60,
+        "idle_gap_minutes": 0,
+        "last_finish_minute": 860,
+        "mode_component": 16.5686,
+        "objective": 503.5686,
+        "runtime_ms": {
+          "max": 47.23,
+          "median": 44.213,
+          "min": 42.047,
+          "runs": 5
+        },
+        "scheduled": 20,
+        "scheduled_minutes": 800,
+        "status": "generated",
+        "stored_insertion_score": 476.0,
+        "unscheduled": 0,
+        "unscheduled_minutes": 0,
+        "unscheduled_reasons": []
+      },
+      "early_finish": {
+        "adhd_component": 0.0,
+        "baseline_reward": 487.0,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 0,
+        "fixed_minutes": 60,
+        "idle_gap_minutes": 0,
+        "last_finish_minute": 860,
+        "mode_component": 48.8568,
+        "objective": 535.8568,
+        "runtime_ms": {
+          "max": 43.019,
+          "median": 42.07,
+          "min": 41.528,
+          "runs": 5
+        },
+        "scheduled": 20,
+        "scheduled_minutes": 800,
+        "status": "generated",
+        "stored_insertion_score": 487.0,
+        "unscheduled": 0,
+        "unscheduled_minutes": 0,
+        "unscheduled_reasons": []
+      },
+      "night_owl": {
+        "adhd_component": 0.0,
+        "baseline_reward": 483.0,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 85,
+        "fixed_minutes": 60,
+        "idle_gap_minutes": 15,
+        "last_finish_minute": 960,
+        "mode_component": 46.9154,
+        "objective": 529.9154,
+        "runtime_ms": {
+          "max": 47.1,
+          "median": 44.26,
+          "min": 41.265,
+          "runs": 5
+        },
+        "scheduled": 20,
+        "scheduled_minutes": 800,
+        "status": "generated",
+        "stored_insertion_score": 483.0,
+        "unscheduled": 0,
+        "unscheduled_minutes": 0,
+        "unscheduled_reasons": []
+      },
+      "precise_greedy": {
+        "adhd_component": 0.0,
+        "baseline_reward": 487.0,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 0,
+        "fixed_minutes": 60,
+        "idle_gap_minutes": 0,
+        "last_finish_minute": 860,
+        "mode_component": 0.0,
+        "objective": 487.0,
+        "runtime_ms": {
+          "max": 44.613,
+          "median": 41.339,
+          "min": 40.994,
+          "runs": 5
+        },
+        "scheduled": 20,
+        "scheduled_minutes": 800,
+        "status": "generated",
+        "stored_insertion_score": 476.0,
+        "unscheduled": 0,
+        "unscheduled_minutes": 0,
+        "unscheduled_reasons": []
+      }
+    },
+    "non_round_minutes_and_unschedulable_optional": {
+      "adhd_friendly": {
+        "adhd_component": 0.0,
+        "baseline_reward": 82.0,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 19,
+        "fixed_minutes": 12,
+        "idle_gap_minutes": 42,
+        "last_finish_minute": 122,
+        "mode_component": 0.0,
+        "objective": 82.0,
+        "runtime_ms": {
+          "max": 1.34,
+          "median": 0.896,
+          "min": 0.814,
+          "runs": 5
+        },
+        "scheduled": 3,
+        "scheduled_minutes": 61,
+        "status": "generated",
+        "stored_insertion_score": 80.0,
+        "unscheduled": 1,
+        "unscheduled_minutes": 500,
+        "unscheduled_reasons": [
+          "no_valid_slot"
+        ]
+      },
+      "catch_up": {
+        "adhd_component": 0.0,
+        "baseline_reward": 82.0,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 19,
+        "fixed_minutes": 12,
+        "idle_gap_minutes": 0,
+        "last_finish_minute": 80,
+        "mode_component": 0.0,
+        "objective": 82.0,
+        "runtime_ms": {
+          "max": 0.887,
+          "median": 0.804,
+          "min": 0.785,
+          "runs": 5
+        },
+        "scheduled": 3,
+        "scheduled_minutes": 61,
+        "status": "generated",
+        "stored_insertion_score": 80.0,
+        "unscheduled": 1,
+        "unscheduled_minutes": 500,
+        "unscheduled_reasons": [
+          "no_valid_slot"
+        ]
+      },
+      "early_finish": {
+        "adhd_component": 0.0,
+        "baseline_reward": 82.0,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 19,
+        "fixed_minutes": 12,
+        "idle_gap_minutes": 0,
+        "last_finish_minute": 80,
+        "mode_component": 13.3425,
+        "objective": 95.3425,
+        "runtime_ms": {
+          "max": 1.37,
+          "median": 1.214,
+          "min": 1.172,
+          "runs": 5
+        },
+        "scheduled": 3,
+        "scheduled_minutes": 61,
+        "status": "generated",
+        "stored_insertion_score": 82.0,
+        "unscheduled": 1,
+        "unscheduled_minutes": 500,
+        "unscheduled_reasons": [
+          "no_valid_slot"
+        ]
+      },
+      "night_owl": {
+        "adhd_component": 0.0,
+        "baseline_reward": 79.0,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 339,
+        "fixed_minutes": 12,
+        "idle_gap_minutes": 0,
+        "last_finish_minute": 400,
+        "mode_component": 13.7138,
+        "objective": 92.7138,
+        "runtime_ms": {
+          "max": 1.406,
+          "median": 1.185,
+          "min": 1.163,
+          "runs": 5
+        },
+        "scheduled": 3,
+        "scheduled_minutes": 61,
+        "status": "generated",
+        "stored_insertion_score": 79.0,
+        "unscheduled": 1,
+        "unscheduled_minutes": 500,
+        "unscheduled_reasons": [
+          "no_valid_slot"
+        ]
+      },
+      "precise_greedy": {
+        "adhd_component": 0.0,
+        "baseline_reward": 82.0,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 19,
+        "fixed_minutes": 12,
+        "idle_gap_minutes": 0,
+        "last_finish_minute": 80,
+        "mode_component": 0.0,
+        "objective": 82.0,
+        "runtime_ms": {
+          "max": 1.061,
+          "median": 0.835,
+          "min": 0.816,
+          "runs": 5
+        },
+        "scheduled": 3,
+        "scheduled_minutes": 61,
+        "status": "generated",
+        "stored_insertion_score": 80.0,
+        "unscheduled": 1,
+        "unscheduled_minutes": 500,
+        "unscheduled_reasons": [
+          "no_valid_slot"
+        ]
+      }
+    },
+    "ordinary": {
+      "adhd_friendly": {
+        "adhd_component": 0.0,
+        "baseline_reward": 112.06,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 60,
+        "fixed_minutes": 30,
+        "idle_gap_minutes": 250,
+        "last_finish_minute": 495,
+        "mode_component": 0.0,
+        "objective": 112.06,
+        "runtime_ms": {
+          "max": 5.291,
+          "median": 3.736,
+          "min": 3.46,
+          "runs": 5
+        },
+        "scheduled": 4,
+        "scheduled_minutes": 155,
+        "status": "generated",
+        "stored_insertion_score": 111.06,
+        "unscheduled": 0,
+        "unscheduled_minutes": 0,
+        "unscheduled_reasons": []
+      },
+      "catch_up": {
+        "adhd_component": 0.0,
+        "baseline_reward": 112.06,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 60,
+        "fixed_minutes": 30,
+        "idle_gap_minutes": 250,
+        "last_finish_minute": 495,
+        "mode_component": 0.0,
+        "objective": 112.06,
+        "runtime_ms": {
+          "max": 4.059,
+          "median": 3.961,
+          "min": 3.878,
+          "runs": 5
+        },
+        "scheduled": 4,
+        "scheduled_minutes": 155,
+        "status": "generated",
+        "stored_insertion_score": 111.06,
+        "unscheduled": 0,
+        "unscheduled_minutes": 0,
+        "unscheduled_reasons": []
+      },
+      "early_finish": {
+        "adhd_component": 0.0,
+        "baseline_reward": 109.41,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 0,
+        "fixed_minutes": 30,
+        "idle_gap_minutes": 0,
+        "last_finish_minute": 155,
+        "mode_component": 17.994,
+        "objective": 127.404,
+        "runtime_ms": {
+          "max": 5.913,
+          "median": 5.698,
+          "min": 5.56,
+          "runs": 5
+        },
+        "scheduled": 4,
+        "scheduled_minutes": 155,
+        "status": "generated",
+        "stored_insertion_score": 109.41,
+        "unscheduled": 0,
+        "unscheduled_minutes": 0,
+        "unscheduled_reasons": []
+      },
+      "night_owl": {
+        "adhd_component": 0.0,
+        "baseline_reward": 107.19,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 685,
+        "fixed_minutes": 30,
+        "idle_gap_minutes": 0,
+        "last_finish_minute": 840,
+        "mode_component": 17.8289,
+        "objective": 125.0189,
+        "runtime_ms": {
+          "max": 6.485,
+          "median": 5.842,
+          "min": 5.459,
+          "runs": 5
+        },
+        "scheduled": 4,
+        "scheduled_minutes": 155,
+        "status": "generated",
+        "stored_insertion_score": 107.19,
+        "unscheduled": 0,
+        "unscheduled_minutes": 0,
+        "unscheduled_reasons": []
+      },
+      "precise_greedy": {
+        "adhd_component": 0.0,
+        "baseline_reward": 112.06,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 60,
+        "fixed_minutes": 30,
+        "idle_gap_minutes": 250,
+        "last_finish_minute": 495,
+        "mode_component": 0.0,
+        "objective": 112.06,
+        "runtime_ms": {
+          "max": 7.009,
+          "median": 4.292,
+          "min": 3.99,
+          "runs": 5
+        },
+        "scheduled": 4,
+        "scheduled_minutes": 155,
+        "status": "generated",
+        "stored_insertion_score": 111.06,
+        "unscheduled": 0,
+        "unscheduled_minutes": 0,
+        "unscheduled_reasons": []
+      }
+    },
+    "preferences": {
+      "adhd_friendly": {
+        "adhd_component": 0.0,
+        "baseline_reward": 87.53,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 60,
+        "fixed_minutes": 0,
+        "idle_gap_minutes": 120,
+        "last_finish_minute": 315,
+        "mode_component": 0.0,
+        "objective": 87.53,
+        "runtime_ms": {
+          "max": 1.535,
+          "median": 1.205,
+          "min": 1.194,
+          "runs": 5
+        },
+        "scheduled": 3,
+        "scheduled_minutes": 135,
+        "status": "generated",
+        "stored_insertion_score": 85.53,
+        "unscheduled": 0,
+        "unscheduled_minutes": 0,
+        "unscheduled_reasons": []
+      },
+      "catch_up": {
+        "adhd_component": 0.0,
+        "baseline_reward": 87.53,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 60,
+        "fixed_minutes": 0,
+        "idle_gap_minutes": 120,
+        "last_finish_minute": 315,
+        "mode_component": 0.0,
+        "objective": 87.53,
+        "runtime_ms": {
+          "max": 2.463,
+          "median": 1.453,
+          "min": 1.259,
+          "runs": 5
+        },
+        "scheduled": 3,
+        "scheduled_minutes": 135,
+        "status": "generated",
+        "stored_insertion_score": 85.53,
+        "unscheduled": 0,
+        "unscheduled_minutes": 0,
+        "unscheduled_reasons": []
+      },
+      "early_finish": {
+        "adhd_component": 0.0,
+        "baseline_reward": 87.53,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 60,
+        "fixed_minutes": 0,
+        "idle_gap_minutes": 120,
+        "last_finish_minute": 315,
+        "mode_component": 11.0357,
+        "objective": 98.5657,
+        "runtime_ms": {
+          "max": 2.098,
+          "median": 1.967,
+          "min": 1.605,
+          "runs": 5
+        },
+        "scheduled": 3,
+        "scheduled_minutes": 135,
+        "status": "generated",
+        "stored_insertion_score": 87.53,
+        "unscheduled": 0,
+        "unscheduled_minutes": 0,
+        "unscheduled_reasons": []
+      },
+      "night_owl": {
+        "adhd_component": 0.0,
+        "baseline_reward": 87.53,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 60,
+        "fixed_minutes": 0,
+        "idle_gap_minutes": 120,
+        "last_finish_minute": 315,
+        "mode_component": 5.4375,
+        "objective": 92.9675,
+        "runtime_ms": {
+          "max": 1.934,
+          "median": 1.683,
+          "min": 1.59,
+          "runs": 5
+        },
+        "scheduled": 3,
+        "scheduled_minutes": 135,
+        "status": "generated",
+        "stored_insertion_score": 87.53,
+        "unscheduled": 0,
+        "unscheduled_minutes": 0,
+        "unscheduled_reasons": []
+      },
+      "precise_greedy": {
+        "adhd_component": 0.0,
+        "baseline_reward": 87.53,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 60,
+        "fixed_minutes": 0,
+        "idle_gap_minutes": 120,
+        "last_finish_minute": 315,
+        "mode_component": 0.0,
+        "objective": 87.53,
+        "runtime_ms": {
+          "max": 1.431,
+          "median": 1.306,
+          "min": 1.252,
+          "runs": 5
+        },
+        "scheduled": 3,
+        "scheduled_minutes": 135,
+        "status": "generated",
+        "stored_insertion_score": 85.53,
+        "unscheduled": 0,
+        "unscheduled_minutes": 0,
+        "unscheduled_reasons": []
+      }
+    },
+    "sparse_history": {
+      "adhd_friendly": {
+        "adhd_component": 0.0,
+        "baseline_reward": 105.0,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 0,
+        "fixed_minutes": 0,
+        "idle_gap_minutes": 35,
+        "last_finish_minute": 255,
+        "mode_component": 0.0,
+        "objective": 105.0,
+        "runtime_ms": {
+          "max": 3.269,
+          "median": 3.006,
+          "min": 2.729,
+          "runs": 5
+        },
+        "scheduled": 6,
+        "scheduled_minutes": 220,
+        "status": "generated",
+        "stored_insertion_score": 105.0,
+        "unscheduled": 0,
+        "unscheduled_minutes": 0,
+        "unscheduled_reasons": []
+      },
+      "catch_up": {
+        "adhd_component": 0.0,
+        "baseline_reward": 105.0,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 0,
+        "fixed_minutes": 0,
+        "idle_gap_minutes": 0,
+        "last_finish_minute": 220,
+        "mode_component": 0.0,
+        "objective": 105.0,
+        "runtime_ms": {
+          "max": 1.969,
+          "median": 1.741,
+          "min": 1.559,
+          "runs": 5
+        },
+        "scheduled": 6,
+        "scheduled_minutes": 220,
+        "status": "generated",
+        "stored_insertion_score": 105.0,
+        "unscheduled": 0,
+        "unscheduled_minutes": 0,
+        "unscheduled_reasons": []
+      },
+      "early_finish": {
+        "adhd_component": 0.0,
+        "baseline_reward": 111.0,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 0,
+        "fixed_minutes": 0,
+        "idle_gap_minutes": 0,
+        "last_finish_minute": 220,
+        "mode_component": 24.9115,
+        "objective": 135.9115,
+        "runtime_ms": {
+          "max": 57.425,
+          "median": 54.984,
+          "min": 54.289,
+          "runs": 5
+        },
+        "scheduled": 6,
+        "scheduled_minutes": 220,
+        "status": "generated",
+        "stored_insertion_score": 111.0,
+        "unscheduled": 0,
+        "unscheduled_minutes": 0,
+        "unscheduled_reasons": []
+      },
+      "night_owl": {
+        "adhd_component": 0.0,
+        "baseline_reward": 111.0,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 500,
+        "fixed_minutes": 0,
+        "idle_gap_minutes": 0,
+        "last_finish_minute": 720,
+        "mode_component": 24.6823,
+        "objective": 135.6823,
+        "runtime_ms": {
+          "max": 61.755,
+          "median": 57.531,
+          "min": 55.522,
+          "runs": 5
+        },
+        "scheduled": 6,
+        "scheduled_minutes": 220,
+        "status": "generated",
+        "stored_insertion_score": 111.0,
+        "unscheduled": 0,
+        "unscheduled_minutes": 0,
+        "unscheduled_reasons": []
+      },
+      "precise_greedy": {
+        "adhd_component": 0.0,
+        "baseline_reward": 105.0,
+        "constraint_violations": 0,
+        "deterministic": true,
+        "first_start_minute": 0,
+        "fixed_minutes": 0,
+        "idle_gap_minutes": 0,
+        "last_finish_minute": 220,
+        "mode_component": 0.0,
+        "objective": 105.0,
+        "runtime_ms": {
+          "max": 2.507,
+          "median": 1.694,
+          "min": 1.555,
+          "runs": 5
+        },
+        "scheduled": 6,
+        "scheduled_minutes": 220,
+        "status": "generated",
+        "stored_insertion_score": 105.0,
+        "unscheduled": 0,
+        "unscheduled_minutes": 0,
+        "unscheduled_reasons": []
+      }
+    }
+  }
+}

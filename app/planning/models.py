@@ -31,13 +31,17 @@ Key differences from the legacy models:
       tombstone (`deleted_at`; None = live). Normal reads only ever return
       live records.
 
-Recurrence note: RecurrenceSpec is a model only -- it describes a
-recurrence *rule* attached to a template Task. Nothing here expands a
-template into concrete future occurrences. When a future milestone adds
-that expansion, each materialized occurrence must receive its own distinct
-Task.id and reference the template it came from (e.g. a future
-`recurrence_template_id` field) -- a recurring template's id must never be
-treated as interchangeable with "all of its future occurrences".
+Recurrence (docs/recurrence.md): a Task whose `recurrence` is set is a
+*series definition*. It is never itself scheduled. Its rule is configured
+when it names an explicit local start date and IANA time zone
+(RecurrenceSpec.start_date/timezone); a rule without them (every template
+stored before recurrence was expanded) needs configuration and produces
+nothing. app/planning/series.py materializes each original recurrence slot
+as a distinct concrete Task -- an *occurrence* -- whose immutable identity is
+(series_id, occurrence_slot) and whose id is derived from exactly that
+(app.planning.recurrence.occurrence_task_id). An occurrence never carries a
+recurrence rule of its own, so it can never be mistaken for another series;
+it is planned, placed, executed, moved and deleted like any other task.
 """
 
 from __future__ import annotations
@@ -89,8 +93,8 @@ class RecurrenceFrequency(str, Enum):
 
 class RecurrenceSpec(BaseModel):
     """
-    Model-only recurrence rule for a template Task. Does not expand
-    occurrences -- see the module docstring.
+    The recurrence rule of a series definition (see the module docstring and
+    app/planning/recurrence.py for the calendar semantics).
     """
 
     frequency: RecurrenceFrequency
@@ -100,11 +104,29 @@ class RecurrenceSpec(BaseModel):
     weekdays: list[int] | None = None
 
     # Monthly-only: 1-31. A month without that day (e.g. day 31 in April)
-    # is a future occurrence-expansion concern, not a model-validity error.
+    # has no occurrence: expansion skips it, never clamps it.
     day_of_month: int | None = Field(default=None, ge=1, le=31)
 
+    #: Inclusive. Before start_date it describes a retired segment with no slots.
     end_date: date_ | None = None
     count: int | None = Field(default=None, gt=0)
+
+    #: The series anchor: its first possible local slot date. Together with `timezone`, explicit -- never
+    #: derived from a requested range or a machine clock. Both None: the rule needs configuration.
+    start_date: date_ | None = None
+    #: The IANA time zone the slots are local dates of.
+    timezone: str | None = None
+
+    @property
+    def configured(self) -> bool:
+        return self.start_date is not None and self.timezone is not None
+
+    @field_validator("timezone")
+    @classmethod
+    def _validate_tz(cls, value: str | None) -> str | None:
+        if value is not None:
+            validate_timezone(value)
+        return value
 
     @field_validator("weekdays")
     @classmethod
@@ -126,7 +148,29 @@ class RecurrenceSpec(BaseModel):
             raise ValueError("day_of_month is only valid for monthly recurrence")
         if self.end_date is not None and self.count is not None:
             raise ValueError("specify at most one of end_date or count, not both")
+        if (self.start_date is None) != (self.timezone is None):
+            raise ValueError("a recurrence's start_date and timezone are set together (or neither: not configured)")
         return self
+
+
+class OccurrenceState(str, Enum):
+    """
+    The exception state of one materialized occurrence (docs/recurrence.md).
+    None (the usual case) means the occurrence follows its series definition.
+    """
+
+    #: Edited on its own ("this occurrence", or moved to another date): later series-wide edits leave it alone.
+    MODIFIED = "modified"
+    #: Skipped by the user (a tombstone that keeps its slot reserved).
+    SKIPPED = "skipped"
+    #: Deleted by the user (a tombstone that keeps its slot reserved).
+    DELETED = "deleted"
+    #: Removed by a series-wide or "this and every later occurrence" change (a tombstone keeping its slot).
+    SUPERSEDED = "superseded"
+
+
+#: States that only a tombstoned occurrence carries.
+OCCURRENCE_TOMBSTONE_STATES = frozenset({OccurrenceState.SKIPPED, OccurrenceState.DELETED, OccurrenceState.SUPERSEDED})
 
 
 # -----------------------------------------------------------------------------
@@ -220,12 +264,40 @@ class Task(BaseModel):
 
     deadline: datetime | None = None
 
+    #: Set: this task is a series definition (never scheduled itself; see the module docstring).
     recurrence: RecurrenceSpec | None = None
+
+    # -- recurrence identity (docs/recurrence.md) ---------------------------------------
+    #: An occurrence: the series it was materialized from (immutable). None for every other task.
+    series_id: uuid.UUID | None = None
+    #: An occurrence: its original local slot date in the series' time zone (immutable, whatever date it is
+    #: moved to). Together with series_id its identity: id == occurrence_task_id(series_id, occurrence_slot).
+    occurrence_slot: date_ | None = None
+    #: An occurrence's exception state (None: it follows its series definition).
+    occurrence_state: OccurrenceState | None = None
+    #: Provenance: the series definition's version this occurrence was materialized (or last refreshed) from.
+    series_version: int | None = Field(default=None, gt=0)
+    #: A series definition: the series segment it continues (a "this and every later occurrence" change).
+    series_predecessor_id: uuid.UUID | None = None
 
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
     version: int = Field(default=1, gt=0)
     deleted_at: datetime | None = None
+
+    @property
+    def is_series(self) -> bool:
+        """A series definition (a recurrence rule), never scheduled itself."""
+        return self.recurrence is not None
+
+    @property
+    def is_occurrence(self) -> bool:
+        return self.series_id is not None
+
+    @property
+    def needs_configuration(self) -> bool:
+        """A series definition without an explicit start date and time zone (e.g. stored before expansion)."""
+        return self.recurrence is not None and not self.recurrence.configured
 
     @field_validator("deadline")
     @classmethod
@@ -243,6 +315,37 @@ class Task(BaseModel):
     def _validate_no_self_dependency(self) -> "Task":
         if self.id in self.dependency_ids:
             raise ValueError("a task cannot depend on itself")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_recurrence_identity(self) -> "Task":
+        if (self.series_id is None) != (self.occurrence_slot is None):
+            raise ValueError("an occurrence names both its series_id and its occurrence_slot (or neither)")
+        if self.series_id is None:
+            if self.occurrence_state is not None or self.series_version is not None:
+                raise ValueError("occurrence_state and series_version belong to occurrences only")
+        else:
+            from app.planning.recurrence import occurrence_task_id
+
+            if self.recurrence is not None:
+                raise ValueError("an occurrence cannot carry a recurrence rule of its own")
+            if self.series_predecessor_id is not None:
+                raise ValueError("series_predecessor_id belongs to series definitions only")
+            if self.series_id == self.id:
+                raise ValueError("an occurrence cannot be its own series")
+            if self.id != occurrence_task_id(self.series_id, self.occurrence_slot):
+                raise ValueError("an occurrence's id is derived from its series and slot (occurrence_task_id)")
+            if self.occurrence_state in OCCURRENCE_TOMBSTONE_STATES and self.deleted_at is None:
+                raise ValueError(f"occurrence_state {self.occurrence_state.value!r} is recorded on a tombstone only")
+        if self.series_predecessor_id is not None and (self.recurrence is None or not self.recurrence.configured):
+            raise ValueError("series_predecessor_id belongs to configured series definitions only")
+        if self.series_predecessor_id is not None and self.series_predecessor_id == self.id:
+            raise ValueError("a series cannot continue itself")
+        if self.recurrence is not None and self.recurrence.configured:
+            # The rule dates every occurrence; single-date constraints do not apply to the definition itself.
+            if self.required_date is not None or self.preferred_dates or self.deadline is not None:
+                raise ValueError("a configured recurring series is dated by its rule: it has no required date, "
+                                 "preferred dates or deadline of its own")
         return self
 
 
@@ -339,6 +442,19 @@ class PlacementRemovalReason(str, Enum):
     RESET = "reset"
 
 
+class PlacementOrigin(str, Enum):
+    """
+    How a placement came to be (docs/execution-rescheduling.md, "Manual
+    placements"). None on a placement means unknown: it was saved before
+    origins were recorded, and is never guessed from its coordinates.
+    """
+
+    #: Produced by a schedule generation.
+    GENERATED = "generated"
+    #: Put there deliberately by the user (an explicit reschedule/move).
+    MANUAL = "manual"
+
+
 class ScheduledTask(BaseModel):
     """
     A canonical placement of one flexible Task into a specific interval.
@@ -375,6 +491,11 @@ class ScheduledTask(BaseModel):
     task_category: str | None = Field(default=None, min_length=1)
     removal_reason: PlacementRemovalReason | None = None
     superseded_by_id: uuid.UUID | None = None
+    #: How it came to be (None: unknown, saved before origins were recorded).
+    origin: PlacementOrigin | None = None
+    #: Manual intent: schedule generation keeps it exactly where it is until the intent is released
+    #: (PlanningService.release_manual_placement). Only a manual placement carries it.
+    preserved: bool = False
 
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
@@ -403,6 +524,8 @@ class ScheduledTask(BaseModel):
             raise ValueError("planned_end must be after planned_start")
         if self.superseded_by_id is not None and self.superseded_by_id == self.id:
             raise ValueError("a placement cannot supersede itself")
+        if self.preserved and self.origin != PlacementOrigin.MANUAL:
+            raise ValueError("only a manual placement can be preserved")
         return self
 
 

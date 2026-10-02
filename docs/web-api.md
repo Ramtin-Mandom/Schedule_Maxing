@@ -133,26 +133,41 @@ preview's fingerprint: if the inputs changed since, `409 inputs_changed`).
   `status: already_current` and **nothing is written** (no id, version,
   timestamp, provenance or change-feed entry changes). Its `unscheduled` is
   `null` (unknown), `unscheduled_count` comes from the saved record.
-- `mode: full` (explicit regeneration): each date is generated from scratch;
-  an unchanged placement keeps its id. Work whose execution has started or
-  finished is never moved or duplicated: it stays exactly where it is and the
-  rest is scheduled around it. Replaced placements of the same occurrence on
-  other dates are listed in `superseded_placement_ids`
-  (`history_protected_placement_ids` were kept because their execution
-  started or finished); replaced placements that execution history refers to
-  are listed in `removed_with_history_placement_ids` (the history is kept).
+- `mode: full` (explicit regeneration): each date is generated around the
+  work it keeps; an unchanged placement keeps its id. Work whose execution
+  has started or finished, and manual placements (a move's destination,
+  until released), are never moved or duplicated: they stay exactly where
+  they are and the rest is scheduled around them. Replaced placements that
+  execution history refers to are listed in
+  `removed_with_history_placement_ids` (the history is kept; a never-started
+  attempt is cancelled with `cancel_reason: "superseded"`).
+- **Scope (Milestone 6, API change).** Only the generated dates are written.
+  A task whose occurrence is already live on another date is not placed
+  again and is listed in `kept_elsewhere` (`task_id`, `placement_id`,
+  `date`). `superseded_placement_ids` and `history_protected_placement_ids`
+  remain in the response for compatibility and are always empty (before,
+  such placements were silently removed).
+- `notices`: kept history that no longer fits the current inputs (for
+  example a fixed block added over started work). Non-blocking: it stays as
+  recorded.
 - `mode: incremental`: every saved placement of the date is kept exactly (id,
   interval, version, execution links) and only new work -- tasks allocated to
   the date that are not scheduled anywhere yet -- is fitted around it. If a
   kept placement no longer fits (task deleted or moved, duration changed,
   window, fixed block, engine mode, deadline or dependency change), the
-  response is `409 regenerate_required` with `problems` (`placement_id`,
-  `task_id`, `date`, `reason`, `explanation`) and nothing is saved; the user
-  must choose an explicit `mode: full` regeneration.
+  response is `409 regenerate_required` with `problems` and nothing is
+  saved; the user must choose an explicit `mode: full` regeneration. The same
+  answer comes from either mode when a *manual* placement no longer fits.
+  Each problem: `placement_id`, `task_id`, `date`, `reason`, `explanation`,
+  `kept_as` (`manual` / `kept` / `history`), `blocking`, and `remedies`
+  (`edit_constraint`, `move`, `release_manual_intent`,
+  `choose_another_range`, `regenerate_full`). A conflict on any generated
+  date writes nothing for every date.
 - Concurrency: the engine runs outside any write transaction; the save then
   re-reads every input under the user's write lock and compares fingerprints
   and placement versions. Any change since (task, fixed block, preference,
-  external dependency, placement) is `409 inputs_changed` /
+  external dependency, placement, manual intent, execution state, or a
+  placement kept outside the generated dates) is `409 inputs_changed` /
   `409 version_conflict`, and the previous schedule stays untouched.
 - A required task that cannot be placed is `422 generation_failed` with
   `date` and `failures` (`task_id`, `reason_code`, `explanation`,
@@ -163,7 +178,11 @@ preview's fingerprint: if the inputs changed since, `409 inputs_changed`).
 
 `GenerateOut.days[]`: `date`, `engine_mode`, `placements`,
 `kept_placement_ids`, `unscheduled`, `unscheduled_count`, `total_score`;
-`unallocated` lists what allocation could not place in the range.
+`unallocated` lists what allocation could not place in the range. Every
+placement carries `origin` (`generated` / `manual` / `null` = unknown) and
+`preserved`; `SnapshotOut.preserved_placement_ids` lists the placements
+generation keeps as manual intent (including older ones proven by their
+move lineage).
 
 ### Reset: `POST /planning/reset/preview` then `POST /planning/reset`
 
@@ -198,7 +217,16 @@ plan, `removal_reason: "rescheduled"` and `superseded_by_id`. Refusals
 `reschedule_rejected`) change nothing and carry the stored placement in
 `current`. This endpoint is not replayed: after a lost response, a `409
 deleted` whose `current.superseded_by_id` is your `replacement_id` means the
-move happened.
+move happened. The replacement is `origin: "manual"`, `preserved: true`:
+every later generation keeps it until it is released.
+
+### `POST /planning/placements/{id}/release` `{base_version}` -> `PlacementOut`
+
+Releases a placement's manual intent (Milestone 6): it stays exactly where
+it is (`preserved: false`, version + 1), and the next generation may replace
+it like generated work. `409 version_conflict` / `deleted` when the
+placement changed since `base_version`; `422 validation_error` when it has
+no manual intent to release.
 
 ### `GET /planning/analytics/schedule-cohort?start_date&end_date&timezone&as_of` -> `ScheduleCohortReport`
 
@@ -303,5 +331,9 @@ no knowledge of its pending changes.
 
 - A request covers at most 62 days; a snapshot of a larger period is several
   requests.
-- No scheduling across a daylight-saving change; no recurrence expansion.
+- No scheduling across a daylight-saving change. Recurring occurrences are
+  materialized per requested range (`POST /planning/recurrence/expand`, and
+  first by every generation and allocation preview); scoped series changes use
+  `POST /planning/occurrences/{id}/edit|delete` and
+  `POST /planning/series/{id}/edit|delete` ([recurrence.md](recurrence.md)).
 - No password recovery, token refresh, billing or rate limiting.

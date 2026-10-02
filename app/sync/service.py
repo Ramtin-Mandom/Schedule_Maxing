@@ -3,8 +3,9 @@ app/sync/service.py
 
 SyncService: the application-level entry point for synchronization
 (docs/sync-protocol.md). Tk-free; app/ui/app_services.py creates one per
-desktop session. There is no sync screen yet -- this is the service API a
-later milestone's UI will call.
+desktop session; the Account page (app/ui/account_page.py, through
+AccountController) is its screen: status, sign-in, password recovery,
+association, Sync now and the conflict comparison.
 
 Inert by default: without a configured backend (no transport) or without a
 signed-in account, sync_now() returns status "inert" and touches nothing,
@@ -31,10 +32,13 @@ lock is held during a request -- so desktop edits proceed concurrently.
 
 Failures: TransportError (offline, timeout, 5xx) leaves every operation in
 the durable outbox (also across restarts) and schedules a retry with
-bounded exponential backoff; AuthenticationError drops the token;
-ProtocolError is reported and not retried automatically. Conflicts and
-rejections are per record (list_conflicts/resolve_conflict) and never stop
-unrelated records.
+bounded exponential backoff; AuthenticationError drops the token (the
+outbox and conflicts stay; signing in again resumes them under the same
+account only); a push the server refuses as a whole (ProtocolError) is
+narrowed to the refused units, which become push_rejected conflicts (never
+retried automatically, never holding other records back); a refused pull is
+reported. Conflicts and rejections are per record
+(list_conflicts/resolve_conflict) and never stop unrelated records.
 
 Background: start() runs sync_now() every `interval` seconds (or after the
 backoff delay) on a daemon thread; wake() triggers a run early; stop()
@@ -53,6 +57,15 @@ last error. The public account operations (register, profile,
 update_profile, check_connectivity) go through the transport, and
 association can be previewed and confirmed exactly (association_preview /
 associate_local_data(confirmation=...)).
+
+Capability negotiation (docs/recurrence.md): each sync asks the server for
+its protocol features once per session (transport.capabilities, cached for
+the transport and token). Records carrying recurrence data -- configured
+series, occurrences, lineage, and the placements and executions of
+occurrences -- are pushed only to a server that lists
+"recurrence_occurrences"; for an older one they stay pending here (counted
+in SyncReport.held, with a message) instead of being sent to a server that
+would drop their fields.
 """
 
 from __future__ import annotations
@@ -65,7 +78,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from app.planning.scope import OwnerScope
-from app.sync.engine import AssociationPreview, SyncEngine
+from app.sync.engine import AssociationPreview, PushOutcome, SyncEngine
 from app.sync.store import BACKEND_URL_SETTING, Account, Conflict
 from app.sync.transport import AuthenticationError, ProtocolError, SyncTransport, TransportError
 
@@ -73,6 +86,24 @@ logger = logging.getLogger(__name__)
 
 MAX_PUSH_ROUNDS = 50
 MAX_PULL_PAGES = 1000
+
+#: The server feature that recurring-series records need (backend/sync.py SYNC_FEATURES).
+def _push_units(batch: list) -> list[list]:
+    """The batch split into what the server applies as one unit: a group's operations together, others alone."""
+    units: list[list] = []
+    for op in batch:
+        if op.group_id is not None and units and units[-1][0].group_id == op.group_id:
+            units[-1].append(op)
+        else:
+            units.append([op])
+    return units
+
+
+RECURRENCE_FEATURE = "recurrence_occurrences"
+#: Placement origin/manual intent and execution cancel reasons (docs/execution-rescheduling.md).
+MANUAL_PLACEMENTS_FEATURE = "manual_placements"
+#: Early Finish, Night Owl and Catch-Up as preference/schedule-record values (docs/scheduling-modes.md).
+SCHEDULING_MODES_FEATURE = "scheduling_modes"
 
 
 @dataclass(frozen=True)
@@ -83,6 +114,8 @@ class SyncReport:
     pulled: int = 0
     conflicts: int = 0
     message: str = ""
+    #: Records held back because the server does not support recurrence (they stay pending).
+    held: int = 0
 
 
 @dataclass(frozen=True)
@@ -146,6 +179,8 @@ class SyncService:
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._thread: threading.Thread | None = None
+        #: (transport, token, features) of the last capability answer.
+        self._capabilities: tuple[object, str, frozenset[str]] | None = None
 
     # ------------------------------------------------------------------
     # Accounts and credentials
@@ -276,6 +311,20 @@ class SyncService:
         transport = self._require_transport()
         return self._reaching(lambda: transport.register(email, password, username, display_name))
 
+    def request_password_recovery(self, identifier: str) -> dict:
+        """Ask the backend to send a recovery link (no session needed; the answer never says if the account exists)."""
+        transport = self._require_transport()
+        return self._reaching(lambda: transport.request_recovery(identifier))
+
+    def reset_password(self, token: str, new_password: str) -> dict:
+        """
+        Set a new password with a recovery token. Every session of the account
+        ends (this device's too, on its next request): sign in again with the
+        new password; pending local changes and conflicts stay and resume then.
+        """
+        transport = self._require_transport()
+        return self._reaching(lambda: transport.reset_password(token, new_password))
+
     def profile(self) -> dict:
         transport, token = self._require_session()
         return self._authorized(token, lambda: transport.profile(token))
@@ -377,13 +426,17 @@ class SyncService:
             pushed = pulled = conflicts = 0
             batch: list = []
             try:
+                features = self._features(token)
+                recurrence = RECURRENCE_FEATURE in features
+                manual = MANUAL_PLACEMENTS_FEATURE in features
+                modes = SCHEDULING_MODES_FEATURE in features
                 for _ in range(MAX_PUSH_ROUNDS):
-                    self._engine.prepare(account)
+                    self._engine.prepare(account, recurrence=recurrence, manual_placements=manual,
+                                         scheduling_modes=modes)
                     batch = self._engine.next_batch(account, self._push_batch_size)
                     if not batch:
                         break
-                    results = self._transport.push(token, [op.wire() for op in batch])  # no transaction open
-                    outcome = self._engine.acknowledge(account, batch, results)
+                    outcome = self._push(token, account, batch)  # no transaction open
                     pushed += outcome.applied
                     conflicts += outcome.conflicts
                 batch = []
@@ -414,7 +467,46 @@ class SyncService:
             self.consecutive_failures = 0
             self._reachable(True)
             self._engine.store.set_last_synced(key, self._clock().isoformat())
-            return self._finish(SyncReport("ok", pushed, pulled, conflicts))
+            held = self._engine.held
+            message = (f"{held} record(s) wait here: the server does not support them yet (recurring series or "
+                       "the newer scheduling modes; update the server).") if held else ""
+            return self._finish(SyncReport("ok", pushed, pulled, conflicts, message, held=held))
+
+    def _push(self, token: str, account, batch: list):
+        """
+        Send `batch` and record the answers. A request the server refuses as a
+        whole (ProtocolError: malformed or unsupported, never an
+        authentication failure) is narrowed unit by unit (a group is one
+        unit) -- the same op_ids, so anything already applied answers from
+        the server's record -- until the refused units are found; those
+        become actionable push_rejected conflicts (SyncEngine.refuse) instead
+        of being retried forever or holding everything behind them.
+        Connection and authentication failures propagate unchanged.
+        """
+        try:
+            results = self._transport.push(token, [op.wire() for op in batch])
+        except ProtocolError as error:
+            units = _push_units(batch)
+            if len(units) == 1:
+                return self._engine.refuse(account, batch, str(error))
+            total = PushOutcome(sent=len(batch))
+            for unit in units:
+                part = self._push(token, account, unit)
+                total.applied += part.applied
+                total.conflicts += part.conflicts
+            return total
+        return self._engine.acknowledge(account, batch, results)
+
+    def _features(self, token: str) -> frozenset[str]:
+        """The server's sync features, asked once per transport and token (no answer method: none)."""
+        transport = self._transport
+        cached = self._capabilities
+        if cached is not None and cached[0] is transport and cached[1] == token:
+            return cached[2]
+        ask = getattr(transport, "capabilities", None)
+        features = frozenset(ask(token).get("features", ())) if ask is not None else frozenset()
+        self._capabilities = (transport, token, features)
+        return features
 
     def reset_task_data(self) -> dict[str, int]:
         """

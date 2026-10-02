@@ -81,7 +81,7 @@ def test_occurrence_identity_is_the_task_or_one_date_of_a_recurring_template() -
 # -----------------------------------------------------------------------------
 
 
-def test_rescheduling_removes_only_superseded_placements_outside_the_range(
+def test_rescheduling_never_touches_placements_outside_the_range(
     planning_service: PlanningService, execution_service: ExecutionService
 ) -> None:
     moved = make_task("Moved")
@@ -107,10 +107,10 @@ def test_rescheduling_removes_only_superseded_placements_outside_the_range(
         expected_versions={}, provenance=provenance(MON, MON),
     )
 
-    assert set(result.superseded_ids) == {by_task[moved.id].id, by_task[merely_linked.id].id}
-    assert result.history_protected_ids == [by_task[started.id].id]
-    remaining = {p.task_id for p in planning_service.placements_for_date(WED)}
-    assert remaining == {untouched.id, template.id, started.id}  # other tasks, other occurrences, history
+    # Milestone 6: the save writes only its own dates. (A generation never even produces a second placement of an
+    # occurrence live elsewhere -- it reports it instead; see test_make_schedule_leaves_a_task_planned_elsewhere.)
+    assert result.superseded_ids == [] and result.history_protected_ids == []
+    assert planning_service.placements_for_date(WED) == wednesday  # untouched: same ids, versions, no tombstones
     assert planning_service.placements_for_date(THU) == thursday  # an unrelated date is untouched
     assert execution_service.get_execution(linked.id).scheduled_task_id == by_task[merely_linked.id].id  # history kept
     assert len(planning_service.placements_for_date(MON)) == 4
@@ -130,7 +130,7 @@ def test_rescheduling_requires_the_previous_placements_it_read(planning_service:
     assert planning_service.generation_record(MON) is None
 
 
-def test_make_schedule_moves_a_task_it_reschedules_elsewhere(tmp_path: Path) -> None:
+def test_make_schedule_leaves_a_task_planned_elsewhere(tmp_path: Path) -> None:
     connection = get_connection(tmp_path / "app.db")
     try:
         service = PlanningService(PlanningRepository(connection))
@@ -140,13 +140,15 @@ def test_make_schedule_moves_a_task_it_reschedules_elsewhere(tmp_path: Path) -> 
         first_day = week.allocation.assignments[floating.id]
         other_day = TUE if first_day != TUE else WED
 
+        before = service.placements_for_date(first_day)
+
         rerun = controller.schedule_range(other_day, other_day, scope=RangeScope.ELIGIBLE).value
 
-        assert [p.task_id for p in service.placements_for_date(other_day)] == [floating.id]
-        assert service.placements_for_date(first_day) == []  # no double booking
-        assert len(rerun.superseded_ids) == 1
-        state = controller.day_state(first_day).value
-        assert state.status == DayResultStatus.STALE  # its saved schedule changed underneath it
+        assert service.placements_for_date(other_day) == []  # no double booking ...
+        assert service.placements_for_date(first_day) == before  # ... and nothing outside the range is touched
+        assert rerun.superseded_ids == []
+        assert rerun.kept_elsewhere[floating.id].id == before[0].id  # reported, not silently moved
+        assert controller.day_state(first_day).value.status == DayResultStatus.GENERATED
     finally:
         connection.close()
 

@@ -57,6 +57,31 @@ Placements (Milestone 5, docs/execution-rescheduling.md):
       stored as a tombstone at once (Mutator.create_placement_history) --
       nothing live is created or changed.
 
+Recurring series (docs/recurrence.md):
+    - occurrences travel as tasks with series_id/occurrence_slot (their id is
+      derived from both). A create repeating an occurrence the server already
+      has with the same content is answered "applied" with the stored record
+      (two devices expanding the same slot converge); different content is a
+      conflict. A create carrying a tombstone occurrence_state (skipped,
+      deleted, superseded) stores a tombstone at once, so a slot suppressed
+      offline stays reserved;
+    - a task delete may carry {"occurrence_state"} (why the device removed
+      the occurrence; default deleted);
+    - a reschedule that moves an occurrence to another date re-dates the
+      occurrence task in the same unit; it is then one of the `related`
+      records.
+
+Capability negotiation: GET /sync/capabilities names the protocol version
+and features (SYNC_PROTOCOL_VERSION, SYNC_FEATURES). A client sends
+recurrence data -- series anchors, occurrence identity, exception states --
+only to a server that lists "recurrence_occurrences"; to an older server it
+holds those operations instead of letting their fields be dropped. An older
+client that omits the fields cannot erase them here (backend/resources.py
+keeps omitted fields on update). Likewise "manual_placements": placement
+origin and manual intent and execution cancel reasons
+(docs/execution-rescheduling.md) are sent only to a server that lists it;
+an older client's placement update without them keeps the stored values.
+
 Pull is GET /changes (backend/api.py): the per-user, gap-free, commit-ordered
 feed with an integer cursor.
 """
@@ -85,6 +110,10 @@ from backend.planning_repository import ServerPlanningRepository
 from backend.resources import FIXED_BLOCKS, GENERATIONS, PLACEMENTS, PREFERENCES, PROJECTS, TASKS, Strict
 
 MAX_PUSH_OPERATIONS = 200
+
+#: The synchronization protocol this server speaks, and its optional features (GET /sync/capabilities).
+SYNC_PROTOCOL_VERSION = 2
+SYNC_FEATURES = ("placement_reschedule", "recurrence_occurrences", "manual_placements", "scheduling_modes")
 
 SPECS = {spec.entity_type: spec for spec in (PROJECTS, TASKS, FIXED_BLOCKS, PLACEMENTS, PREFERENCES, GENERATIONS)}
 ENTITY_TYPES = (*SPECS, "execution")
@@ -174,8 +203,20 @@ class PlacementRemovalIn(Strict):
     superseded_by_id: uuid.UUID | None = None
 
 
+class TaskRemovalIn(Strict):
+    """The optional payload of a task delete: why the device removed an occurrence."""
+
+    occurrence_state: Literal["skipped", "deleted", "superseded"] | None = None
+
+
 class PushOut(BaseModel):
     results: list[OperationResult]
+
+
+class CapabilitiesOut(BaseModel):
+    protocol_version: int
+    features: list[str]
+    max_push_operations: int
 
 
 def _validated(schema: type[BaseModel], data: dict) -> BaseModel:
@@ -223,6 +264,9 @@ def _apply(mutator: Mutator, op: SyncOperationIn) -> tuple[dict, Related | None]
             reason = removal.removal_reason.value if removal.removal_reason is not None else None
             return mutator.delete(spec, op.entity_id, op.base_version, removal_reason=reason,
                                   superseded_by_id=removal.superseded_by_id), None
+        if spec is TASKS:
+            removal = _validated(TaskRemovalIn, payload)
+            return mutator.delete(spec, op.entity_id, op.base_version, occurrence_state=removal.occurrence_state), None
         return mutator.delete(spec, op.entity_id, op.base_version), None
     raise ApiError(422, "validation_error", f"{op.kind} does not apply to a {op.entity_type}.")
 
@@ -246,6 +290,9 @@ def _reschedule(
         return PLACEMENTS.serialize(session, mutator.user_id, session.get(models.Placement, (mutator.user_id, record_id)))
 
     related: Related = [{"entity_type": "placement", "record": placement(result.replacement.id)}]
+    if result.updated_task is not None:  # an occurrence moved to another date: re-dated in the same unit
+        task = session.get(models.Task, (mutator.user_id, result.updated_task.id))
+        related.append({"entity_type": "task", "record": TASKS.serialize(session, mutator.user_id, task)})
     if result.cancelled_execution_id is not None:
         execution = session.get(models.Execution, (mutator.user_id, uuid.UUID(result.cancelled_execution_id)))
         related.append({"entity_type": "execution",
@@ -315,6 +362,12 @@ def _push_unit(session: Session, user_id: uuid.UUID, clock, unit: list[SyncOpera
 
 
 sync = APIRouter(prefix="/sync", tags=["sync"])
+
+
+@sync.get("/capabilities", response_model=CapabilitiesOut, summary="The sync protocol version and features.")
+def capabilities(_user_id: uuid.UUID = Depends(current_user_id)) -> dict:
+    return {"protocol_version": SYNC_PROTOCOL_VERSION, "features": list(SYNC_FEATURES),
+            "max_push_operations": MAX_PUSH_OPERATIONS}
 
 
 @sync.post("/push", response_model=PushOut, summary="Apply a batch of client operations idempotently.")

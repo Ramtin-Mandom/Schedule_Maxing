@@ -84,6 +84,16 @@ class SyncTransport(Protocol):
     #: Remove all of the account's task data on the server ({removed, cursor}); see backend/task_data_reset.py.
     def reset_task_data(self, token: str) -> dict: ...
 
+    #: The server's sync protocol version and features ({protocol_version, features, ...}); an older server that
+    #: has no such endpoint answers as protocol 1 without features (see capabilities_via).
+    def capabilities(self, token: str) -> dict: ...
+
+    #: Password recovery (backend/recovery_api.py): no session needed. The request answer is the same whether or
+    #: not the account exists; the reset consumes a token from the delivered link.
+    def request_recovery(self, identifier: str) -> dict: ...
+
+    def reset_password(self, token: str, new_password: str) -> dict: ...
+
 
 def _classify(status: int, body: dict | None) -> Exception:
     code = ((body or {}).get("error") or {}).get("code", "")
@@ -123,8 +133,30 @@ def health_via(request) -> dict:
     return request("GET", "/health", None, None)
 
 
+def request_recovery_via(request, identifier: str) -> dict:
+    return request("POST", "/auth/recovery/request", None, {"identifier": identifier})
+
+
+def reset_password_via(request, token: str, new_password: str) -> dict:
+    return request("POST", "/auth/recovery/reset", None, {"token": token, "new_password": new_password})
+
+
 def reset_task_data_via(request, token: str) -> dict:
     return request("POST", "/me/task-data/reset", token, {"confirm": True})
+
+
+#: What a server that predates GET /sync/capabilities supports.
+LEGACY_CAPABILITIES = {"protocol_version": 1, "features": []}
+
+
+def capabilities_via(request, token: str) -> dict:
+    """GET /sync/capabilities; an older server without it (404) is protocol 1 with no optional features."""
+    try:
+        return request("GET", "/sync/capabilities", token, None)
+    except ProtocolError as error:
+        if error.status == 404:
+            return dict(LEGACY_CAPABILITIES)
+        raise
 
 
 def pull_via(request, token: str, after: int, limit: int) -> PullPage:
@@ -184,3 +216,12 @@ class HttpTransport:
 
     def reset_task_data(self, token: str) -> dict:
         return reset_task_data_via(self._request, token)
+
+    def capabilities(self, token: str) -> dict:
+        return capabilities_via(self._request, token)
+
+    def request_recovery(self, identifier: str) -> dict:
+        return request_recovery_via(self._request, identifier)
+
+    def reset_password(self, token: str, new_password: str) -> dict:
+        return reset_password_via(self._request, token, new_password)

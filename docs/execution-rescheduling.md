@@ -95,10 +95,13 @@ reported (`RescheduleRejectedError` / `409 reschedule_rejected`, `reason` =
 the first, `problems` = all):
 
 - `wrong_date`, `not_whole_minutes`, `unchanged` (it is already there);
-- `recurring_occurrence_date` -- a recurring template's placement is the
-  occurrence of its date (`app/planning/occurrence.py`); it can move only
-  within that date. `occurrence_taken` -- the template already has a
-  placement on that date. Recurrence is still not expanded;
+- `recurring_occurrence_date` -- a *legacy* placement of a series
+  definition (saved before recurrence was expanded) is the occurrence of its
+  date (`app/planning/occurrence.py`); it can move only within that date. An
+  occurrence of a series moves to any date and keeps its slot identity: the
+  move re-dates the occurrence in the same transaction
+  ([recurrence.md](recurrence.md)). `occurrence_taken` -- the occurrence (or
+  the legacy template on that date) already has another live placement;
 - `required_date`, `deadline_missed`, `task_out_of_range`;
 - `outside_day_window`, `unsupported_day_window`, `overlaps_fixed_block`,
   `overlaps_placement` (the date's other live placements);
@@ -119,20 +122,56 @@ change-capture mark).
    reader of the change order never sees both live.)
 2. The replacement is inserted: the same task and occurrence, the new
    interval, a new id (`replacement_id` or a fresh UUID -- never a reused
-   one, not even a tombstone's), `task_category` = the task's category now.
+   one, not even a tombstone's), `task_category` = the task's category now,
+   `origin = "manual"` and `preserved = true` (the user's manual intent, see
+   below).
 3. The old placement's `scheduled` execution, if any, is **cancelled** (the
-   lifecycle's `cancel`, `actual_final_end_at` = the time of the move), so it
-   is not actionable as current work. It keeps its snapshot and its link to
-   the old placement. That is the whole representation: an execution is
-   "closed by a reschedule" exactly when it is `cancelled` and its placement's
-   `removal_reason` is `rescheduled` (a move requires the execution to be
-   `scheduled`, so no user cancellation can be confused with it).
+   lifecycle's `cancel`, `actual_final_end_at` = the time of the move,
+   `cancel_reason = "rescheduled"`), so it is not actionable as current
+   work. It keeps its snapshot and its link to the old placement.
 4. Versions and change capture advance for exactly these records.
 
 The dates' saved schedules become stale (their placements changed); nothing
-is regenerated. A later **full** generation may replace a moved placement
-like any other (it is then superseded with reason `regenerated`); an
-incremental generation keeps it if it still fits.
+is regenerated. Every later generation -- full or incremental -- keeps the
+moved placement until the user releases it.
+
+### Manual placements (Milestone 6)
+
+Every placement records how it came to be and whether the user's intent
+holds it in place:
+
+| Field | Meaning |
+|---|---|
+| `origin` | `generated` (saved by a generation or a plain create) or `manual` (the destination of a move). `null` = unknown: saved before origins existed. A known origin never changes. |
+| `preserved` | `true` while the user's manual intent holds: every generation keeps the placement exactly where it is. Only a `manual` placement can be preserved (a database CHECK). |
+
+- **Set by a move only.** No update can grant intent; an update can only
+  release it (`true` -> `false`). An update that omits both fields (an
+  older client) keeps the stored values.
+- **Released explicitly**: `PlanningService.release_manual_placement(id,
+  expected_version=...)`, `POST /planning/placements/{id}/release`, or the
+  Day timeline's "Release manual placement". It is one version-checked
+  mutation (version + 1, `preserved = false`, origin `manual`) that moves
+  nothing; started or finished history stays protected as history. A
+  later full generation may then replace it like generated work (the
+  tombstone names its successor, so the chain of moves stays traceable).
+- **Older placements** (origin unknown) are *not* rewritten by any
+  migration. `PlanningService.preserved_placement_ids` treats one as
+  preserved exactly when its recorded lineage proves it is a move's
+  destination -- it superseded a tombstone with `removal_reason =
+  "rescheduled"`. Nothing is inferred from coordinates; any other unknown
+  placement is replaceable. Releasing such a placement records origin
+  `manual`, `preserved = false`.
+
+### Execution cancel reasons
+
+`executions.cancel_reason` says why a `cancelled` attempt was cancelled:
+`user` (the lifecycle's cancel action, the default), `rescheduled` (its
+placement was moved) or `superseded` (a generation replaced or dropped its
+placement before the work started -- a system cancellation, never a user
+skip). `null` for any other status, and for cancellations recorded before
+Milestone 6 (unknown, not guessed). Cancelled attempts are never reopened,
+so a reason never changes.
 
 ### Retries and races
 
@@ -183,17 +222,53 @@ them.
 - A **changed** placement is a new placement; the old one is a tombstone with
   its original planned values, `removal_reason = "regenerated"` and its
   successor.
-- **History protection** on every generation entry point: the web API
-  (`/planning/generate`), the desktop Day and Allocation pages
-  (`PlanningController.generate`), and -- since this milestone -- the Week/Month
-  "Make Schedule" (`schedule_range`) and the CLI (`generate_day`). A
-  placement whose execution has started or finished is kept exactly as it
-  is and reserved; its task is not placed again. With no such history the
-  result is exactly the unprotected full generation's (Greedy v1 is
-  unchanged). Outside the range, `reschedule_range` never supersedes such a
-  placement. Execution rows and sessions are never written by generation.
-  The unprotected `generate_from(..., protect_history=False)` remains for
-  direct callers; it too leaves execution rows untouched.
+- **What every generation keeps** (`workflow.plan_reservations`), on every
+  entry point -- the web API (`/planning/generate`), the desktop Day and
+  Allocation pages (`PlanningController.generate`), the Week/Month "Make
+  Schedule" (`schedule_range`) and the CLI (`generate_day`); there is no
+  public way to switch it off (`protect_history` was removed in Milestone 6):
+  - *history*: a placement whose execution started or finished stays
+    exactly as recorded. If it no longer fits (a fixed block added over it,
+    a window change) that is a non-blocking **notice**
+    (`GenerationOutcome.notices`, `GenerateOut.notices`); an estimate that
+    changed since is never judged against history. New work is placed
+    around the free part of its interval;
+  - *manual intent*: a preserved placement (above) stays until released;
+  - INCREMENTAL also keeps every other saved placement that still fits.
+  Kept work is reserved (in memory only) and its occurrence is not placed
+  again. With nothing to keep the result is exactly Greedy v1's.
+- **Conflicts** (`RegenerationRequiredError`, `409 regenerate_required`): a
+  kept manual or incremental placement that no longer fits, or a dependency
+  this run would now place after it, is a *blocking* problem; the whole
+  generation (every date) writes nothing. Each problem carries
+  `placement_id`, `task_id`, `date`, `reason`, `explanation`, `kept_as`
+  (`manual` / `kept` / `history` / `destination`), `blocking` and
+  `remedies` -- `edit_constraint`, `move`, `release_manual_intent`,
+  `choose_another_range`, `regenerate_full`.
+- A FULL generation replaces only eligible generated placements. A replaced
+  placement's never-started execution is cancelled with `cancel_reason =
+  "superseded"` in the same transaction; started or finished executions,
+  sessions, snapshots and points are never written by generation.
+- **Concurrency.** The engine runs outside any write transaction. The save
+  then re-reads every input (fingerprint: tasks, series, exceptions,
+  blocks, preferences, external dependencies) and recomputes the
+  reservation state -- the generated dates' placements, versions and
+  manual intent, execution states, and the occurrences kept outside the
+  dates; any difference is `StaleInputsError` (`409 inputs_changed`) and
+  nothing is written.
+
+### Scope (Milestone 6)
+
+A generation writes only the dates it generates. An occurrence the range
+plans that is already live on another date stays there and is **not**
+placed again; it is reported (`GenerationOutcome.kept_elsewhere`,
+`GenerateOut.kept_elsewhere`, `RangeScheduleResult.kept_elsewhere`; the
+desktop lists it with its date). Moving work across dates is the explicit
+reschedule. API change: `superseded_placement_ids` and
+`history_protected_placement_ids` of `GenerateOut` (and
+`RescheduleResult.superseded_ids` / `history_protected_ids`) are kept for
+compatibility and are always empty -- before Milestone 6 a generation
+silently removed such placements outside its dates.
 
 ## 6. Storage and migrations
 
@@ -235,6 +310,19 @@ upgrade itself marks nothing for synchronization.
 `reschedule` action; placement records gain fields they ignore; their
 placement deletes carry no reason, which the server records as unknown
 (`null`); they never receive `related` results.
+
+**Milestone 6: local schema v10, server revision 0010**
+(`backend/migrations/versions/0010_manual_placements.py`, additive):
+`scheduled_tasks`/`placements`/`placement_revisions` gain `origin` (nullable,
+CHECK generated/manual) and `preserved` (NOT NULL, default false, CHECK
+"only a manual placement is preserved"); `executions`/`execution_revisions`
+gain `cancel_reason` (nullable, CHECK "only on a cancelled execution",
+user/rescheduled/superseded). Existing rows keep `NULL`/`false`: nothing is
+back-filled or guessed, and the upgrade marks nothing for synchronization
+(a proven move is recognized from its lineage when read). Deploy order as
+above: migrate, then deploy the server, then update clients. A new client
+sends these fields only to a server that advertises `manual_placements`
+(below); CSV exports gain the optional `origin` and `preserved` columns.
 
 ## 7. Synchronization
 
@@ -289,6 +377,17 @@ placement deletes carry no reason, which the server records as unknown
   tombstones when they have the task. So the original plan and every move
   reach every device.
 
+### Manual placements in synchronization
+
+The server advertises `manual_placements` in `GET /sync/capabilities`. A
+client sends `origin`/`preserved` in placement payloads and `cancel_reason`
+in execution payloads and cancel actions only to such a server; otherwise
+it leaves them out (an older server refuses unknown fields), and a pulled
+placement record without them keeps the local origin and intent. A pushed
+reschedule makes the server record the destination as manual and preserved
+itself, so intent reaches other devices either way. An older client's
+placement update keeps the stored origin and intent (omitted = keep).
+
 ## 8. Rules of thumb for clients
 
 - Move with `reschedule`; never emulate it with a delete plus a create.
@@ -306,8 +405,8 @@ server alike (`PlanningService.list_placements(include_deleted=True)`,
 
 **Occurrence chains.** Group placements into chains by following
 `superseded_by_id` (a placement's predecessors: `placements_superseded_by`).
-A chain is one occurrence of its task (for a recurring template, of one
-date). Count a chain once; its **head** is the placement nothing supersedes.
+A chain is one occurrence of its task (for a series, one materialized
+occurrence; for a legacy template placement, one date). Count a chain once; its **head** is the placement nothing supersedes.
 Its **original plan** is the first placement of the chain (the tombstone's
 planned values and `task_category`); every tombstone keeps its own values, so
 each move's before/after is available.
@@ -355,8 +454,10 @@ rows, or a successor for a tombstone without `superseded_by_id`.
 
 ## 10. Remaining limitations
 
-- No UI for moving placements yet (web and desktop); the operation is
-  available through the Python services, the REST API and sync.
+- The desktop moves a placement through its execution actions
+  ("Reschedule...") and releases manual intent from the Day timeline
+  ("Release manual placement"); other clients use the REST API
+  (`/planning/placements/{id}/reschedule` and `/release`) and sync.
 - Regeneration does not cancel the `scheduled` execution of a placement it
   replaces (unchanged behavior); analytics classifies it by the tombstone's
   reason (section 9).

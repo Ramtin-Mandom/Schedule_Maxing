@@ -89,7 +89,7 @@ def test_the_app_opens_on_day_with_a_collapsed_keyboard_operable_sidebar(tmp_pat
         day = app.pages["day"]
         assert day.status_board.winfo_manager() == "grid"  # Uncompleted | Tasks | Completed replaces Execute
         app.show_page("settings")
-        assert app.pages["settings"].engine_select.values == ["Normal", "ADHD friendly"]
+        assert app.pages["settings"].engine_select.values == ["Normal", "ADHD friendly", "Early finish", "Night owl", "Catch-up"]
         assert "reward" not in app.pages  # unsupported legacy weights are not exposed in the native app
         assert "no backend configured" in app.shell.status_bar.label.cget("text")  # the account status, in words
         assert dialogs.errors == []
@@ -262,7 +262,9 @@ def test_dialogs_drawers_and_the_task_list_work_from_the_keyboard(tmp_path: Path
         timeline = day.schedule_canvas
         timeline.canvas.focus_force()
         key(timeline.canvas, "Home")
-        assert [entry.label for entry in timeline._menu_items(None)] == ["Edit...", "Remove..."]
+        entries = timeline._menu_items(None)
+        assert [entry.label for entry in entries] == ["Edit...", "Release manual placement", "Remove..."]
+        assert not entries[1].enabled  # a fixed block is not a manual placement
         key(timeline.canvas, "Return")
         assert day.form.editing and day.form.name_field.get() == "Read"
         day.cancel_edit()

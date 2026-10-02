@@ -69,23 +69,31 @@ from app.reward import RewardSettings, load_reward_settings
 
 class OptimizerMode(str, Enum):
     """
-    Which day-scheduling candidate strategy a day's preferences request.
+    The scheduling mode a day's preferences request (docs/scheduling-modes.md).
 
-    This milestone only defines and validates the mode as configuration --
-    it does not implement either mode's scheduling behavior (that is
-    Task 4). Nothing here or in app/optimizer.py currently reads this value
-    to change scheduling; do not describe a Task-3-era run as "precise" or
-    "ADHD-friendly" until Task 4 actually wires it in.
+    A mode is an *objective* over one shared search: every mode runs the
+    canonical greedy event-candidate engine (app/optimizer.py) under the same
+    hard constraints. The two original wire values keep their meaning --
+    saved "precise_greedy" is Normal and "adhd_friendly" is ADHD -- so old
+    selections and user/date override precedence are unchanged. Generation
+    mode (FULL/INCREMENTAL) is a separate concept. See
+    app/mode_objectives.py for the formulas.
     """
 
     PRECISE_GREEDY = "precise_greedy"
     ADHD_FRIENDLY = "adhd_friendly"
+    EARLY_FINISH = "early_finish"
+    NIGHT_OWL = "night_owl"
+    CATCH_UP = "catch_up"
 
 
 #: What each day engine does, in words any client can show (desktop controllers, the web APIs).
 ENGINE_DESCRIPTIONS: dict[OptimizerMode, str] = {
     OptimizerMode.PRECISE_GREEDY: "Places each task at the best-scoring minute; the protected greedy baseline.",
     OptimizerMode.ADHD_FRIENDLY: "Starts tasks over 30 minutes on quarter hours and rewards filling short gaps.",
+    OptimizerMode.EARLY_FINISH: "The same tasks, packed to finish as early as possible with few idle gaps.",
+    OptimizerMode.NIGHT_OWL: "The same tasks, packed late in the day with few idle gaps.",
+    OptimizerMode.CATCH_UP: "Puts categories you often skipped in the last 90 days first (needs 5+ outcomes).",
 }
 
 #: The engine a date uses when no stored layer chooses one (resolve_day_preferences' own default).
@@ -95,6 +103,9 @@ DEFAULT_OPTIMIZER_MODE = OptimizerMode.PRECISE_GREEDY
 ENGINE_LABELS: dict[OptimizerMode, str] = {
     OptimizerMode.PRECISE_GREEDY: "Normal",
     OptimizerMode.ADHD_FRIENDLY: "ADHD friendly",
+    OptimizerMode.EARLY_FINISH: "Early finish",
+    OptimizerMode.NIGHT_OWL: "Night owl",
+    OptimizerMode.CATCH_UP: "Catch-up",
 }
 
 

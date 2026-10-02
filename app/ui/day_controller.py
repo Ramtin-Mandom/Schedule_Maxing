@@ -83,6 +83,12 @@ ENGINE_EXPLANATIONS: dict[OptimizerMode, str] = {
     OptimizerMode.PRECISE_GREEDY: "Tasks may start at any minute.",
     OptimizerMode.ADHD_FRIENDLY: "Tasks longer than 30 minutes start on the quarter hour (:00, :15, :30, :45); "
                                  "shorter tasks still start at any minute. Durations never change.",
+    OptimizerMode.EARLY_FINISH: "Plans the same tasks as Normal, then packs them so the day finishes as early as "
+                                "possible with few idle gaps. Nothing is dropped or shortened.",
+    OptimizerMode.NIGHT_OWL: "Plans the same tasks as Normal, then packs them late in the day with few idle gaps. "
+                             "Nothing is dropped or shortened.",
+    OptimizerMode.CATCH_UP: "Gives priority to categories you skipped often in the last 90 days (at least 5 "
+                            "finished or skipped tasks). Without that history it plans exactly like Normal.",
 }
 
 _STALE_TEXT = {
@@ -92,6 +98,18 @@ _STALE_TEXT = {
     StaleReason.NO_PROVENANCE: "It was saved before schedules were tracked, so what it was made from is unknown.",
     StaleReason.SUPERSEDED_ALLOCATION: "A newer allocation replaced the one it was made from.",
 }
+
+
+def mode_summary(evaluation, window_start_minute: int) -> str:
+    """One line on what the day's mode achieved (docs/scheduling-modes.md), in words and local clock times."""
+    label = ENGINE_LABELS.get(OptimizerMode(evaluation.mode), evaluation.mode)
+    if evaluation.scheduled_count == 0:
+        return f"{label}: nothing was scheduled, so the mode had nothing to arrange."
+    parts = [f"{label}: first task at {format_clock(window_start_minute + evaluation.first_start_minute)}, "
+             f"last ends {format_clock(window_start_minute + evaluation.last_finish_minute)}, "
+             f"{evaluation.idle_minutes} idle minute(s) between tasks"]
+    parts.append(f"baseline reward {evaluation.baseline_reward:.1f} + mode bonus {evaluation.mode_bonus:.1f}")
+    return "; ".join(parts) + "."
 
 
 def engine_label(mode: OptimizerMode) -> str:
@@ -132,6 +150,8 @@ class EngineState:
 
 TimelineKind = Literal["fixed", "scheduled", "stale"]
 _KIND_WORDS = {"fixed": "Fixed block", "scheduled": "Scheduled", "stale": "Scheduled (out of date)"}
+#: What resolves a kept placement's problem, by why it is kept (workflow.PlacementProblem.kept_as).
+_REMEDY_HINTS = {"manual": " (you placed it: move it, change the conflicting setting, or release it)"}
 
 
 @dataclass(frozen=True)
@@ -149,6 +169,10 @@ class TimelineItem:
     ref: RowRef
     lane: int = 0
     placement_id: uuid.UUID | None = None
+    #: The placement's version (the precondition of its actions).
+    placement_version: int | None = None
+    #: The user's manual placement: Make Schedule keeps it where it is until it is released.
+    preserved: bool = False
 
     @property
     def duration_minutes(self) -> int:
@@ -156,8 +180,9 @@ class TimelineItem:
 
     @property
     def description(self) -> str:
+        manual = ", placed by you (Make Schedule keeps it here)" if self.preserved else ""
         return (f"{self.name}: {self.time_text} ({format_duration(max(1, self.duration_minutes))}), "
-                f"{_KIND_WORDS[self.kind].lower()}, category {self.category}")
+                f"{_KIND_WORDS[self.kind].lower()}, category {self.category}{manual}")
 
 
 @dataclass(frozen=True)
@@ -389,6 +414,7 @@ class DayScheduleController(SchedulePageController):
         if missing:
             tasks.update(self._unwrap(planning.get_tasks(missing)).tasks)
 
+        preserved = self._unwrap(planning.preserved_placement_ids(placements)) if placements else set()
         items: list[TimelineItem] = []
         for block in blocks:
             start = local_minutes(block.planned_start, day, block.timezone)
@@ -409,6 +435,7 @@ class DayScheduleController(SchedulePageController):
                 category=task.category if task else "other", start_minute=start, end_minute=end,
                 time_text=_interval_text(placement.planned_start, placement.planned_end, day, placement.timezone),
                 ref=RowRef("task", placement.task_id, task.version if task else None), placement_id=placement.id,
+                placement_version=placement.version, preserved=placement.id in preserved,
             ))
         items.sort(key=lambda item: (item.start_minute, item.end_minute, item.key))
         lanes = assign_lanes([(item.start_minute, item.end_minute) for item in items])
@@ -515,7 +542,7 @@ class DayScheduleController(SchedulePageController):
         context = self.allocation_context
         start, end, fingerprint = (context[:3] if context and context[3] == day else (day, day, None))
         result = self._planning.generate(start, end, generate_start=day, generate_end=day, mode=mode,
-                                         expected_fingerprint=fingerprint, protect_history=True, preserve_on_empty=True)
+                                         expected_fingerprint=fingerprint, preserve_on_empty=True)
         if not result.ok:
             return self._run_failure(day, result)
         outcome: GenerationOutcome = result.value
@@ -541,10 +568,44 @@ class DayScheduleController(SchedulePageController):
         if mode == GenerationMode.INCREMENTAL:
             message = f"Kept {kept} scheduled task(s) in place and added {placed} new one(s)."
         else:
-            message = f"Scheduled {placed} task(s)" + (f"; {kept} started task(s) kept in place" if kept else "") + "."
+            message = (f"Scheduled {placed} task(s)"
+                       + (f"; {kept} started, finished or manually placed task(s) kept in place" if kept else "") + ".")
         if reasons:
             message += f" {len(reasons)} task(s) could not be placed; see the reasons."
+        reasons = reasons + self._kept_notes(outcome, day)
+        evaluation = outcome.evaluations.get(day)
+        if evaluation is not None and evaluation.mode in ("early_finish", "night_owl", "catch_up"):
+            reasons.append(mode_summary(evaluation, self._anchor_timezone_day_start(day)))
         return ControllerResult.success(DayRun("generated", snapshot, message, reasons))
+
+    def _anchor_timezone_day_start(self, day: date_) -> int:
+        """The local minute the date's window starts at (evaluations count minutes from it)."""
+        try:
+            views = self._unwrap(self._planning.preference_views(day, day))
+        except _Failure:
+            return 0
+        return views.days[day].effective.day_window.start_minute
+
+    def _kept_notes(self, outcome: GenerationOutcome, day: date_) -> list[str]:
+        """Work this run left alone that the user should know about: history that no longer fits, work elsewhere."""
+        notices = outcome.notices.get(day, [])
+        elsewhere = outcome.kept_elsewhere
+        names = self._names([*(problem.task_id for problem in notices), *elsewhere])
+        notes = [f"{names.get(problem.task_id, 'A task')} — kept as recorded (its work started or finished), "
+                 f"although {problem.explanation}" for problem in notices]
+        notes += [f"{names.get(task_id, 'A task')} — already planned on {placement.planned_date:%A, %B} "
+                  f"{placement.planned_date.day}; left there (move it to plan it here)."
+                  for task_id, placement in sorted(elsewhere.items(), key=lambda item: item[1].planned_date)]
+        return notes
+
+    def release_manual_placement(self, item: TimelineItem) -> ControllerResult[DaySnapshot]:
+        """Release the manual intent of a timeline item's placement, then reload the date (nothing moves)."""
+        if item.placement_id is None or item.placement_version is None:
+            return ControllerResult.failure("Only a scheduled task can be released.")
+        result = self._planning.release_manual_placement(item.placement_id, expected_version=item.placement_version)
+        if not result.ok:
+            return self._fail_with_reload(result.error)
+        return self.load()
 
     def _snapshot_for(self, day: date_) -> DaySnapshot | None:
         """The page's snapshot if it still shows `day` (the date may have changed while a run was working)."""
@@ -573,11 +634,12 @@ class DayScheduleController(SchedulePageController):
         if isinstance(cause, RegenerationRequiredError):
             names = self._names([problem.task_id for problem in cause.problems])
             problems = [f"{names.get(problem.task_id, 'A removed task')} — {problem.explanation}"
-                        for problem in cause.problems]
+                        + _REMEDY_HINTS.get(problem.kept_as, "") for problem in cause.problems]
             return ControllerResult.success(DayRun(
                 "needs_regeneration", snapshot,
                 "Some saved work no longer fits the current tasks, fixed blocks or engine. Nothing was changed. "
-                "Regenerate to replace the work that has not started (started or finished work is kept).",
+                "Regenerate to replace the work that has not started (started or finished work is kept; a task you "
+                "placed yourself stays until you move it or release it).",
                 problems=problems))
         if isinstance(cause, MandatoryTaskSchedulingError):
             names = self._names([failure.task_id for failure in cause.failures])

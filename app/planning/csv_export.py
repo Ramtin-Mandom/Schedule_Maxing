@@ -52,6 +52,19 @@ order, so readers of version 1 keep working; version 2 appends seven.
     removal_reason  placement tombstone: why it was removed (app.planning.models.PlacementRemovalReason), or empty
     superseded_by_id  placement tombstone: the placement that replaced it, or empty
     points          task: its points (0..1000); optional on import (missing: the default, 1)
+    --- appended with recurrence expansion (still format version 2; optional on import, docs/recurrence.md) ---
+    series_id       occurrence task: its series' UUID, or empty
+    occurrence_slot occurrence task: its original local slot date (YYYY-MM-DD), or empty
+    occurrence_state  occurrence task: modified / skipped / deleted / superseded, or empty
+    series_version  occurrence task: the series version it was materialized from, or empty
+    series_predecessor_id  series task: the segment it continues, or empty
+    --- appended with manual placements (still format version 2; optional on import,
+        docs/execution-rescheduling.md "Manual placements") ---
+    origin          placement: generated / manual, or empty if unknown (an import then keeps the stored origin
+                    and manual intent of an existing placement)
+    preserved       placement: true when generation keeps it as the user's manual intent, else false (or empty)
+    (A series' start_date and timezone travel inside its `recurrence` JSON; a file without them -- an older
+    export -- imports its templates as needing configuration, exactly as they were.)
 
 Rows are ordered: projects and tasks by (created_at, id), then fixed
 blocks and placements by (date, start, id). Instants are exact to the
@@ -100,7 +113,9 @@ COLUMNS_V2 = COLUMNS_V1 + (
 
 #: Written by this version: version 2 plus the placement history columns appended in Milestone 5. They are
 #: optional on import (an earlier version 2 file has none: the history is then unknown, never guessed).
-COLUMNS = COLUMNS_V2 + ("task_category", "removal_reason", "superseded_by_id", "points")
+COLUMNS = COLUMNS_V2 + ("task_category", "removal_reason", "superseded_by_id", "points",
+                        "series_id", "occurrence_slot", "occurrence_state", "series_version", "series_predecessor_id",
+                        "origin", "preserved")
 
 
 @dataclass(frozen=True)
@@ -243,6 +258,11 @@ def _task_row(task: Task) -> dict[str, str]:
         "dependency_ids": json.dumps([str(dependency) for dependency in task.dependency_ids]),
         "project_id": str(task.project_id) if task.project_id else "",
         "recurrence": json.dumps(task.recurrence.model_dump(mode="json"), sort_keys=True) if task.recurrence else "",
+        "series_id": str(task.series_id) if task.series_id else "",
+        "occurrence_slot": task.occurrence_slot.isoformat() if task.occurrence_slot else "",
+        "occurrence_state": task.occurrence_state.value if task.occurrence_state else "",
+        "series_version": str(task.series_version) if task.series_version else "",
+        "series_predecessor_id": str(task.series_predecessor_id) if task.series_predecessor_id else "",
     }
 
 
@@ -273,4 +293,6 @@ def _placement_row(placement: ScheduledTask, task: Task | None) -> dict[str, str
         "task_category": placement.task_category or "",
         "removal_reason": placement.removal_reason.value if placement.removal_reason is not None else "",
         "superseded_by_id": str(placement.superseded_by_id) if placement.superseded_by_id else "",
+        "origin": placement.origin.value if placement.origin is not None else "",
+        "preserved": "true" if placement.preserved else "false",
     }

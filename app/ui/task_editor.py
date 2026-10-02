@@ -25,6 +25,12 @@ Controls:
   a chip's button (or Enter/Space on it) removes it; Backspace in the empty
   entry removes the last tag. Tags keep their order.
 - DependencyPicker: checkboxes labelled by task name and date, kept by id.
+- Repeats (docs/recurrence.md): does not repeat / daily / weekly (weekday
+  checkboxes) / monthly (day of month), every N, ending never, on a date or
+  after N occurrences. The page's date is the series' start. An edited
+  series or occurrence shows what it is (recurrence_note); for an occurrence
+  the repeat controls are off -- the page asks, when saving, whether the
+  change applies to that occurrence, it and every later one, or the series.
 
 A fixed block (label, category, start, end on the page's date) and a
 flexible task are different forms; editing never switches between them.
@@ -56,7 +62,7 @@ from app.ui.components import (
     make_keyboard_accessible,
 )
 from app.planning.models import DEFAULT_TASK_POINTS
-from app.ui.task_form_model import CATEGORIES, PRIORITIES, Choice, EditorOptions, TaskDraft
+from app.ui.task_form_model import CATEGORIES, PRIORITIES, WEEKDAY_NAMES, Choice, EditorOptions, TaskDraft
 from app.ui.time_fields import (
     FieldError,
     format_date,
@@ -66,6 +72,9 @@ from app.ui.time_fields import (
 )
 
 NO_PROJECT = "(no project)"
+#: "Repeats" labels and the draft values they stand for.
+REPEAT_LABELS = {"Does not repeat": "", "Daily": "daily", "Weekly": "weekly", "Monthly": "monthly"}
+END_LABELS = {"Never": "never", "On a date": "on", "After a number of times": "after"}
 
 
 def _shift_held(event) -> bool:
@@ -260,7 +269,9 @@ class TaskEditor(Card):
     """Add or edit one flexible task or fixed block; `on_submit(draft)` saves it, `on_cancel()` leaves edit mode."""
 
     FIELD_NAMES = ("name", "category", "duration", "priority", "points", "window_start", "window_end",
-                   "deadline_date", "deadline_time", "start", "end")
+                   "deadline_date", "deadline_time", "start", "end", "repeat_interval", "repeat_day_of_month",
+                   "repeat_until", "repeat_count")
+    REPEAT_FIELDS = ("repeat", "repeat_interval", "repeat_day_of_month", "repeat_until", "repeat_count", "repeat_end")
 
     def __init__(self, parent, *, on_submit: Callable[[TaskDraft], None], on_cancel: Callable[[], None],
                  productivity_controller=None) -> None:
@@ -350,7 +361,13 @@ class TaskEditor(Card):
         self.project_select.grid(row=4, column=0, columnspan=2, sticky="ew", pady=4)
         self.dependency_picker = DependencyPicker(self.more_frame)
         self.dependency_picker.grid(row=5, column=0, columnspan=2, sticky="ew", pady=4)
+        self._build_repeat(self.more_frame)
         self.more_open = False
+        #: What the record being edited is ("task", "series", "occurrence"); a new record is a "task".
+        self.recurrence_role = "task"
+        self.needs_configuration = False
+        self.recurrence_note = ctk.CTkLabel(self.task_frame, text="", text_color=theme.TEXT_MUTED, anchor="w",
+                                            justify="left", font=font(theme.SIZE_CAPTION), wraplength=280)
 
         # Fixed block fields
         self.block_frame = ctk.CTkFrame(body, fg_color="transparent")
@@ -395,6 +412,50 @@ class TaskEditor(Card):
         ctk.CTkFrame(self, fg_color="transparent", height=10).grid(row=6, column=0)
         self.set_kind("task")
 
+    def _build_repeat(self, parent) -> None:
+        """The "Repeats" controls (a series; docs/recurrence.md)."""
+        frame = self.repeat_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        frame.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(8, 4))
+        frame.columnconfigure((0, 1), weight=1, uniform="repeat")
+        self.repeat_select = LabeledSelect(frame, "Repeats", list(REPEAT_LABELS),
+                                           command=lambda _value: self._show_repeat())
+        self.repeat_select.grid(row=0, column=0, columnspan=2, sticky="ew", pady=4)
+        self.repeat_interval = LabeledEntry(frame, "Every", placeholder="1", hint="days / weeks / months",
+                                            wraplength=130)
+        self.repeat_interval.variable.set("1")
+        self.repeat_day_of_month = LabeledEntry(frame, "Day of month", placeholder="start date's",
+                                                hint="Months without it are skipped.", wraplength=130)
+        self.weekday_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        self.weekday_vars = [tk.BooleanVar(value=False) for _ in WEEKDAY_NAMES]
+        for index, (name, variable) in enumerate(zip(WEEKDAY_NAMES, self.weekday_vars)):
+            box = ctk.CTkCheckBox(self.weekday_frame, text=name, variable=variable, width=60,
+                                  text_color=theme.TEXT_PRIMARY, fg_color=theme.ACCENT)
+            box.grid(row=index // 4, column=index % 4, sticky="w", pady=2)
+            make_keyboard_accessible(box, activate=box.toggle, ring=False)
+        self.repeat_end = LabeledSelect(frame, "Ends", list(END_LABELS), command=lambda _value: self._show_repeat())
+        self.repeat_until = DateField(frame, "Last date", optional=True)
+        self.repeat_count = LabeledEntry(frame, "Occurrences", placeholder="e.g. 10", wraplength=130)
+
+    def _show_repeat(self) -> None:
+        """Show only the repeat controls that apply to the chosen frequency and end."""
+        repeat = REPEAT_LABELS.get(self.repeat_select.get(), "")
+        end = END_LABELS.get(self.repeat_end.get(), "never")
+        for widget in (self.repeat_interval, self.repeat_day_of_month, self.weekday_frame, self.repeat_end,
+                       self.repeat_until, self.repeat_count):
+            widget.grid_remove()
+        if not repeat:
+            return
+        self.repeat_interval.grid(row=1, column=0, sticky="new", padx=(0, 6), pady=4)
+        if repeat == "monthly":
+            self.repeat_day_of_month.grid(row=1, column=1, sticky="new", padx=(6, 0), pady=4)
+        if repeat == "weekly":
+            self.weekday_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=4)
+        self.repeat_end.grid(row=3, column=0, columnspan=2, sticky="ew", pady=4)
+        if end == "on":
+            self.repeat_until.grid(row=4, column=0, columnspan=2, sticky="new", pady=4)
+        elif end == "after":
+            self.repeat_count.grid(row=4, column=0, columnspan=2, sticky="new", pady=4)
+
     # ------------------------------------------------------------------ fields
 
     @property
@@ -402,7 +463,9 @@ class TaskEditor(Card):
         return {"name": self.name_field, "duration": self.duration_field, "points": self.points_field,
                 "window_start": self.window_start, "window_end": self.window_end,
                 "deadline_date": self.deadline_date, "deadline_time": self.deadline_time,
-                "start": self.start_field, "end": self.end_field}
+                "start": self.start_field, "end": self.end_field, "repeat_interval": self.repeat_interval,
+                "repeat_day_of_month": self.repeat_day_of_month, "repeat_until": self.repeat_until,
+                "repeat_count": self.repeat_count}
 
     def set_kind(self, kind: str) -> None:
         if self.editing and kind != self.kind:
@@ -483,6 +546,12 @@ class TaskEditor(Card):
             deadline_date=self.deadline_date.get(), deadline_time=self.deadline_time.get(),
             dependency_ids=self.dependency_picker.selected(), project_id=self._project_ids.get(project_label),
             tags=tuple(self.tag_input.tags), start=self.start_field.get(), end=self.end_field.get(),
+            repeat=REPEAT_LABELS.get(self.repeat_select.get(), ""), repeat_interval=self.repeat_interval.get(),
+            repeat_weekdays=tuple(day for day, variable in enumerate(self.weekday_vars) if variable.get()),
+            repeat_day_of_month=self.repeat_day_of_month.get(),
+            repeat_end=END_LABELS.get(self.repeat_end.get(), "never"), repeat_until=self.repeat_until.get(),
+            repeat_count=self.repeat_count.get(), recurrence_role=self.recurrence_role,
+            needs_configuration=self.needs_configuration,
         )
 
     def load(self, draft: TaskDraft, *, editing: bool) -> None:
@@ -512,8 +581,29 @@ class TaskEditor(Card):
         self.tag_input.set_tags(list(draft.tags))
         self.start_field.variable.set(draft.start)
         self.end_field.variable.set(draft.end)
+        self.recurrence_role = draft.recurrence_role if editing else "task"
+        self.needs_configuration = draft.needs_configuration and editing
+        self.repeat_select.variable.set(next(label for label, value in REPEAT_LABELS.items() if value == draft.repeat))
+        self.repeat_interval.variable.set(draft.repeat_interval or "1")
+        for day, variable in enumerate(self.weekday_vars):
+            variable.set(day in draft.repeat_weekdays)
+        self.repeat_day_of_month.variable.set(draft.repeat_day_of_month)
+        self.repeat_end.variable.set(next(label for label, value in END_LABELS.items() if value == draft.repeat_end))
+        self.repeat_until.variable.set(draft.repeat_until)
+        self.repeat_count.variable.set(draft.repeat_count)
+        self._show_repeat()
+        if self.recurrence_role == "occurrence":
+            self.repeat_frame.grid_remove()  # one occurrence does not repeat; its series does
+        else:
+            self.repeat_frame.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(8, 4))
+        note = draft.recurrence_note if editing else ""
+        self.recurrence_note.configure(text=note)
+        if note:
+            self.recurrence_note.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        else:
+            self.recurrence_note.grid_remove()
         self.clear_errors()
-        has_more = any((draft.window_start, draft.deadline_date, draft.project_id, draft.dependency_ids))
+        has_more = any((draft.window_start, draft.deadline_date, draft.project_id, draft.dependency_ids, draft.repeat))
         if has_more != self.more_open and draft.kind == "task":
             self.toggle_more()
         if editing:
@@ -540,7 +630,8 @@ class TaskEditor(Card):
         for name, text in (errors or {}).items():
             if name in self.fields:
                 self.fields[name].set_error(text)
-                if name in ("window_start", "window_end", "deadline_date", "deadline_time") and not self.more_open:
+                if (name in ("window_start", "window_end", "deadline_date", "deadline_time", *self.REPEAT_FIELDS)
+                        and not self.more_open):
                     self.toggle_more()
         self.notice.show("error", message)
 

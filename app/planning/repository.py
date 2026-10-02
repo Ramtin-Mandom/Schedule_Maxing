@@ -69,11 +69,11 @@ from typing import Any
 
 from app.execution.db import EXECUTION_LINK_VIOLATION, TransactionState, locked, transaction, transaction_state_for
 from app.execution.lifecycle import TRANSITIONS
-from app.execution.models import ExecutionStatus, TaskExecution, WorkSession
+from app.execution.models import CancelReason, ExecutionStatus, TaskExecution, WorkSession
 from app.planning.errors import DuplicateEntityError, InvalidEntityError, ScopeError
 from app.planning.external_dependencies import ExecutionFact
 from app.planning.history import ExecutionHistory, ScheduleHistory, collect_schedule_history
-from app.planning.models import FixedBlock, PlacementRemovalReason, Project, ScheduledTask, Task
+from app.planning.models import FixedBlock, OccurrenceState, PlacementRemovalReason, Project, ScheduledTask, Task
 from app.planning.preferences import (
     PreferenceRecord,
     PreferenceScope,
@@ -97,7 +97,8 @@ _TASK_COLUMNS = (
     "preferred_window_start_minute", "preferred_window_end_minute",
     "deadline", "deadline_utc",
     "recurrence_frequency", "recurrence_interval", "recurrence_day_of_month",
-    "recurrence_end_date", "recurrence_count",
+    "recurrence_end_date", "recurrence_count", "recurrence_start_date", "recurrence_timezone",
+    "series_id", "occurrence_slot", "occurrence_state", "series_version", "series_predecessor_id",
     "created_at", "updated_at", "version", "deleted_at",
 )
 
@@ -109,7 +110,7 @@ _FIXED_BLOCK_COLUMNS = (
 _PLACEMENT_COLUMNS = (
     "id", "task_id", "user_id", "planned_date", "timezone", "planned_start", "planned_end",
     "planned_start_utc", "planned_end_utc", "score", "optimization_metadata",
-    "task_category", "removal_reason", "superseded_by_id",
+    "task_category", "removal_reason", "superseded_by_id", "origin", "preserved",
     "created_at", "updated_at", "version", "deleted_at",
 )
 
@@ -407,10 +408,64 @@ class PlanningRepository:
             [(task_id, weekday) for weekday in weekdays or []],
         )
 
-    def soft_delete_task(self, task_id: uuid.UUID, *, deleted_at: datetime, expected_version: int | None) -> bool:
-        """Tombstone one live task. Its child rows are kept with the tombstone (history)."""
+    def soft_delete_task(
+        self, task_id: uuid.UUID, *, deleted_at: datetime, expected_version: int | None,
+        occurrence_state: OccurrenceState | None = None,
+    ) -> bool:
+        """
+        Tombstone one live task. Its child rows are kept with the tombstone
+        (history). An occurrence's tombstone may record why (occurrence_state),
+        as part of the same revision.
+        """
         with self.transaction():
-            return self._soft_delete("tasks", task_id, deleted_at, expected_version)
+            if not self._soft_delete("tasks", task_id, deleted_at, expected_version):
+                return False
+            if occurrence_state is not None:
+                self._connection.execute(
+                    "UPDATE tasks SET occurrence_state = ? WHERE id = ?", (occurrence_state.value, str(task_id))
+                )
+            return True
+
+    def occurrences_of_series(
+        self, series_ids: Iterable[uuid.UUID], *, include_deleted: bool = True
+    ) -> dict[uuid.UUID, list[Task]]:
+        """{series id: its materialized occurrences (tombstones included by default)}, each by slot."""
+        grouped: dict[uuid.UUID, list[Task]] = defaultdict(list)
+        with self._read():
+            for chunk in _chunks(_ids(series_ids)):
+                for task in self._load_tasks(f"series_id IN ({_placeholders(chunk)})", tuple(chunk), include_deleted):
+                    grouped[task.series_id].append(task)
+        return {series_id: sorted(tasks, key=lambda task: task.occurrence_slot) for series_id, tasks in grouped.items()}
+
+    def occurrences_in_slot_range(
+        self, series_ids: Iterable[uuid.UUID], first: date_, last: date_
+    ) -> dict[uuid.UUID, list[Task]]:
+        """Occurrences (tombstones included) of the series whose original slot lies in [first, last]."""
+        grouped: dict[uuid.UUID, list[Task]] = defaultdict(list)
+        with self._read():
+            for chunk in _chunks(_ids(series_ids)):
+                for task in self._load_tasks(
+                    f"series_id IN ({_placeholders(chunk)}) AND occurrence_slot BETWEEN ? AND ?",
+                    (*chunk, first.isoformat(), last.isoformat()), True,
+                ):
+                    grouped[task.series_id].append(task)
+        return dict(grouped)
+
+    def list_series(self, *, include_deleted: bool = False) -> list[Task]:
+        """Series definitions (tasks with a recurrence rule), ordered by (created_at, id)."""
+        with self._read():
+            return self._load_tasks("recurrence_frequency IS NOT NULL", (), include_deleted)
+
+    def series_successors(self, series_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, list[Task]]:
+        """{series id: the series segments that continue it (series_predecessor_id), tombstones included}."""
+        grouped: dict[uuid.UUID, list[Task]] = defaultdict(list)
+        with self._read():
+            for chunk in _chunks(_ids(series_ids)):
+                for task in self._load_tasks(
+                    f"series_predecessor_id IN ({_placeholders(chunk)})", tuple(chunk), True
+                ):
+                    grouped[task.series_predecessor_id].append(task)
+        return dict(grouped)
 
     def get_task(self, task_id: uuid.UUID, *, include_deleted: bool = False) -> Task | None:
         return self.get_tasks([task_id], include_deleted=include_deleted).get(task_id)
@@ -703,15 +758,19 @@ class PlanningRepository:
             found.extend(ExecutionHistory(execution, tuple(sessions[execution.id])) for execution in executions)
         return found
 
-    def cancel_unstarted_execution(self, placement_id: uuid.UUID, *, at: datetime) -> str | None:
+    def cancel_unstarted_execution(
+        self, placement_id: uuid.UUID, *, at: datetime, reason: CancelReason = CancelReason.RESCHEDULED
+    ) -> str | None:
         """
-        The execution disposition of an explicit reschedule: cancel the
+        The execution disposition of a placement that stops being the plan
+        before its work started -- an explicit reschedule (reason RESCHEDULED)
+        or a generation that replaced or dropped it (SUPERSEDED): cancel the
         placement's live execution if it is still `scheduled` (never started,
         so it has no work sessions) as one logical execution mutation -- the
         lifecycle's cancel transition (app/execution/lifecycle.py): status,
-        actual_final_end_at at `at`, version + 1, updated_at. Returns its id,
-        or None when the placement has no such execution. A started or
-        finished execution is never touched (the caller refuses to move it).
+        actual_final_end_at at `at`, the reason, version + 1, updated_at.
+        Returns its id, or None when the placement has no such execution. A
+        started or finished execution is never touched.
         """
         allowed, target = TRANSITIONS["cancel"]
         if ExecutionStatus.SCHEDULED not in allowed:  # pragma: no cover - the transition table is fixed
@@ -727,9 +786,9 @@ class PlanningRepository:
             if row is None:
                 return None
             self._connection.execute(
-                "UPDATE executions SET status = ?, actual_final_end_at = ?, updated_at = ?, version = version + 1 "
-                "WHERE id = ? AND status = ?",
-                (target.value, stamp, stamp, row["id"], ExecutionStatus.SCHEDULED.value),
+                "UPDATE executions SET status = ?, actual_final_end_at = ?, updated_at = ?, cancel_reason = ?, "
+                "version = version + 1 WHERE id = ? AND status = ?",
+                (target.value, stamp, stamp, CancelReason(reason).value, row["id"], ExecutionStatus.SCHEDULED.value),
             )
             return row["id"]
 
@@ -1037,6 +1096,13 @@ def _task_to_row(task: Task) -> tuple:
         recurrence.day_of_month if recurrence else None,
         _iso(recurrence.end_date) if recurrence else None,
         recurrence.count if recurrence else None,
+        _iso(recurrence.start_date) if recurrence else None,
+        recurrence.timezone if recurrence else None,
+        _str_or_none(task.series_id),
+        _iso(task.occurrence_slot),
+        task.occurrence_state.value if task.occurrence_state is not None else None,
+        task.series_version,
+        _str_or_none(task.series_predecessor_id),
         task.created_at.isoformat(),
         task.updated_at.isoformat(),
         task.version,
@@ -1060,6 +1126,8 @@ def _row_to_task(
             "day_of_month": row["recurrence_day_of_month"],
             "end_date": _date_or_none(row["recurrence_end_date"]),
             "count": row["recurrence_count"],
+            "start_date": _date_or_none(row["recurrence_start_date"]),
+            "timezone": row["recurrence_timezone"],
         }
 
     return Task.model_validate(
@@ -1080,6 +1148,11 @@ def _row_to_task(
             "dependency_ids": [uuid.UUID(value) for value in dependency_ids],
             "deadline": _datetime_or_none(row["deadline"]),
             "recurrence": recurrence,
+            "series_id": _uuid_or_none(row["series_id"]),
+            "occurrence_slot": _date_or_none(row["occurrence_slot"]),
+            "occurrence_state": row["occurrence_state"],
+            "series_version": row["series_version"],
+            "series_predecessor_id": _uuid_or_none(row["series_predecessor_id"]),
             "created_at": datetime.fromisoformat(row["created_at"]),
             "updated_at": datetime.fromisoformat(row["updated_at"]),
             "version": row["version"],
@@ -1132,6 +1205,8 @@ def _placement_to_row(placement: ScheduledTask) -> tuple:
         placement.task_category,
         placement.removal_reason.value if placement.removal_reason is not None else None,
         _str_or_none(placement.superseded_by_id),
+        placement.origin.value if placement.origin is not None else None,
+        int(placement.preserved),
         placement.created_at.isoformat(), placement.updated_at.isoformat(), placement.version,
         _iso(placement.deleted_at),
     )
@@ -1152,6 +1227,8 @@ def _row_to_placement(row: sqlite3.Row) -> ScheduledTask:
             "task_category": row["task_category"],
             "removal_reason": row["removal_reason"],
             "superseded_by_id": _uuid_or_none(row["superseded_by_id"]),
+            "origin": row["origin"],
+            "preserved": bool(row["preserved"]),
             "created_at": datetime.fromisoformat(row["created_at"]),
             "updated_at": datetime.fromisoformat(row["updated_at"]),
             "version": row["version"],

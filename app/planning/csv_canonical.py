@@ -148,6 +148,16 @@ def _validation_message(error: ValidationError) -> str:
     return f"{location}: {first.get('msg', error)}" if location else str(first.get("msg", error))
 
 
+def _flag(row: dict[str, str], column: str) -> bool:
+    """An optional true/false column (empty or missing: false)."""
+    value = _text(row, column).lower()
+    if value in ("", "false", "0"):
+        return False
+    if value in ("true", "1"):
+        return True
+    raise _RowError(f"{column} must be true or false, got {value!r}")
+
+
 def _text(row: dict[str, str], column: str) -> str:
     return row.get(column, "").strip()
 
@@ -288,6 +298,12 @@ def _parse_task(row: dict[str, str]) -> Task:
         dependency_ids=[uuid.UUID(str(value)) for value in _json(row, "dependency_ids", list, empty=[])],
         deadline=_instant(row, "deadline", required=False),
         recurrence=RecurrenceSpec.model_validate(recurrence) if recurrence is not None else None,
+        # Recurrence identity (optional columns: an older file has none -- ordinary tasks and unconfigured series).
+        series_id=_uuid(row, "series_id", required=False),
+        occurrence_slot=_date(row, "occurrence_slot", required=False),
+        occurrence_state=_text(row, "occurrence_state") or None,
+        **({"series_version": _int(row, "series_version")} if _text(row, "series_version") else {}),
+        series_predecessor_id=_uuid(row, "series_predecessor_id", required=False),
         **_audit(row),
     )
     planned = task_planned_date(task)
@@ -328,7 +344,8 @@ def _parse_placement(row: dict[str, str]) -> ScheduledTask:
         planned_start=start, planned_end=end, score=score,
         optimization_metadata=_json(row, "optimization_metadata", dict, empty={}),
         task_category=_text(row, "task_category") or None, removal_reason=_text(row, "removal_reason") or None,
-        superseded_by_id=_uuid(row, "superseded_by_id", required=False), **_audit(row),
+        superseded_by_id=_uuid(row, "superseded_by_id", required=False),
+        origin=_text(row, "origin") or None, preserved=_flag(row, "preserved"), **_audit(row),
     )
     _check_interval(row, start, end, day, tz_name)
     return placement

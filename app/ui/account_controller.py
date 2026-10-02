@@ -83,6 +83,35 @@ CONFLICT_KINDS = {
 RESOLUTION_LABELS = {"keep_local": "Keep this device's version", "accept_remote": "Use the server's version"}
 #: Fields that identify or describe a record rather than its content.
 _META_FIELDS = ("id", "user_id", "version", "created_at", "updated_at", "deleted_at")
+#: Readable names of fields whose wire names say little to a person.
+FIELD_LABELS = {
+    "series_id": "recurring series", "occurrence_slot": "original date", "occurrence_state": "exception",
+    "series_version": "series version", "series_predecessor_id": "continues series",
+    "origin": "how it was placed", "preserved": "kept by Make Schedule (placed by you)",
+    "removal_reason": "why removed", "superseded_by_id": "replaced by", "cancel_reason": "why cancelled",
+    "sessions": "work sessions", "scheduled_task_id": "scheduled placement",
+}
+_EXCEPTIONS = {"modified": "changed on its own", "skipped": "skipped", "deleted": "deleted",
+               "superseded": "replaced by a series change"}
+_CANCEL_REASONS = {"user": "cancelled by you", "rescheduled": "its task was moved",
+                   "superseded": "a new schedule replaced it before it started"}
+
+
+RECOVERY_NEEDS_BACKEND = ("Password recovery is done by the backend you sign in to, and no backend is configured. "
+                          "Enter its address first (a device that only works offline has no account password).")
+RECOVERY_SENT = "If an account matches, a recovery link has been sent to its email address."
+
+
+def recovery_code(text: str) -> str:
+    """The recovery token in `text`: the code itself, or the #token= part of a pasted link."""
+    text = (text or "").strip()
+    if "#" in text:
+        fragment = text.split("#", 1)[1]
+        for part in fragment.split("&"):
+            if part.startswith("token="):
+                return part[len("token="):].strip()
+        return ""
+    return text
 
 
 class InvalidInput(ValueError):
@@ -228,6 +257,9 @@ class ConflictView:
     server_message: str | None = None
     status: str = "open"
     resolution: dict | None = field(default=None, compare=False)
+    #: What the record is and what each choice means for it, in words (series slot, exception, manual
+    #: placement, work sessions only one side has, the records affected).
+    context: list[str] = field(default_factory=list)
 
 
 def _display(value) -> str:
@@ -249,7 +281,7 @@ def conflict_view(conflict: Conflict, choices: dict[str, str | None]) -> Conflic
     if name:
         title += f' "{name}"'
     content = sorted(key for key in set(local) | set(remote) if key not in _META_FIELDS)
-    differences = [FieldDifference(key.replace("_", " "), _display(local.get(key)), _display(remote.get(key)))
+    differences = [FieldDifference(_label(key), _field_display(key, local.get(key)), _field_display(key, remote.get(key)))
                    for key in content if local.get(key) != remote.get(key)]
     differences += [FieldDifference(key.replace("_", " "), _display(local.get(key)), _display(remote.get(key)))
                     for key in ("version", "updated_at", "deleted_at") if local.get(key) != remote.get(key)]
@@ -261,8 +293,75 @@ def conflict_view(conflict: Conflict, choices: dict[str, str | None]) -> Conflic
         local_updated_at=local.get("updated_at"), remote_updated_at=remote.get("updated_at"),
         remote_deleted=bool(remote.get("deleted_at")), differences=differences, choices=dict(choices),
         server_message=error.get("message") if isinstance(error, dict) else None, status=conflict.status,
-        resolution=conflict.resolution,
+        resolution=conflict.resolution, context=conflict_context(conflict),
     )
+
+
+def _label(key: str) -> str:
+    return FIELD_LABELS.get(key, key.replace("_", " "))
+
+
+def _field_display(key: str, value) -> str:
+    if key == "occurrence_state" and value is not None:
+        return _EXCEPTIONS.get(value, str(value))
+    if key == "cancel_reason" and value is not None:
+        return _CANCEL_REASONS.get(value, str(value))
+    if key == "sessions" and isinstance(value, list):
+        return f"{len(value)} session(s)"
+    return _display(value)
+
+
+def conflict_context(conflict: Conflict) -> list[str]:
+    """
+    Readable lines about a conflict beyond its field differences: which
+    occurrence of which series it is, exception states, manual placement
+    intent, work sessions only one side has, and what a choice does to the
+    records related to it. Built from the stored conflict only.
+    """
+    local, remote = conflict.local_record or {}, conflict.remote_record or {}
+    error = conflict.error if isinstance(conflict.error, dict) else {}
+    lines: list[str] = []
+    if conflict.entity_type == "task":
+        record = local or remote
+        if record.get("series_id"):
+            lines.append(f"An occurrence of a recurring series, originally on {record.get('occurrence_slot')}.")
+            here, there = local.get("occurrence_state"), remote.get("occurrence_state")
+            if local and remote and here != there and error.get("code") != "series_changed":
+                lines.append(f"Exception here: {_EXCEPTIONS.get(here, 'none')}; on the server: "
+                             f"{_EXCEPTIONS.get(there, 'none')}.")
+        elif (record.get("recurrence") or {}).get("frequency"):
+            rule = record["recurrence"]
+            lines.append(f"A recurring series: every {rule.get('interval', 1)} {rule['frequency']} from "
+                         f"{rule.get('start_date') or '(not set up)'}. Its occurrences follow the version you keep.")
+        if error.get("code") == "series_changed":
+            lines.append("The series changed on the server after this occurrence was created here; the server "
+                         "column shows the series as it is now. Using the server's version makes this occurrence "
+                         "follow it (or retires it here if its date is no longer part of the series).")
+    elif conflict.entity_type == "placement":
+        for side, record in (("Here", local), ("On the server", remote)):
+            if record:
+                manual = ("placed by you; Make Schedule keeps it" if record.get("preserved")
+                          else "placed by you, released" if record.get("origin") == "manual"
+                          else "placed by Make Schedule" if record.get("origin") == "generated" else "origin unknown")
+                lines.append(f"{side}: {record.get('planned_date')} {_display(record.get('planned_start'))} – "
+                             f"{_display(record.get('planned_end'))} ({manual}).")
+    elif conflict.entity_type == "execution":
+        here, there = local.get("sessions") or [], remote.get("sessions") or []
+        if local or remote:
+            lines.append(f"Work sessions: {len(here)} on this device, {len(there)} on the server.")
+        known = {str(work.get("started_at")) for work in there if isinstance(work, dict)}
+        only_here = [work for work in here if isinstance(work, dict) and str(work.get("started_at")) not in known]
+        if only_here and remote:
+            lines.append(f"{len(only_here)} session(s) exist only on this device. Using the server's version keeps "
+                         "them as a separate history record; nothing recorded here is deleted.")
+        if remote.get("cancel_reason"):
+            lines.append(f"On the server it was cancelled: {_CANCEL_REASONS.get(remote['cancel_reason'])}.")
+    if error.get("code") == "request_refused":
+        lines.append("The server could not accept this change as it was sent (it may need an app update). It is not "
+                     "retried automatically: keep this device's version to try again, or use the server's version.")
+    if conflict.status != "open" and (conflict.resolution or {}).get("kept_history_execution_id"):
+        lines.append("Work recorded only on this device was kept as a separate history record.")
+    return lines
 
 
 class AccountController:
@@ -378,6 +477,55 @@ class AccountController:
                                 associated_before=account.associated_at is not None)
 
         return self._call(op, signing_in=True)
+
+    def request_recovery(self, identifier: str) -> ControllerResult[str]:
+        """
+        Ask the backend for a password recovery link for `identifier` (an
+        email or username). The answer is the backend's generic message --
+        it never says whether the account exists.
+        """
+
+        def op() -> str:
+            if not identifier.strip():
+                raise InvalidInput({"email": "Enter your email address or username."})
+            if not self._sync.configured:
+                raise RuntimeError(RECOVERY_NEEDS_BACKEND)
+            return self._sync.request_password_recovery(identifier.strip()).get("message") or RECOVERY_SENT
+
+        result = self._call(op)
+        if not result.ok and isinstance(result.cause, ProtocolError) and result.cause.code == "recovery_unavailable":
+            return ControllerResult.failure("This backend cannot send recovery links (it is not set up for email). "
+                                            "Ask its operator.", result.cause)
+        return result
+
+    def reset_password(self, code: str, new_password: str, confirm: str) -> ControllerResult[str]:
+        """
+        Set a new password with the code from a recovery link (the whole link
+        may be pasted: the code is taken from its #token= part). Does not
+        sign in: sign in again with the new password afterwards.
+        """
+
+        def op() -> str:
+            token = recovery_code(code)
+            errors: dict[str, str] = {}
+            if not token:
+                errors["code"] = "Paste the code or the whole link from the recovery email."
+            if not MIN_PASSWORD_LENGTH <= len(new_password) <= MAX_PASSWORD_LENGTH:
+                errors["password"] = (f"Use {MIN_PASSWORD_LENGTH} to {MAX_PASSWORD_LENGTH} characters.")
+            elif new_password != confirm:
+                errors["confirm"] = "The two passwords are not the same."
+            if errors:
+                raise InvalidInput(errors)
+            if not self._sync.configured:
+                raise RuntimeError(RECOVERY_NEEDS_BACKEND)
+            self._sync.reset_password(token, new_password)
+            return "Your password was changed. Sign in with the new password; your unsynced work is still here."
+
+        result = self._call(op)
+        if not result.ok and isinstance(result.cause, ProtocolError) and result.cause.code == "invalid_recovery_token":
+            return ControllerResult.failure("This recovery code is invalid, already used or expired. "
+                                            "Request a new link.", result.cause)
+        return result
 
     def sign_out(self) -> ControllerResult[ConnectionView]:
         """Forget the session on this device (the backend has no revocation; the token expires there)."""

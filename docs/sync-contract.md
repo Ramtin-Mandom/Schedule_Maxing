@@ -255,8 +255,12 @@ preferences never invalidates stored blocks; generation reports such a date.
 `app/planning/occurrence.py` defines what a placement is *for*:
 
 - A non-recurring task has one occurrence: `(task_id, None)`.
-- A recurring template has one occurrence per date: `(task_id, date)`.
-  Recurrence is model-only, and there is no expansion engine.
+- A materialized occurrence of a recurring series is its original slot:
+  `(series_id, occurrence_slot)` -- wherever it is moved
+  ([recurrence.md](recurrence.md)).
+- A legacy placement of a series definition (saved before expansion) is the
+  occurrence of its date: `(task_id, date)`, the same key as that slot's
+  occurrence, so the occurrence supersedes it instead of duplicating it.
 
 Make Schedule (`PlanningService.reschedule_range`) does the following in
 one transaction:
@@ -264,9 +268,8 @@ one transaction:
 - It replaces the range's placements.
 - It tombstones active placements **outside** the range, but only those
   that a new placement **supersedes** (the same occurrence). It never
-  touches placements of tasks the run did not place, other dates of a
-  recurring template, or placements whose execution has started or
-  finished.
+  touches placements of tasks the run did not place, other occurrences of
+  a series, or placements whose execution has started or finished.
 - It saves the provenance.
 
 Milestone 5 ([execution-rescheduling.md](execution-rescheduling.md)) adds the
@@ -326,7 +329,6 @@ association and conflict resolution to the web UI (`app/web`,
 Still not implemented:
 
 - a sync or conflict-resolution screen in the desktop app;
-- recurrence expansion;
 - scheduling across a DST change (a date whose day window spans one is
   still refused by the day engine; fixed blocks on it are checked by their
   endpoints only);

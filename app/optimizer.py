@@ -46,6 +46,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from collections.abc import Mapping
 from typing import Any, Callable
 
 from app.constraints import validate_fixed_blocks
@@ -596,7 +597,8 @@ def _get(obj: Any, key: str, default: Any = None) -> Any:
 # canonical (real dates, aware instants, stable UUID identity).
 #
 # Mode-specific candidate generation (see _candidate_starts):
-#   precise_greedy  -- one-minute resolution, no snapping.
+#   precise_greedy, early_finish, night_owl, catch_up
+#                   -- one-minute resolution, no snapping.
 #   adhd_friendly   -- tasks > ADHD_SHORT_TASK_THRESHOLD_MINUTES start only on
 #                       local wall-clock quarter-hour boundaries; tasks at or
 #                       under that threshold may start on any valid minute,
@@ -804,7 +806,7 @@ def _candidate_starts(
     if latest_start < first_start:
         return []
 
-    if mode == OptimizerMode.PRECISE_GREEDY or duration <= ADHD_SHORT_TASK_THRESHOLD_MINUTES:
+    if mode != OptimizerMode.ADHD_FRIENDLY or duration <= ADHD_SHORT_TASK_THRESHOLD_MINUTES:
         return list(range(first_start, latest_start + 1))
 
     start = _next_quarter_hour_offset(first_start, day_window_start_minute)
@@ -1392,10 +1394,15 @@ def _run_greedy_tier(
     day_preferences: DayPreferences,
     lookup,
     deadline_offsets: dict[uuid.UUID, int],
+    task_bonuses: Mapping[uuid.UUID, float] | None = None,
 ) -> tuple[dict[uuid.UUID, tuple[int, int, float]], list[uuid.UUID]]:
     """
     Repeatedly place the best-scoring currently-feasible task from
-    `task_ids` (mirrors Greedy Optimizer v1's own repeated-best-pick loop),
+    `task_ids` (mirrors Greedy Optimizer v1's own repeated-best-pick loop).
+    `task_bonuses` (Catch-Up) is added to a task's candidate score only when
+    choosing which task to place next -- a task-wide constant cannot change
+    where a task goes -- and the stored score stays the insertion score.
+    Without bonuses the selection is exactly the baseline's,
     mutating `placed`/`placed_by_task_id` in place so later tiers and
     dependency lookups see every placement made here. Returns
     (task_id -> (start, end, score) for every placed task, and the task_ids
@@ -1428,10 +1435,11 @@ def _run_greedy_tier(
             if candidate is None:
                 continue
 
-            if candidate[2] > best_score:
+            selection = candidate[2] + (task_bonuses.get(task_id, 0.0) if task_bonuses else 0.0)
+            if selection > best_score:
                 best_task_id = task_id
                 best_candidate = candidate
-                best_score = candidate[2]
+                best_score = selection
 
         if best_task_id is None or best_candidate is None:
             break
@@ -1481,9 +1489,17 @@ def generate_day_schedule(
     *,
     previous_result: CanonicalDayScheduleOutput | None = None,
     external_dependency_ends: dict[uuid.UUID, datetime] | None = None,
+    task_bonuses: Mapping[uuid.UUID, float] | None = None,
 ) -> CanonicalDayScheduleOutput:
     """
     Generate one day's canonical schedule.
+
+    The day's mode (preferences.optimizer_mode, app/mode_objectives.py):
+    Normal and ADHD run exactly the baseline search; Catch-Up adds
+    `task_bonuses` to the greedy task choice; Early Finish and Night Owl
+    repack the baseline's selected work afterwards (same tasks, same hard
+    constraints) and store each placement's final baseline reward as its
+    score.
 
     Order: validate/place fixed blocks, detect dependency cycles once,
     schedule every required task plus its full prerequisite closure
@@ -1619,9 +1635,10 @@ def generate_day_schedule(
 
     lookup = _make_dependency_lookup(registry, placed_by_task_id, external_dependency_end_offsets)
 
+    bonuses = task_bonuses if mode == OptimizerMode.CATCH_UP else None
     essential_results, essential_remaining = _run_greedy_tier(
         essential_ordered, registry, placed, placed_by_task_id, day_total_minutes,
-        mode, day_window_start_minute, settings, preferences, lookup, deadline_offsets,
+        mode, day_window_start_minute, settings, preferences, lookup, deadline_offsets, bonuses,
     )
 
     if essential_remaining:
@@ -1635,7 +1652,7 @@ def generate_day_schedule(
 
     optional_results, optional_remaining = _run_greedy_tier(
         optional_ids, registry, placed, placed_by_task_id, day_total_minutes,
-        mode, day_window_start_minute, settings, preferences, lookup, deadline_offsets,
+        mode, day_window_start_minute, settings, preferences, lookup, deadline_offsets, bonuses,
     )
 
     unscheduled_entries = []
@@ -1649,6 +1666,11 @@ def generate_day_schedule(
             previous_placement_ids[(placement.task_id, placement.planned_start, placement.planned_end)] = placement.id
 
     all_results = {**essential_results, **optional_results}
+    if mode in (OptimizerMode.EARLY_FINISH, OptimizerMode.NIGHT_OWL) and all_results:
+        all_results = _refine_time_objective(
+            mode, all_results, registry, movable_ids, placed, day_total_minutes, settings, preferences,
+            external_dependency_end_offsets, deadline_offsets,
+        )
     placements: list[CanonicalScheduledTask] = []
     for task_id, (start, end, score) in all_results.items():
         planned_start = _from_offset(start, day_start_utc)
@@ -1678,6 +1700,180 @@ def generate_day_schedule(
         placements=placements,
         unscheduled=unscheduled_entries,
         total_score=compute_total_score(placements),
+    )
+
+
+# -----------------------------------------------------------------------------
+# Final evaluation and the time objectives (app/mode_objectives.py)
+# -----------------------------------------------------------------------------
+
+
+def _scoring_tasks(registry: Mapping[uuid.UUID, CanonicalTask], preferences: DayPreferences) -> dict[uuid.UUID, dict]:
+    tasks = {}
+    for task_id, task in registry.items():
+        scoring_task = to_legacy_scoring_task(task, preferences)
+        scoring_task["preference_time"] = _normalize_preferred_window(
+            scoring_task["preference_time"], preferences.day_window.start_minute)
+        tasks[task_id] = scoring_task
+    return tasks
+
+
+def _final_scores(
+    starts: Mapping[uuid.UUID, int],
+    registry: Mapping[uuid.UUID, CanonicalTask],
+    scoring_tasks: Mapping[uuid.UUID, dict],
+    fixed: list[_Placed],
+    day_total_minutes: int,
+    settings: RewardSettings,
+    *,
+    adhd_mode: bool,
+) -> dict[uuid.UUID, float]:
+    """
+    The final reward of every flexible placement, against its actual
+    chronological neighbors (fixed blocks included) -- unlike the insertion
+    score, which saw only the neighbors placed before it.
+    """
+    items = list(fixed)
+    for task_id, start in starts.items():
+        task = registry[task_id]
+        items.append(_Placed(start=start, end=start + task.estimated_duration_minutes, name=task.name,
+                             category=task.category, tag=task.tags[0] if task.tags else "", task_id=task_id,
+                             score=0.0, fixed=False))
+    items.sort(key=lambda item: (item.start, item.end))
+    scores: dict[uuid.UUID, float] = {}
+    for index, item in enumerate(items):
+        if item.fixed:
+            continue
+        scores[item.task_id] = calculate_task_score(
+            scoring_tasks[item.task_id], item.start,
+            previous_task=items[index - 1] if index > 0 else None,
+            next_task=items[index + 1] if index + 1 < len(items) else None,
+            settings=settings, adhd_mode=adhd_mode, day_start=0, day_end=day_total_minutes,
+        )
+    return scores
+
+
+def _refine_time_objective(
+    mode: OptimizerMode,
+    results: dict[uuid.UUID, tuple[int, int, float]],
+    registry: Mapping[uuid.UUID, CanonicalTask],
+    input_order: list[uuid.UUID],
+    placed: list[_Placed],
+    day_total_minutes: int,
+    settings: RewardSettings,
+    preferences: DayPreferences,
+    external_ends: Mapping[uuid.UUID, int],
+    deadline_offsets: Mapping[uuid.UUID, int],
+) -> dict[uuid.UUID, tuple[int, int, float]]:
+    """Repack the baseline's selected work for Early Finish / Night Owl; scores become final baseline rewards."""
+    from app.mode_objectives import RepackTask, mode_weight, refine
+
+    fixed = [item for item in placed if item.fixed]
+    scoring_tasks = _scoring_tasks({task_id: registry[task_id] for task_id in results}, preferences)
+    position = {task_id: index for index, task_id in enumerate(input_order)}
+    ranked = sorted(results, key=lambda task_id: (-registry[task_id].priority, position.get(task_id, 0)))
+    tasks = []
+    for rank, task_id in enumerate(ranked):
+        task = registry[task_id]
+        dependencies = list(task.dependency_ids)
+        earliest = max([0, *(external_ends[dep] for dep in dependencies if dep in external_ends and dep not in results)])
+        latest = min(day_total_minutes, deadline_offsets.get(task_id, day_total_minutes))
+        tasks.append(RepackTask(
+            task_id=task_id, duration=task.estimated_duration_minutes, earliest=earliest, latest_finish=latest,
+            predecessors=tuple(dep for dep in dependencies if dep in results), rank=rank,
+        ))
+
+    def baseline_reward(starts: Mapping[uuid.UUID, int]) -> float:
+        return sum(_final_scores(starts, registry, scoring_tasks, fixed, day_total_minutes, settings,
+                                 adhd_mode=False).values())
+
+    refinement = refine(
+        mode.value, tasks, {task_id: start for task_id, (start, _, _) in results.items()},
+        [(item.start, item.end) for item in fixed], day_total_minutes, mode_weight(settings.weight_importance),
+        baseline_reward,
+    )
+    scores = _final_scores(refinement.starts, registry, scoring_tasks, fixed, day_total_minutes, settings,
+                           adhd_mode=False)
+    return {task_id: (start, start + registry[task_id].estimated_duration_minutes, scores[task_id])
+            for task_id, start in refinement.starts.items()}
+
+
+@dataclass(frozen=True)
+class DayEvaluation:
+    """A saved or generated day's objective, recomputed (nothing stored is changed)."""
+
+    mode: str
+    #: The sum of stored placement scores (insertion scores for Normal/ADHD/Catch-Up).
+    stored_score: float
+    #: B(S): every flexible placement's final baseline reward over its actual neighbors.
+    baseline_reward: float
+    #: ADHD's short-gap component (0 unless ADHD and configured).
+    adhd_component: float
+    #: Early Finish / Night Owl bonus, or the Catch-Up bonuses of the placed tasks.
+    mode_bonus: float
+    objective: float
+    first_start_minute: int | None
+    last_finish_minute: int | None
+    idle_minutes: int
+    fixed_minutes: int
+    scheduled_count: int
+    scheduled_minutes: int
+
+
+def evaluate_day_output(
+    output: CanonicalDayScheduleOutput,
+    preferences: DayPreferences,
+    *,
+    task_bonuses: Mapping[uuid.UUID, float] | None = None,
+) -> DayEvaluation:
+    """
+    The objective of a day's output under its mode, recomputed with the final
+    evaluator -- for reports and comparisons. Kept work given to the engine as
+    busy time is part of the output's fixed blocks; placements whose task is
+    missing from the output's registry are counted as busy time.
+    """
+    from app.mode_objectives import mode_weight, schedule_metrics, time_bonus
+
+    day_start_utc, day_end_utc = preferences.to_local_day_window().to_utc_instants()
+    total = _to_offset(day_end_utc, day_start_utc)
+    settings = day_preferences_to_reward_settings(preferences)
+    fixed = [
+        _Placed(start=_to_offset(block.planned_start, day_start_utc), end=_to_offset(block.planned_end, day_start_utc),
+                name=block.label, category=block.category, tag="", task_id=None, score=0.0, fixed=True)
+        for block in output.fixed_blocks
+    ]
+    registry: dict[uuid.UUID, CanonicalTask] = {}
+    starts: dict[uuid.UUID, int] = {}
+    for placement in output.placements:
+        task = output.tasks.get(placement.task_id)
+        start, end = _to_offset(placement.planned_start, day_start_utc), _to_offset(placement.planned_end, day_start_utc)
+        if task is None or placement.task_id in starts:
+            fixed.append(_Placed(start=start, end=end, name="", category="", tag="", task_id=None, score=0.0,
+                                 fixed=True))
+            continue
+        registry[placement.task_id] = task.model_copy(update={"estimated_duration_minutes": end - start})
+        starts[placement.task_id] = start
+    scoring_tasks = _scoring_tasks(registry, preferences)
+    base = _final_scores(starts, registry, scoring_tasks, fixed, total, settings, adhd_mode=False)
+    mode = preferences.optimizer_mode
+    adhd = 0.0
+    if mode == OptimizerMode.ADHD_FRIENDLY:
+        with_bonus = _final_scores(starts, registry, scoring_tasks, fixed, total, settings, adhd_mode=True)
+        adhd = sum(with_bonus.values()) - sum(base.values())
+    flexible = [(start, start + registry[task_id].estimated_duration_minutes) for task_id, start in starts.items()]
+    fixed_intervals = [(item.start, item.end) for item in fixed]
+    metrics = schedule_metrics(flexible, fixed_intervals, total)
+    if mode == OptimizerMode.CATCH_UP:
+        bonus = sum((task_bonuses or {}).get(task_id, 0.0) for task_id in starts)
+    else:
+        bonus = time_bonus(mode.value, metrics, mode_weight(settings.weight_importance))
+    baseline = sum(base.values())
+    return DayEvaluation(
+        mode=mode.value, stored_score=sum(p.score for p in output.placements), baseline_reward=baseline,
+        adhd_component=adhd, mode_bonus=bonus, objective=baseline + adhd + bonus,
+        first_start_minute=metrics.first_start, last_finish_minute=metrics.last_finish,
+        idle_minutes=metrics.idle_minutes, fixed_minutes=sum(end - start for start, end in fixed_intervals),
+        scheduled_count=len(flexible), scheduled_minutes=sum(end - start for start, end in flexible),
     )
 
 

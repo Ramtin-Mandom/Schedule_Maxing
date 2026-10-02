@@ -63,30 +63,37 @@ def column_names(connection, table: str) -> list[str]:
 V7_PLACEMENT_COLUMNS = ("task_category", "removal_reason", "superseded_by_id")
 #: Schema v8 (task points and the execution snapshot of them) -- absent from a Milestone 3 database.
 V8_COLUMNS = ("points",)
+#: Schema v9 (recurrence expansion, docs/recurrence.md) -- task columns a Milestone 3 database lacks.
+V9_TASK_COLUMNS = ("recurrence_start_date", "recurrence_timezone", "series_id", "occurrence_slot", "occurrence_state",
+                   "series_version", "series_predecessor_id")
+#: Schema v10 (manual placements, docs/execution-rescheduling.md) -- placement and execution columns.
+V10_PLACEMENT_COLUMNS = {"origin": None, "preserved": 0}
+V10_EXECUTION_COLUMNS = ("cancel_reason",)
 
 
 @contextmanager
 def pre_v8_writers():
-    """The planning and execution repositories as they were before schema v8: no points columns."""
+    """The planning and execution repositories as they were before schema v8: no points or recurrence columns."""
     from app.execution import repository as execution_repository
     from app.planning import repository as planning_repository
 
+    absent = (*V8_COLUMNS, *V9_TASK_COLUMNS, *V10_EXECUTION_COLUMNS)
     with pytest.MonkeyPatch.context() as patch:
         for module, columns_name, to_row_name, from_row_name in (
             (planning_repository, "_TASK_COLUMNS", "_task_to_row", None),
             (execution_repository, "_EXECUTION_COLUMNS", "_execution_to_row", "_row_to_execution"),
         ):
             columns, to_row = getattr(module, columns_name), getattr(module, to_row_name)
-            patch.setattr(module, columns_name, tuple(c for c in columns if c not in V8_COLUMNS))
+            patch.setattr(module, columns_name, tuple(c for c in columns if c not in absent))
             patch.setattr(module, to_row_name, lambda record, columns=columns, to_row=to_row: tuple(
-                value for column, value in zip(columns, to_row(record)) if column not in V8_COLUMNS))
+                value for column, value in zip(columns, to_row(record)) if column not in absent))
             if from_row_name is not None:
                 from_row = getattr(module, from_row_name)
                 patch.setattr(module, from_row_name, lambda row, from_row=from_row: from_row(
-                    {**dict(row), **{column: None for column in V8_COLUMNS}}))
+                    {**dict(row), **{column: None for column in (*V8_COLUMNS, *V10_EXECUTION_COLUMNS)}}))
         original_row_to_task = planning_repository._row_to_task
         patch.setattr(planning_repository, "_row_to_task", lambda row, *rest: original_row_to_task(
-            {**dict(row), "points": 1}, *rest))
+            {**dict(row), "points": 1, **{column: None for column in V9_TASK_COLUMNS}}, *rest))
         yield
 
 
@@ -97,12 +104,13 @@ def milestone3_placement_writer():
 
     columns = repository._PLACEMENT_COLUMNS
     to_row, from_row = repository._placement_to_row, repository._row_to_placement
+    absent = (*V7_PLACEMENT_COLUMNS, *V10_PLACEMENT_COLUMNS)
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(repository, "_PLACEMENT_COLUMNS", tuple(c for c in columns if c not in V7_PLACEMENT_COLUMNS))
+        patch.setattr(repository, "_PLACEMENT_COLUMNS", tuple(c for c in columns if c not in absent))
         patch.setattr(repository, "_placement_to_row", lambda placement: tuple(
-            value for column, value in zip(columns, to_row(placement)) if column not in V7_PLACEMENT_COLUMNS))
+            value for column, value in zip(columns, to_row(placement)) if column not in absent))
         patch.setattr(repository, "_row_to_placement", lambda row: from_row(
-            {**dict(row), **{column: None for column in V7_PLACEMENT_COLUMNS}}))
+            {**dict(row), **{column: None for column in V7_PLACEMENT_COLUMNS}, **V10_PLACEMENT_COLUMNS}))
         yield
 
 

@@ -28,11 +28,14 @@ from app.sync.transport import (
     PullPage,
     TransportError,
     _classify,
+    capabilities_via,
     health_via,
     login_via,
     profile_via,
     pull_via,
     register_via,
+    request_recovery_via,
+    reset_password_via,
     reset_task_data_via,
     update_profile_via,
 )
@@ -87,6 +90,15 @@ class InProcessTransport:
 
     def health(self) -> dict:
         return health_via(self._request)
+
+    def capabilities(self, token: str) -> dict:
+        return capabilities_via(self._request, token)
+
+    def request_recovery(self, identifier: str) -> dict:
+        return request_recovery_via(self._request, identifier)
+
+    def reset_password(self, token: str, new_password: str) -> dict:
+        return reset_password_via(self._request, token, new_password)
 
 
 class FlakyTransport(InProcessTransport):

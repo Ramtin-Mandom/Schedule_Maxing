@@ -16,7 +16,9 @@ tokens that desktop synchronization uses.
     - A cookie-authenticated request is accepted until the session expires
       (BROWSER_SESSION_TTL_MINUTES, fixed at login) or is revoked by
       POST /auth/browser/logout -- revocation is stored, so a copied cookie
-      stops working at once.
+      stops working at once -- or the account's password is reset: a reset
+      revokes every session and raises the account's credential epoch, and a
+      session started under an older epoch is refused (backend/recovery.py).
     - Every cookie-authenticated request with an unsafe method (anything but
       GET/HEAD/OPTIONS) must send X-CSRF-Token (an HMAC of the session token
       under the server secret, compared in constant time) and, when the
@@ -59,12 +61,12 @@ def csrf_token_for(token: str, settings: BackendSettings) -> str:
 
 
 def start_session(
-    session: Session, user_id: uuid.UUID, settings: BackendSettings, now: datetime
+    session: Session, user_id: uuid.UUID, settings: BackendSettings, now: datetime, credential_epoch: int = 0
 ) -> tuple[str, models.BrowserSession]:
     token = secrets.token_urlsafe(32)
     row = models.BrowserSession(
         id=uuid.uuid4(), user_id=user_id, token_hash=_digest(token), created_at=now,
-        expires_at=now + timedelta(minutes=settings.browser_session_ttl_minutes),
+        expires_at=now + timedelta(minutes=settings.browser_session_ttl_minutes), credential_epoch=credential_epoch,
     )
     session.add(row)
     session.commit()
@@ -87,12 +89,15 @@ def find_session(session: Session, token: str) -> models.BrowserSession | None:
 
 
 def live_session(session: Session, token: str | None, now: datetime) -> models.BrowserSession:
-    """The unrevoked, unexpired session of `token`, or a clear 401."""
+    """The unrevoked, unexpired session of `token` whose credential epoch is current, or a clear 401."""
     row = find_session(session, token) if token else None
     if row is None or row.revoked_at is not None:
         raise ApiError(401, "unauthenticated", "You are signed out. Sign in again.")
     if row.expires_at <= now:
         raise ApiError(401, "session_expired", "Your session has expired. Sign in again.")
+    epoch = session.scalar(select(models.User.credential_epoch).where(models.User.id == row.user_id))
+    if epoch is None or epoch != row.credential_epoch:
+        raise ApiError(401, "unauthenticated", "You are signed out. Sign in again.")
     return row
 
 

@@ -46,12 +46,20 @@ _TASK_FIELDS = (
     "project_id", "name", "category", "tags", "estimated_duration_minutes", "priority", "points", "required",
     "required_date",
     "preferred_dates", "preferred_time_window", "dependency_ids", "deadline", "recurrence",
+    "series_id", "occurrence_slot", "occurrence_state", "series_version", "series_predecessor_id",
 )
+#: Task fields a record from a server older than recurrence expansion (docs/recurrence.md) does not have.
+_TASK_FIELDS_SINCE_RECURRENCE = ("series_id", "occurrence_slot", "occurrence_state", "series_version",
+                                 "series_predecessor_id")
+#: An occurrence's bookkeeping: two devices' copies of one slot converge when everything else is equal.
+OCCURRENCE_BOOKKEEPING = ("occurrence_state", "series_version")
 _BLOCK_FIELDS = ("label", "category", "planned_date", "timezone", "planned_start", "planned_end")
 _PLACEMENT_FIELDS = ("task_id", "planned_date", "timezone", "planned_start", "planned_end", "score",
                      "optimization_metadata", "task_category")
 #: Removal provenance: written by the server with a tombstone (never part of a create/update payload).
 _PLACEMENT_REMOVAL_FIELDS = ("removal_reason", "superseded_by_id")
+#: Origin and manual intent (docs/execution-rescheduling.md): sent only to a server with "manual_placements".
+_PLACEMENT_INTENT_FIELDS = ("origin", "preserved")
 _GENERATION_FIELDS = (
     "planned_date", "timezone", "engine_mode", "range_start", "range_end", "range_scope", "allocation_id",
     "fingerprint", "fingerprint_version", "placements_digest", "placement_count", "unscheduled_count",
@@ -100,6 +108,9 @@ class LocalRecords:
     """Reads local records (tombstones included) in wire form, and writes pulled ones."""
 
     def __init__(self, planning: PlanningRepository, executions: ExecutionRepository) -> None:
+        #: Whether the server knows placement origin/manual intent and cancel reasons ("manual_placements"):
+        #: without it they are left out of payloads (an older server rejects unknown fields).
+        self.manual_placements = True
         self.planning = planning
         self.executions = executions
 
@@ -121,7 +132,8 @@ class LocalRecords:
             payload = model and _dump(model, _BLOCK_FIELDS)
         elif entity_type == "placement":
             model = self.planning.get_placements([record_id], include_deleted=True).get(record_id)
-            payload = model and _dump(model, _PLACEMENT_FIELDS)
+            fields = (*_PLACEMENT_FIELDS, *_PLACEMENT_INTENT_FIELDS) if self.manual_placements else _PLACEMENT_FIELDS
+            payload = model and _dump(model, fields)
         elif entity_type == "preference":
             model = self.planning.get_preference_by_id(record_id, include_deleted=True)
             payload = model and {
@@ -143,6 +155,8 @@ class LocalRecords:
             return None
         sessions = [(s.started_at, s.ended_at) for s in self.executions.list_sessions(local_id)]
         payload = {name: value for name, value in execution.model_dump(mode="json").items() if name in _EXECUTION_FIELDS}
+        if self.manual_placements and execution.cancel_reason is not None:
+            payload["cancel_reason"] = execution.cancel_reason.value
         payload.update(
             task_id=str(execution.task_id) if execution.task_id else None,
             scheduled_task_id=str(execution.scheduled_task_id) if execution.scheduled_task_id else None,
@@ -164,6 +178,21 @@ class LocalRecords:
             "removal_reason": placement.removal_reason.value if placement.removal_reason is not None else None,
             "superseded_by_id": str(placement.superseded_by_id) if placement.superseded_by_id else None,
         }
+
+    def task_removal(self, record: LocalRecord) -> dict | None:
+        """An occurrence tombstone's removal state as a task delete payload (None for other tasks)."""
+        task = record.model
+        if not task.is_occurrence:
+            return None
+        state = task.occurrence_state.value if task.occurrence_state is not None else "deleted"
+        return {"occurrence_state": state if state != "modified" else "deleted"}
+
+    def reserved_slot_payload(self, record: LocalRecord) -> dict:
+        """
+        A locally tombstoned occurrence the server never had, as a create of a
+        tombstone: its slot stays reserved there too (docs/recurrence.md).
+        """
+        return {**record.payload, **(self.task_removal(record) or {})}
 
     def reschedule_payload(self, record: LocalRecord) -> dict | None:
         """
@@ -208,14 +237,22 @@ class LocalRecords:
         if entity_type == "project":
             model = Project.model_validate({**meta, "name": record["name"], "description": record["description"]})
         elif entity_type == "task":
-            model = Task.model_validate({**meta, **{name: record[name] for name in _TASK_FIELDS}})
+            model = Task.model_validate({**meta, **{
+                name: record.get(name) if name in _TASK_FIELDS_SINCE_RECURRENCE else record[name]
+                for name in _TASK_FIELDS}})
         elif entity_type == "fixed_block":
             model = FixedBlock.model_validate({**meta, **{name: record[name] for name in _BLOCK_FIELDS}})
         elif entity_type == "placement":
             # .get: a record acknowledged before the server had these fields (an older shadow) has none of them.
-            model = ScheduledTask.model_validate({
-                **meta, **{name: record.get(name) for name in (*_PLACEMENT_FIELDS, *_PLACEMENT_REMOVAL_FIELDS)}
-            })
+            fields = {name: record.get(name) for name in (*_PLACEMENT_FIELDS, *_PLACEMENT_REMOVAL_FIELDS)}
+            if "preserved" in record:
+                fields.update(origin=record.get("origin"), preserved=bool(record["preserved"]))
+            else:  # a server without manual placements: the local origin and manual intent stay
+                stored = self.planning.get_placements([uuid.UUID(str(meta["id"]))], include_deleted=True).get(
+                    uuid.UUID(str(meta["id"])))
+                if stored is not None:
+                    fields.update(origin=stored.origin, preserved=stored.preserved)
+            model = ScheduledTask.model_validate({**meta, **fields})
         elif entity_type == "preference":
             model = PreferenceRecord.model_validate({
                 **meta, "scope": PreferenceScope(record["scope"]), "date": record["date"],
@@ -229,6 +266,7 @@ class LocalRecords:
         local_id = self.local_id_for("execution", record)
         execution = TaskExecution.model_validate({
             **{name: record[name] for name in _EXECUTION_FIELDS},
+            "cancel_reason": record.get("cancel_reason"),
             "id": local_id, "user_id": owner, "task_id": record["task_id"],
             "scheduled_task_id": record["scheduled_task_id"], "status": record["status"],
             "created_at": _local_text(record["created_at"]), "updated_at": _local_text(record["updated_at"]),
@@ -317,7 +355,10 @@ def execution_changes(shadow: dict, local: LocalRecord) -> list[tuple[str, str |
 
     if execution.status in TERMINAL_STATUSES and status != execution.status:
         at = final.isoformat() if final is not None else None
-        operations.append(("action", _VERBS[execution.status], {"at": at} if at else {}))
+        payload = {"at": at} if at else {}
+        if execution.status == ExecutionStatus.CANCELLED and local.payload.get("cancel_reason"):
+            payload["cancel_reason"] = local.payload["cancel_reason"]  # a system cancellation stays one
+        operations.append(("action", _VERBS[execution.status], payload))
     elif execution.status != status and execution.status not in TERMINAL_STATUSES:
         raise DivergedHistory(f"cannot move from {status.value} to {execution.status.value} with the recorded sessions")
 

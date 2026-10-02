@@ -46,7 +46,8 @@ def test_the_persisted_day_flow(tmp_path: Path, dialogs) -> None:
         day = app.pages["day"]
         assert app.shell.current == "day" and day.page_controller.anchor_date == WEDNESDAY
         assert day.freshness_badge.cget("text") == "Not scheduled yet"
-        assert day.engine_select.get() == "Normal" and day.engine_select.values == ["Normal", "ADHD friendly"]
+        assert day.engine_select.get() == "Normal"
+        assert day.engine_select.values == ["Normal", "ADHD friendly", "Early finish", "Night owl", "Catch-up"]
         assert rows_of(app, "preference_overrides") == []  # nothing is written at startup
 
         # A fixed block shows at once, in its own category's color.

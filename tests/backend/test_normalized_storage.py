@@ -111,7 +111,8 @@ def test_task_lists_keep_their_exact_order_and_repeats(client, alice) -> None:
     assert task["dependency_ids"] == [other["id"], dependency["id"]]
     assert task["deadline"] == "2026-03-05T17:00:00+05:30"
     assert task["recurrence"] == {"frequency": "weekly", "interval": 3, "weekdays": [0, 4], "day_of_month": None,
-                                  "end_date": None, "count": 2}  # the canonical model's set of weekdays
+                                  "end_date": None, "count": 2, "start_date": None,
+                                  "timezone": None}  # the canonical model's set of weekdays; not configured
     assert client.get(f"/tasks/{task['id']}", headers=alice).json() == task
 
     changed = client.put(f"/tasks/{task['id']}", headers=alice, json=editable(

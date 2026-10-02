@@ -269,9 +269,12 @@ get_placements(day) -> list[ScheduledTask]
 # generation (the shared workflow; Prompt 4)
 preview_allocation(start, end, *, scope=PLANNED) -> workflow.AllocationPreview   # .allocation, .fingerprint, .freshness
 generate(start, end, *, generate_start=None, generate_end=None, scope=PLANNED,
-         mode=GenerationMode.FULL, protect_history=True, expected_fingerprint=None,
+         mode=GenerationMode.FULL, expected_fingerprint=None,
          preserve_on_empty=False) -> workflow.GenerationOutcome     # "nothing_placed": empty run, nothing written
     # outcome.status "generated" | "already_current"; .outputs[day].unscheduled; .kept_ids; .allocation.unallocated
+    # .notices (kept history that no longer fits); .kept_elsewhere (work left on other dates; never superseded)
+    # history and manual placements are always kept (Milestone 6: no protect_history switch)
+preserved_placement_ids(placements) -> set[UUID]; release_manual_placement(id, *, expected_version) -> ScheduledTask
     # failures: cause StaleInputsError | RegenerationRequiredError(.problems) | MandatoryTaskSchedulingError(.failures)
 day_freshness(dates) -> dict[date, workflow.DayFreshness]   # CURRENT/STALE(+StaleReason)/NONE, record, placements
 day_state(day) / day_states(dates) -> SelectedDayState      # legacy view of the same freshness
@@ -319,7 +322,7 @@ Project CRUD, version checks and reference-safe deletion use the existing servic
 `preview_allocation` and `inputs_fingerprint` support date-only previews; selected-day
 generation retains the preview range and checks its fingerprint. Calendar/project
 filters affect presentation only. See [desktop-projects-allocation.md](desktop-projects-allocation.md).
-There is no archive or recurrence expansion.
+There is no archive; recurring series are expanded per range ([recurrence.md](recurrence.md)).
 
 Settings (Prompt 7): `SettingsController.load/change/set_engine/reset` edits the
 versioned user preference layer through `PlanningController`. `SettingsPage` reuses

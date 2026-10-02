@@ -121,6 +121,7 @@ def generate_selected_day(
     *,
     previous_result: DayScheduleOutput | None = None,
     external_dependency_satisfaction: Mapping[uuid.UUID, tuple[date_, datetime]] | None = None,
+    task_bonuses: Mapping[uuid.UUID, float] | None = None,
 ) -> tuple[DayScheduleOutput, SelectedDayState]:
     """
     Generate the minute-level schedule for exactly `selected_date`, from
@@ -169,7 +170,8 @@ def generate_selected_day(
                     external_dependency_ends[dependency_id] = max(day_start_utc, ceil_to_minute(satisfied_at))
 
     result = generate_day_schedule(
-        day_schedule, preferences, previous_result=previous_result, external_dependency_ends=external_dependency_ends
+        day_schedule, preferences, previous_result=previous_result, external_dependency_ends=external_dependency_ends,
+        task_bonuses=task_bonuses,
     )
 
     state = SelectedDayState(

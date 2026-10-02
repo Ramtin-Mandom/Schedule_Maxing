@@ -202,6 +202,90 @@ Every error has the same shape:
 | `409 fixed_block_overlap` | The fixed block overlaps another live block of the caller; `conflicting` is that block (never `current`, which always means the record itself). |
 | `401 unauthenticated` | Missing or bad credentials. The response includes `WWW-Authenticate: Bearer`. |
 
+## Password recovery
+
+`POST /auth/recovery/request {identifier}` (email or username) always answers
+`202` with one generic message; the link is delivered in the background after
+the response, so neither the answer nor its timing depends on whether the
+account exists or whether delivery worked. `POST /auth/recovery/reset {token,
+new_password}` consumes the token: `200`, or `400 invalid_recovery_token` for
+an unknown, malformed, expired, used or replaced token alike. `GET
+/auth/recovery/reset` is the page the emailed link opens.
+
+- Tokens: 256 random bits; only a SHA-256 digest is stored
+  (`password_recovery_tokens`), bound to the user, expiring after
+  `RECOVERY_TOKEN_TTL_MINUTES` (30), single use. One outstanding token per
+  account: a new request revokes the earlier ones.
+- Reset, in one transaction: a conditional update consumes the token (of
+  concurrent resets with one token exactly one succeeds), the new password is
+  checked with the registration rule and stored as Argon2id, the account's
+  `credential_epoch` is raised, its other tokens and all its browser sessions
+  are revoked. No automatic sign-in follows.
+- Session invalidation: access tokens carry the epoch they were issued under
+  (claim `cep`) and browser sessions store it; both are checked against the
+  stored epoch on every request, and direct-mode workspaces re-check it on
+  every unit of work. A sign-in whose password check completed before a reset
+  issues a token with the old epoch, which is refused at once. Tokens issued
+  before revision 0011 have no `cep` and count as epoch 0: they keep working
+  until the account's first reset (then they stop, intentionally).
+- Links are built only from `RECOVERY_PUBLIC_URL` with the token in the URL
+  fragment (`...#token=...`): a fragment is never sent to a server, so it is in
+  no request line, access log or `Referer`. The page is self-contained
+  (`no-store`, `no-referrer`, a CSP allowing only its own script by hash,
+  frame denial) and never redirects. Access-log filters additionally redact
+  `token=`/`password=`/`secret=` values and bearer headers
+  (`backend/protection.py`).
+- Delivery: `backend/recovery_delivery.py` `SmtpDelivery` (STARTTLS or
+  implicit TLS, optional login, `DELIVERY_TIMEOUT_SECONDS`). A failure is
+  logged by error class only; the issued token simply goes unused, and the user
+  requests a new link. Without `RECOVERY_PUBLIC_URL`, `SMTP_HOST` and
+  `SMTP_SENDER`, requests answer `503 recovery_unavailable` for everyone. The
+  automated tests use an injected fake adapter only: real delivery is not
+  verified until an operator configures and tests it.
+- Desktop: the account page's "Forgot password?" sends the request and accepts
+  the pasted link or code with the new password (`AccountController.
+  request_recovery/reset_password`, run in the background). Pending local
+  changes and conflicts stay and synchronize after signing in again. Direct
+  mode can consume a token (`DirectBackend.reset_password`); links are issued
+  by the hosted server.
+
+## Protections
+
+Application guarantees (`backend/app.py`, `rate_limit.py`, `protection.py`):
+
+| Control | Behavior |
+| --- | --- |
+| Rate limits (`RATE_LIMIT_ENABLED`, default on via the environment) | Fixed windows counted in the database (`rate_limit_buckets`), so every worker and replica shares them: sign-in (bearer and browser) 30 per address per 5 min and 10 per identifier per 15 min; registration 10 per address per hour; recovery requests 10 per address and 3 per identifier per hour; resets 20 per address per hour. Over the limit: `429 rate_limited` with `Retry-After`. Subjects are hashed; identifier limits apply equally to unknown accounts. Expired windows are deleted as new ones start. If the limiter's database work fails, the request fails closed with `503 temporarily_unavailable`. |
+| Client address | The socket peer; `X-Forwarded-For` is believed only when the peer is in `TRUSTED_PROXIES` (the right-most untrusted entry). Run uvicorn with `--forwarded-allow-ips` set to the same proxies (or `--no-proxy-headers`), so the peer it reports is the real one. |
+| Request bodies | Over `MAX_REQUEST_BYTES` (8 MiB): `413 request_too_large`, from `Content-Length` at once or while a chunked body is read, before parsing. Existing per-feature limits stay (push 200 operations, 5 MiB CSV, 4 KiB placement metadata, page sizes, 62-day ranges); task lists are bounded (50 tags, 366 preferred dates, 200 dependencies); recurrence expansion is bounded (docs/recurrence.md). |
+| Generation work | At most 2000 tasks per generation; a hosted generation past `GENERATION_TIME_LIMIT_SECONDS` stops between dates or before its save with `503 generation_limit` and saves nothing (the check is cooperative: once the save transaction starts it completes). |
+| Hosts and CORS | `ALLOWED_HOSTS` installs Starlette's TrustedHostMiddleware (`400` for other hosts). `CORS_ORIGINS` installs CORSMiddleware with exact origins and credentials (never `*`). `ALLOWED_ORIGINS` remains the CSRF/origin list for cookie requests -- it does not enable CORS. |
+| Errors | Unexpected exceptions answer `500 internal_error` with no detail; validation errors never echo submitted values; settings errors name settings, never values. |
+| Database | PostgreSQL connect timeout, pool wait timeout and `statement_timeout` (`DB_*` settings). |
+
+Operator-supplied (not enforced by the application): TLS termination and
+HTTP-to-HTTPS redirects, proxy body-size and request-time limits, proxy access
+logs that do not record bodies, uvicorn's keep-alive and graceful-shutdown
+timeouts (a keep-alive timeout is not an execution deadline), and the secrets
+themselves. Example (placeholders only):
+
+```
+RECOVERY_PUBLIC_URL=https://app.example.com/auth/recovery/reset
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USERNAME=<smtp user>
+SMTP_PASSWORD=<smtp password>
+SMTP_SENDER=Schedule Maxing <no-reply@example.com>
+ALLOWED_HOSTS=api.example.com
+CORS_ORIGINS=https://app.example.com
+TRUSTED_PROXIES=10.0.0.0/8
+DB_STATEMENT_TIMEOUT_MS=30000
+GENERATION_TIME_LIMIT_SECONDS=20
+```
+
+Checked against the installed FastAPI 0.141.1 / Starlette 1.6.0 (TrustedHostMiddleware, CORSMiddleware),
+Uvicorn 0.53.0 (proxy headers), PyJWT 2.14.0, and the OWASP Forgot Password Cheat Sheet.
+
 ## Data model, ownership, and concurrency
 
 - **Ownership.** Every user table's primary key is `(user_id, id)`, and
@@ -392,10 +476,46 @@ additive: run it first (a server of the previous version keeps working
 against it), then deploy the new server, then update desktop clients -- a new
 client needs the new server, while older clients keep working against it.
 
+### Recurrence expansion (0009)
+
+Revision 0009 ([recurrence.md](recurrence.md)) adds a series' explicit anchor
+(`recurrence_start_date`, `recurrence_timezone`), an occurrence's identity
+(`series_id`, `occurrence_slot`), its exception state (`occurrence_state`),
+provenance (`series_version`) and series lineage (`series_predecessor_id`) to
+`tasks` and `task_revisions` -- all nullable, nothing back-filled (existing
+templates need configuration) -- with their CHECKs, `fk_tasks_series` (an
+occurrence's series is the same user's task), the unique
+`uq_tasks_user_series_slot (user_id, series_id, occurrence_slot)` (tombstones
+included: a suppressed slot stays reserved) and a lineage index. Expand-only:
+run it first; the API keeps any field an older client omits, so older clients
+cannot erase it; `GET /sync/capabilities` lets a new client find out whether a
+server supports recurrence before it sends such records (it holds them for an
+older server).
+
 **Downgrades** rebuild the JSON columns losslessly from the relational rows,
 but are for tests and disposable databases only: never run
 `backend.migrate` downgrades against a real database; restore a backup
 instead.
+
+### Manual placements (0010)
+
+Additive: `placements`/`placement_revisions.origin` (nullable; generated or
+manual) and `preserved` (NOT NULL, default false; only a manual placement can
+be preserved), `executions`/`execution_revisions.cancel_reason` (nullable;
+user, rescheduled or superseded, only on a cancelled execution). Existing rows
+keep `NULL`/`false` -- nothing is back-filled; a placement whose lineage proves
+it is a move's destination is recognized as preserved when read. A server of
+the previous version keeps working against the upgraded schema. Downgrade
+(disposable databases only) drops the columns. See
+[execution-rescheduling.md](execution-rescheduling.md), "Manual placements".
+
+### Account recovery and limits (0011)
+
+Additive: `users.credential_epoch` and `browser_sessions.credential_epoch`
+(NOT NULL, default 0), `password_recovery_tokens`, `rate_limit_buckets`.
+Existing accounts and sessions keep working; see "Password recovery" for how
+pre-epoch tokens are treated. Downgrade (disposable databases only) drops
+them.
 
 ## Tests
 

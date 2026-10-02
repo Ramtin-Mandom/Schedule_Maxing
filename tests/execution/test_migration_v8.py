@@ -25,7 +25,7 @@ def test_a_populated_v7_database_upgrades_without_touching_existing_values(tmp_p
 
     conn = get_connection(db_path)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST_SCHEMA_VERSION == 8
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST_SCHEMA_VERSION >= 8
         after = {table: _rows(conn, table) for table in TABLES}
         for table in TABLES:
             old_columns = before[table][0].keys() if before[table] else ()

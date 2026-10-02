@@ -223,14 +223,17 @@ class AllocationController:
         mode = GenerationMode.INCREMENTAL if state.status == Freshness.STALE and state.placements else GenerationMode.FULL
         result = self._planning.generate(
             view.period.start, view.period.end, generate_start=day, generate_end=day, mode=mode,
-            protect_history=True, expected_fingerprint=view.fingerprint, preserve_on_empty=True)
+            expected_fingerprint=view.fingerprint, preserve_on_empty=True)
         if not result.ok:
             if isinstance(result.cause, StaleInputsError):
                 return ControllerResult.failure("Something changed since this allocation was calculated. Nothing was "
                                                 "scheduled; recalculate the allocation first.", result.cause)
             if isinstance(result.cause, RegenerationRequiredError):
-                return ControllerResult.failure("Saved work on this date no longer fits. Nothing was changed; open the "
-                                                "day and choose Regenerate there.", result.cause)
+                manual = any(problem.kept_as == "manual" for problem in result.cause.problems)
+                return ControllerResult.failure(
+                    "Saved work on this date no longer fits. Nothing was changed; open the day and "
+                    + ("move or release the task you placed yourself, or choose Regenerate there." if manual
+                       else "choose Regenerate there."), result.cause)
             return ControllerResult.failure(f"{result.error}\n\nNothing was saved.", result.cause)
         outcome = result.value
         if outcome.status == "already_current":
@@ -241,4 +244,6 @@ class AllocationController:
         output = outcome.outputs[day]
         return ControllerResult.success(
             f"Scheduled {day_label(day)}: {len(output.placements)} task(s) placed"
-            + (f", {len(output.unscheduled)} could not be placed" if output.unscheduled else "") + ".")
+            + (f", {len(output.unscheduled)} could not be placed" if output.unscheduled else "")
+            + (f", {len(outcome.kept_elsewhere)} already planned on another date left there"
+               if outcome.kept_elsewhere else "") + ".")
