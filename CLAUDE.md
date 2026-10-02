@@ -1,178 +1,57 @@
-# CLAUDE.md
-
-## Project Context
-
-This is a Python scheduling/productivity application with:
-
-* Pydantic models
-* scheduling constraints
-* dependency / PERT logic
-* reward scoring
-* a greedy optimizer
-* CSV loading
-* a CustomTkinter desktop UI
-* automated tests
-
-The current optimizer is the baseline:
-
-**Greedy Optimizer v1**
-
-Future features may include better optimization, ML prediction, persistence, cloud sync, Android, and AI feedback.
-
-Do not implement future roadmap features unless the active task explicitly requests them.
-
----
-
-## Queued Tasks — IMPORTANT
-
-When multiple prompts are queued, complete them **strictly in order**.
-
-For each task:
-
-1. Read the full prompt.
-2. Inspect the relevant repository files.
-3. Implement the requested changes.
-4. Add/update tests when needed.
-5. Run verification.
-6. Fix failures caused by your changes.
-7. Confirm the task is complete.
-8. Only then start the next queued task.
-
-Do not partially implement several queued tasks at once.
-
-Do not skip an unfinished task to work on a later one.
-
-If a task is genuinely blocked, explain the blocker instead of silently moving on.
-
----
-
-## Inspect Before Editing
-
-Before changing code:
-
-* inspect relevant files
-* inspect imports/call sites
-* inspect nearby tests
-* check whether functionality already exists
-
-Do not assume the repository structure from the prompt alone.
-
-Prefer extending existing architecture instead of creating duplicate systems.
-
----
-
-## Architecture
-
-Keep these responsibilities separate:
-
-* **models** — data structures
-* **constraints** — whether a schedule is valid
-* **PERT/dependencies** — graph ordering and cycles
-* **reward** — how desirable a valid placement is
-* **optimizer** — searches for good valid placements
-* **UI** — calls the scheduling logic; does not reimplement it
-
-Hard constraints must not be replaced with reward penalties.
-
-Do not change Greedy Optimizer v1 behavior unless explicitly requested.
-
----
-
-## Change Discipline
-
-Make focused changes.
-
-Avoid:
-
-* unrelated refactors
-* unnecessary file renaming
-* large formatting changes
-* speculative abstractions
-* unnecessary dependencies
-* implementing future features early
-
-If you notice unrelated technical debt, mention it afterward instead of automatically fixing it.
-
----
-
-## Tests
-
-For scheduling changes, consider:
-
-* overlaps
-* fixed blocks
-* day boundaries
-* durations
-* dependencies
-* cycles
-* reward calculations
-* unscheduled tasks
-* CSV loading
-* final schedule validity
-
-Prefer meaningful tests over increasing test count.
-
-Do not weaken or delete useful tests just to make the suite pass.
-
----
-
-## Verification
-
-When available, use:
-
-```bash
+CLAUDE.md
+Project Context
+This is a scheduling/productivity application containing domain models, constraints, dependency logic, reward/scoring, multiple scheduling engines, persistence/sync, analytics, and a CustomTkinter desktop UI.
+Implement only the active request. Preserve working behavior and existing architecture unless the task requires a change.
+Efficient Working Method
+Queued tasks
+Process queued prompts strictly in order. Finish the implementation for one before editing for the next, but do not run the full verification suite between queued tasks.
+If a task is genuinely blocked, explain the blocker instead of guessing.
+Read as little as necessary
+Avoid repository-wide exploration.
+Start from the smallest relevant scope:
+- files explicitly named by the task
+- direct imports/call sites found through search
+- the specific functions/classes being changed
+- nearby tests only when their behavior matters
+For large files, read/search the relevant sections rather than the whole file. Do not repeatedly reread unchanged files or inspect unrelated tests/configuration.
+Only broaden the search when the current information is insufficient.
+Architecture
+Keep responsibilities separated:
+- models/data
+- hard constraints
+- dependencies/PERT
+- reward/scoring
+- optimizer/engine strategies
+- analytics/ML
+- UI
+- persistence/sync/API
+The UI should call domain/application logic rather than reimplement it. Hard constraints must remain hard constraints.
+Preserve existing optimizer baselines and public behavior unless the active task explicitly changes them.
+Change discipline
+Make focused changes. Avoid unrelated refactors, broad formatting, unnecessary renames, speculative abstractions, duplicate systems, and unnecessary dependencies.
+When changing a public API/model/config/storage format, inspect only its directly affected call sites and maintain compatibility when practical.
+Testing and Verification
+This repository has a large test suite. Optimize for implementation speed and context efficiency.
+While building:
+- do not run the full pytest suite after each task or edit
+- do not run broad test directories by default
+- rely on code inspection/static reasoning for straightforward changes
+- run a small targeted test only when needed to resolve uncertainty or diagnose a failure
+- add/update necessary tests without repeatedly executing them
+- do not rerun checks that already passed unless later changes affect them
+After all requested implementations in the current batch are complete, run final verification once:
 pytest
 python -m compileall .
 ruff check .
-```
-
-Run focused tests during development if useful.
-
-Before completing a milestone, run the broader checks requested by the prompt.
-
-Fix failures introduced by your changes.
-
----
-
-## Dependencies
-
-Do not add packages unless necessary.
-
-Check existing dependencies and the standard library first.
-
-If a dependency is added, update the appropriate dependency file.
-
----
-
-## Future Optimizers / ML
-
-When adding another optimizer:
-
-* preserve the greedy baseline
-* use the same constraints
-* compare results using measurable metrics
-
-When adding ML:
-
-* establish a simple baseline first
-* evaluate the model properly
-* compare it against the baseline
-* keep ML separate from hard scheduling correctness
-
----
-
-## Completion
-
-At the end of each task, briefly report:
-
-* what changed
-* important files changed
-* tests/checks run
-* whether they passed
-* any important remaining limitation
-
-If more queued tasks remain, continue only after the current task is complete and verified.
-
-## Most Important Rule
-
-**Finish each queued command completely before starting the next one.**
+If final verification fails, isolate the affected tests, fix the issue with focused reruns, then run the full suite once more.
+Never weaken/delete meaningful tests just to make the suite pass.
+If the prompt explicitly requests a different test strategy, follow the prompt.
+Dependencies
+Use existing packages or the standard library when practical. Add dependencies only when clearly justified and update dependency files accordingly.
+Final Report
+After the whole batch is complete, give one concise summary containing:
+- major changes
+- important files changed
+- final tests/checks run and whether they passed
+- important remaining limitations
+Avoid verbose per-task summaries unless requested.

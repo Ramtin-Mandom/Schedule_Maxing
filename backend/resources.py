@@ -13,7 +13,27 @@ the caller's user scope only:
     project      delete refused (409 in_use) while live tasks belong to it
     task         project_id / dependency_ids must be live records of the user;
                  delete refused while live tasks depend on it; deleting it
-                 tombstones its live placements (each logged)
+                 tombstones its live placements (each logged). Recurrence
+                 (docs/recurrence.md): an occurrence names one of the user's
+                 series and its id is derived from (series, slot); its
+                 identity, and a segment's lineage, never change; a new
+                 dependency on a series is series-to-series with a compatible
+                 cadence (anything else names one concrete occurrence); an
+                 occurrence may keep its same-slot edge to a skipped
+                 prerequisite occurrence, and such edges never block a skip.
+                 Fields an update omits (an older client that does not know
+                 them) keep their stored values -- recurrence identity,
+                 exception state, lineage and a series' anchor are never
+                 erased by omission -- and an older client's content edit of
+                 an occurrence marks it modified. Creating an identical
+                 occurrence again (another device expanded the same slot) is
+                 accepted as a no-op; a different one is a conflict. A new
+                 live occurrence must still be a date of its series and --
+                 unless it is an exception (modified) -- carry the series'
+                 current content; otherwise, or when the series was deleted,
+                 it is 409 series_changed with the series as `current`, so an
+                 occurrence expanded offline from an older series never gets
+                 around a concurrent series edit.
     fixed block  the fixed-block invariants of app/planning/fixed_block_rules.py:
                  a positive whole-minute interval that starts on its
                  planned_date in its timezone and lies inside that date's
@@ -30,7 +50,11 @@ the caller's user scope only:
                  else the task's category now) and never changes after;
                  removal_reason/superseded_by_id are set only when it is
                  removed (a delete, a task cascade, a reschedule), never by a
-                 create or update
+                 create or update; origin (generated/manual) and preserved
+                 (manual intent) are kept when an update omits them (an older
+                 client); an update never changes a known origin and can only
+                 release manual intent (preserved true -> false), never grant
+                 it -- a move's destination is created preserved
     preference   one live layer per scope ("user" or one date); scope is fixed
     generation   one live record per date; the date is fixed
 """
@@ -41,8 +65,8 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date as date_
-from datetime import datetime
-from typing import Any, Literal
+from datetime import datetime, timezone
+from typing import Annotated, Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import inspect, select
@@ -50,8 +74,16 @@ from sqlalchemy.orm import Session
 
 from app.planning import fixed_block_rules
 from app.planning.models import FixedBlock as CanonicalFixedBlock
-from app.planning.models import DEFAULT_TASK_POINTS, MAX_TASK_POINTS, LocalTimeWindow, RecurrenceSpec
-from app.planning.models import PlacementRemovalReason
+from app.planning.models import (
+    DEFAULT_TASK_POINTS,
+    MAX_TASK_POINTS,
+    OCCURRENCE_TOMBSTONE_STATES,
+    LocalTimeWindow,
+    OccurrenceState,
+    RecurrenceSpec,
+)
+from app.planning.models import PlacementOrigin, PlacementRemovalReason
+from app.planning.recurrence import SeriesRule, cadence_problem, occurrence_task_id
 from app.planning.models import ScheduledTask as CanonicalPlacement
 from app.planning.models import Task as CanonicalTask
 from app.planning.preferences import OptimizerMode, PreferenceOverrides
@@ -120,31 +152,50 @@ class ProjectOut(ProjectFields, RecordMeta):
     pass
 
 
+#: Request bounds of a task's lists (validation errors, before any database work).
+MAX_TAGS = 50
+MAX_PREFERRED_DATES = 366
+MAX_DEPENDENCIES = 200
+
+
 class TaskFields(Strict):
     project_id: uuid.UUID | None = None
     name: str = Field(min_length=1, max_length=500)
     category: str = Field(min_length=1, max_length=100)
-    tags: list[str] = Field(default_factory=list)
+    tags: list[Annotated[str, Field(max_length=100)]] = Field(default_factory=list, max_length=MAX_TAGS)
     estimated_duration_minutes: int = Field(gt=0)
     priority: int = Field(ge=1, le=10)
     #: The user's productivity value (not the optimizer's placement score); omitted by older clients: the default.
     points: int = Field(default=DEFAULT_TASK_POINTS, ge=0, le=MAX_TASK_POINTS)
     required: bool = False
     required_date: date_ | None = None
-    preferred_dates: list[date_] = Field(default_factory=list)
+    preferred_dates: list[date_] = Field(default_factory=list, max_length=MAX_PREFERRED_DATES)
     preferred_time_window: LocalTimeWindow | None = None
-    dependency_ids: list[uuid.UUID] = Field(default_factory=list)
+    dependency_ids: list[uuid.UUID] = Field(default_factory=list, max_length=MAX_DEPENDENCIES)
     deadline: AwareDatetime | None = None
     recurrence: RecurrenceSpec | None = None
+    #: Recurrence identity, exception state, provenance and lineage (docs/recurrence.md). An older client
+    #: omits them: an update then keeps the stored values (see with_stored_omissions).
+    series_id: uuid.UUID | None = None
+    occurrence_slot: date_ | None = None
+    occurrence_state: OccurrenceState | None = None
+    series_version: int | None = Field(default=None, gt=0)
+    series_predecessor_id: uuid.UUID | None = None
 
     def canonical(self, task_id: uuid.UUID) -> CanonicalTask:
-        return CanonicalTask(id=task_id, **self.model_dump(include=set(TaskFields.model_fields)))
+        data = self.model_dump(include=set(TaskFields.model_fields))
+        if self.occurrence_state in OCCURRENCE_TOMBSTONE_STATES:
+            data["deleted_at"] = datetime.now(timezone.utc)  # only ever stored as a tombstone
+        return CanonicalTask(id=task_id, **data)
 
     @model_validator(mode="after")
     def _canonical_rules(self):
         if len(set(self.dependency_ids)) != len(self.dependency_ids):
             raise ValueError("dependency_ids must not repeat a task")
-        _validated(lambda: self.canonical(getattr(self, "id", None) or uuid.uuid4()))
+        task_id = getattr(self, "id", None)
+        if task_id is None and self.series_id is not None and self.occurrence_slot is not None:
+            task_id = occurrence_task_id(self.series_id, self.occurrence_slot)
+        _validated(lambda: self.canonical(task_id or uuid.uuid4()))
         return self
 
 
@@ -199,6 +250,10 @@ class PlacementFields(Strict):
     #: Set on a tombstone only: why it was removed, and the placement that replaced it.
     removal_reason: PlacementRemovalReason | None = None
     superseded_by_id: uuid.UUID | None = None
+    #: How it came to be (generated / manual; None = unknown) and the user's manual intent: generation keeps a
+    #: preserved placement until it is released (docs/execution-rescheduling.md, "Manual placements").
+    origin: PlacementOrigin | None = None
+    preserved: bool = False
 
     @model_validator(mode="after")
     def _canonical_rules(self):
@@ -358,32 +413,172 @@ def _task_content(_session, _user_id, row) -> dict:
     return task_content(row)
 
 
-def _task_assign(_session, _user_id, row, payload: TaskFields) -> None:
+#: Task fields an update may omit (an older client does not know them): omitted ones keep the stored values.
+_KEPT_WHEN_OMITTED = ("series_id", "occurrence_slot", "occurrence_state", "series_version", "series_predecessor_id")
+#: An occurrence's bookkeeping, not its content (a change of anything else is an edit of it).
+_OCCURRENCE_BOOKKEEPING = {"occurrence_state", "series_version"}
+
+
+def with_stored_omissions(row, payload: TaskFields) -> TaskFields:
+    """
+    The update `payload` with every recurrence field it omits taken from the
+    stored `row` (docs/recurrence.md, "older clients"): an older client's
+    update can never erase an occurrence's identity, exception state,
+    provenance or a series' lineage and anchor -- and its content edit of an
+    occurrence that still followed its series marks it modified.
+    """
+    stored = task_content(row)
+    sent = payload.model_fields_set
+    update = {name: stored[name] for name in _KEPT_WHEN_OMITTED if name not in sent}
+    recurrence = payload.recurrence
+    if (recurrence is not None and stored["recurrence"] is not None
+            and not {"start_date", "timezone"} & recurrence.model_fields_set):
+        update["recurrence"] = recurrence.model_copy(update={
+            "start_date": stored["recurrence"]["start_date"], "timezone": stored["recurrence"]["timezone"]})
+    if not update:
+        return payload
+    merged = payload.model_copy(update=update)
+    if "occurrence_state" not in sent and stored["series_id"] is not None and stored["occurrence_state"] is None:
+        before = {key: value for key, value in TaskFields.model_validate(stored).model_dump().items()
+                  if key not in _OCCURRENCE_BOOKKEEPING}
+        after = {key: value for key, value in merged.model_dump(include=set(TaskFields.model_fields)).items()
+                 if key not in _OCCURRENCE_BOOKKEEPING}
+        if before != after:
+            merged = merged.model_copy(update={"occurrence_state": OccurrenceState.MODIFIED})
+    return merged
+
+
+def _task_assign(session, _user_id, row, payload: TaskFields) -> None:
+    if session is not None and not inspect(row).pending:
+        payload = with_stored_omissions(row, payload)  # an update of a stored row
     write_task(row, payload)
 
 
 def _task_validate(session, user_id, payload: TaskFields, existing) -> None:
+    if existing is not None:
+        payload = with_stored_omissions(existing, payload)
     if payload.project_id is not None and live(session, models.Project, user_id, payload.project_id) is None:
         raise invalid_reference("project_id does not name one of your projects.")
+    if existing is not None:
+        if (existing.series_id, existing.occurrence_slot) != (payload.series_id, payload.occurrence_slot):
+            raise ApiError(422, "validation_error", "An occurrence's series and original slot never change.")
+        if existing.series_predecessor_id != payload.series_predecessor_id:
+            raise ApiError(422, "validation_error", "A series segment's lineage never changes.")
+        if existing.recurrence_frequency is not None and payload.recurrence is None and session.scalars(
+                select(models.Task.id).where(models.Task.user_id == user_id, models.Task.series_id == existing.id)
+                .limit(1)).first() is not None:
+            raise ApiError(422, "validation_error", "This series has occurrences, so it stays a recurring series; end "
+                                                    "or delete the series instead.")
+    elif payload.series_id is not None:
+        series = session.get(models.Task, (user_id, payload.series_id))
+        tombstone = payload.occurrence_state in OCCURRENCE_TOMBSTONE_STATES
+        if series is None or series.recurrence_frequency is None:
+            raise invalid_reference("series_id must name one of your live recurring series.")
+        if not tombstone:
+            _check_series_precondition(session, user_id, series, payload)
+    if existing is None and payload.series_predecessor_id is not None:
+        predecessor = session.get(models.Task, (user_id, payload.series_predecessor_id))
+        if predecessor is None or predecessor.recurrence_frequency is None:
+            raise invalid_reference("series_predecessor_id must name one of your recurring series.")
+    stored_edges = {item.depends_on_id for item in existing.dependency_rows} if existing is not None else set()
     for dependency in payload.dependency_ids:
         if existing is not None and dependency == existing.id:
             raise ApiError(422, "validation_error", "A task cannot depend on itself.")
-        if live(session, models.Task, user_id, dependency) is None:
+        target = session.get(models.Task, (user_id, dependency))
+        if target is None or (target.deleted_at is not None and not (
+                target.series_id is not None and payload.series_id is not None)):
             raise invalid_reference("dependency_ids must name your own existing tasks.")
+        if dependency in stored_edges or target.recurrence_frequency is None:
+            continue
+        if payload.recurrence is None:
+            raise invalid_reference(f"A one-off task or an occurrence cannot depend on the recurring series "
+                                    f"{target.name!r} itself; name one concrete occurrence of it.")
+        target_spec = RecurrenceSpec.model_validate(task_content(target)["recurrence"])
+        if payload.recurrence.configured and target_spec.configured:
+            problem = cadence_problem(SeriesRule.of(payload.recurrence), SeriesRule.of(target_spec))
+            if problem is not None:
+                raise invalid_reference(f"This series cannot depend on the series {target.name!r}: {problem}")
+    if payload.recurrence is not None and payload.dependency_ids:
+        task_id = existing.id if existing is not None else getattr(payload, "id", None)
+        _refuse_series_cycles(session, user_id, task_id, payload.dependency_ids)
 
 
-def _task_before_delete(mutator, row) -> None:
-    dependent = mutator.session.execute(
-        select(models.TaskDependency.task_id)
+#: The occurrence fields its series dictates (app/planning/series.py: _CONTENT_FIELDS, occurrence_for).
+_SERIES_CONTENT = frozenset({"project_id", "name", "category", "tags", "estimated_duration_minutes", "priority",
+                             "points", "required", "preferred_time_window"})
+
+
+def _check_series_precondition(session, user_id, series, payload: TaskFields) -> None:
+    """
+    The series precondition of a new live occurrence (docs/sync-protocol.md,
+    "Recurring series"): its series is live, the slot is still one of the
+    series' dates, and an occurrence that follows its series (no exception
+    state) carries the series' current content. Versions cannot be compared
+    -- a device numbers its own versions -- so the content is: an occurrence
+    expanded offline from an older series is refused as 409 series_changed
+    with the series as `current`, never stored as a stale copy.
+    """
+    content = task_content(series)
+    reason = None
+    if series.deleted_at is not None:
+        reason = "the series was deleted"
+    else:
+        spec = RecurrenceSpec.model_validate(content["recurrence"])
+        if not spec.configured or not SeriesRule.of(spec).is_slot(payload.occurrence_slot):
+            reason = f"{payload.occurrence_slot} is no longer one of its dates"
+        elif payload.occurrence_state is None:
+            stored = TaskFields.model_validate(content).model_dump(include=_SERIES_CONTENT)
+            if stored != payload.model_dump(include=_SERIES_CONTENT):
+                reason = "its details changed after this occurrence was created"
+    if reason is not None:
+        raise ApiError(409, "series_changed", f"The recurring series changed on the server: {reason}. Accept the "
+                                              "server's series; the occurrence then follows it.",
+                       current=TASKS.serialize(session, user_id, series))
+
+
+def _refuse_series_cycles(session, user_id, task_id, dependency_ids) -> None:
+    """Series definitions never depend on each other in a cycle (every slot would be a cycle)."""
+    if task_id is None:
+        return
+    edges: dict[uuid.UUID, set[uuid.UUID]] = {}
+    for depender, depends_on in session.execute(
+        select(models.TaskDependency.task_id, models.TaskDependency.depends_on_id)
+        .join(models.Task, (models.Task.user_id == models.TaskDependency.user_id)
+              & (models.Task.id == models.TaskDependency.task_id))
+        .where(models.TaskDependency.user_id == user_id, models.Task.recurrence_frequency.is_not(None),
+               models.Task.deleted_at.is_(None))
+    ):
+        edges.setdefault(depender, set()).add(depends_on)
+    edges[task_id] = set(dependency_ids)
+    seen: set[uuid.UUID] = set()
+    stack = list(edges.get(task_id, ()))
+    while stack:
+        current = stack.pop()
+        if current == task_id:
+            raise ApiError(422, "validation_error", "Recurring series cannot depend on each other in a cycle.")
+        if current not in seen:
+            seen.add(current)
+            stack.extend(edges.get(current, ()))
+
+
+def _task_before_delete(mutator, row, occurrence_state: str | None = None) -> None:
+    rows = mutator.session.execute(
+        select(models.TaskDependency.task_id, models.Task.series_id)
         .join(models.Task, (models.Task.user_id == models.TaskDependency.user_id)
               & (models.Task.id == models.TaskDependency.task_id))
         .where(
             models.TaskDependency.user_id == mutator.user_id, models.TaskDependency.depends_on_id == row.id,
             models.Task.deleted_at.is_(None),
-        ).limit(1)
-    ).first()
-    if dependent is not None:
+        )
+    ).all()
+    # An occurrence's same-slot edge never blocks skipping/deleting its prerequisite occurrence.
+    blocking = [task_id for task_id, series_id in rows if not (row.series_id is not None and series_id is not None)]
+    if blocking:
         raise ApiError(409, "in_use", "Other tasks depend on this task; remove those dependencies first.")
+    if row.series_id is not None:
+        if occurrence_state is not None and occurrence_state not in {state.value for state in OCCURRENCE_TOMBSTONE_STATES}:
+            raise ApiError(422, "validation_error", "An occurrence is removed as skipped, deleted or superseded.")
+        row.occurrence_state = occurrence_state or OccurrenceState.DELETED.value
     for placement in mutator.session.scalars(
         select(models.Placement).where(
             models.Placement.user_id == mutator.user_id, models.Placement.task_id == row.id,
@@ -457,6 +652,19 @@ def _placement_content(_session, _user_id, row) -> dict:
     return {name: getattr(row, name) for name in PlacementFields.model_fields}
 
 
+#: Placement fields an update may omit (an older client does not know them): omitted ones keep the stored values.
+_PLACEMENT_KEPT_WHEN_OMITTED = ("origin", "preserved")
+
+
+def placement_with_stored_omissions(row, payload: PlacementFields) -> PlacementFields:
+    """The update `payload` with the origin and manual intent it omits taken from the stored `row`."""
+    sent = payload.model_fields_set
+    stored = {"origin": PlacementOrigin(row.origin) if row.origin is not None else None,
+              "preserved": bool(row.preserved)}
+    update = {name: stored[name] for name in _PLACEMENT_KEPT_WHEN_OMITTED if name not in sent}
+    return payload.model_copy(update=update) if update else payload
+
+
 def _placement_assign(session, user_id, row, payload: PlacementFields) -> None:
     """
     The payload's content. task_category is a snapshot: kept when the payload
@@ -464,10 +672,12 @@ def _placement_assign(session, user_id, row, payload: PlacementFields) -> None:
     placement is created without one (a revision row stores exactly what it
     is given: it is filled without a session).
     """
+    if session is not None and not inspect(row).pending:
+        payload = placement_with_stored_omissions(row, payload)  # an update of a stored row
     for name, value in _fields(payload, PlacementFields).items():
         if name == "task_category":
             continue
-        setattr(row, name, value.value if isinstance(value, PlacementRemovalReason) else value)
+        setattr(row, name, value.value if isinstance(value, (PlacementRemovalReason, PlacementOrigin)) else value)
     if payload.task_category is not None:
         row.task_category = payload.task_category
     elif session is not None and inspect(row).pending and row.deleted_at is None:
@@ -479,6 +689,14 @@ def _placement_validate(session, user_id, payload: PlacementFields, existing) ->
     if payload.removal_reason is not None or payload.superseded_by_id is not None:
         raise ApiError(422, "validation_error", "removal_reason and superseded_by_id are recorded when a placement "
                                                 "is removed; a create or update cannot set them.")
+    if existing is not None:
+        payload = placement_with_stored_omissions(existing, payload)
+        origin = payload.origin.value if payload.origin is not None else None
+        if existing.origin is not None and origin != existing.origin:
+            raise ApiError(422, "validation_error", "A placement's origin never changes once it is known.")
+        if payload.preserved and not existing.preserved:
+            raise ApiError(422, "validation_error", "Manual intent is recorded by a move (reschedule); an update can "
+                                                    "only release it.")
     if (existing is not None and existing.task_category is not None and payload.task_category is not None
             and payload.task_category != existing.task_category):
         raise ApiError(422, "validation_error", "task_category is the snapshot taken when the placement was saved; "

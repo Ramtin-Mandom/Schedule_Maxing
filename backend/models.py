@@ -65,12 +65,17 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, declared_attr, mapped_column
 from backend.database import JSONDocument, UTCDateTime
 
 EXECUTION_STATUSES = ("scheduled", "in_progress", "paused", "completed", "skipped", "cancelled")
-OPTIMIZER_MODES = ("precise_greedy", "adhd_friendly")
+OPTIMIZER_MODES = ("precise_greedy", "adhd_friendly", "early_finish", "night_owl", "catch_up")
 RECURRENCE_FREQUENCIES = ("daily", "weekly", "monthly")
+#: app.planning.models.OccurrenceState (docs/recurrence.md).
+OCCURRENCE_STATES = ("modified", "skipped", "deleted", "superseded")
 ENTITY_TYPES = ("project", "task", "fixed_block", "placement", "preference", "schedule_generation", "execution")
 SYNC_STATUSES = ("applied", "conflict", "rejected")
 #: app.planning.models.PlacementRemovalReason (docs/execution-rescheduling.md).
 PLACEMENT_REMOVAL_REASONS = ("rescheduled", "regenerated", "deleted", "task_deleted", "reset")
+#: app.planning.models.PlacementOrigin and app.execution.models.CancelReason (docs/execution-rescheduling.md).
+PLACEMENT_ORIGINS = ("generated", "manual")
+CANCEL_REASONS = ("user", "rescheduled", "superseded")
 
 #: The reward fields of app.planning.preferences.RewardPreferencesOverride stored as reward_<name> columns.
 REWARD_FLOAT_FIELDS = (
@@ -114,6 +119,9 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     #: The last change-log sequence number allocated for this user (see backend/mutations.py).
     change_seq: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
+    #: Raised by every credential change (a password reset): access tokens and browser sessions carry the epoch
+    #: they were issued under, and one from an older epoch is refused (backend/recovery.py). Not the profile version.
+    credential_epoch: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -122,6 +130,7 @@ class User(Base):
         CheckConstraint("length(email) > 0", name="ck_users_email_nonempty"),
         CheckConstraint("change_seq >= 0", name="ck_users_change_seq"),
         CheckConstraint("version > 0", name="ck_users_version"),
+        CheckConstraint("credential_epoch >= 0", name="ck_users_credential_epoch"),
     )
     __mapper_args__ = {"version_id_col": version, "version_id_generator": False}
 
@@ -183,6 +192,18 @@ class _TaskContent:
     recurrence_day_of_month: Mapped[int | None] = mapped_column(Integer, nullable=True)
     recurrence_end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     recurrence_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: A series' explicit anchor (local date) and IANA time zone (both NULL: it needs configuration).
+    recurrence_start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    recurrence_timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: An occurrence's immutable identity: its series (one of the user's tasks) and original local slot date.
+    series_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    occurrence_slot: Mapped[date | None] = mapped_column(Date, nullable=True)
+    #: An occurrence's exception state (OCCURRENCE_STATES; NULL: it follows its series).
+    occurrence_state: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    #: Provenance: the series version the occurrence was materialized (or last refreshed) from.
+    series_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: A series segment's lineage: the series it continues.
+    series_predecessor_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
 
 
 def _task_checks(table: str) -> tuple:
@@ -216,6 +237,33 @@ def _task_checks(table: str) -> tuple:
             "recurrence_frequency IS NOT NULL OR (recurrence_end_date IS NULL AND recurrence_count IS NULL)",
             name=f"ck_{table}_recurrence_bounds",
         ),
+        CheckConstraint(
+            "(recurrence_start_date IS NULL) = (recurrence_timezone IS NULL)"
+            " AND (recurrence_start_date IS NULL OR recurrence_frequency IS NOT NULL)",
+            name=f"ck_{table}_recurrence_anchor",
+        ),
+        CheckConstraint(
+            "(series_id IS NULL) = (occurrence_slot IS NULL)"
+            " AND (series_id IS NULL OR recurrence_frequency IS NULL)"
+            " AND (series_id IS NOT NULL OR (occurrence_state IS NULL AND series_version IS NULL))"
+            " AND (series_version IS NULL OR series_version > 0)",
+            name=f"ck_{table}_occurrence",
+        ),
+        CheckConstraint(
+            f"occurrence_state IS NULL OR {_in('occurrence_state', OCCURRENCE_STATES)}",
+            name=f"ck_{table}_occurrence_state",
+        ),
+        CheckConstraint(
+            "series_predecessor_id IS NULL OR recurrence_start_date IS NOT NULL", name=f"ck_{table}_series_lineage",
+        ),
+        # The live row's own id and tombstone (a revision row's id is the revision's, its tombstone in the header).
+        *((
+            CheckConstraint(
+                "(series_id IS NULL OR series_id <> id) AND (series_predecessor_id IS NULL OR series_predecessor_id <> id)"
+                " AND (occurrence_state IS NULL OR occurrence_state = 'modified' OR deleted_at IS NOT NULL)",
+                name="ck_tasks_recurrence_identity",
+            ),
+        ) if table == "tasks" else ()),
     )
 
 
@@ -251,11 +299,17 @@ class _PlacementContent:
     #: and the placement that replaced it. History, not a live reference: not a foreign key.
     removal_reason: Mapped[str | None] = mapped_column(String(20), nullable=True)
     superseded_by_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    #: How the placement came to be (PLACEMENT_ORIGINS; NULL = unknown, saved before Milestone 6) and the user's
+    #: manual intent: a preserved placement is kept by generation until released.
+    origin: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    preserved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
 
 
 def _placement_checks(table: str) -> tuple:
     return (
         CheckConstraint("planned_end > planned_start", name=f"ck_{table}_order"),
+        CheckConstraint(f"origin IS NULL OR {_in('origin', PLACEMENT_ORIGINS)}", name=f"ck_{table}_origin"),
+        CheckConstraint("NOT preserved OR (origin IS NOT NULL AND origin = 'manual')", name=f"ck_{table}_preserved"),
         CheckConstraint(
             f"removal_reason IS NULL OR {_in('removal_reason', PLACEMENT_REMOVAL_REASONS)}",
             name=f"ck_{table}_removal_reason",
@@ -368,11 +422,17 @@ class _ExecutionContent:
     canonical_planned_end: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     actual_first_start_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     actual_final_end_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    #: Why a cancelled execution was cancelled (CANCEL_REASONS); NULL otherwise or when unknown.
+    cancel_reason: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
 
 def _execution_checks(table: str) -> tuple:
     return (
         CheckConstraint(_in("status", EXECUTION_STATUSES), name=f"ck_{table}_status"),
+        CheckConstraint(
+            f"cancel_reason IS NULL OR (status = 'cancelled' AND {_in('cancel_reason', CANCEL_REASONS)})",
+            name=f"ck_{table}_cancel_reason",
+        ),
         CheckConstraint("priority BETWEEN 1 AND 10", name=f"ck_{table}_priority"),
         CheckConstraint("points IS NULL OR points >= 0", name=f"ck_{table}_points"),
         CheckConstraint("focus_rating IS NULL OR focus_rating BETWEEN 1 AND 5", name=f"ck_{table}_focus"),
@@ -410,8 +470,14 @@ class Task(_Record, _TaskContent, Base):
     __table_args__ = (
         *_record_checks("tasks"),
         ForeignKeyConstraint(["user_id", "project_id"], ["projects.user_id", "projects.id"], name="fk_tasks_project"),
+        # An occurrence's series is one of the same user's tasks (rows are only ever tombstoned, never removed).
+        ForeignKeyConstraint(["user_id", "series_id"], ["tasks.user_id", "tasks.id"], name="fk_tasks_series"),
         *_task_checks("tasks"),
         Index("ix_tasks_user_project", "user_id", "project_id"),
+        # One record per (user, series, original slot), tombstones included: a suppressed slot stays reserved.
+        Index("uq_tasks_user_series_slot", "user_id", "series_id", "occurrence_slot", unique=True,
+              sqlite_where=text("series_id IS NOT NULL"), postgresql_where=text("series_id IS NOT NULL")),
+        Index("ix_tasks_user_series_predecessor", "user_id", "series_predecessor_id"),
     )
 
 
@@ -1115,8 +1181,54 @@ class BrowserSession(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    #: The user's credential epoch when the session started; a session from an older epoch is refused.
+    credential_epoch: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
 
     __table_args__ = (
         CheckConstraint("expires_at > created_at", name="ck_browser_sessions_expiry"),
         Index("ix_browser_sessions_user", "user_id"),
+    )
+
+
+class PasswordRecoveryToken(Base):
+    """
+    One issued password-recovery credential (backend/recovery.py). Only the
+    SHA-256 digest of the random token is stored; it is bound to one user,
+    expires, and is consumed or revoked at most once (conditional updates).
+    """
+
+    __tablename__ = "password_recovery_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("expires_at > created_at", name="ck_password_recovery_tokens_expiry"),
+        CheckConstraint("consumed_at IS NULL OR revoked_at IS NULL", name="ck_password_recovery_tokens_state"),
+        Index("ix_password_recovery_tokens_user", "user_id"),
+    )
+
+
+class RateLimitBucket(Base):
+    """
+    A fixed-window request counter shared by every worker and replica
+    (backend/rate_limit.py). `key` is a digest of (scope, subject, window);
+    rows past `expires_at` are deleted as new windows start.
+    """
+
+    __tablename__ = "rate_limit_buckets"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    scope: Mapped[str] = mapped_column(String(40), nullable=False)
+    count: Mapped[int] = mapped_column(Integer, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("count > 0", name="ck_rate_limit_buckets_count"),
+        Index("ix_rate_limit_buckets_expiry", "expires_at"),
     )

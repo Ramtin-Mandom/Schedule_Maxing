@@ -59,9 +59,9 @@ from app.execution.lifecycle import (
     compute_start_delay_minutes,
     reopen_target,
 )
-from app.execution.models import ExecutionStatus
+from app.execution.models import CancelReason, ExecutionStatus
 from app.execution.models import WorkSession as CanonicalSession
-from app.planning.models import PlacementRemovalReason
+from app.planning.models import OCCURRENCE_TOMBSTONE_STATES, PlacementRemovalReason
 from app.planning.time import elapsed_minutes
 from backend import models, snapshots
 from backend.errors import ApiError, invalid_reference, not_found, version_conflict
@@ -128,17 +128,33 @@ class Mutator:
         return row
 
     def create(self, spec: ResourceSpec, payload) -> dict:
+        """
+        Create one record. Recurrence (docs/recurrence.md): an occurrence
+        whose id already exists with the same content -- another device
+        materialized the same slot -- is accepted as it is stored (no new
+        version, no change-log entry: the devices converge); with different
+        content it is a conflict, never a second occurrence. An occurrence
+        created with a tombstone state (skipped, deleted, superseded) is stored
+        as a tombstone at once, so a slot suppressed before it was ever
+        synchronized stays reserved here too.
+        """
         record_id = payload.id or uuid.uuid4()
         existing = self.session.get(spec.model, (self.user_id, record_id))
         if existing is not None:
+            if spec.entity_type == "task" and _same_occurrence(existing, payload):
+                return spec.serialize(self.session, self.user_id, existing)
             raise ApiError(409, "already_exists", f"This {spec.label} already exists.",
                            current=spec.serialize(self.session, self.user_id, existing))
         spec.validate(self.session, self.user_id, payload, None)
         row = spec.model(user_id=self.user_id, id=record_id, created_at=self.now, updated_at=self.now, version=1)
+        tombstone = spec.entity_type == "task" and payload.occurrence_state in OCCURRENCE_TOMBSTONE_STATES
+        if tombstone:
+            row.deleted_at = self.now  # removed from the start: never current
         self.session.add(row)
         spec.assign(self.session, self.user_id, row, payload)
         self._flush(spec, row)
-        return self.log(spec.entity_type, spec.serialize(self.session, self.user_id, row), "upsert")
+        return self.log(spec.entity_type, spec.serialize(self.session, self.user_id, row),
+                        "delete" if tombstone else "upsert")
 
     def update(self, spec: ResourceSpec, record_id: uuid.UUID, payload) -> dict:
         row = self._load(spec.model, record_id, spec.label)
@@ -161,16 +177,21 @@ class Mutator:
         *,
         removal_reason: str | None = PlacementRemovalReason.DELETED.value,
         superseded_by_id: uuid.UUID | None = None,
+        occurrence_state: str | None = None,
     ) -> dict:
         """
         Tombstone one record. For a placement, removal_reason/superseded_by_id
         are its removal provenance (docs/execution-rescheduling.md): an explicit
         REST delete is "deleted"; a synchronized delete reports the reason
-        the device recorded (None = unknown, e.g. from an older client).
+        the device recorded (None = unknown, e.g. from an older client). For an
+        occurrence, occurrence_state says why it was removed (default deleted).
         """
         row = self._load(spec.model, record_id, spec.label)
         self._check_precondition(spec, row, base_version)
-        spec.before_delete(self, row)
+        if spec.entity_type == "task":
+            spec.before_delete(self, row, occurrence_state)
+        else:
+            spec.before_delete(self, row)
         if spec.entity_type == "placement":
             self._record_placement_removal(row, removal_reason, superseded_by_id)
         return self.tombstone(spec, row)
@@ -308,6 +329,8 @@ class Mutator:
         row = self._load(models.Execution, record_id, "execution")
         self._check_precondition(EXECUTIONS, row, payload.base_version)
         allowed, target = TRANSITIONS[action]
+        if payload.cancel_reason is not None and action != "cancel":
+            raise ApiError(422, "validation_error", "cancel_reason belongs to the cancel action only.")
         if ExecutionStatus(row.status) not in allowed:
             raise ApiError(409, "invalid_transition", f"Cannot {action} an execution that is {row.status}.",
                            current=EXECUTIONS.serialize(self.session, self.user_id, row))
@@ -356,6 +379,8 @@ class Mutator:
                 row.start_delay_minutes = compute_start_delay_minutes(canonical[0].started_at, row.planned_start)
         if action in ("complete", "skip", "cancel"):
             row.actual_final_end_at = at
+        if action == "cancel":  # a user's cancel unless the system says why (part of the same revision)
+            row.cancel_reason = (payload.cancel_reason or CancelReason.USER).value
         return self._commit_execution(row)
 
     def execution_feedback(self, record_id: uuid.UUID, payload: FeedbackIn) -> dict:
@@ -379,6 +404,22 @@ class Mutator:
         row = self._load(models.Execution, record_id, "execution")
         self._check_precondition(EXECUTIONS, row, base_version)
         return self.tombstone(EXECUTIONS, row)
+
+
+def _same_occurrence(existing, payload) -> bool:
+    """Whether a create of an occurrence repeats the stored one (same slot, content and deletion state)."""
+    from backend.record_mapping import task_content
+    from backend.resources import TaskFields
+
+    if getattr(payload, "series_id", None) is None or existing.series_id != payload.series_id:
+        return False
+    bookkeeping = {"occurrence_state", "series_version"}
+    stored = {key: value for key, value in TaskFields.model_validate(task_content(existing)).model_dump().items()
+              if key not in bookkeeping}
+    incoming = {key: value for key, value in payload.model_dump(include=set(TaskFields.model_fields)).items()
+                if key not in bookkeeping}
+    removed = payload.occurrence_state in OCCURRENCE_TOMBSTONE_STATES
+    return stored == incoming and (existing.deleted_at is not None) == removed
 
 
 @contextmanager

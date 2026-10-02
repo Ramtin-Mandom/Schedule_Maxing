@@ -193,6 +193,47 @@ The answers are recorded in one SQLite transaction:
 - **Conflict or rejected:** it becomes a `sync_conflicts` row, and that
   record's operations are removed. Other records keep synchronizing.
 
+### Recurring series ([recurrence.md](recurrence.md))
+
+- `GET /sync/capabilities` answers `{protocol_version, features,
+  max_push_operations}`; an older server answers 404, which the client reads as
+  protocol 1 without features. Records carrying recurrence data are pushed only
+  when `features` includes `recurrence_occurrences`; otherwise they stay pending
+  and the sync report says how many are held.
+- A series is sent before its occurrences, a segment after its predecessor. All
+  pending task operations of one lineage (its segments, their occurrences, the
+  moves of those occurrences and the deletes of superseded ones with their
+  placements) form one atomic group.
+- A create repeating an occurrence the server has with the same content is
+  `applied` with the stored record (no new version, no change-log entry); with
+  different content it is an `already_exists` conflict. A pulled occurrence equal
+  to this device's pending copy converges without a conflict.
+- **Series precondition (Milestone 6).** A device numbers its own versions, so
+  the precondition of a *new* live occurrence is its series' current state: the
+  series is live, the slot is still one of its dates, and an occurrence that
+  follows its series (no exception state) carries the series' current content
+  (name, category, tags, estimate, priority, points, required, preferred window,
+  project). Otherwise the create is a `series_changed` conflict whose `current`
+  is the series. So an occurrence expanded offline from an older rule -- or
+  under a series another device deleted -- can never get around the series
+  edit. A tombstone create (a skipped or deleted slot) needs no precondition: it
+  only keeps a slot reserved.
+- An occurrence removed before it ever synced is pushed as a create carrying its
+  tombstone `occurrence_state`; a pulled occurrence tombstone is stored even if
+  never seen locally. A task delete may carry `{"occurrence_state"}`.
+- A reschedule that moves an occurrence to another date returns the re-dated
+  occurrence task among its `related` records.
+
+### Manual placements ([execution-rescheduling.md](execution-rescheduling.md))
+
+Placement `origin`/`preserved` and execution `cancel_reason` (including the
+`cancel_reason` of a pushed `cancel` action) are sent only to a server whose
+capabilities list `manual_placements`. Against an older server they are left
+out of payloads, and a pulled placement record without them keeps the local
+values, so an older server can never erase manual intent. The server keeps
+both fields when an update omits them (an older client) and never lets an
+update grant intent.
+
 ## Pull
 
 `GET /changes?after=<cursor>&limit=` returns the account's change feed.
@@ -248,11 +289,56 @@ retried automatically; everything else continues.
 | Resolution | Effect |
 | --- | --- |
 | `accept_remote` | The server state replaces the local record. If the server never had the record (a rejected create), or another record owns its scope, the local record is discarded as a local tombstone and is not pushed. |
-| `keep_local` | The remote version becomes the new precondition and the local change is sent again. It can conflict again. Refused when the server record is a tombstone, because that would silently revive it, and when another record owns the scope. |
+| `keep_local` | The remote version becomes the new precondition and the local change is prepared as a **new** operation (a new `op_id`; an `op_id` is never reused with a different payload) against that displayed server revision. The server applies its usual rules (constraints, ownership); if the record changed again before the push, that is another conflict. Refused when the server record is a tombstone, because that would silently revive it, and when another record owns the scope. |
 
 Accepting the server's placement over a local move also undoes the rest of
 that move: the replacement the server never had is discarded locally, and the
 execution the move cancelled returns to its last acknowledged server state.
+
+Milestone 6 additions:
+
+- **`series_changed`** (above): an occurrence this device only expanded (no
+  exception state) is not the user's intent, so it follows the server's series
+  at once, without a conflict -- re-derived and sent again, or retired -- and
+  other occurrence creates of that series that failed only because their unit
+  did are sent again on their own (members of any other compound change never
+  are). A local exception, or a pending local change of the series itself, is
+  a conflict: `keep_local` is refused. `accept_remote` stores
+  the server's series (unless it has a pending change of its own, which its own
+  conflict decides) and re-derives the occurrence from it -- it is sent again --
+  or, when its date is no longer part of the series or the series was deleted,
+  retires it here as `superseded` together with its never-synchronized
+  placements that have no recorded work. Nothing is resurrected.
+- **Execution history is never discarded.** `accept_remote` on an execution
+  first keeps the work sessions only this device recorded as a separate
+  historical execution (same snapshot, no placement link, just those
+  sessions, derived metrics unknown), which is then pushed as a create;
+  `resolution.kept_history_execution_id` names it. `keep_local` is refused
+  when the local sessions do not continue the server's (they could not be
+  expressed as lifecycle actions).
+- **Refused requests** (see Failures) arrive as `push_rejected` conflicts with
+  code `request_refused`.
+- The desktop conflict view (`app/ui/account_controller.conflict_context`)
+  explains each conflict in words: which occurrence of a series and its
+  original date, exception states on each side, whether a placement is the
+  user's manual placement, work sessions only one side has, and what the
+  choice does to related records.
+
+### Retention and cursors
+
+- The server never prunes its change feed, record revisions, sync operation
+  results or tombstones (`change_log`, `record_revisions`, `sync_operations`,
+  `sync_operation_related_records`). A device that reconnects after any time
+  replays from its cursor: a deleted series, a skipped or deleted occurrence
+  and every placement lineage arrive as tombstones and stay suppressed, and a
+  retried `op_id` is answered from its stored result. Revision histories needed
+  for execution history and placement lineage are kept.
+- The client keeps acknowledged tombstones' shadows and stored occurrence
+  tombstones (their slots stay reserved); it deletes an outbox operation only
+  when it is answered (applied, conflict or rejected) and a conflict row never
+  (resolved ones keep their decision).
+- The cursor advances only in the transaction that applies its page's records;
+  a crash anywhere before that commit replays the page.
 
 Every decision is kept on the conflict row: `resolution` (the choice, the
 time, and the base and remote versions) and `resolved_at`.
@@ -281,8 +367,21 @@ time, and the base and remote versions) and `resolved_at`.
 | --- | --- |
 | `TransportError` (network, timeout, 5xx) | Operations stay in the durable outbox, also across restarts, and are resent with the same `op_id`. The next run waits `min(backoff_max, backoff_base · 2^(failures-1))`. |
 | `AuthenticationError` (401) | The token is dropped. Status is `auth_required`. |
-| `ProtocolError` (other 4xx for the whole request) | Operations are marked `blocked`. Status is `error`. No automatic retry. |
+| `AuthenticationError` during a sync | The outbox and conflicts stay. Nothing is sent until the same account signs in again; another account's token never sends this account's queue (operations are per account). |
+| `ProtocolError` on a push (other 4xx for the whole request) | The batch is narrowed unit by unit (a group is one unit) under the same `op_id`s until the refused units are found; those become `push_rejected` conflicts with code `request_refused` (actionable in the conflict view, never retried automatically). Everything else is sent normally. |
+| `ProtocolError` on a pull | Reported (status `error`); the cursor does not move. |
 | Per-operation conflicts and rejections | Stored as conflicts (above). |
+
+Recovery matrix (each is covered by `tests/sync`):
+
+| Interruption | Outcome |
+| --- | --- |
+| Lost push response (the server committed) | Resent with the same `op_id`s; answered from the stored result -- no new version or change-log entry. |
+| Crash after a push answer, before it was acknowledged locally | Same as a lost response. |
+| Crash while applying a pull page | The page's transaction rolls back with the cursor; the page is fetched again. |
+| A page delivered in part, or replayed | Every change not newer than its shadow is skipped. |
+| Restart with pending operations, conflicts or a stale token | All durable; the next sync resumes in dependency order without duplicate occurrences, placements, executions or sessions. |
+| Account switched while a request is in flight | The answer is recorded for the account that sent it; the new account's records and UI are never touched by it. |
 
 `SyncService.start()` runs `sync_now()` on a daemon thread every
 `interval`, or after the backoff delay. `wake()` triggers a run early.

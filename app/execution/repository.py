@@ -92,6 +92,7 @@ _EXECUTION_COLUMNS = (
     "version",
     "deleted_at",
     "points",
+    "cancel_reason",
 )
 
 
@@ -550,6 +551,7 @@ def _execution_to_row(execution: TaskExecution) -> tuple:
         execution.version,
         execution.deleted_at,
         execution.points,
+        execution.cancel_reason.value if execution.cancel_reason is not None else None,
     )
 
 

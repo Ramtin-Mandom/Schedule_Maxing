@@ -17,6 +17,18 @@ deadline (date and time), dependencies, a project and ordered tags.
 Fixed block fields: label, category, date, start and end. A fixed block is
 not a disguised flexible task, and neither kind is converted into the other.
 
+Repeating (docs/recurrence.md): "Repeats" makes a task a recurring series
+whose start date is the form's date and whose time zone is the page's (an
+edited series keeps its own): daily / weekly (weekdays, default the start
+date's) / monthly (a day of month, default the start date's; months without
+it are skipped), every N, ending never, on a date (inclusive) or after N
+occurrences. A series is dated by its rule, so it takes no pin, other
+preferred dates or deadline. A stored series without a start date and time
+zone (saved before series repeated) needs configuration: the form shows it
+and choosing them configures it. An occurrence of a series is edited like a
+task; whether the change applies to that occurrence, to it and every later
+one, or to the entire series is chosen when it is saved (recurrence_role).
+
 Edits start from the stored model and change only the form's fields, so
 recurrence, further preferred dates, tags order, dependencies, the project,
 an unknown imported category and anything the form does not show survive.
@@ -40,7 +52,15 @@ from typing import Literal
 
 from pydantic import ValidationError
 
-from app.planning.models import DEFAULT_TASK_POINTS, MAX_TASK_POINTS, FixedBlock, LocalTimeWindow, Task
+from app.planning.models import (
+    DEFAULT_TASK_POINTS,
+    MAX_TASK_POINTS,
+    FixedBlock,
+    LocalTimeWindow,
+    RecurrenceFrequency,
+    RecurrenceSpec,
+    Task,
+)
 from app.planning.time import (
     AmbiguousLocalTimeError,
     LocalDayWindow,
@@ -63,6 +83,10 @@ from app.ui.time_fields import (
 CATEGORIES = ["study", "work", "class", "exercise", "sleep", "food", "event", "entertainment", "errand", "other"]
 PRIORITIES = [str(value) for value in range(1, 11)]
 MAX_TAG_LENGTH = 60
+#: The form's "Repeats" choices: "" does not repeat.
+REPEATS = ("", "daily", "weekly", "monthly")
+REPEAT_ENDS = ("never", "on", "after")
+WEEKDAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
 
 class FormErrors(ValueError):
@@ -93,6 +117,24 @@ class TaskDraft:
     dependency_ids: tuple[uuid.UUID, ...] = ()
     project_id: uuid.UUID | None = None
     tags: tuple[str, ...] = ()
+    # -- repeating (a series; docs/recurrence.md) --------------------------------------
+    #: "" (does not repeat), "daily", "weekly" or "monthly".
+    repeat: str = ""
+    repeat_interval: str = "1"
+    #: Weekly: 0 = Monday .. 6 = Sunday (none: the start date's weekday).
+    repeat_weekdays: tuple[int, ...] = ()
+    #: Monthly: 1-31, or "" for the start date's day.
+    repeat_day_of_month: str = ""
+    #: "never", "on" (repeat_until, inclusive) or "after" (repeat_count occurrences).
+    repeat_end: str = "never"
+    repeat_until: str = ""
+    repeat_count: str = ""
+    #: What the stored record is (set when editing): "task", "series" or "occurrence" (of a series).
+    recurrence_role: str = "task"
+    #: A short description for an edited series or occurrence (e.g. which series and original date).
+    recurrence_note: str = ""
+    #: An edited series stored without a start date and time zone: choosing "Repeats" configures it.
+    needs_configuration: bool = False
     # -- fixed block -----------------------------------------------------------------
     start: str = ""
     end: str = ""
@@ -120,13 +162,61 @@ def categories_for(current: str | None) -> list[str]:
 # -----------------------------------------------------------------------------
 
 
-def draft_from_task(task: Task, timezone_name: str) -> TaskDraft:
+def describe_rule(spec: RecurrenceSpec) -> str:
+    """A short description of a recurrence rule, e.g. "Repeats every 2 weeks on Mon, Wed, until 2026-06-30"."""
+    unit = {"daily": "day", "weekly": "week", "monthly": "month"}[spec.frequency.value]
+    text = f"Repeats every {unit}" if spec.interval == 1 else f"Repeats every {spec.interval} {unit}s"
+    if spec.frequency == RecurrenceFrequency.WEEKLY:
+        days = spec.weekdays or ([spec.start_date.weekday()] if spec.start_date else [])
+        if days:
+            text += " on " + ", ".join(WEEKDAY_NAMES[day] for day in days)
+    if spec.frequency == RecurrenceFrequency.MONTHLY:
+        day = spec.day_of_month or (spec.start_date.day if spec.start_date else None)
+        if day:
+            text += f" on day {day}"
+    if spec.start_date is not None:
+        text += f", from {spec.start_date.isoformat()} ({spec.timezone})"
+    if spec.end_date is not None:
+        text += f", until {spec.end_date.isoformat()}"
+    elif spec.count is not None:
+        text += f", {spec.count} times"
+    return text
+
+
+def draft_from_task(task: Task, timezone_name: str, *, series: Task | None = None) -> TaskDraft:
+    """The form's view of a stored task (`series`: an occurrence's series definition, for its description)."""
     planned = task.required_date or (task.preferred_dates[0] if task.preferred_dates else None)
     window = task.preferred_time_window
     deadline_date = deadline_time = ""
     if task.deadline is not None:
         local = task.deadline.astimezone(_zone(timezone_name))
         deadline_date, deadline_time = local.date().isoformat(), format_clock(local.hour * 60 + local.minute)
+    recurrence: dict = {}
+    spec = task.recurrence
+    if spec is not None:
+        planned = spec.start_date or planned
+        recurrence = dict(
+            # A rule that needs configuration is shown, but only choosing "Repeats" again configures it.
+            repeat=spec.frequency.value if spec.configured else "",
+            repeat_interval=str(spec.interval), repeat_weekdays=tuple(spec.weekdays or ()),
+            repeat_day_of_month=str(spec.day_of_month) if spec.day_of_month else "",
+            repeat_end="on" if spec.end_date else "after" if spec.count else "never",
+            repeat_until=format_date(spec.end_date) if spec.end_date else "",
+            repeat_count=str(spec.count) if spec.count else "", recurrence_role="series",
+            needs_configuration=not spec.configured,
+            recurrence_note=(describe_rule(spec) if spec.configured else
+                             "Needs setup: this repeating task was saved before repeating tasks were expanded, so it "
+                             "does not repeat yet. Choose how it repeats (it starts on the date shown) to start it."),
+        )
+    elif task.is_occurrence:
+        note = f"One occurrence (originally {task.occurrence_slot.isoformat()})"
+        if series is not None:
+            note += f" of \u201c{series.name}\u201d"
+            if series.recurrence is not None and series.recurrence.configured:
+                note += f" -- {describe_rule(series.recurrence).lower()}"
+        if task.occurrence_state is not None:
+            note += " (edited on its own)"
+        recurrence = dict(recurrence_role="occurrence", recurrence_note=note + ".")
     return TaskDraft(
         kind="task", name=task.name, category=task.category, date=format_date(planned),
         duration=format_duration(task.estimated_duration_minutes), priority=str(task.priority),
@@ -136,6 +226,7 @@ def draft_from_task(task: Task, timezone_name: str) -> TaskDraft:
         window_end=format_clock(window.end_minute) if window else "",
         deadline_date=deadline_date, deadline_time=deadline_time,
         dependency_ids=tuple(task.dependency_ids), project_id=task.project_id, tags=tuple(task.tags),
+        **recurrence,
     )
 
 
@@ -203,6 +294,15 @@ def build_task(draft: TaskDraft, *, timezone_name: str, existing: Task | None = 
             if day is not None and minute is not None:
                 deadline = _field(errors, "deadline_time", lambda: _instant(day, minute, timezone_name, "deadline"))
 
+    recurrence = None
+    if draft.repeat:
+        if draft.recurrence_role == "occurrence":
+            errors["repeat"] = "This is one occurrence of a repeating task; change how it repeats on the series."
+        else:
+            recurrence = _recurrence(draft, errors, planned, timezone_name, existing)
+            if deadline is not None:
+                errors["deadline_date"] = "A repeating task is dated by how it repeats: it has no deadline."
+
     if errors:
         raise FormErrors(errors)
 
@@ -214,7 +314,16 @@ def build_task(draft: TaskDraft, *, timezone_name: str, existing: Task | None = 
         dependency_ids=list(dict.fromkeys(draft.dependency_ids)), project_id=draft.project_id, tags=tags,
     )
     previous_dates = list(existing.preferred_dates) if existing is not None else []
-    if draft.pin_to_date:
+    if recurrence is not None:
+        # A series is dated by its rule.
+        fields.update(recurrence=recurrence, required_date=None, preferred_dates=[], deadline=None)
+    elif existing is not None and existing.is_series and existing.needs_configuration:
+        # Not configured yet and no rule chosen: everything about its recurrence stays exactly as stored.
+        fields.update(recurrence=existing.recurrence, required_date=existing.required_date,
+                      preferred_dates=list(existing.preferred_dates))
+    elif existing is not None and existing.is_series:
+        fields["recurrence"] = None  # "Does not repeat" for a configured series (refused while it has occurrences)
+    elif draft.pin_to_date:
         fields["required_date"] = planned
         fields["preferred_dates"] = previous_dates
     else:
@@ -233,6 +342,52 @@ def build_task(draft: TaskDraft, *, timezone_name: str, existing: Task | None = 
         return Task.model_validate(data)
     except ValidationError as error:
         raise FormErrors({"form": _first_message(error)}) from None
+
+
+def _recurrence(draft: TaskDraft, errors: dict[str, str], start: date_ | None, timezone_name: str,
+                existing: Task | None) -> RecurrenceSpec | None:
+    """The draft's repeat fields as a configured rule starting on the form's date (errors collected)."""
+    if draft.repeat not in REPEATS:
+        errors["repeat"] = "Choose how the task repeats."
+        return None
+    if start is None:
+        errors.setdefault("date", "A repeating task starts on a date: choose the day it starts.")
+    interval = _field(errors, "repeat_interval", lambda: _positive(draft.repeat_interval or "1", "Every"))
+    day_of_month = None
+    if draft.repeat == "monthly" and draft.repeat_day_of_month.strip():
+        day_of_month = _field(errors, "repeat_day_of_month", lambda: _positive(draft.repeat_day_of_month, "Day of month"))
+        if day_of_month is not None and day_of_month > 31:
+            errors["repeat_day_of_month"] = "Day of month is 1 to 31 (a month without it is skipped)."
+    end_date = count = None
+    if draft.repeat_end == "on":
+        if not draft.repeat_until.strip():
+            errors["repeat_until"] = "Choose the last date it can repeat on."
+        else:
+            end_date = _field(errors, "repeat_until", lambda: parse_date(draft.repeat_until))
+    elif draft.repeat_end == "after":
+        count = _field(errors, "repeat_count", lambda: _positive(draft.repeat_count, "Occurrences"))
+    elif draft.repeat_end != "never":
+        errors["repeat_end"] = "Choose when it stops repeating."
+    if errors or start is None:
+        return None
+    tz_name = (existing.recurrence.timezone if existing is not None and existing.recurrence is not None
+               and existing.recurrence.configured else timezone_name)
+    try:
+        return RecurrenceSpec(
+            frequency=draft.repeat, interval=interval,
+            weekdays=sorted(set(draft.repeat_weekdays)) or None if draft.repeat == "weekly" else None,
+            day_of_month=day_of_month, end_date=end_date, count=count, start_date=start, timezone=tz_name,
+        )
+    except ValidationError as error:
+        errors["repeat"] = _first_message(error)
+        return None
+
+
+def _positive(text: str, label: str) -> int:
+    raw = (text or "").strip()
+    if not raw.isdigit() or int(raw) < 1:
+        raise FieldError(f"{label} must be a whole number of at least 1.")
+    return int(raw)
 
 
 def build_block(draft: TaskDraft, *, timezone_name: str, existing: FixedBlock | None = None) -> FixedBlock:

@@ -112,14 +112,16 @@ def test_two_devices_complete_workflow(server, make_device, tmp_path, monkeypatc
     assert phone.planning.get_task(daily.id) is None
     assert server.get("alice@example.com", f"/tasks/{daily.id}", include_deleted=True)["deleted_at"] is not None
 
-    # 7. Rescheduling on the phone supersedes the laptop's old placement of the floating task (no double booking).
+    # 7. Scheduling another date on the phone leaves the floating task where the laptop planned it and says so
+    #    (Milestone 6: a run never touches other dates) -- no double booking, on either device.
     first_day = week.allocation.assignments.get(floating.id, MON)
     other = MON + timedelta(days=5) if first_day != MON + timedelta(days=5) else MON + timedelta(days=4)
-    assert phone.controller.schedule_range(other, other, scope=RangeScope.ELIGIBLE).value.superseded_ids
+    rerun = phone.controller.schedule_range(other, other, scope=RangeScope.ELIGIBLE).value
+    assert rerun.superseded_ids == [] and floating.id in rerun.kept_elsewhere
     phone.sync_now()
     laptop.sync_now()
-    assert [p.planned_date for p in laptop.planning.list_placements() if p.task_id == floating.id] == [other]
-    assert laptop.controller.day_state(first_day).value.status in (DayResultStatus.STALE, DayResultStatus.ALLOCATED)
+    assert [p.planned_date for p in laptop.planning.list_placements() if p.task_id == floating.id] == [
+        rerun.kept_elsewhere[floating.id].planned_date]
 
     # 8. Outside-range dependency: completed on the phone, it satisfies a dependent the laptop schedules later.
     completed = phone.executions.complete(execution.id)

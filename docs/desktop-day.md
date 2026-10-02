@@ -94,6 +94,14 @@ The **Engine** choice sits right beside **Make Schedule**:
 | --- | --- | --- |
 | Normal | `precise_greedy` | Tasks may start at any minute |
 | ADHD friendly | `adhd_friendly` | Tasks longer than 30 minutes start on the quarter hour; shorter tasks still start at any minute; durations never change |
+| Early finish | `early_finish` | Plans the same tasks as Normal, then packs them to finish early with few idle gaps |
+| Night owl | `night_owl` | Plans the same tasks as Normal, then packs them late with few idle gaps |
+| Catch-up | `catch_up` | Gives priority to categories you skipped often in the last 90 days (5+ outcomes); otherwise exactly Normal |
+
+After a run with Early finish, Night owl or Catch-up, the reasons list adds one line:
+first start, last end, idle minutes, the baseline reward and the mode's bonus
+([scheduling-modes.md](scheduling-modes.md)). A task you moved yourself is kept where you
+put it; **Release manual placement** in the timeline's menu hands it back to Make Schedule.
 
 - The choices come from `OptimizerMode` and the service's engine catalog.
   Their labels live in one place, `app.planning.preferences.ENGINE_LABELS`,

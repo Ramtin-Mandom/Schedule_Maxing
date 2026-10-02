@@ -94,7 +94,7 @@ from app.execution.lifecycle import (  # noqa: F401 - re-exported for existing c
     outcome_actions,
     reopen_target,
 )
-from app.execution.models import ExecutionStatus, TaskExecution, WorkSession
+from app.execution.models import CancelReason, ExecutionStatus, TaskExecution, WorkSession
 from app.execution.repository import ExecutionRepository
 from app.models import ScheduledTask
 from app.planning.models import ScheduledTask as CanonicalScheduledTask
@@ -517,7 +517,7 @@ class ExecutionService:
         original = self._load(execution_id, expected_version)
         execution = self._transition(original, "cancel")
         self._close_open_session(execution_id)
-        execution = execution.model_copy(update={"actual_final_end_at": self._clock()})
+        execution = execution.model_copy(update={"actual_final_end_at": self._clock(), "cancel_reason": CancelReason.USER})
         return self._commit(original, execution)
 
     @_atomic

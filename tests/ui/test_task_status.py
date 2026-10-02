@@ -167,7 +167,8 @@ def test_duplicate_names_keep_separate_statuses(services) -> None:
 
 
 def test_recurring_occurrences_do_not_share_a_status(services) -> None:
-    walk = add(services, "Walk", recurrence=RecurrenceSpec(frequency=RecurrenceFrequency.DAILY), preferred_dates=[])
+    walk = add(services, "Walk", preferred_dates=[], recurrence=RecurrenceSpec(
+        frequency=RecurrenceFrequency.DAILY, start_date=DAY, timezone=TZ))
     today, tomorrow = Day(services), Day(services)
     tomorrow.page = DayScheduleController(services.planning_controller, anchor_date=date(2026, 9, 25), timezone=TZ)
     today.make_schedule()
@@ -175,7 +176,10 @@ def test_recurring_occurrences_do_not_share_a_status(services) -> None:
     today.move("Walk", U)
     tomorrow_board = ok(tomorrow.status.board(date(2026, 9, 25), ok(tomorrow.page.load()).executables))
     assert [card.outcome for card in tomorrow_board.cards] == [P]  # the next occurrence is untouched
-    assert tomorrow_board.cards[0].task.id == walk.id != None  # noqa: E711 - same template, own placement
+    today_task = today.board().cards[0].task
+    # Each date is its own concrete occurrence of the series (its own task, not the series itself).
+    assert tomorrow_board.cards[0].task.series_id == today_task.series_id == walk.id
+    assert tomorrow_board.cards[0].task.id != today_task.id
 
 
 def test_removing_a_scheduled_task_is_safe_and_keeps_its_history(services) -> None:

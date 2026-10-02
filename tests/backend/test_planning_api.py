@@ -276,7 +276,8 @@ def test_preferences_view_lists_layers_and_inheritance(client, alice) -> None:
     assert first["effective"]["day_window"]["start_minute"] == 480 and first["inherited"]["day_window"]["start_minute"] == 0
     assert first["effective"]["optimizer_mode"] == "adhd_friendly" and second["date_layer_id"] is None
     assert view["user_layer"]["overrides"]["optimizer_mode"] == "adhd_friendly"
-    assert {engine["mode"] for engine in view["engines"]} == {"precise_greedy", "adhd_friendly"}
+    assert {engine["mode"] for engine in view["engines"]} == {
+        "precise_greedy", "adhd_friendly", "early_finish", "night_owl", "catch_up"}
 
 
 def test_capabilities_and_bounded_ranges(client, alice) -> None:

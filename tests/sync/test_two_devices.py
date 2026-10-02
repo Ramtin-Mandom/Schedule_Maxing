@@ -144,7 +144,7 @@ def test_rescheduling_cleanup_and_outside_dependencies_sync(pair) -> None:
     a.sign_in("alice@example.com")
     b.sign_in("alice@example.com")
     floating = a.add_task("Floating")
-    daily = a.add_task("Daily", recurrence={"frequency": "daily"})
+    daily = a.add_task("Daily", recurrence={"frequency": "daily", "start_date": MON, "timezone": "UTC"})
     week = a.controller.schedule_range(MON, SUN, scope=RangeScope.ELIGIBLE).value
     first_day = week.allocation.assignments[floating.id]
     a.sync_now()
@@ -152,13 +152,18 @@ def test_rescheduling_cleanup_and_outside_dependencies_sync(pair) -> None:
 
     other = MON + timedelta(days=3) if first_day != MON + timedelta(days=3) else MON + timedelta(days=4)
     rerun = b.controller.schedule_range(other, other, scope=RangeScope.ELIGIBLE).value
-    assert rerun.superseded_ids  # B moved the floating task; its old placement was superseded
+    # Milestone 6: B's run of another date leaves the floating task where A planned it and reports it.
+    assert rerun.superseded_ids == [] and rerun.kept_elsewhere[floating.id].planned_date == first_day
     b.sync_now()
     a.sync_now()
     a_floating = [p for p in a.planning.list_placements() if p.task_id == floating.id]
-    assert [p.planned_date for p in a_floating] == [other]  # the cleanup reached A: no double booking
-    daily_dates = {p.planned_date for p in a.planning.list_placements() if p.task_id == daily.id}
-    assert len(daily_dates) >= 2  # distinct occurrences of a recurring template stay
+    assert [p.planned_date for p in a_floating] == [first_day]  # no double booking on either device
+    occurrences = {task.id: task for task in a.planning.list_tasks() if task.series_id == daily.id}
+    daily_placements = [p for p in a.planning.list_placements() if p.task_id in occurrences]
+    # Each date's slot is its own occurrence, placed once -- B's run of one date converged with A's expansion.
+    assert len({p.planned_date for p in daily_placements}) == len(daily_placements) == 7
+    assert {occurrences[p.task_id].occurrence_slot for p in daily_placements} == {p.planned_date for p in daily_placements}
+    assert len(b.planning.occurrences_of_series([daily.id])[daily.id]) == 7  # never a second occurrence of a slot
 
     # A dependency completed on B and synced satisfies a dependent scheduled next week on A.
     prerequisite = b.add_task("Prerequisite", required_date=MON)

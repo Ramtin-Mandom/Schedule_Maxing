@@ -38,6 +38,16 @@ imported "sleep" or the legacy default "fixed"), the form shows the
 fallback "other"; leaving it at "other" keeps the stored category rather
 than silently replacing it.
 
+Recurring series (docs/recurrence.md): a series definition is listed as its
+own row ("repeats", or "needs setup" when it was saved before series
+repeated) whenever it can produce a date of the page, and its materialized
+occurrences are the page's ordinary rows ("repeat"). Saving an occurrence
+or deleting it takes an EditScope -- this occurrence, this and every later
+one (from its original date), or the entire series (scope_choices /
+removal_choices say which apply to a row); a series row's own edits apply
+to the entire series. Make Schedule materializes the range's occurrences
+first (PlanningController.schedule_range).
+
 The desktop form (Milestone 4) saves through blank_draft/editor_options/
 draft_for/save_draft/delete_description with app/ui/task_form_model.py's
 minute-precise rules (docs/desktop-task-form.md). submit_task_form and
@@ -49,7 +59,7 @@ own rules are untouched either way.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date as date_
 from datetime import timedelta
 from enum import Enum
@@ -60,6 +70,7 @@ from app.planning.csv_export import PlanningExportResult
 from app.planning.csv_import import ImportMode
 from app.planning.compat import legacy_day_to_date, legacy_minutes_to_utc
 from app.planning.models import FixedBlock, LocalTimeWindow, ScheduledTask, Task
+from app.planning.series import EditScope
 from app.planning.fixed_block_rules import FixedBlockRuleViolation
 from app.planning.service import DayResultStatus
 from app.planning.time import local_minutes, validate_timezone
@@ -73,6 +84,7 @@ from app.ui.task_form_model import (
     build_block,
     build_task,
     categories_for,
+    describe_rule,
     draft_from_block,
     draft_from_task,
 )
@@ -372,19 +384,60 @@ class SchedulePageController:
                 task = self._unwrap(self._planning.get_task(ref.id))
                 if task is None:
                     raise _Failure("That task no longer exists.")
-                return ControllerResult.success(draft_from_task(task, self.timezone))
+                series = (self._unwrap(self._planning.get_task_including_deleted(task.series_id))
+                          if task.is_occurrence else None)
+                return ControllerResult.success(draft_from_task(task, self.timezone, series=series))
             return ControllerResult.success(draft_from_block(self._find_block(ref.id)))
         except _Failure as failure:
             return ControllerResult.failure(failure.message, failure.cause)
 
-    def save_draft(self, draft: TaskDraft, *, editing: RowRef | None = None) -> ControllerResult[PageSnapshot]:
+    def scope_choices(self, ref: RowRef) -> ControllerResult[list[tuple[str, str]]]:
+        """(EditScope value, label) choices for saving an edit of `ref`: several only for an occurrence."""
+        try:
+            task = self._task_or_none(ref)
+            if task is not None and task.is_occurrence:
+                return ControllerResult.success([
+                    (EditScope.OCCURRENCE.value, "Only this occurrence"),
+                    (EditScope.FUTURE.value, "This and every later occurrence"),
+                    (EditScope.SERIES.value, "Every occurrence (the entire series)"),
+                ])
+            if task is not None and task.is_series:
+                return ControllerResult.success([(EditScope.SERIES.value, "The entire series")])
+            return ControllerResult.success([])
+        except _Failure as failure:
+            return ControllerResult.failure(failure.message, failure.cause)
+
+    def removal_choices(self, ref: RowRef) -> ControllerResult[list[tuple[str, str]]]:
+        """(choice, label) for removing `ref`: "skip", "occurrence", "future", "series"; empty for other rows."""
+        try:
+            task = self._task_or_none(ref)
+            if task is not None and task.is_occurrence:
+                return ControllerResult.success([
+                    ("skip", "Skip only this occurrence"),
+                    (EditScope.OCCURRENCE.value, "Delete only this occurrence"),
+                    (EditScope.FUTURE.value, "Delete this and every later occurrence"),
+                    (EditScope.SERIES.value, "Delete every occurrence (the entire series)"),
+                ])
+            if task is not None and task.is_series:
+                return ControllerResult.success([(EditScope.SERIES.value, "Delete the entire series")])
+            return ControllerResult.success([])
+        except _Failure as failure:
+            return ControllerResult.failure(failure.message, failure.cause)
+
+    def _task_or_none(self, ref: RowRef) -> Task | None:
+        return self._unwrap(self._planning.get_task(ref.id)) if ref.kind == "task" else None
+
+    def save_draft(self, draft: TaskDraft, *, editing: RowRef | None = None,
+                   scope: str | None = None) -> ControllerResult[PageSnapshot]:
         """
         Create (editing=None) or update one task/fixed block from the form.
         Edits start from the stored record and pass the version the row was
         drawn with, so a change made elsewhere meanwhile is reported, not
         overwritten. On any failure nothing is saved; the error's cause is
         FormErrors (field -> message) where a field is to blame, and the
-        committed state is re-read.
+        committed state is re-read. Editing an occurrence of a series applies
+        to `scope` (an EditScope value; default: only this occurrence); a
+        series row's edit applies to the entire series.
         """
         try:
             expected_version = self._precondition(editing)
@@ -403,8 +456,13 @@ class SchedulePageController:
                     stored = self._unwrap(self._planning.get_task(editing.id))
                     if stored is None:
                         raise _Failure("That task no longer exists.")
+                if stored is not None and stored.is_series and draft.needs_configuration and not draft.date.strip():
+                    draft = replace(draft, date=self.form_date.isoformat())  # configuring: it starts on this page's date
                 task = build_task(draft, timezone_name=self.timezone, existing=stored)
-                result = self._planning.add_or_update_task(task, expected_version=expected_version)
+                if stored is not None and (stored.is_occurrence or stored.is_series):
+                    result = self._save_series_edit(stored, task, expected_version, scope)
+                else:
+                    result = self._planning.add_or_update_task(task, expected_version=expected_version)
                 if not result.ok:
                     raise _FormFailure(result.error or "The task could not be saved.", result.cause)
         except FormErrors as errors:
@@ -417,6 +475,23 @@ class SchedulePageController:
             return self._fail_with_reload(str(error))
         return self.load()
 
+    def _save_series_edit(self, stored: Task, edited: Task, expected_version: int, scope: str | None):
+        """An edit of a series definition or of one of its occurrences, for the chosen scope."""
+        if stored.is_series:
+            return self._planning.edit_series(edited, expected_version=expected_version, scope=EditScope.SERIES)
+        chosen = EditScope(scope or EditScope.OCCURRENCE.value)
+        if chosen == EditScope.OCCURRENCE:
+            return self._planning.edit_occurrence(edited, expected_version=expected_version)
+        series = self._unwrap(self._planning.get_task(stored.series_id))
+        if series is None:
+            raise _Failure("This occurrence's series was deleted; only this occurrence can be changed.")
+        content = {name: getattr(edited, name) for name in (
+            "project_id", "name", "category", "tags", "estimated_duration_minutes", "priority", "points", "required",
+            "preferred_time_window")}
+        definition = series.model_copy(update=content)
+        return self._planning.edit_series(definition, expected_version=series.version, scope=chosen,
+                                          cutoff=stored.occurrence_slot if chosen == EditScope.FUTURE else None)
+
     def delete_description(self, ref: RowRef) -> ControllerResult[str]:
         """What removing a row does, in words, for the confirmation."""
         try:
@@ -424,6 +499,13 @@ class SchedulePageController:
                 task = self._unwrap(self._planning.get_task(ref.id))
                 if task is None:
                     raise _Failure("That task no longer exists.")
+                if task.is_occurrence or task.is_series:
+                    return ControllerResult.success(
+                        f"Remove \u201c{self._task_display(task)}\u201d, a repeating task? Removed occurrences are "
+                        "never generated again, and their saved schedule entries go with them. Occurrences already "
+                        "started or finished, and ones you edited on their own, are kept. Execution history "
+                        "(work sessions, feedback) is kept."
+                    )
                 return ControllerResult.success(
                     f"Remove the task \u201c{self._task_display(task)}\u201d? Its saved schedule entries are removed too. "
                     "Execution history (work sessions, feedback) is kept."
@@ -488,10 +570,17 @@ class SchedulePageController:
             return self._fail_with_reload(str(error))
         return self.load()
 
-    def delete(self, ref: RowRef) -> ControllerResult[PageSnapshot]:
+    def delete(self, ref: RowRef, *, scope: str | None = None) -> ControllerResult[PageSnapshot]:
+        """
+        Remove a row. For an occurrence `scope` is "skip", "occurrence",
+        "future" or "series" (default "occurrence"); for a series, "series".
+        """
         try:
             expected_version = self._precondition(ref)
-            if ref.kind == "task":
+            task = self._task_or_none(ref)
+            if task is not None and (task.is_occurrence or task.is_series):
+                self._unwrap(self._delete_in_series(task, expected_version, scope))
+            elif ref.kind == "task":
                 self._explain_dependents(ref.id)
                 self._unwrap(self._planning.remove_task(ref.id, expected_version=expected_version))
             else:
@@ -499,6 +588,19 @@ class SchedulePageController:
         except (InvalidFormError, _Failure) as error:
             return self._fail_with_reload(str(error))
         return self.load()
+
+    def _delete_in_series(self, task: Task, expected_version: int, scope: str | None):
+        if task.is_series:
+            return self._planning.delete_series(task.id, expected_version=expected_version, scope=EditScope.SERIES)
+        choice = scope or EditScope.OCCURRENCE.value
+        if choice in ("skip", EditScope.OCCURRENCE.value):
+            return self._planning.delete_occurrence(task.id, expected_version=expected_version, skip=choice == "skip")
+        series = self._unwrap(self._planning.get_task(task.series_id))
+        if series is None:
+            raise _Failure("This occurrence's series was deleted; only this occurrence can be removed.")
+        chosen = EditScope(choice)
+        return self._planning.delete_series(series.id, expected_version=series.version, scope=chosen,
+                                            cutoff=task.occurrence_slot if chosen == EditScope.FUTURE else None)
 
     def make_schedule(self) -> ControllerResult[ScheduleRun]:
         """Allocate the page's dates, generate each date, save the range atomically, re-read."""
@@ -530,6 +632,13 @@ class SchedulePageController:
                                reason=f"{entry.reason_code.value}: {entry.explanation}")
                 for entry in output.unscheduled
             )
+        # Work this run left where it is: occurrences already planned outside the range (never moved silently).
+        elsewhere = self._task_names(list(result.kept_elsewhere))
+        unscheduled.extend(
+            UnscheduledRow(day_label=day_label(placement.planned_date), name=elsewhere.get(task_id, str(task_id)),
+                           reason="already planned outside this range: left there (move it to plan it here)")
+            for task_id, placement in sorted(result.kept_elsewhere.items(), key=lambda item: item[1].planned_date)
+        )
         placed = sum(len(output.placements) for output in result.outputs.values())
         return ControllerResult.success(ScheduleRun(snapshot=loaded.value, unscheduled=unscheduled, placed_count=placed))
 
@@ -653,16 +762,28 @@ class SchedulePageController:
             window = task.preferred_time_window
             window_text = f"pref {format_window(window.start_minute, window.end_minute)}" if window else "any time"
             sort_start = window.start_minute if window else 0
+            type_label = "flexible"
+            if task.is_occurrence:
+                type_label = "repeat (edited)" if task.occurrence_state is not None else "repeat"
             rows.append((((planned or date_.max), sort_start, 1, str(task.id)), TaskRow(
                 ref=RowRef("task", task.id, task.version), date=planned,
                 day_label=day_label(planned) if planned is not None else "any",
-                name=task.name, type_label="flexible", time_text=window_text,
+                name=task.name, type_label=type_label, time_text=window_text,
             )))
             if task.id not in placed_task_ids and planned is not None and self._in_range(planned) and window:
                 canvas.append(CanvasItem(
                     self._day_index(planned), f"{task.name}  · pref", task.category,
                     window.start_minute, window.end_minute, "preview",
                 ))
+        for series in self._series_rows(start, end):
+            rule = series.recurrence
+            first = rule.start_date if rule.configured else None
+            rows.append((((first or date_.max), 0, 2, str(series.id)), TaskRow(
+                ref=RowRef("task", series.id, series.version), date=first,
+                day_label=day_label(first) if first is not None else "any",
+                name=series.name, type_label="repeats" if rule.configured else "needs setup",
+                time_text=describe_rule(rule) if rule.configured else "choose how it repeats",
+            )))
 
         executables = self._executables(placements, tasks)
 
@@ -679,6 +800,17 @@ class SchedulePageController:
             status_text=self._status_text(day_status),
             day_status=day_status,
         )
+
+    def _series_rows(self, start: date_, end: date_) -> list[Task]:
+        """The series definitions to list on these dates: ones that can repeat in them, and ones needing setup."""
+        found = []
+        for series in self._unwrap(self._planning.list_series()):
+            rule = series.recurrence
+            if not rule.configured:
+                found.append(series)
+            elif rule.start_date <= end and (rule.end_date is None or rule.end_date >= start):
+                found.append(series)
+        return found
 
     def _executables(self, placements: list[ScheduledTask], tasks: dict[uuid.UUID, Task]) -> list[ExecutablePlacement]:
         executables: list[ExecutablePlacement] = []

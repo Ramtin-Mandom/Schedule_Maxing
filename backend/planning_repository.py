@@ -50,8 +50,8 @@ from app.planning.application import task_planned_date
 from app.planning.errors import DuplicateEntityError, InvalidEntityError, ScopeError
 from app.planning.external_dependencies import ExecutionFact
 from app.planning.history import ExecutionHistory, ScheduleHistory, collect_schedule_history
-from app.execution.models import ExecutionStatus
-from app.planning.models import FixedBlock, PlacementRemovalReason, Project, ScheduledTask, Task
+from app.execution.models import CancelReason, ExecutionStatus
+from app.planning.models import FixedBlock, OccurrenceState, PlacementRemovalReason, Project, ScheduledTask, Task
 from app.planning.preferences import PreferenceRecord, PreferenceScope
 from app.planning.provenance import GenerationRecord
 from app.planning.scope import OwnerScope
@@ -186,6 +186,7 @@ class ServerPlanningRepository:
     def _soft_delete(
         self, spec: ResourceSpec, entity_id, expected_version: int | None,
         removal: tuple[PlacementRemovalReason | None, uuid.UUID | None] | None = None,
+        occurrence_state: OccurrenceState | None = None,
     ) -> bool:
         with self.transaction():
             row = self._session.get(spec.model, (self._user_id, uuid.UUID(str(entity_id))), populate_existing=True)
@@ -197,6 +198,8 @@ class ServerPlanningRepository:
                 reason, successor = removal
                 row.removal_reason = reason.value if reason is not None else None
                 row.superseded_by_id = successor
+            if occurrence_state is not None:  # why an occurrence was removed, part of the same revision
+                row.occurrence_state = occurrence_state.value
             self._mutator.tombstone(spec, row)
             return True
 
@@ -239,8 +242,39 @@ class ServerPlanningRepository:
     def update_task(self, task: Task, *, expected_version: int) -> bool:
         return self._update(TASKS, task, _task_payload(task), expected_version)
 
-    def soft_delete_task(self, task_id, *, deleted_at, expected_version) -> bool:
-        return self._soft_delete(TASKS, task_id, expected_version)
+    def soft_delete_task(self, task_id, *, deleted_at, expected_version, occurrence_state=None) -> bool:
+        return self._soft_delete(TASKS, task_id, expected_version, occurrence_state=occurrence_state)
+
+    def occurrences_of_series(self, series_ids: Iterable, *, include_deleted: bool = True) -> dict[uuid.UUID, list[Task]]:
+        ids = [uuid.UUID(str(value)) for value in series_ids]
+        grouped: dict[uuid.UUID, list[Task]] = defaultdict(list)
+        if ids:
+            for task in self._tasks(self._rows(models.Task, models.Task.series_id.in_(ids),
+                                               include_deleted=include_deleted)):
+                grouped[task.series_id].append(task)
+        return {key: sorted(tasks, key=lambda task: task.occurrence_slot) for key, tasks in grouped.items()}
+
+    def occurrences_in_slot_range(self, series_ids: Iterable, first: date_, last: date_) -> dict[uuid.UUID, list[Task]]:
+        ids = [uuid.UUID(str(value)) for value in series_ids]
+        grouped: dict[uuid.UUID, list[Task]] = defaultdict(list)
+        if ids:
+            for task in self._tasks(self._rows(models.Task, models.Task.series_id.in_(ids),
+                                               models.Task.occurrence_slot.between(first, last), include_deleted=True)):
+                grouped[task.series_id].append(task)
+        return dict(grouped)
+
+    def list_series(self, *, include_deleted: bool = False) -> list[Task]:
+        return self._tasks(self._rows(models.Task, models.Task.recurrence_frequency.is_not(None),
+                                      include_deleted=include_deleted))
+
+    def series_successors(self, series_ids: Iterable) -> dict[uuid.UUID, list[Task]]:
+        ids = [uuid.UUID(str(value)) for value in series_ids]
+        grouped: dict[uuid.UUID, list[Task]] = defaultdict(list)
+        if ids:
+            for task in self._tasks(self._rows(models.Task, models.Task.series_predecessor_id.in_(ids),
+                                               include_deleted=True)):
+                grouped[task.series_predecessor_id].append(task)
+        return dict(grouped)
 
     def get_task(self, task_id, *, include_deleted: bool = False) -> Task | None:
         return self.get_tasks([task_id], include_deleted=include_deleted).get(task_id)
@@ -396,10 +430,13 @@ class ServerPlanningRepository:
                 sessions[work.execution_id].append(to_work_session(work))
         return [ExecutionHistory(to_task_execution(row), tuple(sessions[row.id])) for row in rows]
 
-    def cancel_unstarted_execution(self, placement_id, *, at: datetime) -> str | None:
+    def cancel_unstarted_execution(
+        self, placement_id, *, at: datetime, reason: CancelReason = CancelReason.RESCHEDULED
+    ) -> str | None:
         """
-        A reschedule's execution disposition (see the SQLite repository): the
-        placement's live, never-started execution is cancelled through the
+        The execution disposition of a placement that stops being the plan
+        before its work started (see the SQLite repository): the placement's
+        live, never-started execution is cancelled with `reason` through the
         Mutator's lifecycle action -- the shared transition table, a server
         version and a change-log entry. Returns its id, or None.
         """
@@ -412,7 +449,8 @@ class ServerPlanningRepository:
             )).first()
             if row is None:
                 return None
-            self._mutator.execution_action(row.id, "cancel", ActionIn(base_version=row.version, at=at))
+            self._mutator.execution_action(row.id, "cancel", ActionIn(base_version=row.version, at=at,
+                                                                      cancel_reason=CancelReason(reason)))
             return str(row.id)
 
     def get_placements(self, placement_ids: Iterable, *, include_deleted: bool = False) -> dict[uuid.UUID, ScheduledTask]:
@@ -550,14 +588,15 @@ def _block(row) -> FixedBlock:
 def _placement_fields(placement: ScheduledTask) -> dict:
     return placement.model_dump(include={"task_id", "planned_date", "timezone", "planned_start", "planned_end", "score",
                                          "optimization_metadata", "task_category", "removal_reason",
-                                         "superseded_by_id"})
+                                         "superseded_by_id", "origin", "preserved"})
 
 
 def _placement(row) -> ScheduledTask:
     return ScheduledTask(task_id=row.task_id, planned_date=row.planned_date, timezone=row.timezone,
                          planned_start=row.planned_start, planned_end=row.planned_end, score=row.score,
                          optimization_metadata=dict(row.optimization_metadata), task_category=row.task_category,
-                         removal_reason=row.removal_reason, superseded_by_id=row.superseded_by_id, **_audit(row))
+                         removal_reason=row.removal_reason, superseded_by_id=row.superseded_by_id,
+                         origin=row.origin, preserved=bool(row.preserved), **_audit(row))
 
 
 def _ordered_placements(placements: Iterable[ScheduledTask]) -> list[ScheduledTask]:

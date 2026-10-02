@@ -9,7 +9,11 @@ Password hashing and access tokens, built only on maintained libraries:
       JWT_ALGORITHM (so "none" or an asymmetric-algorithm confusion is
       impossible), requires exp/iat/nbf/sub/iss/aud/jti/typ, and checks
       issuer, audience, expiry and token type. The user's identity is taken
-      only from the verified `sub` claim.
+      only from the verified `sub` claim. A token also carries `cep`, the
+      account's credential epoch when it was issued; the API refuses it once
+      the stored epoch has moved on (a password reset). A token issued before
+      epochs existed has no `cep` and is read as epoch 0 -- valid until the
+      account's first reset.
 
 Nothing here logs or returns a password, a hash, or a token.
 """
@@ -47,9 +51,12 @@ class IssuedToken:
     expires_in: int
 
 
-def issue_access_token(user_id: uuid.UUID, settings: BackendSettings, now: datetime) -> IssuedToken:
+def issue_access_token(
+    user_id: uuid.UUID, settings: BackendSettings, now: datetime, credential_epoch: int = 0
+) -> IssuedToken:
     expires_at = now + timedelta(minutes=settings.access_token_ttl_minutes)
     claims = {
+        "cep": int(credential_epoch),
         "sub": str(user_id),
         "iss": settings.jwt_issuer,
         "aud": settings.jwt_audience,
@@ -65,6 +72,11 @@ def issue_access_token(user_id: uuid.UUID, settings: BackendSettings, now: datet
 
 def verify_access_token(token: str, settings: BackendSettings, now: datetime) -> uuid.UUID:
     """The user id of a valid access token; TokenError otherwise (never says which check failed to the client)."""
+    return verify_access_token_claims(token, settings, now)[0]
+
+
+def verify_access_token_claims(token: str, settings: BackendSettings, now: datetime) -> tuple[uuid.UUID, int]:
+    """(user id, credential epoch) of a valid access token; TokenError otherwise."""
     try:
         claims = jwt.decode(
             token,
@@ -90,7 +102,10 @@ def verify_access_token(token: str, settings: BackendSettings, now: datetime) ->
         raise TokenError("ImmatureSignatureError")
     if claims.get("typ") != TOKEN_TYPE:
         raise TokenError("wrong token type")
+    epoch = claims.get("cep", 0)
+    if not isinstance(epoch, int) or isinstance(epoch, bool) or epoch < 0:
+        raise TokenError("malformed credential epoch")
     try:
-        return uuid.UUID(claims["sub"])
+        return uuid.UUID(claims["sub"]), epoch
     except (ValueError, TypeError, AttributeError):
         raise TokenError("invalid subject") from None

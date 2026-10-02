@@ -203,6 +203,21 @@ class DirectBackend:
                 email=email, username=username, password=password)
         return AccountSession(self, identity, _capability=_CAPABILITY)
 
+    def reset_password(self, *, token: str, new_password: str) -> None:
+        """
+        Set a new password with a recovery token (backend/recovery.py: single
+        use, atomic with the credential-epoch change that ends every earlier
+        session, direct ones included). Does not sign in. Recovery links are
+        issued and delivered only by the hosted server.
+        """
+        from backend.recovery import InvalidRecoveryTokenError, RecoveryService
+
+        try:
+            with self._account_errors(), self.operation() as session:
+                RecoveryService(session, self._clock).reset(token, new_password)
+        except InvalidRecoveryTokenError as error:
+            raise errors.InvalidCredentialsError(str(error)) from None
+
     def account_exists(self, *, email: str) -> bool:
         """Whether an account uses this (normalized) email -- for operator tools, never for a sign-in screen."""
         from sqlalchemy import select
@@ -293,9 +308,21 @@ class AccountSession(_Services):
         if not self.active:
             raise errors.NotSignedInError()
 
-    def operation(self, translate: Callable[[ApiError], Exception] = planning_error):
+    @contextmanager
+    def operation(self, translate: Callable[[ApiError], Exception] = planning_error) -> Iterator[Session]:
+        """
+        One unit of work of this account. The account's credential epoch is
+        re-read first: after a password reset (anywhere) this session is
+        signed out and refuses the work, like the server refuses older tokens.
+        """
+        from backend.recovery import credential_epoch
+
         self.require_active()
-        return self._backend.operation(translate)
+        with self._backend.operation(translate) as session:
+            if credential_epoch(session, self.user_id) != self._identity.credential_epoch:
+                self._active = False
+                raise errors.NotSignedInError()
+            yield session
 
     def reset_task_data(self) -> dict[str, int]:
         """

@@ -14,6 +14,12 @@ docs/web-api.md and in the OpenAPI schema.
     POST /planning/reset/preview         what a range reset would remove (nothing is written)
     POST /planning/reset                 the confirmed reset
     POST /planning/placements/{id}/reschedule  move one placement (docs/execution-rescheduling.md)
+    POST /planning/placements/{id}/release     release a placement's manual intent (it is not moved)
+    POST /planning/recurrence/expand     materialize a range's recurring occurrences (docs/recurrence.md)
+    POST /planning/occurrences/{id}/edit    change one occurrence ("this occurrence")
+    POST /planning/occurrences/{id}/delete  skip or delete one occurrence
+    POST /planning/series/{id}/edit      change a series: this and later occurrences, or the entire series
+    POST /planning/series/{id}/delete    delete this and later occurrences, or the entire series
     GET  /planning/analytics/schedule-cohort  planned-versus-actual report of a date range (docs/analytics.md)
     POST /planning/csv/preview           validate a canonical v2 CSV against what is stored, apply nothing
     POST /planning/csv/import            apply it (all or nothing)
@@ -36,7 +42,9 @@ refused; versions in a file are only ever preconditions.
 
 from __future__ import annotations
 
+import dataclasses
 import io
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -50,6 +58,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validato
 from sqlalchemy.orm import Session
 
 from app.optimizer import MandatoryTaskSchedulingError
+from app.planning import series as series_ops
 from app.planning import workflow
 from app.planning.allocation import AllocationResult
 from app.planning.application import PlacementReschedule, PlanningService, RangeScope, ResetPreview
@@ -60,13 +69,16 @@ from app.planning.errors import (
     DuplicateEntityError,
     EntityInUseError,
     EntityNotFoundError,
+    GenerationLimitError,
     HistoryProtectedError,
     InvalidEntityError,
     InvalidReferenceError,
     PlanningError,
+    RecurrenceLimitError,
     RegenerationRequiredError,
     RescheduleRejectedError,
     ScopeError,
+    SeriesConfigurationError,
     StaleInputsError,
     VersionConflictError,
 )
@@ -169,6 +181,9 @@ class SnapshotOut(BaseModel):
     fixed_blocks: list[FixedBlockOut]
     placements: list[PlacementOut]
     days: list[DayStateOut]
+    #: The placements generation keeps as manual intent: preserved ones, and older ones whose recorded lineage
+    #: proves they are a move's destination (docs/execution-rescheduling.md, "Manual placements").
+    preserved_placement_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
 class EngineOut(BaseModel):
@@ -256,6 +271,31 @@ class GeneratedDayOut(BaseModel):
     unscheduled: list[UnscheduledOut] | None
     unscheduled_count: int | None
     total_score: float
+    #: The day's objective under its mode, recomputed after generation (docs/scheduling-modes.md): baseline
+    #: reward B(S), the mode's component, the objective, first start / last finish (minutes into the day
+    #: window), idle and fixed minutes. Null for an already-current answer.
+    evaluation: dict[str, Any] | None = None
+
+
+class KeptElsewhereOut(BaseModel):
+    task_id: uuid.UUID
+    placement_id: uuid.UUID
+    date: date_
+
+
+class PlacementProblemOut(BaseModel):
+    """A kept placement that no longer fits (workflow.PlacementProblem)."""
+
+    placement_id: uuid.UUID
+    task_id: uuid.UUID
+    date: date_
+    reason: str
+    explanation: str
+    #: Why it is kept: history / manual / kept (incremental) / destination (a move).
+    kept_as: str
+    blocking: bool
+    #: What resolves it: edit_constraint, move, release_manual_intent, choose_another_range, regenerate_full.
+    remedies: list[str]
 
 
 class GenerateOut(BaseModel):
@@ -265,12 +305,22 @@ class GenerateOut(BaseModel):
     fingerprint: str
     days: list[GeneratedDayOut]
     unallocated: list[UnallocatedOut]
-    #: Placements outside the generated dates that this run replaced (the same occurrence).
+    #: Always empty since Milestone 6: generation never removes placements outside the generated dates
+    #: (kept for compatibility; see kept_elsewhere).
     superseded_placement_ids: list[uuid.UUID]
-    #: Placements outside the generated dates kept because their execution started or finished.
+    #: Always empty since Milestone 6 (kept for compatibility).
     history_protected_placement_ids: list[uuid.UUID]
     #: Replaced placements that execution history references (the history itself is kept).
     removed_with_history_placement_ids: list[uuid.UUID]
+    #: Occurrences the range plans that are already live outside the generated dates: left there, not placed again.
+    kept_elsewhere: list[KeptElsewhereOut] = Field(default_factory=list)
+    #: Kept history that no longer fits the current inputs (non-blocking: it stays exactly as recorded).
+    notices: list[PlacementProblemOut] = Field(default_factory=list)
+
+
+class ReleaseIn(Strict):
+    #: The version of the placement the release is based on (the precondition).
+    base_version: int = Field(gt=0)
 
 
 class ResetRangeIn(Strict):
@@ -331,6 +381,87 @@ class RescheduleIn(Strict):
     @classmethod
     def _valid_timezone(cls, value: str) -> str:
         return _timezone(value)
+
+
+class ExpandIn(Strict):
+    start_date: date_
+    end_date: date_
+
+    @model_validator(mode="after")
+    def _bounded(self):
+        workflow_range_error(self.start_date, self.end_date)
+        return self
+
+
+class SlotProblemOut(BaseModel):
+    series_id: uuid.UUID
+    slot: date_ | None
+    code: str
+    message: str
+
+
+class LegacyCollisionOut(BaseModel):
+    series_id: uuid.UUID
+    slot: date_
+    placement_ids: list[uuid.UUID]
+
+
+class ExpansionOut(BaseModel):
+    start_date: date_
+    end_date: date_
+    #: The occurrences this call materialized (empty when the range was already expanded).
+    created: list[TaskOut]
+    existing_count: int
+    #: Series without an explicit start date and time zone: they produce no occurrences until configured.
+    needs_configuration: list[uuid.UUID]
+    problems: list[SlotProblemOut]
+    warnings: list[SlotProblemOut]
+    legacy_collisions: list[LegacyCollisionOut]
+
+
+class OccurrenceEditIn(Strict):
+    base_version: int = Field(gt=0)
+    #: The occurrence's content as it should be (its series and original slot cannot change).
+    task: TaskFields
+
+
+class OccurrenceDeleteIn(Strict):
+    base_version: int = Field(gt=0)
+    #: True: skipped; False: deleted. Either way its slot stays reserved.
+    skip: bool = False
+
+
+class SeriesEditIn(Strict):
+    base_version: int = Field(gt=0)
+    scope: Literal["series", "future"]
+    #: For "future": the original slot date of the first occurrence to change.
+    cutoff: date_ | None = None
+    #: The series definition as it should be.
+    definition: TaskFields
+
+
+class SeriesDeleteIn(Strict):
+    base_version: int = Field(gt=0)
+    scope: Literal["series", "future"]
+    cutoff: date_ | None = None
+
+
+class PreservedOut(BaseModel):
+    task: TaskOut
+    #: "history" (started or finished) or "modified" (edited on its own).
+    reason: str
+
+
+class SeriesChangeOut(BaseModel):
+    scope: Literal["occurrence", "future", "series"]
+    series: TaskOut | None
+    successor: TaskOut | None
+    occurrence: TaskOut | None
+    updated: list[TaskOut]
+    superseded: list[TaskOut]
+    preserved: list[PreservedOut]
+    problems: list[SlotProblemOut]
+    explanation: str
 
 
 class RescheduleOut(BaseModel):
@@ -395,7 +526,13 @@ def block_out(block: FixedBlock) -> FixedBlockOut:
 def placement_out(placement: ScheduledTask) -> PlacementOut:
     return PlacementOut.model_validate({**placement.model_dump(include={
         "task_id", "planned_date", "timezone", "planned_start", "planned_end", "score", "optimization_metadata",
-        "task_category", "removal_reason", "superseded_by_id"}), **_meta(placement)})
+        "task_category", "removal_reason", "superseded_by_id", "origin", "preserved"}), **_meta(placement)})
+
+
+def problem_out(problem: workflow.PlacementProblem) -> PlacementProblemOut:
+    return PlacementProblemOut(placement_id=problem.placement_id, task_id=problem.task_id, date=problem.date,
+                               reason=problem.reason, explanation=problem.explanation, kept_as=problem.kept_as,
+                               blocking=problem.blocking, remedies=list(problem.remedies))
 
 
 def preference_out(record: PreferenceRecord) -> PreferenceOut:
@@ -441,6 +578,8 @@ def reset_preview_out(preview: ResetPreview) -> ResetPreviewOut:
 def api_error(error: Exception) -> ApiError:
     if isinstance(error, ApiError):
         return error
+    if isinstance(error, GenerationLimitError):
+        return ApiError(503, "generation_limit", str(error))
     if isinstance(error, StaleInputsError):
         return ApiError(409, "inputs_changed", str(error), expected_fingerprint=error.expected,
                         current_fingerprint=error.current)
@@ -452,8 +591,7 @@ def api_error(error: Exception) -> ApiError:
             for problem in error.problems])
     if isinstance(error, RegenerationRequiredError):
         return ApiError(409, "regenerate_required", str(error), problems=[
-            {"placement_id": p.placement_id, "task_id": p.task_id, "date": p.date, "reason": p.reason,
-             "explanation": p.explanation} for p in error.problems])
+            problem_out(p).model_dump(mode="json") for p in error.problems])
     if isinstance(error, MandatoryTaskSchedulingError):
         return ApiError(422, "generation_failed", str(error), date=getattr(error, "failed_date", None), failures=[
             {"task_id": f.task_id, "reason_code": f.reason_code.value, "explanation": f.explanation,
@@ -480,6 +618,10 @@ def api_error(error: Exception) -> ApiError:
         return ApiError(422, "invalid_reference", str(error))
     if isinstance(error, ScopeError):
         return ApiError(422, "out_of_scope", str(error))
+    if isinstance(error, RecurrenceLimitError):
+        return ApiError(422, "recurrence_limit", str(error))
+    if isinstance(error, SeriesConfigurationError):
+        return ApiError(422, "series_configuration", str(error))
     if isinstance(error, (InvalidEntityError, PlanningError)):
         return ApiError(422, "validation_error", str(error))
     if isinstance(error, ValueError):  # the day engine's own input refusals (cycles, invalid blocks)
@@ -515,6 +657,7 @@ def snapshot(service: PlanningService, query: RangeIn) -> SnapshotOut:
         fixed_blocks=[block_out(b) for day in freshness for b in loaded.fixed_blocks_by_date[day]],
         placements=[placement_out(p) for p in placements],
         days=[day_state_out(state) for state in freshness.values()],
+        preserved_placement_ids=sorted(service.preserved_placement_ids(placements), key=str),
     )
 
 
@@ -550,12 +693,12 @@ def allocation_preview(service: PlanningService, query: RangeIn) -> AllocationPr
     )
 
 
-def generate(service: PlanningService, request: GenerateIn, clock) -> GenerateOut:
+def generate(service: PlanningService, request: GenerateIn, clock, *, deadline: float | None = None) -> GenerateOut:
     outcome = workflow.generate(
         service, range_start=request.start_date, range_end=request.end_date, generate_start=request.generate_start,
         generate_end=request.generate_end, scope=RangeScope(request.scope), timezone_name=request.timezone,
-        mode=workflow.GenerationMode(request.mode), protect_history=True,
-        expected_fingerprint=request.expected_fingerprint, clock=clock,
+        mode=workflow.GenerationMode(request.mode),
+        expected_fingerprint=request.expected_fingerprint, clock=clock, deadline=deadline,
     )
     current = outcome.status == "already_current"
     records = service.generation_records(min(outcome.outputs), max(outcome.outputs)) if current else {}
@@ -571,6 +714,7 @@ def generate(service: PlanningService, request: GenerateIn, clock) -> GenerateOu
                 for e in output.unscheduled],
             unscheduled_count=(record.unscheduled_count if record else None) if current else len(output.unscheduled),
             total_score=output.total_score,
+            evaluation=dataclasses.asdict(outcome.evaluations[day]) if day in outcome.evaluations else None,
         ))
     reschedule = outcome.reschedule
     return GenerateOut(
@@ -579,6 +723,9 @@ def generate(service: PlanningService, request: GenerateIn, clock) -> GenerateOu
         superseded_placement_ids=reschedule.superseded_ids if reschedule else [],
         history_protected_placement_ids=reschedule.history_protected_ids if reschedule else [],
         removed_with_history_placement_ids=reschedule.replacement.removed_with_history_ids if reschedule else [],
+        kept_elsewhere=[KeptElsewhereOut(task_id=task_id, placement_id=p.id, date=p.planned_date)
+                        for task_id, p in sorted(outcome.kept_elsewhere.items(), key=lambda item: str(item[0]))],
+        notices=[problem_out(problem) for day in sorted(outcome.notices) for problem in outcome.notices[day]],
     )
 
 
@@ -610,6 +757,58 @@ def reschedule(
             if stored is not None:
                 failure.details["current"] = placement_out(stored).model_dump(mode="json")
         raise failure from None
+
+
+def _slot_problems(problems) -> list[SlotProblemOut]:
+    return [SlotProblemOut(series_id=p.series_id, slot=p.slot, code=p.code, message=p.message) for p in problems]
+
+
+def expansion_out(result: series_ops.ExpansionResult) -> ExpansionOut:
+    return ExpansionOut(
+        start_date=result.start_date, end_date=result.end_date, created=[task_out(task) for task in result.created],
+        existing_count=result.existing_count, needs_configuration=result.needs_configuration,
+        problems=_slot_problems(result.problems), warnings=_slot_problems(result.warnings),
+        legacy_collisions=[LegacyCollisionOut(series_id=c.series_id, slot=c.slot, placement_ids=c.placement_ids)
+                           for c in result.legacy_collisions],
+    )
+
+
+def series_change_out(change: series_ops.SeriesChange) -> SeriesChangeOut:
+    def one(task):
+        return task_out(task) if task is not None else None
+
+    return SeriesChangeOut(
+        scope=change.scope.value, series=one(change.series), successor=one(change.successor),
+        occurrence=one(change.occurrence), updated=[task_out(task) for task in change.updated],
+        superseded=[task_out(task) for task in change.superseded],
+        preserved=[PreservedOut(task=task_out(item.task), reason=item.reason) for item in change.preserved],
+        problems=_slot_problems(change.problems), explanation=change.explanation(),
+    )
+
+
+def _edited(stored: Task | None, fields: TaskFields, record_id: uuid.UUID) -> Task:
+    """`stored` with the request's content; recurrence fields the request omits keep their stored values."""
+    if stored is None:
+        raise EntityNotFoundError("task", record_id)
+    sent = fields.model_dump(include=fields.model_fields_set & set(TaskFields.model_fields))
+    try:
+        return Task.model_validate({**stored.model_dump(), **sent})
+    except ValueError as error:
+        raise ApiError(422, "validation_error", _first_message(error)) from None
+
+
+def edit_occurrence_op(service: PlanningService, task_id: uuid.UUID, body: OccurrenceEditIn) -> SeriesChangeOut:
+    stored = service.get_task(task_id)
+    change = series_ops.edit_occurrence(service, _edited(stored, body.task, task_id), expected_version=body.base_version)
+    return series_change_out(change)
+
+
+def edit_series_op(service: PlanningService, series_id: uuid.UUID, body: SeriesEditIn) -> SeriesChangeOut:
+    stored = service.get_task(series_id)
+    change = series_ops.edit_series(service, _edited(stored, body.definition, series_id),
+                                    expected_version=body.base_version, scope=series_ops.EditScope(body.scope),
+                                    cutoff=body.cutoff)
+    return series_change_out(change)
 
 
 def reschedule_out(result: PlacementReschedule) -> RescheduleOut:
@@ -700,7 +899,9 @@ def build_planning_router(
     @router.post("/generate", response_model=GenerateOut, operation_id="planning_generate",
                  summary="Generate and save selected dates (full or incremental); already_current writes nothing.")
     def post_generate(body: GenerateIn, request: Request, context: PlanningContext = Depends(get_context)):
-        return _run(lambda: generate(context.service, body, request.app.state.clock))
+        limit = getattr(getattr(request.app.state, "settings", None), "generation_time_limit_seconds", None)
+        deadline = time.monotonic() + limit if limit else None
+        return _run(lambda: generate(context.service, body, request.app.state.clock, deadline=deadline))
 
     @router.post("/reset/preview", response_model=ResetPreviewOut, operation_id="planning_reset_preview",
                  summary="What resetting a date range would delete, including disclosed cascades. Writes nothing.")
@@ -723,6 +924,45 @@ def build_planning_router(
                  summary="Move one placement that has not been started; validated and atomic (no regeneration).")
     def post_reschedule(placement_id: uuid.UUID, body: RescheduleIn, context: PlanningContext = Depends(get_context)):
         return reschedule_out(reschedule(context.service, placement_id, body))
+
+    @router.post("/placements/{placement_id}/release", response_model=PlacementOut,
+                 operation_id="planning_release_manual_placement",
+                 summary="Release a placement's manual intent: it stays where it is, but generation may replace it.")
+    def post_release(placement_id: uuid.UUID, body: ReleaseIn, context: PlanningContext = Depends(get_context)):
+        return _run(lambda: placement_out(context.service.release_manual_placement(
+            placement_id, expected_version=body.base_version)))
+
+    @router.post("/recurrence/expand", response_model=ExpansionOut, operation_id="planning_expand_recurrence",
+                 summary="Materialize the recurring occurrences of a bounded range (idempotent; generation does it too).")
+    def post_expand(body: ExpandIn, context: PlanningContext = Depends(get_context)):
+        return _run(lambda: expansion_out(series_ops.expand_occurrences(context.service, body.start_date, body.end_date)))
+
+    @router.post("/occurrences/{task_id}/edit", response_model=SeriesChangeOut, operation_id="planning_edit_occurrence",
+                 summary="Change one occurrence of a series on its own (it becomes modified; its slot stays).")
+    def post_edit_occurrence(task_id: uuid.UUID, body: OccurrenceEditIn,
+                             context: PlanningContext = Depends(get_context)):
+        return _run(lambda: edit_occurrence_op(context.service, task_id, body))
+
+    @router.post("/occurrences/{task_id}/delete", response_model=SeriesChangeOut,
+                 operation_id="planning_delete_occurrence",
+                 summary="Skip or delete one occurrence; its slot stays reserved and is never generated again.")
+    def post_delete_occurrence(task_id: uuid.UUID, body: OccurrenceDeleteIn,
+                               context: PlanningContext = Depends(get_context)):
+        return _run(lambda: series_change_out(series_ops.delete_occurrence(
+            context.service, task_id, expected_version=body.base_version, skip=body.skip)))
+
+    @router.post("/series/{series_id}/edit", response_model=SeriesChangeOut, operation_id="planning_edit_series",
+                 summary="Change a series from an occurrence on (a split with lineage) or entirely; history is kept.")
+    def post_edit_series(series_id: uuid.UUID, body: SeriesEditIn, context: PlanningContext = Depends(get_context)):
+        return _run(lambda: edit_series_op(context.service, series_id, body))
+
+    @router.post("/series/{series_id}/delete", response_model=SeriesChangeOut, operation_id="planning_delete_series",
+                 summary="Delete a series from an occurrence on, or entirely; started, finished and edited "
+                         "occurrences are kept.")
+    def post_delete_series(series_id: uuid.UUID, body: SeriesDeleteIn, context: PlanningContext = Depends(get_context)):
+        return _run(lambda: series_change_out(series_ops.delete_series(
+            context.service, series_id, expected_version=body.base_version, scope=series_ops.EditScope(body.scope),
+            cutoff=body.cutoff)))
 
     @router.get("/analytics/schedule-cohort", response_model=ScheduleCohortReport,
                 operation_id="planning_schedule_cohort",
@@ -799,5 +1039,7 @@ def hosted_capabilities(_request: Request) -> CapabilitiesOut:
         csv_format_version=FORMAT_VERSION, max_csv_bytes=MAX_CSV_BYTES,
         auth={"browser_sessions": True, "bearer_tokens": True, "registration": True},
         extra={"note": "Changes are saved on the server directly. Changes still waiting on a device reach the server "
-                       "only when that device synchronizes; this server cannot see them."},
+                       "only when that device synchronizes; this server cannot see them.",
+               "recurrence": {"expansion": True, "max_range_days": series_ops.MAX_EXPANSION_DAYS,
+                              "max_occurrences": series_ops.MAX_EXPANSION_OCCURRENCES}},
     )

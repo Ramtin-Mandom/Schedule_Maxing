@@ -14,7 +14,8 @@ only for out-of-date work) go to their own lane.
 Keyboard and pointer: the canvas takes Tab focus (with a visible ring);
 Left/Right/Home/End select an item, Enter or a double-click edits it,
 Delete removes it, and the Menu key, Shift+F10 or a right-click open its
-actions. The selected item's full details (h:mm AM/PM times, duration,
+actions (a task the user placed by moving it also offers "Release manual
+placement": Make Schedule keeps it until it is released). The selected item's full details (h:mm AM/PM times, duration,
 kind, category) are written out below the canvas. The Day page's task list
 offers the same actions.
 
@@ -69,13 +70,14 @@ def hour_label(hour: int) -> str:
 
 
 class DayTimeline(Card):
-    """See the module docstring. on_edit/on_remove receive the TimelineItem acted on."""
+    """See the module docstring. on_edit/on_remove/on_release receive the TimelineItem acted on."""
 
     def __init__(self, parent, *, on_edit: Callable[[TimelineItem], None], on_remove: Callable[[TimelineItem], None],
+                 on_release: Callable[[TimelineItem], None] | None = None,
                  geometry: TimelineGeometry | None = None) -> None:
         super().__init__(parent)
         self.geometry = geometry or TimelineGeometry()
-        self._on_edit, self._on_remove = on_edit, on_remove
+        self._on_edit, self._on_remove, self._on_release = on_edit, on_remove, on_release
         self.snapshot: DaySnapshot | None = None
         self.items: list[TimelineItem] = []
         self.selected: TimelineItem | None = None
@@ -172,6 +174,10 @@ class DayTimeline(Card):
         if self.selected is not None:
             self._on_remove(self.selected)
 
+    def release_selected(self) -> None:
+        if self.selected is not None and self.selected.preserved and self._on_release is not None:
+            self._on_release(self.selected)
+
     def item_bounds(self, key: str) -> tuple[float, float, float, float] | None:
         """The drawn rectangle (x0, y0, x1, y1) of an item, in canvas coordinates (None if not drawn)."""
         found = self.canvas.find_withtag(f"box:{key}")
@@ -203,8 +209,11 @@ class DayTimeline(Card):
         if event is not None:
             self._on_click(event)
         chosen = self.selected is not None
-        return [MenuItem("Edit...", self.edit_selected, enabled=chosen),
-                MenuItem("Remove...", self.remove_selected, enabled=chosen, danger=True)]
+        items = [MenuItem("Edit...", self.edit_selected, enabled=chosen)]
+        if self._on_release is not None:
+            items.append(MenuItem("Release manual placement", self.release_selected,
+                                  enabled=chosen and self.selected.preserved))
+        return [*items, MenuItem("Remove...", self.remove_selected, enabled=chosen, danger=True)]
 
     def _show_details(self) -> None:
         if self.selected is not None:

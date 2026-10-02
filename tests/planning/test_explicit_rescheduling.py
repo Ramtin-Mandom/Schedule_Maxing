@@ -3,8 +3,9 @@
 its replacement; a regeneration leaves unchanged placements alone and gives
 every removed one its reason and successor; chains of moves stay traceable;
 started or finished history is never replaced through any generation entry
-point; recurrence templates keep one occurrence per date; a failed move
-changes nothing (change capture included); owner scopes hold."""
+point; an occurrence of a recurring series keeps its identity when it moves to
+another date (docs/recurrence.md); a failed move changes nothing (change
+capture included); owner scopes hold."""
 
 from __future__ import annotations
 
@@ -25,7 +26,14 @@ from app.planning.errors import (
     RescheduleRejectedError,
     VersionConflictError,
 )
-from app.planning.models import FixedBlock, PlacementRemovalReason, RecurrenceSpec, ScheduledTask, Task
+from app.planning.models import (
+    FixedBlock,
+    PlacementOrigin,
+    PlacementRemovalReason,
+    RecurrenceSpec,
+    ScheduledTask,
+    Task,
+)
 from app.planning.repository import PlanningRepository
 from app.planning.scope import OwnerScope
 from app.ui.planning_controller import PlanningController
@@ -117,16 +125,32 @@ def test_a_changed_placement_keeps_its_original_plan_and_names_its_successor(sta
         original.planned_start, original.planned_end, "study")  # the plan as it was, category included
 
 
-def test_a_move_then_a_regeneration_is_one_traceable_chain(stack: Stack) -> None:
+def test_a_moved_placement_survives_a_full_regeneration(stack: Stack) -> None:
     task = stack.task()
     stack.schedule()
     first = stack.only(task)
     moved = stack.move(first, 15).replacement
+    assert (moved.origin, moved.preserved) == (PlacementOrigin.MANUAL, True)
 
-    stack.schedule()  # a full regeneration replaces the manually moved placement like any other
+    stack.schedule()  # a full regeneration keeps the user's manual placement
+
+    assert stack.only(task) == moved  # same id, interval and version: not rewritten
+
+
+def test_a_released_move_then_a_regeneration_is_one_traceable_chain(stack: Stack) -> None:
+    task = stack.task()
+    stack.schedule()
+    first = stack.only(task)
+    moved = stack.move(first, 15).replacement
+    released = stack.planning.release_manual_placement(moved.id, expected_version=moved.version)
+    assert (released.id, released.preserved, released.version) == (moved.id, False, moved.version + 1)
+    assert released.planned_start == moved.planned_start  # releasing never moves anything
+
+    stack.schedule()  # released: a full regeneration may now replace it like generated work
 
     last = stack.only(task)
     assert last.id not in (first.id, moved.id)
+    assert (last.origin, last.preserved) == (PlacementOrigin.GENERATED, False)
     chain = [last.id]
     while predecessors := stack.planning.placements_superseded_by([chain[-1]]).get(chain[-1]):
         chain.append(predecessors[0].id)
@@ -168,17 +192,21 @@ def test_started_or_finished_history_survives_every_generation_entry_point(stack
 # -----------------------------------------------------------------------------
 
 
-def test_a_recurring_template_placement_moves_only_within_its_own_date(stack: Stack) -> None:
-    daily = stack.task("Daily", required_date=None, recurrence=RecurrenceSpec(frequency="daily"))
+def test_a_recurring_occurrence_moves_to_another_date_keeping_its_identity(stack: Stack) -> None:
+    # Replaces "a recurring template's placement moves only within its own date": the series is expanded into
+    # concrete occurrences, and an occurrence keeps its original slot identity wherever it is moved.
+    daily = stack.task("Daily", required_date=None,
+                       recurrence=RecurrenceSpec(frequency="daily", start_date=MON, timezone="UTC"))
     stack.schedule()
-    placement = stack.only(daily)
+    [occurrence] = [task for task in stack.planning.list_tasks() if task.series_id == daily.id]
+    placement = stack.only(occurrence)
 
-    with pytest.raises(RescheduleRejectedError) as rejected:
-        stack.move(placement, 10, day=TUE)  # another date is another occurrence
-    assert [p.reason for p in rejected.value.problems] == ["recurring_occurrence_date"]
-
-    moved = stack.move(placement, 16)
-    assert moved.replacement.planned_date == MON and moved.previous.superseded_by_id == moved.replacement.id
+    moved = stack.move(placement, 10, day=TUE)
+    assert moved.replacement.task_id == occurrence.id and moved.replacement.planned_date == TUE
+    assert moved.previous.superseded_by_id == moved.replacement.id
+    assert (moved.updated_task.occurrence_slot, moved.updated_task.required_date) == (MON, TUE)
+    stack.schedule()  # Monday again: the moved occurrence is not placed there a second time
+    assert not [p for p in stack.planning.placements_for_date(MON) if p.task_id == occurrence.id]
 
 
 def test_hard_rules_of_the_destination(stack: Stack) -> None:

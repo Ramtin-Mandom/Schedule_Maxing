@@ -852,7 +852,7 @@ Schema version 4 prepares the local store for a later synchronization milestone.
 - **Soft deletion.** Deleting a record keeps it as a tombstone, so history stays and the id is never reused.
 - **Saved preferences.** The user preference layer and per-date layers, including the scheduler mode, are stored in SQLite. They keep the YAML -> user -> date order, and they stay the same after a restart.
 - **Schedule records.** Every Make Schedule run saves a record of what each date was generated from, in the same transaction as the placements. That includes dates where nothing was placed. After a restart, an unchanged schedule is shown as current, and one whose tasks, fixed blocks, preferences, mode, or timezone changed is shown as out of date. Schedules saved before this version have no record and are shown as out of date.
-- **Make Schedule cleans up moved tasks.** If a run places a task that still has an older placement on another date, that older placement is removed. Placements of other tasks and other dates of a recurring task are left alone. So is any placement whose execution has started or finished. See `app/planning/occurrence.py`.
+- **Make Schedule never touches other dates.** Since Milestone 6 a run writes only the dates it schedules. A task that already has a placement on another date is left there and listed ("already planned on ...; left there") instead of being moved silently; moving it is an explicit reschedule. See `app/planning/occurrence.py` and [docs/execution-rescheduling.md](docs/execution-rescheduling.md#scope-milestone-6).
 - **Dependencies outside the range.** Make Schedule now checks dependencies that fall outside the scheduled dates against saved data. A dependency counts as done if it was completed, or if it has a generated placement before the range. A skipped, cancelled, pending, or missing dependency blocks its dependent, and the reason names which of these it was. See `app/planning/external_dependencies.py`.
 
 ### Milestone 4 preflight: domain repairs for the web UI
@@ -892,7 +892,15 @@ Protocol details: [docs/sync-protocol.md](docs/sync-protocol.md).
 
 ### Projects and recurrence
 
-Project Schedule manages persisted projects and task assignments; calendar and allocation filters display a project's work. `RecurrenceSpec` is persisted but has no automatic recurrence expansion. See [Projects and Allocation](docs/desktop-projects-allocation.md).
+Project Schedule manages persisted projects and task assignments; calendar and allocation filters display a project's work. See [Projects and Allocation](docs/desktop-projects-allocation.md).
+
+**Five scheduling modes.** Normal, ADHD friendly, Early finish, Night owl and Catch-up share the same hard rules and search; they differ in what they optimize (finishing early, starting late, or prioritizing categories you often skipped). Old Normal/ADHD choices keep working. See [Scheduling modes](docs/scheduling-modes.md).
+
+**Forgot your password?** The account page can request a recovery link and reset the password with it; every older session then ends. The server needs mail delivery configured for this (see [backend.md](docs/backend.md#password-recovery)).
+
+**Your moves stay put.** A task you move yourself is a manual placement: every later Make Schedule or Regenerate keeps it where you put it (and places other work around it) until you choose "Release manual placement" on the Day timeline. If it no longer fits -- say a class was added over it -- nothing is changed and you are told what to do (move it, change the setting, or release it). Started or finished work is always kept as recorded. See [Manual placements](docs/execution-rescheduling.md#manual-placements-milestone-6).
+
+A repeating task is a recurring series (daily, weekly or monthly, every N, ending never, on a date or after N times) with an explicit start date and time zone. Each original date becomes its own concrete occurrence when a range is scheduled, previewed or expanded; occurrences can be moved (keeping their identity), edited or removed on their own, from one occurrence on, or for the entire series, while started or finished work is kept. Templates saved before this need setup. See [Recurring series](docs/recurrence.md).
 
 ### Saved data: SQLite, import, export, reset, and backups (Milestone 2)
 
@@ -1021,7 +1029,7 @@ Possible next steps:
 - Feed productivity-derived duration predictions back into the optimizer as an opt-in input (currently the suggestion is shown but never applied automatically).
 - Add a real calendar-date mapping for the abstract day-index schedule model in the *legacy* pipeline (largely superseded by the canonical layer's real `datetime.date`, but the legacy `app/models.py` path itself still uses abstract day indexes).
 - If real usage history grows enough to clear the ML activation gate, surface the comparison result (and, once it wins honestly, the ML suggestion itself) in the desktop UI's duration-suggestion widget alongside the median predictor.
-- Implement recurrence-template expansion and project archiving; project CRUD, assignment and the separate Allocation Planning view are already available.
+- Implement project archiving; project CRUD, assignment, the separate Allocation Planning view and recurring series ([docs/recurrence.md](docs/recurrence.md)) are already available.
 
 ---
 
@@ -1042,4 +1050,4 @@ The project has these parts:
 - **Offline-first sync (Milestone 3):** retries are safe, conflicts are stored and resolved explicitly, and your existing local data is uploaded only after the explicit association step. See [docs/sync-protocol.md](docs/sync-protocol.md).
 - **Also:** reward-based optimization, PERT-style dependency handling (name- and id-based), personal productivity analytics, and an evidence-gated experimental ML duration predictor.
 
-Automated coverage includes native desktop workflows (`python -m pytest`, which needs no external server, Docker, or PostgreSQL; native widget tests require a display). Real PostgreSQL verification is optional and explicit: see [docs/backend.md](docs/backend.md#tests). Remaining roadmap items include recurrence expansion and project archiving. See [Milestone 4 verification](docs/milestone-4-completion.md) for recorded checks and limitations.
+Automated coverage includes native desktop workflows (`python -m pytest`, which needs no external server, Docker, or PostgreSQL; native widget tests require a display). Real PostgreSQL verification is optional and explicit: see [docs/backend.md](docs/backend.md#tests). Remaining roadmap items include project archiving. See [Milestone 4 verification](docs/milestone-4-completion.md) for recorded checks and limitations.

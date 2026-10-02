@@ -80,21 +80,35 @@ class StaleInputsError(PlanningError):
         )
 
 
+class GenerationLimitError(PlanningError):
+    """
+    A generation exceeded its work budget -- too many tasks in the range, or
+    its time limit (a hosted deadline) before saving. Checked cooperatively
+    between dates and once more before the write transaction: nothing was
+    saved, and nothing is saved later.
+    """
+
+
 class RegenerationRequiredError(PlanningError):
     """
-    Placements that an incremental generation (or protected history) would
-    keep are no longer compatible with the current inputs; `problems` says
-    which and why. Nothing was saved -- an explicit (full) regeneration is
-    needed, which never happens implicitly.
+    Placements that a generation must keep -- an incremental generation's
+    saved work, or a manual placement (the user's move, until released) --
+    are no longer compatible with the current inputs; `problems`
+    (workflow.PlacementProblem) says which, why, and what resolves each
+    (`remedies`). Nothing was saved: replacing kept work never happens
+    implicitly.
     """
 
     def __init__(self, problems: list, message: str | None = None) -> None:
         self.problems = list(problems)
+        manual = any(getattr(problem, "kept_as", None) == "manual" for problem in self.problems)
         super().__init__(
             message
             or "Some saved placements no longer fit the current inputs, so they cannot be kept: "
             + "; ".join(f"{problem.placement_id} ({problem.reason})" for problem in self.problems)
-            + ". Nothing was saved; regenerate explicitly to replace them."
+            + ". Nothing was saved; "
+            + ("move or release the manual placements, change the conflicting constraint, or regenerate explicitly "
+               "to replace the others." if manual else "regenerate explicitly to replace them.")
         )
 
 
@@ -162,3 +176,20 @@ class RescheduleRejectedError(PlanningError):
             + "; ".join(f"{problem.explanation} ({problem.reason})" for problem in self.problems)
             + " Nothing was changed."
         )
+
+
+class RecurrenceLimitError(PlanningError):
+    """
+    A recurrence request (expansion, or a series-wide change) would exceed
+    its bounded work budget -- the planning range limit, the number of
+    occurrences it may materialize or touch, or the slot scan budget.
+    Nothing was written; ask for a smaller range.
+    """
+
+
+class SeriesConfigurationError(PlanningError):
+    """
+    A recurring series cannot be used as asked: it has no explicit start
+    date and time zone yet (it needs configuration), or the requested scoped
+    change does not apply to it. Nothing was written.
+    """

@@ -73,8 +73,15 @@ adjusted:
   is refused for a deadline or block, with a request to choose another time.
 - **Blocks across a daylight-saving change.** A block that spans the change
   is refused, with a request to split it at the change.
-- **Recurrence.** Stored recurrence is preserved through edits, but there is
-  no Repeat control, because occurrences are not expanded yet.
+- **Recurrence.** "Repeats" (in More options) makes the task a recurring
+  series starting on the page's date in the page's time zone: daily, weekly
+  (weekdays), monthly (day of month; months without it are skipped), every N,
+  ending never, on a date or after N times. A template saved before series
+  repeated shows "Needs setup" and is configured only when Repeats is chosen.
+  Saving an edited occurrence asks whether the change applies to only it, to
+  it and every later occurrence, or to the entire series; removing one offers
+  skip, delete it, delete it and later ones, or the entire series. See
+  [recurrence.md](recurrence.md).
 - **Task list times.** Since the Day rebuild (Prompt 4) the task lists, the
   Execute choices and the schedule strips show h:mm AM/PM times.
 

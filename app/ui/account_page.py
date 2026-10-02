@@ -48,8 +48,84 @@ from app.ui.account_controller import (
     profile_summary,
 )
 from app.ui.background import ControllerResult, run_in_background
-from app.ui.components import AppButton, Card, ConfirmDialog, LabeledEntry, Notice, SectionTitle, font
+from app.ui.components import AppButton, Card, ConfirmDialog, LabeledEntry, ModalDialog, Notice, SectionTitle, font
 from app.ui.pages import PageHeader
+
+
+class RecoveryDialog(ModalDialog):
+    """
+    "Forgot password": (1) ask the backend to email a recovery link; (2) paste
+    the link (or its code) and choose a new password. Network work runs in the
+    background; a result for a closed dialog is dropped. The fields are cleared
+    after each attempt; nothing is kept. No automatic sign-in follows a reset.
+    """
+
+    def __init__(self, parent, controller, *, email: str = "") -> None:
+        super().__init__(parent, "Reset password", width=480)
+        self.controller = controller
+        intro = ("1. Enter your email or username to receive a recovery link.\n"
+                 "2. Paste the link (or its code) here and choose a new password.")
+        ctk.CTkLabel(self.body, text=intro, anchor="w", justify="left", wraplength=460, font=font(theme.SIZE_BODY),
+                     text_color=theme.TEXT_PRIMARY).grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        self.identifier_field = LabeledEntry(self.body, "Email or username", placeholder="name@example.com")
+        self.identifier_field.variable.set(email)
+        self.identifier_field.grid(row=1, column=0, sticky="ew", pady=4)
+        self.send_button = AppButton(self.body, "Send recovery link", self.send_link, variant="secondary")
+        self.send_button.grid(row=2, column=0, sticky="ew", pady=(4, 10))
+        self.code_field = LabeledEntry(self.body, "Recovery link or code")
+        self.code_field.grid(row=3, column=0, sticky="ew", pady=4)
+        self.password_field = LabeledEntry(self.body, "New password")
+        self.password_field.entry.configure(show="•")
+        self.password_field.grid(row=4, column=0, sticky="ew", pady=4)
+        self.confirm_field = LabeledEntry(self.body, "Repeat the new password")
+        self.confirm_field.entry.configure(show="•")
+        self.confirm_field.grid(row=5, column=0, sticky="ew", pady=4)
+        self.notice = Notice(self.body, wraplength=460)
+        self.notice.grid(row=6, column=0, sticky="ew", pady=(8, 0))
+        self.notice.hide()
+        self.add_buttons("Set new password", self.reset, cancel_text="Close")
+        self.initial_focus = self.identifier_field.entry
+
+    def _background(self, work, done) -> None:
+        run_in_background(self, work, done, still_current=lambda: not self._closed)
+
+    def send_link(self) -> None:
+        identifier = self.identifier_field.get()
+        self.identifier_field.set_error(None)
+        self.send_button.configure(state="disabled")
+
+        def done(result: ControllerResult) -> None:
+            self.send_button.configure(state="normal")
+            if result.ok:
+                self.notice.show("success", result.value)
+            else:
+                if isinstance(result.cause, InvalidInput):
+                    self.identifier_field.set_error(result.cause.errors.get("email"))
+                self.notice.show("error", result.error)
+
+        self._background(lambda: self.controller.request_recovery(identifier), done)
+
+    def reset(self) -> None:
+        code, password, confirm = self.code_field.get(), self.password_field.get(), self.confirm_field.get()
+        for field_widget in (self.code_field, self.password_field, self.confirm_field):
+            field_widget.set_error(None)
+        self.password_field.variable.set("")  # never kept, whatever happens next
+        self.confirm_field.variable.set("")
+        self.primary_button.configure(state="disabled")
+
+        def done(result: ControllerResult) -> None:
+            self.primary_button.configure(state="normal")
+            if result.ok:
+                self.code_field.variable.set("")
+                self.notice.show("success", result.value)
+                return
+            if isinstance(result.cause, InvalidInput):
+                fields = {"code": self.code_field, "password": self.password_field, "confirm": self.confirm_field}
+                for name, message in result.cause.errors.items():
+                    fields[name].set_error(message)
+            self.notice.show("error", result.error)
+
+        self._background(lambda: self.controller.reset_password(code, password, confirm), done)
 
 
 def _always() -> bool:
@@ -169,6 +245,8 @@ class AccountPage(ctk.CTkFrame):
         self.name_field = LabeledEntry(self.form_frame, "Display name (optional)")
         self.submit_button = AppButton(self.form_frame, "Sign in", self.submit_account)
         self.submit_button.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        self.forgot_button = AppButton(self.form_frame, "Forgot password?", self.open_recovery, variant="ghost")
+        self.forgot_button.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         for entry in (self.email_field.entry, self.password_field.entry, self.name_field.entry):
             entry.bind("<Return>", lambda _e: self.submit_account(), add="+")
         self.account_notice = Notice(card, wraplength=440)
@@ -415,6 +493,11 @@ class AccountPage(ctk.CTkFrame):
             self.name_field.grid_remove()
         self._render_buttons()
 
+    def open_recovery(self) -> None:
+        """The password recovery dialog: request a link, then set a new password with its code."""
+        self.recovery_dialog = RecoveryDialog(self, self.controller, email=self.email_field.get())
+        self.recovery_dialog.present()
+
     def submit_account(self) -> None:
         if "account" in self.busy or self.view is None or self.view.state == "unconfigured":
             return
@@ -597,6 +680,8 @@ class AccountPage(ctk.CTkFrame):
             title += "\nThe server deleted this record."
         if conflict.server_message:
             title += f"\nServer: {conflict.server_message}"
+        if conflict.context:
+            title += "\n" + "\n".join(conflict.context)
         self.detail_title.configure(text=title)
         self.difference_tree.delete(*self.difference_tree.get_children())
         for index, difference in enumerate(conflict.differences):

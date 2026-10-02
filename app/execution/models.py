@@ -95,6 +95,22 @@ class ExecutionStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class CancelReason(str, Enum):
+    """
+    Why an attempt was cancelled (docs/execution-rescheduling.md). A
+    cancellation is never a skip: analytics keep "the user did not do it"
+    (skipped) apart from "the plan was withdrawn". None on a cancelled
+    attempt means unknown (cancelled before reasons were recorded).
+    """
+
+    #: The user withdrew the attempt.
+    USER = "user"
+    #: The user moved the placement before starting it; the attempt belongs to the old placement.
+    RESCHEDULED = "rescheduled"
+    #: A schedule generation replaced or dropped the never-started placement (a system action).
+    SUPERSEDED = "superseded"
+
+
 TERMINAL_STATUSES = frozenset(
     {ExecutionStatus.COMPLETED, ExecutionStatus.SKIPPED, ExecutionStatus.CANCELLED}
 )
@@ -196,6 +212,8 @@ class TaskExecution(BaseModel):
     # any terminal status (completed, skipped, or cancelled).
     actual_first_start_at: datetime | None = None
     actual_final_end_at: datetime | None = None
+    #: Why a cancelled attempt was cancelled (None while not cancelled, or unknown for older cancellations).
+    cancel_reason: CancelReason | None = None
 
     @field_validator("canonical_planned_start", "canonical_planned_end", "actual_first_start_at", "actual_final_end_at")
     @classmethod

@@ -8,7 +8,8 @@ saved placements with exact times and links to each date. Duplicate project name
 distinct suffixes and choices retain their IDs. Assign, reassign or clear a task's project in the shared
 Day/Week/Month task form. The Projects page also offers a confirmed bulk move to another
 project or no project. Writes use the versions read; deletion refuses live task
-references and never cascades. Archive and recurrence expansion are not supported.
+references and never cascades. Archive is not supported. Allocation materializes a range's recurring
+occurrences first ([recurrence.md](recurrence.md)).
 
 Allocation Planning previews a Monday-first week or real calendar month. Allocate /
 Recalculate reads persisted tasks, dependencies, fixed blocks and preferences. It shows

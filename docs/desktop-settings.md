@@ -6,9 +6,11 @@ built-in defaults, project template, user defaults, then explicit date overrides
 Changing defaults preserves date overrides and saved placements; affected schedules
 show out-of-date status until explicitly regenerated. No setting starts generation.
 
-The engine labels are **Normal** (`precise_greedy`) and **ADHD friendly**
-(`adhd_friendly`). ADHD's short-gap fields appear only for that engine; zero weight
-disables its short-gap bonus. The baseline Greedy Optimizer v1 is unchanged.
+The scheduling modes are **Normal** (`precise_greedy`), **ADHD friendly**
+(`adhd_friendly`), **Early finish** (`early_finish`), **Night owl** (`night_owl`) and
+**Catch-up** (`catch_up`); see [scheduling-modes.md](scheduling-modes.md) for what each
+optimizes. ADHD's short-gap fields appear only for that mode; zero weight disables its
+short-gap bonus. The baseline Greedy Optimizer v1 is unchanged.
 
 Save applies one field with a version check. Use inherited removes the field's
 contribution. For category multipliers/windows, No preference explicitly stores null,

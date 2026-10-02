@@ -37,7 +37,7 @@ from pydantic import AwareDatetime, BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.execution.models import ExecutionStatus, TaskExecution, WorkSession
+from app.execution.models import CancelReason, ExecutionStatus, TaskExecution, WorkSession
 from backend import models
 from backend.resources import BaseVersion, RecordMeta, Strict
 
@@ -77,11 +77,15 @@ class ExecutionFields(Strict):
     canonical_planned_end: AwareDatetime | None = None
     actual_first_start_at: AwareDatetime | None = None
     actual_final_end_at: AwareDatetime | None = None
+    #: Why a cancelled execution was cancelled (user / rescheduled / superseded); None otherwise or unknown.
+    cancel_reason: CancelReason | None = None
 
     @model_validator(mode="after")
     def _aggregate_rules(self):
         if self.scheduled_task_id is not None and self.task_id is None:
             raise ValueError("scheduled_task_id requires task_id")
+        if self.cancel_reason is not None and self.status != ExecutionStatus.CANCELLED:
+            raise ValueError("only a cancelled execution has a cancel_reason")
         if self.legacy_id is not None:
             try:
                 uuid.UUID(self.legacy_id)
@@ -126,6 +130,9 @@ class ExecutionOut(ExecutionFields, RecordMeta):
 class ActionIn(Strict, BaseVersion):
     #: When the action happened (e.g. recorded offline); defaults to the server time. Not in the future.
     at: AwareDatetime | None = None
+    #: cancel only: why (default "user"). "rescheduled"/"superseded" are the system's cancellations of an attempt
+    #: whose placement stopped being the plan before it started (docs/execution-rescheduling.md).
+    cancel_reason: CancelReason | None = None
 
 
 class FeedbackIn(Strict, BaseVersion):
@@ -173,7 +180,7 @@ SNAPSHOT_FIELDS = (
     "points", "actual_active_duration_minutes", "duration_variance_minutes", "start_delay_minutes", "focus_rating",
     "energy_rating", "interruption_count", "note", "task_id", "scheduled_task_id", "canonical_planned_date",
     "canonical_timezone", "canonical_planned_start", "canonical_planned_end", "actual_first_start_at",
-    "actual_final_end_at",
+    "actual_final_end_at", "cancel_reason",
 )
 
 

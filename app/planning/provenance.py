@@ -18,7 +18,10 @@ The record stores two digests:
       document of everything the generation read -- the allocation range and
       its scope, the timezone, every task in that range's scope (content
       only: audit fields such as updated_at/version are excluded, so saving
-      unchanged content never makes a schedule stale), their dependency ids,
+      unchanged content never makes a schedule stale; recurrence fields that
+      are unset are left out, so tasks fingerprint exactly as they did before
+      recurrence expansion; the range's series definitions are included
+      although only their occurrences are scheduled), their dependency ids,
       the fixed blocks of every date of the range, the fully resolved
       DayPreferences of every date of the range (YAML -> user -> date,
       including optimizer_mode, i.e. the engine mode), and the resolved state
@@ -117,8 +120,24 @@ class GenerationRecord(BaseModel):
         return value.astimezone(timezone.utc)
 
 
+#: Task fields added with recurrence expansion (docs/recurrence.md). Left out of a task's content while unset,
+#: so every fingerprint computed before them is unchanged; series_version is provenance, never content.
+_RECURRENCE_TASK_FIELDS = ("series_id", "occurrence_slot", "occurrence_state", "series_predecessor_id")
+_RECURRENCE_RULE_FIELDS = ("start_date", "timezone")
+
+
 def _content(model: Task | FixedBlock) -> dict:
-    return model.model_dump(mode="json", exclude=_NON_CONTENT_FIELDS)
+    content = model.model_dump(mode="json", exclude=_NON_CONTENT_FIELDS | {"series_version"})
+    if isinstance(model, Task):
+        for name in _RECURRENCE_TASK_FIELDS:
+            if content.get(name) is None:
+                content.pop(name, None)
+        rule = content.get("recurrence")
+        if rule is not None:
+            for name in _RECURRENCE_RULE_FIELDS:
+                if rule.get(name) is None:
+                    rule.pop(name, None)
+    return content
 
 
 def _digest(payload: object) -> str:

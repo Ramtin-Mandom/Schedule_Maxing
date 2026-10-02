@@ -446,22 +446,34 @@ PLACEMENT_FIELDS_SINCE_0007 = {"task_category": None, "removal_reason": None, "s
 #: 0008: an existing task gets the default points; an existing execution's snapshot is unknown.
 TASK_FIELDS_SINCE_0008 = {"points": 1}
 EXECUTION_FIELDS_SINCE_0008 = {"points": None}
+#: 0009 (docs/recurrence.md): no existing task is an occurrence, a segment or a configured series.
+TASK_FIELDS_SINCE_0009 = {"series_id": None, "occurrence_slot": None, "occurrence_state": None, "series_version": None,
+                          "series_predecessor_id": None}
+RECURRENCE_FIELDS_SINCE_0009 = {"start_date": None, "timezone": None}
+#: 0010 (docs/execution-rescheduling.md): an existing placement's origin is unknown and it carries no manual intent
+#: (a proven move is recognized from its lineage when read, not rewritten); an execution's cancel reason is unknown.
+PLACEMENT_FIELDS_SINCE_0010 = {"origin": None, "preserved": False}
+EXECUTION_FIELDS_SINCE_0010 = {"cancel_reason": None}
 
 
 def as_of_head(value):
     """
     The fixture (as the 0003 API wrote it) as today's API returns it:
     placements gain the 0007 fields (null), tasks their 0008 points (the
-    default) and executions their 0008 points snapshot (null).
+    default) and 0009 recurrence fields (null), recurrence rules their 0009
+    anchor (null: needs configuration) and executions their 0008 points
+    snapshot (null).
     """
     if isinstance(value, dict):
         converted = {key: as_of_head(item) for key, item in value.items()}
         if {"task_id", "planned_start", "optimization_metadata"} <= set(value):
-            converted = {**PLACEMENT_FIELDS_SINCE_0007, **converted}
+            converted = {**PLACEMENT_FIELDS_SINCE_0007, **PLACEMENT_FIELDS_SINCE_0010, **converted}
         if {"estimated_duration_minutes", "priority", "dependency_ids"} <= set(value):
-            converted = {**TASK_FIELDS_SINCE_0008, **converted}
+            converted = {**TASK_FIELDS_SINCE_0008, **TASK_FIELDS_SINCE_0009, **converted}
+        if {"frequency", "interval"} <= set(value):
+            converted = {**RECURRENCE_FIELDS_SINCE_0009, **converted}
         if {"task_name", "planned_duration", "status"} <= set(value):
-            converted = {**EXECUTION_FIELDS_SINCE_0008, **converted}
+            converted = {**EXECUTION_FIELDS_SINCE_0008, **EXECUTION_FIELDS_SINCE_0010, **converted}
         return converted
     if isinstance(value, list):
         return [as_of_head(item) for item in value]
@@ -716,3 +728,84 @@ def test_a_failing_0007_rolls_back_to_a_working_0006(blank_engine) -> None:
         assert current_revision(connection) == "0006"
         columns = {column["name"] for column in sa.inspect(connection).get_columns("placements")}
         assert "removal_reason" not in columns and "task_category" not in columns
+
+
+def test_0009_adds_recurrence_identity_without_touching_any_record(predecessor) -> None:
+    """0008 -> 0009 (docs/recurrence.md): every row stays; templates get no guessed anchor (they need configuration)."""
+    upgrade(predecessor, "0008")
+    tables = ("tasks", "task_revisions", "placements", "executions", "change_log", "record_revisions",
+              "sync_operations")
+    with predecessor.connect() as connection:
+        before = {table: connection.execute(sa.text(f"SELECT COUNT(*) FROM {table}")).scalar_one() for table in tables}
+        tasks_before = [tuple(row) for row in connection.execute(sa.text(
+            "SELECT user_id, id, version, recurrence_frequency, recurrence_count FROM tasks ORDER BY user_id, id"))]
+    upgrade(predecessor, "0009")
+    with predecessor.connect() as connection:
+        assert current_revision(connection) == "0009"
+        assert {table: connection.execute(sa.text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
+                for table in tables} == before
+        assert [tuple(row) for row in connection.execute(sa.text(
+            "SELECT user_id, id, version, recurrence_frequency, recurrence_count FROM tasks ORDER BY user_id, id"
+        ))] == tasks_before
+        for table in ("tasks", "task_revisions"):
+            assert connection.execute(sa.text(
+                f"SELECT COUNT(*) FROM {table} WHERE recurrence_start_date IS NOT NULL OR series_id IS NOT NULL "
+                "OR occurrence_state IS NOT NULL OR series_predecessor_id IS NOT NULL")).scalar_one() == 0
+    upgrade(predecessor)  # today's API reads the head schema (0011 added credential epochs to accounts)
+    with client_for(predecessor) as client:  # the templates read back as needing configuration
+        headers = login_headers(client, "alice@example.com")
+        task = client.get(f"/tasks/{T1}", headers=headers).json()
+        assert task["recurrence"]["frequency"] == "weekly" and task["recurrence"]["start_date"] is None
+    with predecessor.begin() as connection, pytest.raises(sa.exc.IntegrityError):
+        connection.execute(sa.text("UPDATE tasks SET occurrence_state = 'skipped'"))  # none is an occurrence
+
+
+def test_0009_downgrades_a_disposable_database_and_upgrades_again(predecessor) -> None:
+    upgrade(predecessor)
+    downgrade(predecessor, "0008")
+    with predecessor.connect() as connection:
+        assert current_revision(connection) == "0008"
+        columns = {column["name"] for column in sa.inspect(connection).get_columns("tasks")}
+        assert "series_id" not in columns and "recurrence_start_date" not in columns
+    upgrade(predecessor)
+    with predecessor.connect() as connection:
+        assert current_revision(connection) == head_revision()
+
+
+def test_0010_adds_origin_intent_and_cancel_reasons_without_touching_any_record(predecessor) -> None:
+    """0009 -> 0010 (docs/execution-rescheduling.md): every row stays; origins and reasons are unknown, not guessed."""
+    upgrade(predecessor, "0009")
+    tables = ("placements", "placement_revisions", "executions", "execution_revisions", "change_log",
+              "record_revisions", "sync_operations")
+    with predecessor.connect() as connection:
+        before = {table: connection.execute(sa.text(f"SELECT COUNT(*) FROM {table}")).scalar_one() for table in tables}
+        placements_before = [tuple(row) for row in connection.execute(sa.text(
+            "SELECT user_id, id, version, planned_start, deleted_at FROM placements ORDER BY user_id, id"))]
+    upgrade(predecessor, "0010")
+    with predecessor.connect() as connection:
+        assert current_revision(connection) == "0010"
+        assert {table: connection.execute(sa.text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
+                for table in tables} == before
+        assert [tuple(row) for row in connection.execute(sa.text(
+            "SELECT user_id, id, version, planned_start, deleted_at FROM placements ORDER BY user_id, id"
+        ))] == placements_before
+        for table in ("placements", "placement_revisions"):
+            assert connection.execute(sa.text(
+                f"SELECT COUNT(*) FROM {table} WHERE origin IS NOT NULL OR preserved")).scalar_one() == 0
+        for table in ("executions", "execution_revisions"):
+            assert connection.execute(sa.text(
+                f"SELECT COUNT(*) FROM {table} WHERE cancel_reason IS NOT NULL")).scalar_one() == 0
+    with predecessor.begin() as connection, pytest.raises(sa.exc.IntegrityError):
+        connection.execute(sa.text("UPDATE placements SET preserved = true"))  # intent needs a manual origin
+
+
+def test_0010_downgrades_a_disposable_database_and_upgrades_again(predecessor) -> None:
+    upgrade(predecessor)
+    downgrade(predecessor, "0009")
+    with predecessor.connect() as connection:
+        assert current_revision(connection) == "0009"
+        assert "preserved" not in {column["name"] for column in sa.inspect(connection).get_columns("placements")}
+        assert "cancel_reason" not in {column["name"] for column in sa.inspect(connection).get_columns("executions")}
+    upgrade(predecessor)
+    with predecessor.connect() as connection:
+        assert current_revision(connection) == head_revision()

@@ -46,8 +46,11 @@ from backend.security import (
     TokenError,
     issue_access_token,
     normalize_identifier,
-    verify_access_token,
+    verify_access_token_claims,
 )
+from backend.protection import client_address
+from backend.rate_limit import identifier_subject
+from backend.recovery import credential_epoch
 from backend.settings import BackendSettings
 
 # -----------------------------------------------------------------------------
@@ -70,6 +73,19 @@ def server_now(request: Request) -> datetime:
 _bearer = HTTPBearer(auto_error=False, description="An access token from POST /auth/login.")
 
 
+def throttle(request: Request, scope: str, subject: str | None = None) -> None:
+    """
+    Count this request against the shared limit of `scope` (backend/rate_limit.py) -- per client address
+    unless `subject` names another subject. A no-op when rate limiting is disabled.
+    """
+    limiter = request.app.state.rate_limiter
+    if limiter is None:
+        return
+    if subject is None:
+        subject = "ip:" + client_address(request, request.app.state.settings.trusted_proxies)
+    limiter.hit(scope, subject)
+
+
 def current_user_id(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
@@ -83,10 +99,12 @@ def current_user_id(
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise unauthenticated()
     try:
-        user_id = verify_access_token(credentials.credentials, request.app.state.settings, request.app.state.clock())
+        user_id, epoch = verify_access_token_claims(credentials.credentials, request.app.state.settings,
+                                                    request.app.state.clock())
     except TokenError:
         raise unauthenticated("The access token is invalid or has expired.") from None
-    if session.get(models.User, user_id) is None:
+    # Checked against the stored account on every request: a password reset (a new epoch) ends every older token.
+    if credential_epoch(session, user_id) != epoch:
         raise unauthenticated("The access token is invalid or has expired.")
     return user_id
 
@@ -184,7 +202,9 @@ def _user_out(user: models.User | AccountIdentity) -> dict:
 
 
 @auth.post("/auth/register", status_code=201, response_model=UserOut, summary="Create an account.")
-def register(payload: RegisterIn, session: Session = Depends(get_session), now: datetime = Depends(server_now)) -> dict:
+def register(payload: RegisterIn, request: Request, session: Session = Depends(get_session),
+             now: datetime = Depends(server_now)) -> dict:
+    throttle(request, "register_ip")
     try:
         identity = AccountService(session, lambda: now).register(
             email=payload.email, password=payload.password, username=payload.username,
@@ -195,7 +215,9 @@ def register(payload: RegisterIn, session: Session = Depends(get_session), now: 
     return _user_out(identity)
 
 
-def _check_credentials(payload: LoginIn, session: Session) -> AccountIdentity:
+def _check_credentials(payload: LoginIn, session: Session, request: Request) -> AccountIdentity:
+    throttle(request, "login_ip")
+    throttle(request, "login_identifier", identifier_subject(payload.email or payload.username))
     try:
         return AccountService(session).authenticate(email=payload.email, username=payload.username,
                                                     password=payload.password)
@@ -210,8 +232,8 @@ def login(
     session: Session = Depends(get_session),
     now: datetime = Depends(server_now),
 ) -> dict:
-    user = _check_credentials(payload, session)
-    issued = issue_access_token(user.id, request.app.state.settings, now)
+    user = _check_credentials(payload, session, request)
+    issued = issue_access_token(user.id, request.app.state.settings, now, user.credential_epoch)
     return {"access_token": issued.token, "expires_in": issued.expires_in, "expires_at": issued.expires_at}
 
 
@@ -233,8 +255,8 @@ def browser_login(
     now: datetime = Depends(server_now),
 ) -> dict:
     settings = request.app.state.settings
-    user = _check_credentials(payload, session)
-    token, row = browser_sessions.start_session(session, user.id, settings, now)
+    user = _check_credentials(payload, session, request)
+    token, row = browser_sessions.start_session(session, user.id, settings, now, user.credential_epoch)
     browser_sessions.set_cookie(response, token, row, settings, now)
     return {"authenticated": True, "user": _user_out(user), "expires_at": row.expires_at,
             "csrf_token": browser_sessions.csrf_token_for(token, settings)}
@@ -626,4 +648,4 @@ def install_routes(app: FastAPI) -> None:
     app.include_router(changes)
 
 
-__all__ = ["install_routes", "current_user_id", "version_conflict"]
+__all__ = ["install_routes", "current_user_id", "throttle", "version_conflict"]

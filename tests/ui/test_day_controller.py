@@ -167,8 +167,10 @@ def test_today_is_the_planning_timezone_date(services) -> None:
 def test_engine_options_come_from_the_enum_and_catalog_with_central_labels(services) -> None:
     assert set(ENGINE_LABELS) == set(OptimizerMode) == set(ENGINE_EXPLANATIONS) == set(ENGINE_DESCRIPTIONS)
     options = day_page(services).engine_options()
-    assert [(o.mode, o.label) for o in options] == [(OptimizerMode.PRECISE_GREEDY, "Normal"),
-                                                    (OptimizerMode.ADHD_FRIENDLY, "ADHD friendly")]
+    assert [(o.mode, o.label) for o in options] == [
+        (OptimizerMode.PRECISE_GREEDY, "Normal"), (OptimizerMode.ADHD_FRIENDLY, "ADHD friendly"),
+        (OptimizerMode.EARLY_FINISH, "Early finish"), (OptimizerMode.NIGHT_OWL, "Night owl"),
+        (OptimizerMode.CATCH_UP, "Catch-up")]
     assert "quarter hour" in options[1].explanation and "Durations never change" in options[1].explanation
     assert "any minute" in options[0].explanation
 
@@ -446,14 +448,14 @@ def write_rows(path: Path, header: list[str], data: list[dict]) -> None:
 
 def test_canonical_csv_round_trip_preview_updates_and_refusals(services, tmp_path) -> None:
     controller = services.planning_controller
-    weekly = add_task(services, "Weekly review", window=(540, 720),
-                      recurrence=RecurrenceSpec(frequency=RecurrenceFrequency.WEEKLY))
+    weekly = add_task(services, "Weekly review", window=(540, 720), day=None,
+                      recurrence=RecurrenceSpec(frequency=RecurrenceFrequency.WEEKLY, start_date=DAY, timezone=TZ))
     ok(controller.save_fixed_block(block("Class", (13, 0), (14, 0))))
     page = day_page(services)
     ok(page.make_schedule())
     exported = tmp_path / "day.csv"
     result = ok(page.export_csv(str(exported)))
-    assert (result.tasks, result.fixed_blocks, result.placements) == (1, 1, 1)
+    assert (result.tasks, result.fixed_blocks, result.placements) == (2, 1, 1)  # the series and its occurrence
 
     saved = state(services.connection)
     plan = ok(page.csv_plan(str(exported)))
@@ -464,7 +466,7 @@ def test_canonical_csv_round_trip_preview_updates_and_refusals(services, tmp_pat
 
     header, data = read_rows(exported)
     for line in data:
-        if line["record_type"] == "task":
+        if line["record_type"] == "task" and line["recurrence"]:  # the series definition
             line["name"] = "Weekly review (renamed)"
     edited = tmp_path / "edited.csv"
     write_rows(edited, header, data)
@@ -477,7 +479,7 @@ def test_canonical_csv_round_trip_preview_updates_and_refusals(services, tmp_pat
 
     # Content already stored is a no-op; a different change made from the outdated export is refused (its
     # version no longer matches), in the preview and nothing is written.
-    assert "already up to date: 1 task(s)" in ok(page.apply_csv(plan)).summary
+    assert "already up to date: 2 task(s)" in ok(page.apply_csv(plan)).summary
     after_update = state(services.connection)
     conflicting = tmp_path / "conflicting.csv"
     write_rows(conflicting, header, [{**line, "name": "Something else"} if line["record_type"] == "task" else line

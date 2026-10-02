@@ -3,7 +3,8 @@ backend/record_mapping.py
 
 The one field <-> column mapping of the record content that is stored
 relationally (backend/models.py): a task's tags, preferred dates,
-dependencies and recurrence, and a preference layer's overrides. The same
+dependencies, recurrence and recurrence identity (docs/recurrence.md), and a
+preference layer's overrides. The same
 functions write and read a live row (tasks, preferences) and a revision row
 (task_revisions, preference_revisions) -- they share their content columns
 and child-relationship names -- so a record and its historical snapshots
@@ -92,6 +93,12 @@ def write_task(row, task) -> None:
     row.recurrence_day_of_month = recurrence.day_of_month if recurrence else None
     row.recurrence_end_date = recurrence.end_date if recurrence else None
     row.recurrence_count = recurrence.count if recurrence else None
+    row.recurrence_start_date = recurrence.start_date if recurrence else None
+    row.recurrence_timezone = recurrence.timezone if recurrence else None
+    row.series_id, row.occurrence_slot = task.series_id, task.occurrence_slot
+    state = task.occurrence_state
+    row.occurrence_state = state.value if state is not None and not isinstance(state, str) else state
+    row.series_version, row.series_predecessor_id = task.series_version, task.series_predecessor_id
 
     tag, preferred, dependency, weekday = (
         _child(row, name) for name in ("tag_rows", "preferred_date_rows", "dependency_rows", "recurrence_weekday_rows")
@@ -117,7 +124,8 @@ def task_content(row) -> dict:
         recurrence = {
             "frequency": row.recurrence_frequency, "interval": row.recurrence_interval, "weekdays": weekdays or None,
             "day_of_month": row.recurrence_day_of_month, "end_date": row.recurrence_end_date,
-            "count": row.recurrence_count,
+            "count": row.recurrence_count, "start_date": row.recurrence_start_date,
+            "timezone": row.recurrence_timezone,
         }
     return {
         "project_id": row.project_id, "name": row.name, "category": row.category,
@@ -130,6 +138,9 @@ def task_content(row) -> dict:
         "dependency_ids": [item.depends_on_id for item in row.dependency_rows],
         "deadline": datetime.fromisoformat(row.deadline) if row.deadline else None,
         "recurrence": recurrence,
+        "series_id": row.series_id, "occurrence_slot": row.occurrence_slot,
+        "occurrence_state": row.occurrence_state, "series_version": row.series_version,
+        "series_predecessor_id": row.series_predecessor_id,
     }
 
 

@@ -60,12 +60,16 @@ def test_incremental_generation_never_duplicates_an_occurrence(planning_service:
     assert live_placements(planning_service, essay.id) == [monday]  # kept where it was, not placed twice
 
 
-def test_full_generation_moves_the_occurrence_instead_of_copying_it(planning_service: PlanningService) -> None:
+def test_full_generation_leaves_an_occurrence_live_outside_its_dates(planning_service: PlanningService) -> None:
     essay = planning_service.create_task(task("Essay", preferred_dates=[MON]))
     workflow.generate(planning_service, range_start=MON, range_end=MON, timezone_name="UTC")
+    [monday] = live_placements(planning_service, essay.id)
     planning_service.update_task(essay.model_copy(update={"preferred_dates": [TUE]}), expected_version=essay.version)
-    workflow.generate(planning_service, range_start=MON, range_end=TUE, generate_start=TUE, timezone_name="UTC")
-    assert [p.planned_date for p in live_placements(planning_service, essay.id)] == [TUE]
+    outcome = workflow.generate(planning_service, range_start=MON, range_end=TUE, generate_start=TUE,
+                                timezone_name="UTC")
+    # Generating Tuesday never touches Monday: the occurrence stays there and is reported, not copied or moved.
+    assert live_placements(planning_service, essay.id) == [monday]
+    assert outcome.kept_elsewhere[essay.id].id == monday.id
 
 
 def test_a_write_by_another_connection_during_generation_refuses_the_save(db_path, monkeypatch) -> None:
