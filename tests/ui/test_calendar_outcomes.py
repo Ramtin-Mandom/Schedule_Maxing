@@ -21,12 +21,14 @@ MONDAY = WEDNESDAY - timedelta(days=2)
 def schedule_monday(app, names: tuple[str, ...]):
     """Plan and schedule tasks on Monday (a past date: "today" is Wednesday) through the Day page."""
     app.open_day(MONDAY)
+    pump(app)
     day = app.pages["day"]
     pump(app)
     for index, name in enumerate(names):
         start = 540 + 90 * index
         fill_form(day, name=name, duration="30", start=str(start), end=str(start + 60))
         day.form.submit_button.invoke()
+        pump(app)
     day.make_schedule_button.invoke()
     pump(app, until=lambda: not day._busy)
     pump(app)
@@ -39,6 +41,7 @@ def test_week_bulk_actions_match_the_day_board_and_colour_only_the_past(tmp_path
         day = schedule_monday(app, ("Read", "Write", "Review"))
         week = app.pages["week"]
         app.show_page("week")
+        pump(app)
         week.select_date(MONDAY)
         pump(app)
         panel = week.day_panel
@@ -62,6 +65,7 @@ def test_week_bulk_actions_match_the_day_board_and_colour_only_the_past(tmp_path
         assert board_names(day) == {"uncompleted": [], "pending": [], "completed": ["Read", "Review", "Write"]}
 
         app.show_page("week")
+        pump(app)
         week.select_date(MONDAY)
         pump(app)
         panel.none_button.invoke()
@@ -79,8 +83,10 @@ def test_month_panel_follows_the_selection_and_the_legend_explains_every_colour(
     app = open_app(tmp_path / "month.db", tmp_path)
     try:
         schedule_monday(app, ("Only",))
+        pump(app)
         month = app.pages["month"]
         app.show_page("month")
+        pump(app)
         month.select_date(MONDAY + timedelta(days=1))  # a past date without scheduled tasks
         pump(app)
         panel = month.day_panel
@@ -112,9 +118,11 @@ def test_the_task_form_saves_and_validates_points(tmp_path: Path, dialogs) -> No
         fill_form(day, name="Essay", duration="45")
         form.points_field.variable.set("oops")
         form.submit_button.invoke()
+        pump(app)
         assert "whole number" in form.points_field.error and "Essay" not in [row.name for row in day.snapshot.rows]
         form.points_field.variable.set("12")
         form.submit_button.invoke()
+        pump(app)
         [task] = app.services.planning_controller.list_tasks().value
         assert task.points == 12 and form.points_field.get() == "1"  # saved; the next form starts at the default
     finally:

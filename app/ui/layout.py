@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from app.ui import diagnostics
+
 
 def _alive(widget) -> bool:
     try:
@@ -69,7 +71,8 @@ class Coalescer:
         if not _alive(self._widget):
             return
         self.runs += 1
-        self._callback()
+        with diagnostics.span("coalesced", self._callback):
+            self._callback()
 
 
 class BoundedAnimation:
@@ -131,7 +134,8 @@ class BoundedAnimation:
             return
         self._step += 1
         fraction = min(1.0, self._step / self._steps)
-        self._on_step(fraction)
+        with diagnostics.span("animation.step", self._on_step):
+            self._on_step(fraction)
         if self._step < self._steps:
             self._schedule()
         elif self._on_done is not None:

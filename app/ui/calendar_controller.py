@@ -200,7 +200,7 @@ class CalendarController(SchedulePageController):
         year = self.today().year
         return [(*shift_month(year, 1, offset), month_title(*shift_month(year, 1, offset))) for offset in range(12)]
 
-    def set_anchor_date(self, value: str | date_) -> ControllerResult[CalendarSnapshot]:
+    def move_to(self, value: str | date_) -> ControllerResult[date_]:
         """Go to a typed date (YYYY-MM-DD): its week/month is shown with the date selected."""
         if isinstance(value, str):
             try:
@@ -208,7 +208,7 @@ class CalendarController(SchedulePageController):
             except ValueError:
                 return ControllerResult.failure(f"The date must be YYYY-MM-DD, got {value!r}.")
         self.select(value)
-        return self.load()
+        return ControllerResult.success(value)
 
     @property
     def form_date(self) -> date_:

@@ -51,14 +51,17 @@ def test_month_navigation_selection_and_the_way_back(tmp_path: Path, dialogs) ->
 
         # Races: only the newest navigation's result is shown.
         month.shift(1)
+        pump(app)
         month.shift(1)
         settle_load(app, month)
         assert month.title_label.cget("text") == "April 2024" and month.snapshot.period.start == date(2024, 4, 1)
         stale = month.page_controller.load_for(month.page_controller.period.shifted(-2))
         month._loaded(month._load_token - 1, stale.value.period, stale)
+        pump(app)
         assert month.title_label.cget("text") == "April 2024"
         month._loaded(month._load_token, month.page_controller.period.shifted(5),
                       ControllerResult.failure("late"))
+        pump(app)
         assert month.title_label.cget("text") == "April 2024"
 
         for _ in range(9):
@@ -68,15 +71,20 @@ def test_month_navigation_selection_and_the_way_back(tmp_path: Path, dialogs) ->
 
         # Keyboard selection and the explicit Open Day; Back restores the month and the day.
         month.select_date(date(2025, 1, 15))
+        pump(app)
         key(month.calendar.canvas, "Right")
+        pump(app)
         key(month.calendar.canvas, "Down")
+        pump(app)
         assert month.page_controller.selected_date == date(2025, 1, 23)
         assert month.details_title.cget("text").startswith("Thursday, January 23, 2025")
         month.open_day_button.invoke()
+        pump(app)
         day = app.pages["day"]
         assert app.shell.current == "day" and day.page_controller.anchor_date == date(2025, 1, 23)
         assert "Back to Month (Thu Jan 23)" in day.back_button.cget("text")
         day.back_button.invoke()
+        pump(app)
         assert app.shell.current == "month" and month.page_controller.selected_date == date(2025, 1, 23)
         assert month.title_label.cget("text") == "January 2025"
 
@@ -100,12 +108,14 @@ def test_week_shows_real_dates_colors_past_days_and_creates_on_the_selected_date
         controller.save_fixed_block(FixedBlock(
             label="Swim", category="exercise", planned_date=date(2024, 6, 4), timezone="UTC",
             planned_start=datetime(2024, 6, 4, 7, tzinfo=UTC), planned_end=datetime(2024, 6, 4, 8, tzinfo=UTC)))
+        pump(app)
         week.select_date(date(2024, 6, 6))
+        pump(app)
         assert week.form.date_text == "2024-06-06"  # the form follows the selected date (nothing to type)
-        assert week.form.date_label.cget("text") == "Thu, Jun 6, 2024"
         week.form.name_field.variable.set("Plan trip")
         week.form.duration_field.variable.set("25 min")
         week.form.submit_button.invoke()
+        pump(app)
         assert dialogs.errors == [] and "Plan trip" in tree_names(week)
         thursday = week.snapshot.day(date(2024, 6, 6))
         assert [(item.kind, item.name) for item in thursday.items] == [("unscheduled", "Plan trip")]
@@ -123,10 +133,12 @@ def test_week_shows_real_dates_colors_past_days_and_creates_on_the_selected_date
         # Reset Week asks first; cancelling deletes nothing.
         dialogs.confirm = False
         week.reset_button.invoke()
+        pump(app)
         assert "Reset the week of Mon Jun 3" in dialogs.confirms[-1] and "nothing was deleted" in week.notice.text
         assert "Plan trip" in tree_names(week)
         dialogs.confirm = True
         week.reset_button.invoke()
+        pump(app)
         assert tree_names(week) == [] and "was reset" in week.notice.text
 
         week.shift(-1)

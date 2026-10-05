@@ -165,8 +165,10 @@ def test_the_time_input_by_keyboard(tmp_path: Path, dialogs) -> None:
         assert str(app.focus_get()).startswith(str(field.minute_entry))
         field.minute_entry.insert(0, "5")
         key(field.minute_entry, "KeyPress-p")
+        pump(app)
         assert field.meridiem == "PM" and field.minute_var.get() == "5"  # "p" chose PM and was not typed
         key(field.minute_entry, "KeyPress-a")
+        pump(app)
         assert field.meridiem == "AM"
         app.pages["day"].window_bar.apply_button.focus_force()
         settle(app, 0.2)

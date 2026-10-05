@@ -316,11 +316,10 @@ Task form (Prompt 3, implemented; [desktop-task-form.md](desktop-task-form.md)):
 `save_draft(draft, editing=ref)` (cause `FormErrors` with field -> message on a refusal) and
 `delete_description(ref)`; `PlanningController.list_projects()` feeds the project choice.
 
-Projects and Allocation (Prompt 6): native `ProjectsPage` / `AllocationPage` use
-`ProjectsController` / `AllocationController` through `PlanningController`.
-Project CRUD, version checks and reference-safe deletion use the existing service.
-`preview_allocation` and `inputs_fingerprint` support date-only previews; selected-day
-generation retains the preview range and checks its fingerprint. Calendar/project
+Projects (Prompt 6): the native `ProjectsPage` uses `ProjectsController` through
+`PlanningController`. Project CRUD, version checks and reference-safe deletion use the
+existing service. `preview_allocation` and `inputs_fingerprint` remain available for
+date-only previews (the desktop's Allocation Planning page was removed). Calendar/project
 filters affect presentation only. See [desktop-projects-allocation.md](desktop-projects-allocation.md).
 There is no archive; recurring series are expanded per range ([recurrence.md](recurrence.md)).
 

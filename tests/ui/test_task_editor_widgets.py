@@ -14,7 +14,7 @@ from app.planning.models import Project, RecurrenceFrequency, RecurrenceSpec, Ta
 from app.ui.schedule_page_controller import RowRef
 from app.ui.task_editor import NO_PROJECT
 from app.ui.task_form_model import TaskDraft
-from tests.ui.test_desktop_app import WEDNESDAY, close_app, open_app, tree_names
+from tests.ui.test_desktop_app import WEDNESDAY, close_app, open_app, pump, tree_names
 from tests.ui.test_desktop_app import dialogs as dialogs  # noqa: F401 - the dialog-recorder fixture
 from tests.ui.test_desktop_app import pytestmark as pytestmark  # noqa: F401 - skip without a display
 from tests.ui.test_desktop_shell import key, settle, shown
@@ -30,6 +30,7 @@ def test_reserved_project_name_can_be_assigned_and_cleared(tmp_path, dialogs):
         project = app.services.planning_service.create_project(Project(name=NO_PROJECT))
         day = app.pages["day"]
         day._reset_editor()
+        pump(app)
         form = day.form
         assert form._project_ids[NO_PROJECT] is None
         label = next(label for label, key in form._project_ids.items() if key == project.id)
@@ -37,13 +38,98 @@ def test_reserved_project_name_can_be_assigned_and_cleared(tmp_path, dialogs):
         form.duration_field.variable.set("13")
         form.project_select.variable.set(label)
         form.submit_button.invoke()
+        pump(app)
         task = stored(app)["Project task"]
         assert task.project_id == project.id
         day.edit_ref(RowRef("task", task.id, task.version))
+        pump(app)
         form.project_select.variable.set(NO_PROJECT)
         form.submit_button.invoke()
+        pump(app)
         assert stored(app)["Project task"].project_id is None
         assert dialogs.errors == []
+    finally:
+        close_app(app)
+
+
+def test_defaults_points_steps_and_added_categories(tmp_path: Path, dialogs) -> None:
+    app = shown(open_app(tmp_path / "defaults.db", tmp_path), tmp_path)
+    try:
+        day, settings = app.pages["day"], app.pages["settings"]
+        form = day.form
+        # Category and Project start unset; the removed controls are gone.
+        assert form.category_select.get() == "(none)" and form.project_select.get() == NO_PROJECT
+        assert not hasattr(form, "pin_check") and not hasattr(form, "duration_suggestion")
+        assert form.project_select.winfo_manager() == "grid" and form.project_select.master is form.body
+
+        form.points_field.plus_button.invoke()
+        assert form.points_field.get() == "11"
+        form.points_field.minus_button.invoke()
+        form.points_field.minus_button.invoke()
+        assert form.points_field.get() == "0"  # never below 0
+
+        form.defaults_button.invoke()  # no category: the general defaults
+        assert (form.name_field.get(), form.duration_field.get(), form.priority_select.get(),
+                form.points_field.get()) == ("Task", "1 h", "5", "20")
+        form.name_field.variable.set("")
+        form.category_select.variable.set("study")
+        form.defaults_button.invoke()
+        assert form.name_field.get() == "Study"
+
+        # Settings: change a category's defaults and add a category; the form uses both.
+        settings.default_for_select.choose("study")
+        settings.default_duration.variable.set("45")
+        settings.default_points.variable.set("30")
+        settings.save_default_button.invoke()
+        settings.new_category.variable.set("Volunteering")
+        settings.add_category_button.invoke()
+        assert settings.default_for_select.get() == "Volunteering"
+        assert (tmp_path / "task_defaults.json").exists()
+        form.name_field.variable.set("Read notes")
+        form.defaults_button.invoke()
+        assert (form.name_field.get(), form.duration_field.get(), form.points_field.get()) == (
+            "Read notes", "45 min", "30")  # a typed name stays
+        day._reset_editor()
+        pump(app)
+        assert "Volunteering" in form.category_select.values
+        form.category_select.variable.set("Volunteering")
+        form.defaults_button.invoke()
+        form.submit_button.invoke()
+        pump(app)
+        task = stored(app)["Volunteering"]
+        assert (task.category, task.estimated_duration_minutes, task.priority, task.points) == (
+            "Volunteering", 60, 5, 20)
+
+        # A task saved without a category is "other".
+        day._reset_editor()
+        pump(app)
+        form.defaults_button.invoke()
+        form.submit_button.invoke()
+        pump(app)
+        assert stored(app)["Task"].category == "other"
+
+        # The hard reset removes what was added and changed.
+        app._task_data_was_reset()
+        pump(app)
+        assert app.task_defaults.value.custom_categories == () and app.task_defaults.value.categories == {}
+        assert "Volunteering" not in settings.default_for_select.values
+        assert dialogs.errors == []
+    finally:
+        close_app(app)
+
+
+def test_editing_keeps_a_pinned_date(tmp_path: Path, dialogs) -> None:
+    app = open_app(tmp_path / "pinned.db", tmp_path)
+    try:
+        saved = app.services.planning_controller.add_or_update_task(Task(
+            name="Pinned", category="study", estimated_duration_minutes=30, priority=5, required_date=WEDNESDAY)).value
+        day = app.pages["day"]
+        day.edit_ref(RowRef("task", saved.id, saved.version))
+        pump(app)
+        day.form.name_field.variable.set("Pinned still")
+        day.form.submit_button.invoke()
+        pump(app)
+        assert stored(app)["Pinned still"].required_date == WEDNESDAY and dialogs.errors == []
     finally:
         close_app(app)
 
@@ -54,8 +140,9 @@ def test_times_tags_and_a_minute_precise_task(tmp_path: Path, dialogs) -> None:
         day = app.pages["day"]
         form = day.form
         assert not hasattr(form, "date_field")  # no date to type: a new task starts on the page's date
-        assert form.date_text == WEDNESDAY.isoformat() and form.date_label.cget("text") == "Wed, Jun 5, 2024"
+        assert form.date_text == WEDNESDAY.isoformat() and not hasattr(form, "date_label")  # the date is not shown
         form.toggle_more()
+        pump(app)
 
         start = form.window_start
         assert not hasattr(start, "up_button") and start.meridiem == "AM"  # no spinner; AM by default
@@ -63,18 +150,23 @@ def test_times_tags_and_a_minute_precise_task(tmp_path: Path, dialogs) -> None:
         start.minute_var.set("13")
         assert start.get() == "10:13 AM" and start.value() == 613
         start.meridiem_button.invoke()
+        pump(app)
         assert start.get() == "10:13 PM" and start.value() == 1333  # AM -> PM
         start.meridiem_button.invoke()
+        pump(app)
         assert start.value() == 613  # PM -> AM again
         start.minute_var.set("7")
         start.normalize()
+        pump(app)
         assert start.minute_var.get() == "07" and start.get() == "10:07 AM"  # two-digit minutes once normalized
         start.hour_var.set("13")
         start.normalize()
+        pump(app)
         assert "hour goes from 1 to 12" in start.error
         start.hour_var.set("10")
         start.minute_var.set("13")
         start.normalize()
+        pump(app)
         assert start.error == ""
         end = form.window_end
         end.hour_var.set("12")
@@ -86,18 +178,23 @@ def test_times_tags_and_a_minute_precise_task(tmp_path: Path, dialogs) -> None:
         for text in ("focus", "math", "focus"):
             tags.field.variable.set(text)
             key(tags.field.entry, "Return")
+            pump(app)
         assert tags.tags == ["focus", "math"] and tree_names(day) == []  # Enter added tags, never submitted
         tags.field.variable.set("")
         key(tags.field.entry, "BackSpace")
+        pump(app)
         assert tags.tags == ["focus"]
         tags.field.variable.set("reading")
         key(tags.field.entry, "Return")
+        pump(app)
         tags.chip_buttons["focus"].invoke()
+        pump(app)
         assert tags.tags == ["reading"]
 
         form.name_field.variable.set("Flashcards")
         form.duration_field.variable.set("13")
         form.submit_button.invoke()
+        pump(app)
         assert dialogs.errors == [] and "Flashcards" in tree_names(day)
         task = stored(app)["Flashcards"]
         assert task.estimated_duration_minutes == 13
@@ -120,6 +217,7 @@ def test_overlap_refusal_keeps_the_form_and_writes_nothing(tmp_path: Path, dialo
             form.start_field.variable.set(start)
             form.end_field.variable.set(end)
             form.submit_button.invoke()
+            pump(app)
         assert tree_names(day) == ["Lecture"]
         assert "overlaps the fixed block “Lecture” (9:00 AM – 10:30 AM" in form.notice.text
         assert (form.name_field.get(), form.start_field.get(), form.end_field.get()) == ("Gym", "10:13 AM", "11:00 AM")
@@ -128,6 +226,7 @@ def test_overlap_refusal_keeps_the_form_and_writes_nothing(tmp_path: Path, dialo
 
         form.start_field.variable.set("10:30 AM")  # corrected: adjacent is fine
         form.submit_button.invoke()
+        pump(app)
         assert sorted(tree_names(day)) == ["Gym", "Lecture"] and form.kind == "block"
     finally:
         close_app(app)
@@ -144,26 +243,33 @@ def test_edit_keeps_hidden_fields_remove_asks_and_everything_survives_a_reopen(t
             recurrence=RecurrenceSpec(frequency=RecurrenceFrequency.WEEKLY, weekdays=[2])))
         day = app.pages["day"]
         day.reload()
+        pump(app)
         day.edit_ref(RowRef("task", gym.id, gym.version))  # as its Available-task button does
+        pump(app)
         form = day.form
         assert form.editing and form.category_select.get() == "Volunteering"  # an unknown category is kept
         assert form.kind_buttons["block"].cget("state") == "disabled"  # a task stays a task
         form.name_field.variable.set("Gym (evening)")
         form.duration_field.variable.set("1 h 13 min")
         form.submit_button.invoke()
+        pump(app)
         saved = stored(app)["Gym (evening)"]
         assert saved.id == gym.id and saved.estimated_duration_minutes == 73
         assert saved.recurrence == gym.recurrence and saved.tags == ["a", "b"] and saved.category == "Volunteering"
         assert saved.preferred_dates == [WEDNESDAY, WEDNESDAY + timedelta(days=7)]
 
         form.load(TaskDraft(name="Temp", duration="5", date=WEDNESDAY.isoformat()), editing=False)
+        pump(app)
         form.submit_button.invoke()
+        pump(app)
         temp = stored(app)["Temp"]
         dialogs.confirm = False
         day.remove_ref(RowRef("task", temp.id, temp.version))
+        pump(app)
         assert "Temp" in stored(app)  # declined: nothing removed
         dialogs.confirm = True
         day.remove_ref(RowRef("task", temp.id, temp.version))
+        pump(app)
         assert "Temp" not in stored(app)
     finally:
         close_app(app)
@@ -184,14 +290,20 @@ def test_week_and_month_use_the_same_form_with_real_dates(tmp_path: Path, dialog
         assert type(week.form) is type(app.pages["day"].form) is type(app.pages["month"].form)
         friday = date(2024, 6, 7)
         week.select_date(friday)  # selecting the day is how a Week task gets its date
+        pump(app)
         week.form.load(TaskDraft(name="Report", duration="2 h", pin_to_date=True), editing=False)
+        pump(app)
         assert week.form.date_text == friday.isoformat()
         week.form.submit_button.invoke()
+        pump(app)
         assert stored(app)["Report"].required_date == friday and "Report" in tree_names(week)
         # A date carried by a draft never overrides the selected day for a new task.
         week.form.load(TaskDraft(name="Elsewhere", duration="5", date="2030-01-01"), editing=False)
+        pump(app)
         week.form.set_date(friday)
+        pump(app)
         week.form.submit_button.invoke()
+        pump(app)
         assert stored(app)["Elsewhere"].preferred_dates == [friday]
         settle(app, 0.1)
     finally:
