@@ -70,7 +70,8 @@ FINGERPRINT_VERSION = 1
 #: Fields that describe a record's bookkeeping rather than its scheduling content.
 #: Not scheduling inputs: audit fields, the owner, and a task's points (analytics only -- changing them must not
 #: make a saved schedule look out of date, and adding the field left every existing fingerprint unchanged).
-_NON_CONTENT_FIELDS = {"created_at", "updated_at", "version", "deleted_at", "user_id", "points"}
+#: Likewise a task's type (identity for analytics) and a placement's planning snapshot.
+_NON_CONTENT_FIELDS = {"created_at", "updated_at", "version", "deleted_at", "user_id", "points", "task_type_id"}
 
 
 class StaleReason(str, Enum):

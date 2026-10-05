@@ -166,7 +166,9 @@ def test_an_older_server_never_receives_recurrence_data_it_would_drop(alice_serv
     walk = add_series(legacy)
     series_ops.expand_occurrences(legacy.planning, MON, MON + timedelta(days=1))
     report = legacy.sync_now()
-    assert report.status == "ok" and report.held == 3 and "recurring" in report.message
+    # The series, its two occurrences -- and the two task types (the report's and the series'), which a server
+    # without "task_types" does not know either.
+    assert report.status == "ok" and report.held == 5 and "recurring" in report.message
     ids = {task["id"] for task in alice_server.get("alice@example.com", "/tasks", limit=500)["items"]}
     assert str(ordinary.id) in ids and str(walk.id) not in ids  # held here, not sent to be stripped
     assert {entry[1] for entry in legacy.dirty() if entry[0] == "task"} >= {str(walk.id)}

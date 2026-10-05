@@ -122,6 +122,8 @@ from app.planning.repository import PlanningRepository
 from app.planning.series import SERIES_CONTENT_FIELDS
 from app.sync.mapping import (
     ENTITY_ORDER,
+    PLACEMENT_HISTORY_FIELDS,
+    TASK_TYPE_FIELDS,
     OCCURRENCE_BOOKKEEPING,
     DivergedHistory,
     LocalRecord,
@@ -253,9 +255,11 @@ class SyncEngine:
                 rows = self._connection.execute(
                     f"SELECT id, version, deleted_at FROM {table} WHERE user_id IS NULL ORDER BY id"
                 ).fetchall()
+                identity.extend((entity_type, row["id"], row["version"]) for row in rows)
+                if entity_type == "task_type":
+                    continue  # claimed with its tasks, but not a record the user counts (a label of theirs)
                 counts[entity_type] = len(rows)
                 live[entity_type] = sum(1 for row in rows if row["deleted_at"] is None)
-                identity.extend((entity_type, row["id"], row["version"]) for row in rows)
             for row in self._connection.execute(_PREFERENCE_COLLISIONS, (account.user_id,)).fetchall():
                 problems.append({"entity_type": "preference", "id": row["id"], "code": "scope_taken",
                                  "message": "The account already has preferences for this scope (the user layer or "
@@ -295,7 +299,8 @@ class SyncEngine:
                     f"UPDATE {table} SET user_id = ?, version = version + 1, updated_at = ? WHERE user_id IS NULL",
                     (account.user_id, now),
                 )
-                counts[entity_type] = cursor.rowcount
+                if entity_type != "task_type":  # see association_preview
+                    counts[entity_type] = cursor.rowcount
             self.store.mark_associated(account.account_key)
             self.store.set_active(account.account_key)
         return counts
@@ -308,7 +313,7 @@ class SyncEngine:
         return self.store.has_ops(key, entity_type, wire_id) or self.store.open_conflict(key, entity_type, wire_id) is not None
 
     def prepare(self, account: Account, *, recurrence: bool = True, manual_placements: bool = True,
-                scheduling_modes: bool = True) -> int:
+                scheduling_modes: bool = True, task_types: bool = True) -> int:
         """
         Materialize operations for the account's dirty records (see the module
         docstring). Returns how many. recurrence=False (a server without the
@@ -317,12 +322,19 @@ class SyncEngine:
         refers to them -- instead of letting an older server drop those fields;
         they stay dirty and are counted in self.held. manual_placements=False
         (a server without "manual_placements") leaves placement origin/manual
-        intent and cancel reasons out of the payloads.
+        intent and cancel reasons out of the payloads. task_types=False (a server
+        without "task_types") holds task-type records back and leaves a task's
+        type and a placement's planning snapshot out of the payloads: they stay
+        recorded here and are uploaded once the server supports them
+        (_requeue_history_fields).
         """
         key = account.account_key
         self.held = 0
         self.records.manual_placements = manual_placements
+        self.records.task_types = task_types
         with self.store.transaction():
+            if task_types:
+                self._requeue_history_fields(account)
             upserts: list[tuple[LocalRecord, object]] = []
             reschedules: list[tuple[LocalRecord, object, int]] = []
             histories: list[LocalRecord] = []
@@ -351,6 +363,9 @@ class SyncEngine:
                     continue
                 if not scheduling_modes and self._uses_new_mode(local):
                     self.held += 1  # an older server refuses the value: wait for it to be upgraded
+                    continue
+                if not task_types and entity_type == "task_type":
+                    self.held += 1  # an older server does not know the record type: it stays queued here
                     continue
                 if self._part_of_pending_reschedule(key, local):
                     continue
@@ -703,6 +718,45 @@ class SyncEngine:
 
         return sorted(deletes, key=lambda item: (-rank[item[0]], -depth(item[1]) if item[0] == "task" else 0))
 
+    def _requeue_history_fields(self, account: Account) -> None:
+        """
+        Once per account, when its server first supports "task_types": mark the
+        tasks and placements whose acknowledged server copy lacks a type or a
+        planning-snapshot field this device recorded, so they are uploaded --
+        fields an older server could not take are never lost. Only a field the
+        server has no value for is ever sent this way (a snapshot is immutable).
+        """
+        flag = f"history_fields_requeued:{account.account_key}"
+        if self.store.setting(flag) is not None:
+            return
+        rows = self._connection.execute(
+            "SELECT entity_type, entity_id, record FROM sync_shadows WHERE account_key = ? AND deleted = 0 "
+            "AND entity_type IN ('task', 'placement')", (account.account_key,),
+        ).fetchall()
+        for row in rows:
+            names = TASK_TYPE_FIELDS if row["entity_type"] == "task" else PLACEMENT_HISTORY_FIELDS
+            remote = json.loads(row["record"])
+            if all(remote.get(name) is not None for name in names):
+                continue
+            local = self.records.read(row["entity_type"], row["entity_id"])
+            if local is None or local.deleted or local.owner != account.user_id:
+                continue
+            if any(local.payload.get(name) is not None and remote.get(name) is None for name in names):
+                self.store.ensure_dirty(row["entity_type"], row["entity_id"])
+        self.store.set_setting(flag, self._clock().isoformat())
+
+    @staticmethod
+    def _update_payload(local: LocalRecord, shadow) -> dict:
+        """
+        A placement update never contradicts a snapshot value the server already
+        holds (it refuses a changed snapshot): those fields repeat the server's.
+        """
+        if local.entity_type != "placement":
+            return local.payload
+        held = {name: shadow.record[name] for name in ("task_category", *PLACEMENT_HISTORY_FIELDS)
+                if name in local.payload and shadow.record.get(name) is not None}
+        return {**local.payload, **held}
+
     def _materialize(self, key: str, local: LocalRecord, shadow, *, group_id: str | None = None) -> int:
         rev = self.store.dirty_rev(local.entity_type, local.local_id) or 1
         add = self.store.add_op
@@ -715,7 +769,7 @@ class SyncEngine:
             return 1
         if local.entity_type != "execution":
             add(key, local.entity_type, local.wire_id, local.local_id, "update", base_version=shadow.server_version,
-                payload=local.payload, local_rev=rev, group_id=group_id)
+                payload=self._update_payload(local, shadow), local_rev=rev, group_id=group_id)
             return 1
         try:
             changes = execution_changes(shadow.record, local)
@@ -761,7 +815,9 @@ class SyncEngine:
                     for related in result.get("related") or []:
                         self.store.put_shadow(key, related["entity_type"], related["record"])
                     self.store.delete_op(op.op_id)
-                    outcome.applied += 1
+                    # A task type travels with its task: the user's counts (pushed, pulled, pending) are of the
+                    # records they made, so the type record is synchronized but not counted.
+                    outcome.applied += op.entity_type != "task_type"
                     if not self.store.has_ops(key, op.entity_type, op.entity_id):
                         # Only if nothing changed locally while the request was in flight.
                         self.store.clear_dirty(op.entity_type, op.local_id, if_rev=op.local_rev)
@@ -912,7 +968,7 @@ class SyncEngine:
         version = (local.model.version + 1) if local is not None else 1
         self.records.store(entity_type, record, account.user_id, version)
         self.store.put_shadow(key, entity_type, record)
-        outcome.applied += 1
+        outcome.applied += entity_type != "task_type"
 
     def _keeps_lineage(self, entity_type: str, record: dict) -> bool:
         """

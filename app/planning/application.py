@@ -166,7 +166,7 @@ from app.planning.errors import (
     ScopeError,
     VersionConflictError,
 )
-from app.planning.history import ScheduleHistory
+from app.planning.history import CompletionHistory, HistoryBounds, ScheduleHistory
 from app.planning.external_dependencies import (
     ExternalDependency,
     external_dependency_ids,
@@ -174,6 +174,7 @@ from app.planning.external_dependencies import (
 )
 from app.execution.models import CancelReason
 from app.planning.models import (
+    PLACEMENT_SNAPSHOT_FIELDS,
     DayScheduleOutput,
     FixedBlock,
     OccurrenceState,
@@ -183,7 +184,10 @@ from app.planning.models import (
     ScheduledTask,
     Task,
     TaskRegistry,
+    TaskType,
     compute_total_score,
+    derived_task_type_id,
+    placement_snapshot,
 )
 from app.planning.occurrence import HISTORY_PROTECTED_STATUSES, occurrence_key
 from app.planning.preferences import (
@@ -242,8 +246,11 @@ def _same_content(stored, incoming) -> bool:
     return stored.model_dump(exclude=_AUDIT_FIELDS) == incoming.model_dump(exclude=_AUDIT_FIELDS)
 
 
-#: Placement fields that are history, not plan content: the category snapshot and the removal provenance.
-_PLACEMENT_HISTORY_FIELDS = ("task_category", "removal_reason", "superseded_by_id")
+#: Placement fields that are history, not plan content: the planning snapshot and the removal provenance.
+_PLACEMENT_HISTORY_FIELDS = (*PLACEMENT_SNAPSHOT_FIELDS, "removal_reason", "superseded_by_id")
+
+#: The most segments of a series lineage walked to find the root a type is derived from.
+_MAX_TYPE_LINEAGE = 64
 
 
 def _with_placement_history(item: ScheduledTask, stored: ScheduledTask) -> ScheduledTask:
@@ -431,6 +438,7 @@ class BatchApplyResult:
 
 # Per record kind: (repository table, human-readable name).
 _KINDS = {
+    "task_type": ("task_types", "task type"),
     "project": ("projects", "project"),
     "task": ("tasks", "task"),
     "fixed_block": ("fixed_blocks", "fixed block"),
@@ -563,6 +571,151 @@ class PlanningService:
             raise VersionConflictError(
                 label, entity_id, expected_version=expected_version, current_version=version, deleted=deleted
             )
+
+    # ------------------------------------------------------------------
+    # Task types (docs/productivity-redesign-plan.md, contract A)
+    # ------------------------------------------------------------------
+
+    def list_task_types(self, *, include_deleted: bool = False) -> list[TaskType]:
+        """The reusable task types of this scope, by (created_at, id)."""
+        return self._repository.list_task_types(include_deleted=include_deleted)
+
+    def get_task_types(
+        self, type_ids: Iterable[uuid.UUID], *, include_deleted: bool = False
+    ) -> dict[uuid.UUID, TaskType]:
+        return self._repository.get_task_types(type_ids, include_deleted=include_deleted)
+
+    def create_task_type(self, task_type: TaskType) -> TaskType:
+        """Store a new reusable type. DuplicateEntityError if its id exists (even as a tombstone)."""
+        if task_type.deleted_at is not None:
+            raise InvalidEntityError("a task type cannot be created already deleted.")
+        task_type = self._stamp_owner(task_type)
+        with self._repository.transaction():
+            self._repository.insert_task_type(task_type)
+            return self._repository.get_task_types([task_type.id])[task_type.id]
+
+    def update_task_type(self, task_type: TaskType, *, expected_version: int) -> TaskType:
+        """
+        Rename a type if it is still at `expected_version`. Its id -- the
+        identity tasks and history refer to -- never changes, and the label
+        snapshots of saved placements are not rewritten.
+        """
+        if task_type.deleted_at is not None:
+            raise InvalidEntityError("a task type cannot be deleted by an update.")
+        with self._repository.transaction():
+            stored = self._repository.get_task_types([task_type.id]).get(task_type.id)
+            if stored is None or stored.version != expected_version:
+                self._check_version("task_type", task_type.id, expected_version)
+            if task_type.user_id != stored.user_id:
+                raise InvalidEntityError(f"task type {task_type.id}: its owner (user_id) cannot be changed by an update.")
+            if _same_content(stored, task_type):
+                return stored
+            to_store = task_type.model_copy(
+                update={"created_at": stored.created_at, "updated_at": self._clock(), "version": expected_version + 1}
+            )
+            if not self._repository.update_task_type(to_store, expected_version=expected_version):
+                self._check_version("task_type", task_type.id, expected_version)
+            return self._repository.get_task_types([task_type.id])[task_type.id]
+
+    def placement_snapshots(self, tasks: Iterable[Task]) -> dict[uuid.UUID, dict]:
+        """{task id: the planning snapshot a placement of the task saved now records} (models.placement_snapshot)."""
+        tasks = list(tasks)
+        types = self._repository.get_task_types(
+            {task.task_type_id for task in tasks if task.task_type_id is not None}, include_deleted=True
+        )
+        return {task.id: placement_snapshot(task, types.get(task.task_type_id)) for task in tasks}
+
+    @staticmethod
+    def _with_snapshot(placement: ScheduledTask, task: Task, snapshots: Mapping[uuid.UUID, dict]) -> dict:
+        """The snapshot fields of a placement being saved for the first time: its own values, else the task's now."""
+        current = snapshots[task.id]
+        return {name: getattr(placement, name) if getattr(placement, name) is not None else current[name]
+                for name in PLACEMENT_SNAPSHOT_FIELDS}
+
+    def _resolve_task_types(self, tasks: list[Task], stored_by_id: Mapping[uuid.UUID, Task]) -> list[Task]:
+        """
+        Caller holds a repository transaction. `tasks` as they will be stored,
+        each with its type (contract A), creating the type records that do not
+        exist yet:
+
+            - an occurrence always has its series' type;
+            - a task saved without a type keeps its stored one; a new task (or
+              one stored before types) gets its default: a series segment its
+              predecessor's type, anything else the type derived from its own
+              id (derived_task_type_id) -- distinct per task, never by name;
+            - a type chosen explicitly must be a live type of the same owner
+              (InvalidReferenceError / InvalidEntityError): a task never
+              references another account's type.
+        """
+        batch = {task.id: task for task in tasks}
+        related = {reference for task in tasks for reference in (task.series_id, task.series_predecessor_id)
+                   if reference is not None and reference not in batch}
+        known: dict[uuid.UUID, Task] = dict(self._repository.get_tasks(related, include_deleted=True)) if related else {}
+        resolved: dict[uuid.UUID, tuple[uuid.UUID, str]] = {}
+
+        def lookup(task_id: uuid.UUID) -> Task | None:
+            if task_id in batch:
+                return batch[task_id]
+            if task_id not in known:
+                found = self._repository.get_task(task_id, include_deleted=True)
+                if found is None:
+                    return None
+                known[task_id] = found
+            return known[task_id]
+
+        def default(task: Task) -> tuple[uuid.UUID, str]:
+            """(type id, the label a new record of it gets): from the oldest provable root of the task's lineage."""
+            current, seen = task, {task.id}
+            for _ in range(_MAX_TYPE_LINEAGE):
+                parent_id = current.series_id or current.series_predecessor_id
+                parent = lookup(parent_id) if parent_id is not None and parent_id not in seen else None
+                if parent is None or parent.user_id != current.user_id:
+                    break
+                current = parent
+                seen.add(current.id)
+                if current.id in resolved:
+                    return resolved[current.id]
+                chosen = self._chosen_type(current, stored_by_id)
+                if chosen is not None:
+                    return chosen, current.name
+            return derived_task_type_id(current.id), current.name
+
+        # Series definitions first, so an occurrence or a continuing segment of the same save inherits from them.
+        for task in sorted(tasks, key=lambda item: (item.is_occurrence, item.series_predecessor_id is not None)):
+            chosen = None if task.is_occurrence else self._chosen_type(task, stored_by_id)
+            resolved[task.id] = (chosen, task.name) if chosen is not None else default(task)
+
+        existing = self._repository.get_task_types({type_id for type_id, _ in resolved.values()}, include_deleted=True)
+        device_wide = self._repository.owner is None
+        result: list[Task] = []
+        for task in tasks:
+            type_id, label = resolved[task.id]
+            task_type = existing.get(type_id)
+            stored = stored_by_id.get(task.id)
+            unchanged = stored is not None and stored.task_type_id == type_id
+            explicit = task.task_type_id == type_id and not task.is_occurrence
+            if task_type is None and not unchanged:
+                if explicit and type_id != derived_task_type_id(task.id):
+                    raise InvalidReferenceError(
+                        f"task {task.id}: task_type_id must name one of your task types.", {type_id}
+                    )
+                self._repository.insert_task_type(TaskType(id=type_id, user_id=task.user_id, label=label))
+                existing[type_id] = self._repository.get_task_types([type_id], include_deleted=True)[type_id]
+            elif task_type is not None and not unchanged:
+                if task_type.deleted_at is not None and explicit:
+                    raise InvalidReferenceError(f"task {task.id}: its task type was deleted.", {type_id})
+                if task_type.user_id != task.user_id and not (device_wide and task.user_id is None):
+                    raise InvalidEntityError(f"task {task.id} must have the same owner as its task type.")
+            result.append(task if task.task_type_id == type_id else task.model_copy(update={"task_type_id": type_id}))
+        return result
+
+    @staticmethod
+    def _chosen_type(task: Task, stored_by_id: Mapping[uuid.UUID, Task]) -> uuid.UUID | None:
+        """The type the task names itself, else the one it is stored with (None: it needs its default)."""
+        if task.task_type_id is not None:
+            return task.task_type_id
+        stored = stored_by_id.get(task.id)
+        return stored.task_type_id if stored is not None else None
 
     # ------------------------------------------------------------------
     # Tasks
@@ -1050,15 +1203,16 @@ class PlanningService:
         for placement_id in sorted(removed, key=str):
             self._repository.cancel_unstarted_execution(placement_id, at=now, reason=CancelReason.SUPERSEDED)
 
+        snapshots = self.placement_snapshots(tasks.values())
         for placement in placements:
             stored = stored_by_id.get(placement.id)
-            # A new placement snapshots its task's category now; a kept one keeps its original snapshot, origin and
-            # manual intent. A new one without an origin is generated output.
+            # A new placement takes its task's planning snapshot now; a kept one keeps its original snapshot (even an
+            # unknown one), origin and manual intent. A new one without an origin is generated output.
             placement = placement.model_copy(update={
                 "user_id": tasks[placement.task_id].user_id, "deleted_at": None, "removal_reason": None,
                 "superseded_by_id": None,
-                "task_category": stored.task_category if stored is not None else (
-                    placement.task_category or tasks[placement.task_id].category),
+                **({name: getattr(stored, name) for name in PLACEMENT_SNAPSHOT_FIELDS} if stored is not None
+                   else self._with_snapshot(placement, tasks[placement.task_id], snapshots)),
                 "origin": stored.origin if stored is not None else (placement.origin or PlacementOrigin.GENERATED),
                 "preserved": stored.preserved if stored is not None else placement.preserved,
             })
@@ -1235,6 +1389,18 @@ class PlanningService:
         """
         return self._repository.schedule_history(start_utc, end_utc)
 
+    def completion_history(self, start_utc: datetime, end_utc: datetime) -> CompletionHistory:
+        """
+        The completed work whose recorded completion instant lies in
+        [start_utc, end_utc), in this service's scope -- found by completion
+        date, whatever its planned date (app/planning/history.py). Reads only.
+        """
+        return self._repository.completion_history(start_utc, end_utc)
+
+    def history_bounds(self) -> HistoryBounds:
+        """Where this scope's recorded planning and completion history starts and ends. Reads only."""
+        return self._repository.history_bounds()
+
     # ------------------------------------------------------------------
     # Explicit rescheduling (docs/execution-rescheduling.md)
     # ------------------------------------------------------------------
@@ -1304,8 +1470,10 @@ class PlanningService:
             ):
                 self._check_version("placement", placement_id, expected_version)
             # The destination of a deliberate move is manual and preserved: generation keeps it until released.
+            # The tombstone keeps the original planning snapshot; the destination records its own, taken now.
             self._repository.insert_placement(replacement.model_copy(update={
-                "user_id": task.user_id, "task_category": replacement.task_category or task.category,
+                "user_id": task.user_id,
+                **self._with_snapshot(replacement, task, self.placement_snapshots([task])),
                 "removal_reason": None, "superseded_by_id": None, "deleted_at": None,
                 "origin": PlacementOrigin.MANUAL, "preserved": True,
                 "created_at": now, "updated_at": now, "version": 1,
@@ -1823,6 +1991,7 @@ class PlanningService:
                     plans[kind].append(self._plan_batch_record(kind, item, stored_by_id.get(item.id), owner, allow_updates))
 
             self._check_batch_references(records, plans, owner)
+            self._prepare_batch_history(plans)
 
             deleted_task_ids: list[uuid.UUID] = []
             touched_dates: set[date_] = set()
@@ -1870,6 +2039,8 @@ class PlanningService:
             raise InvalidEntityError(f"{label} {item.id} is stored for a different owner (user_id); it cannot be imported.")
         if kind == "placement":
             item = _with_placement_history(item, stored)  # the file does not carry them; never cleared by it
+        if kind == "task" and item.task_type_id is None:
+            item = item.model_copy(update={"task_type_id": stored.task_type_id})  # likewise its type
         if _same_content(stored, item):
             return ("unchanged", item, stored)
         if stored.deleted_at is not None and item.deleted_at is not None:
@@ -1968,6 +2139,38 @@ class PlanningService:
             task = batch_tasks.get(placement.task_id) or self._repository.get_task(placement.task_id, include_deleted=True)
             if task is not None and task.user_id != placement.user_id:
                 raise InvalidEntityError(f"placement {placement.id} must have the same owner as its task.")
+
+    def _prepare_batch_history(self, plans: dict) -> None:
+        """
+        Caller holds a repository transaction. What a file does not carry, for
+        the records the batch creates: a new task's type (and its record), and
+        the planning snapshot of a new live placement, taken now from its task
+        as the batch leaves it. A placement that arrives removed keeps what
+        the file says -- its history is not invented.
+        """
+        writes = [index for index, (action, _, _) in enumerate(plans["task"]) if action in ("insert", "update")]
+        if writes:
+            stored = {plans["task"][index][2].id: plans["task"][index][2] for index in writes
+                      if plans["task"][index][2] is not None}
+            typed = self._resolve_task_types([plans["task"][index][1] for index in writes], stored)
+            for index, task in zip(writes, typed):
+                action, _, previous = plans["task"][index]
+                plans["task"][index] = (action, task, previous)
+        new = [index for index, (action, item, _) in enumerate(plans["placement"])
+               if action == "insert" and item.deleted_at is None]
+        if not new:
+            return
+        batch_tasks = {item.id: item for _, item, _ in plans["task"]}
+        wanted = {plans["placement"][index][1].task_id for index in new}
+        tasks = {**self._repository.get_tasks(wanted - set(batch_tasks)),
+                 **{task_id: batch_tasks[task_id] for task_id in wanted & set(batch_tasks)}}
+        snapshots = self.placement_snapshots(tasks.values())
+        for index in new:
+            action, placement, previous = plans["placement"][index]
+            task = tasks.get(placement.task_id)
+            if task is not None:
+                plans["placement"][index] = (
+                    action, placement.model_copy(update=self._with_snapshot(placement, task, snapshots)), previous)
 
     def _apply_batch_record(self, kind: str, action: str, item, stored, now: datetime) -> None:
         table, label = _KINDS[kind]
@@ -2122,6 +2325,7 @@ class PlanningService:
                 raise InvalidEntityError(f"task {task.id}: its owner (user_id) cannot be changed by an update.")
 
         self._check_recurrence_rules(tasks, stored_by_id)
+        tasks = self._resolve_task_types(tasks, stored_by_id)
 
         now = self._clock()
         for task in tasks:

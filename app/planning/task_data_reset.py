@@ -82,6 +82,12 @@ def wipe_task_data(connection, scope: OwnerScope, *, account_key: str | None = N
                 marks = ", ".join("?" for _ in chunk)
                 connection.execute(f"DELETE FROM sync_dirty WHERE entity_type = ? AND entity_id IN ({marks})",
                                    (entity_type, *chunk))
+        # The workspace's task types go with its tasks. The server keeps them (a label is not task data), so
+        # only their pending change marks are dropped: nothing queues a deletion of a type on the server.
+        connection.execute(
+            f"DELETE FROM sync_dirty WHERE entity_type = 'task_type' AND entity_id IN "
+            f"(SELECT id FROM task_types WHERE {condition})", params)
+        connection.execute(f"DELETE FROM task_types WHERE {condition}", params)
         if account_key is not None:
             marks = ", ".join("?" for _ in TASK_DATA_ENTITY_TYPES)
             for table in ("sync_outbox", "sync_shadows", "sync_conflicts"):

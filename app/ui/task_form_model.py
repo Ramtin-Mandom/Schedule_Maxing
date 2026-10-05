@@ -117,6 +117,10 @@ class TaskDraft:
     dependency_ids: tuple[uuid.UUID, ...] = ()
     project_id: uuid.UUID | None = None
     tags: tuple[str, ...] = ()
+    #: The reusable task type (docs/productivity-redesign-plan.md): None keeps the stored type, or gives a new
+    #: task a type of its own. new_type_label, when set, names a type to create and use instead.
+    task_type_id: uuid.UUID | None = None
+    new_type_label: str = ""
     # -- repeating (a series; docs/recurrence.md) --------------------------------------
     #: "" (does not repeat), "daily", "weekly" or "monthly".
     repeat: str = ""
@@ -226,6 +230,7 @@ def draft_from_task(task: Task, timezone_name: str, *, series: Task | None = Non
         window_end=format_clock(window.end_minute) if window else "",
         deadline_date=deadline_date, deadline_time=deadline_time,
         dependency_ids=tuple(task.dependency_ids), project_id=task.project_id, tags=tuple(task.tags),
+        task_type_id=task.task_type_id,
         **recurrence,
     )
 
@@ -334,6 +339,8 @@ def build_task(draft: TaskDraft, *, timezone_name: str, existing: Task | None = 
             if existing is not None else None
         fields["preferred_dates"] = ([planned] + [day for day in previous_dates if day not in (previous_date, planned)]) \
             if planned else []
+    if draft.task_type_id is not None:
+        fields["task_type_id"] = draft.task_type_id  # None: a stored task keeps its type, a new one gets its own
     try:
         if existing is None:
             return Task(**fields)
@@ -498,3 +505,5 @@ class EditorOptions:
     #: Tasks that can be dependencies (never the edited task itself), labelled so duplicate names differ.
     dependencies: list[Choice] = field(default_factory=list)
     projects: list[Choice] = field(default_factory=list)
+    #: The workspace's reusable task types (independent of category and tags).
+    task_types: list[Choice] = field(default_factory=list)

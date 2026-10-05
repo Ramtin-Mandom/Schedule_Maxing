@@ -8,4 +8,11 @@ select = ["E", "F"]
 [tool.pytest.ini_options]
 markers = [
     "postgres: needs a disposable PostgreSQL database in TEST_DATABASE_URL (skipped otherwise)",
+    "real_password_hashing: use the production Argon2 parameters (tests otherwise hash with minimal cost)",
+    "unit: in-process domain/controller test (assigned automatically, tests/test_tiers.py)",
+    "integration: server-backed, subprocess or real-window test (assigned automatically)",
+    "system: multi-system suite -- sync, the local web profile, direct PostgreSQL mode (assigned automatically)",
+    "ui: opens real Tk/CustomTkinter windows (assigned automatically)",
+    "slow: real-window, subprocess, migration-path or individually slow test (assigned automatically)",
+    "dev: the development suite, run with `pytest -m dev` (not slow, ui or system)",
 ]

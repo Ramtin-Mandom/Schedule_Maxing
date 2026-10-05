@@ -25,6 +25,7 @@ from app.planning.application import PlanningService
 from app.planning.repository import PlanningRepository
 from app.ui import background
 from app.ui.schedule_page_controller import RowRef
+from tests.tk_cleanup import cancel_stale_after_jobs
 
 
 def _display_available() -> bool:
@@ -94,6 +95,7 @@ def pump(app, until=lambda: True, timeout: float = 10.0) -> None:
 
 def close_app(app) -> None:
     app._on_close()
+    cancel_stale_after_jobs(app)  # its leftover timers must not fire during later tests (tests/tk_cleanup.py)
     # Collect the closed window's Tk objects (fonts, images) now, on the Tk thread. Left for later, a
     # garbage collection on another thread (e.g. a TestClient's event loop) would call into Tcl from the
     # wrong thread and block.

@@ -69,7 +69,8 @@ OPTIMIZER_MODES = ("precise_greedy", "adhd_friendly", "early_finish", "night_owl
 RECURRENCE_FREQUENCIES = ("daily", "weekly", "monthly")
 #: app.planning.models.OccurrenceState (docs/recurrence.md).
 OCCURRENCE_STATES = ("modified", "skipped", "deleted", "superseded")
-ENTITY_TYPES = ("project", "task", "fixed_block", "placement", "preference", "schedule_generation", "execution")
+ENTITY_TYPES = ("project", "task", "fixed_block", "placement", "preference", "schedule_generation", "execution",
+                "task_type")
 SYNC_STATUSES = ("applied", "conflict", "rejected")
 #: app.planning.models.PlacementRemovalReason (docs/execution-rescheduling.md).
 PLACEMENT_REMOVAL_REASONS = ("rescheduled", "regenerated", "deleted", "task_deleted", "reset")
@@ -171,6 +172,15 @@ def _project_checks(table: str) -> tuple:
     return (CheckConstraint("length(name) > 0", name=f"ck_{table}_name"),)
 
 
+class _TaskTypeContent:
+    #: The display label of a reusable task type (app.planning.models.TaskType); its id is the identity.
+    label: Mapped[str] = mapped_column(String(500), nullable=False)
+
+
+def _task_type_checks(table: str) -> tuple:
+    return (CheckConstraint("length(label) > 0", name=f"ck_{table}_label"),)
+
+
 class _TaskContent:
     project_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     name: Mapped[str] = mapped_column(String(500), nullable=False)
@@ -179,6 +189,8 @@ class _TaskContent:
     priority: Mapped[int] = mapped_column(Integer, nullable=False)
     #: The user's productivity value (app.planning.models.Task.points); not a scheduling input.
     points: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    #: The task's reusable type (one of the user's task_types; NULL: not assigned yet). Not a scheduling input.
+    task_type_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     required: Mapped[bool] = mapped_column(Boolean, nullable=False)
     required_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     preferred_window_start_minute: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -295,6 +307,16 @@ class _PlacementContent:
     optimization_metadata: Mapped[dict] = mapped_column(JSONDocument, nullable=False)
     #: The task's category when the placement was saved (a historical snapshot; NULL = not recorded).
     task_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    #: The rest of the planning snapshot (app.planning.models.ScheduledTask): the task's name, points, estimate
+    #: and type when the placement was saved; each NULL = not recorded. Its tags are ordered child rows
+    #: (task_tag_rows), recorded only when task_tags_recorded -- so "no tags" and "unknown" stay distinct.
+    #: task_type_id is history, not a live reference: not a foreign key.
+    task_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    task_tags_recorded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    task_points: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    task_estimate_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    task_type_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    task_type_label: Mapped[str | None] = mapped_column(String(500), nullable=True)
     #: Why a tombstone left the plan (PLACEMENT_REMOVAL_REASONS; NULL while live, or unknown for old tombstones)
     #: and the placement that replaced it. History, not a live reference: not a foreign key.
     removal_reason: Mapped[str | None] = mapped_column(String(20), nullable=True)
@@ -315,6 +337,12 @@ def _placement_checks(table: str) -> tuple:
             name=f"ck_{table}_removal_reason",
         ),
         CheckConstraint("superseded_by_id IS NULL OR superseded_by_id <> id", name=f"ck_{table}_superseded_by"),
+        CheckConstraint(
+            "(task_name IS NULL OR length(task_name) > 0) AND (task_type_label IS NULL OR length(task_type_label) > 0)"
+            " AND (task_points IS NULL OR task_points >= 0)"
+            " AND (task_estimate_minutes IS NULL OR task_estimate_minutes > 0)",
+            name=f"ck_{table}_snapshot",
+        ),
         # A coarse database backstop for every writer (the exact 4 KiB compact-JSON limit is enforced by
         # backend/record_mapping.py); PostgreSQL only, because SQLite has no jsonb functions.
         CheckConstraint(
@@ -453,6 +481,12 @@ class Project(_Record, _ProjectContent, Base):
     __table_args__ = (*_record_checks("projects"), *_project_checks("projects"))
 
 
+class TaskType(_Record, _TaskTypeContent, Base):
+    __tablename__ = "task_types"
+
+    __table_args__ = (*_record_checks("task_types"), *_task_type_checks("task_types"))
+
+
 class Task(_Record, _TaskContent, Base):
     __tablename__ = "tasks"
 
@@ -472,8 +506,12 @@ class Task(_Record, _TaskContent, Base):
         ForeignKeyConstraint(["user_id", "project_id"], ["projects.user_id", "projects.id"], name="fk_tasks_project"),
         # An occurrence's series is one of the same user's tasks (rows are only ever tombstoned, never removed).
         ForeignKeyConstraint(["user_id", "series_id"], ["tasks.user_id", "tasks.id"], name="fk_tasks_series"),
+        # A task's type is one of the same user's types: another account's type can never be referenced.
+        ForeignKeyConstraint(["user_id", "task_type_id"], ["task_types.user_id", "task_types.id"],
+                             name="fk_tasks_task_type"),
         *_task_checks("tasks"),
         Index("ix_tasks_user_project", "user_id", "project_id"),
+        Index("ix_tasks_user_task_type", "user_id", "task_type_id"),
         # One record per (user, series, original slot), tombstones included: a suppressed slot stays reserved.
         Index("uq_tasks_user_series_slot", "user_id", "series_id", "occurrence_slot", unique=True,
               sqlite_where=text("series_id IS NOT NULL"), postgresql_where=text("series_id IS NOT NULL")),
@@ -560,6 +598,9 @@ class Placement(_Record, _PlacementContent, Base):
 
     __tablename__ = "placements"
 
+    task_tag_rows: Mapped[list[PlacementTaskTag]] = relationship(
+        order_by="PlacementTaskTag.position", cascade="all, delete-orphan", lazy="selectin")
+
     __table_args__ = (
         *_record_checks("placements"),
         ForeignKeyConstraint(["user_id", "task_id"], ["tasks.user_id", "tasks.id"], name="fk_placements_task"),
@@ -575,6 +616,22 @@ class Placement(_Record, _PlacementContent, Base):
         ),
         # Walking a chain of moves backwards (which tombstones did this placement supersede?).
         Index("ix_placements_user_superseded_by", "user_id", "superseded_by_id"),
+    )
+
+
+class PlacementTaskTag(Base):
+    """A placement's snapshot of its task's tags, in order (see _PlacementContent.task_tags_recorded)."""
+
+    __tablename__ = "placement_task_tags"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    placement_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tag: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        _child_of("placement_task_tags", "placements", ("placement_id",), ("id",)),
+        _position_check("placement_task_tags"),
     )
 
 
@@ -788,6 +845,12 @@ class ProjectRevision(_RevisionKey, _ProjectContent, RecordRevision):
     __mapper_args__ = {"polymorphic_identity": "project", "polymorphic_load": "selectin"}
 
 
+class TaskTypeRevision(_RevisionKey, _TaskTypeContent, RecordRevision):
+    __tablename__ = "task_type_revisions"
+    __table_args__ = (_revision_of("task_type_revisions"), *_task_type_checks("task_type_revisions"))
+    __mapper_args__ = {"polymorphic_identity": "task_type", "polymorphic_load": "selectin"}
+
+
 class TaskRevision(_RevisionKey, _TaskContent, RecordRevision):
     __tablename__ = "task_revisions"
 
@@ -869,8 +932,26 @@ class FixedBlockRevision(_RevisionKey, _FixedBlockContent, RecordRevision):
 
 class PlacementRevision(_RevisionKey, _PlacementContent, RecordRevision):
     __tablename__ = "placement_revisions"
+
+    task_tag_rows: Mapped[list[PlacementRevisionTaskTag]] = relationship(
+        order_by="PlacementRevisionTaskTag.position", cascade="all, delete-orphan", lazy="selectin")
+
     __table_args__ = (_revision_of("placement_revisions"), *_placement_checks("placement_revisions"))
     __mapper_args__ = {"polymorphic_identity": "placement", "polymorphic_load": "selectin"}
+
+
+class PlacementRevisionTaskTag(Base):
+    __tablename__ = "placement_revision_task_tags"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    revision_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tag: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        _child_of("placement_revision_task_tags", "placement_revisions", ("revision_id",), ("id",)),
+        _position_check("placement_revision_task_tags"),
+    )
 
 
 class PreferenceRevision(_RevisionKey, _PreferenceContent, RecordRevision):

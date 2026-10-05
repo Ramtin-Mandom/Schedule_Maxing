@@ -14,7 +14,7 @@ account) or "server" (direct PostgreSQL) -- see storage_copy().
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -26,6 +26,7 @@ from app.productivity.filters import ObservationFilters
 from app.productivity.prediction import DurationPrediction
 from app.productivity.reporting import DurationPredictionComparison, ProductivityDashboard, ProductivityService
 from app.productivity.schedule_cohort import ScheduleCohortReport
+from app.productivity.tracker import TrackerFilters, TrackerReport
 from app.planning.time import local_date_of
 from app.ui.background import ControllerResult
 from app.ui.execution_controller import ExecutionController
@@ -70,6 +71,12 @@ _STORAGE_COPY = {
 }
 
 
+def task_tags(planning) -> list[str]:
+    """The tags of every task of a PlanningController's workspace (none when the tasks cannot be read)."""
+    result = planning.list_tasks()
+    return [tag for task in result.value for tag in task.tags] if result.ok else []
+
+
 class ProductivityController:
     def __init__(
         self,
@@ -78,8 +85,11 @@ class ProductivityController:
         *,
         storage: str = "device",
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        task_tags: Callable[[], Iterable[str]] | None = None,
     ) -> None:
         self._service = productivity_service
+        #: Reads the tags of the workspace's tasks (None: only the tags of the recorded history are known).
+        self._task_tags = task_tags
         self._execution_controller = execution_controller
         self._storage = storage
         self._clock = clock
@@ -120,6 +130,20 @@ class ProductivityController:
 
     def build_dashboard(self, filters: ObservationFilters | None = None) -> ControllerResult[ProductivityDashboard]:
         return self._call(lambda: self._service.build_dashboard(filters=filters))
+
+    def build_tracker(self, range_days: int | None = None, filters: TrackerFilters | None = None
+                      ) -> ControllerResult[TrackerReport]:
+        """The tracker report (awards, averages, per-type and time views) as of now; read-only."""
+        return self._call(lambda: self._service.build_tracker_report(range_days=range_days, filters=filters))
+
+    def used_tags(self) -> list[str]:
+        """Every tag on the workspace's tasks, scheduled or not (empty when they cannot be read)."""
+        if self._task_tags is None:
+            return []
+        try:
+            return sorted(set(self._task_tags()))
+        except Exception:  # noqa: BLE001 - filter choices only: the history's own tags are still offered
+            return []
 
     def build_schedule_cohort_report(
         self, start_date: date, end_date: date, *, timezone_name: str | None = None, as_of: datetime | None = None,

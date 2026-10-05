@@ -45,6 +45,7 @@ from backend.database import create_backend_engine
 from backend.migrate import upgrade
 from backend.settings import BackendSettings
 from tests.backend.conftest import TEST_SECRET, _postgres_url
+from tests.db_template import clone_migrated
 
 PASSWORD = "correct horse battery"
 MON = date(2026, 3, 2)
@@ -136,18 +137,26 @@ class Server:
         self.engine = engine
         self.app = create_app(BackendSettings(database_url="sqlite://", jwt_secret=TEST_SECRET), engine=engine)
         self.client = TestClient(self.app)
+        self._tokens: dict[str, str] = {}
 
     def register(self, email: str) -> dict:
         response = self.client.post("/auth/register", json={"email": email, "password": PASSWORD})
         assert response.status_code == 201, response.text
         return response.json()
 
-    def headers(self, email: str) -> dict:
-        token = self.client.post("/auth/login", json={"email": email, "password": PASSWORD}).json()["access_token"]
+    def headers(self, email: str, *, fresh: bool = False) -> dict:
+        """A bearer header for `email`, reusing its token (signing in only when needed)."""
+        token = None if fresh else self._tokens.get(email)
+        if token is None:
+            token = self.client.post("/auth/login", json={"email": email, "password": PASSWORD}).json()["access_token"]
+            self._tokens[email] = token
         return {"Authorization": f"Bearer {token}"}
 
     def get(self, email: str, path: str, **params) -> dict:
-        return self.client.get(path, params=params, headers=self.headers(email)).json()
+        response = self.client.get(path, params=params, headers=self.headers(email))
+        if response.status_code == 401:  # the cached token was ended (e.g. a password reset): sign in again
+            response = self.client.get(path, params=params, headers=self.headers(email, fresh=True))
+        return response.json()
 
     def changes(self, email: str) -> list[dict]:
         return self.get(email, "/changes", limit=500)["changes"]
@@ -159,13 +168,14 @@ def server():
     schema = None
     if url is None:
         engine = create_backend_engine("sqlite://")
+        clone_migrated(engine)  # a private copy of a migrated database (tests/db_template.py)
     else:
         schema = f"sm_test_{uuid.uuid4().hex[:12]}"
         admin = create_backend_engine(url)
         with admin.begin() as connection:
             connection.execute(text(f'CREATE SCHEMA "{schema}"'))
         engine = create_backend_engine(url, connect_args={"options": f"-csearch_path={schema}"})
-    upgrade(engine)
+        upgrade(engine)
     instance = Server(engine)
     try:
         yield instance

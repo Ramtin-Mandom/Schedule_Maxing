@@ -72,6 +72,9 @@ from app.ui.time_fields import (
 )
 
 NO_PROJECT = "(no project)"
+#: The task-type choices that are not a stored type: keep the task's own type / create one from the name below.
+OWN_TYPE = "(its own type)"
+NEW_TYPE = "New type..."
 #: "Repeats" labels and the draft values they stand for.
 REPEAT_LABELS = {"Does not repeat": "", "Daily": "daily", "Weekly": "weekly", "Monthly": "monthly"}
 END_LABELS = {"Never": "never", "On a date": "on", "After a number of times": "after"}
@@ -284,6 +287,7 @@ class TaskEditor(Card):
         self.date_text = ""
         self.options = EditorOptions(timezone="UTC")
         self._project_ids: dict[str, uuid.UUID | None] = {NO_PROJECT: None}
+        self._type_ids: dict[str, uuid.UUID | None] = {OWN_TYPE: None}
 
         self.title = SectionTitle(self, "Add a task", "Flexible tasks are placed by the scheduler; fixed blocks stay "
                                                        "where you put them.", wraplength=280)
@@ -359,8 +363,13 @@ class TaskEditor(Card):
         self.deadline_time.grid(row=3, column=0, columnspan=2, sticky="new", pady=4)
         self.project_select = LabeledSelect(self.more_frame, "Project", [NO_PROJECT])
         self.project_select.grid(row=4, column=0, columnspan=2, sticky="ew", pady=4)
+        # The reusable task type: independent of category and tags; several tasks may share one.
+        self.type_select = LabeledSelect(self.more_frame, "Task type", [OWN_TYPE, NEW_TYPE],
+                                         command=lambda _value: self._show_new_type())
+        self.type_select.grid(row=5, column=0, columnspan=2, sticky="ew", pady=4)
+        self.new_type_field = LabeledEntry(self.more_frame, "New type name", placeholder="e.g. Reading")
         self.dependency_picker = DependencyPicker(self.more_frame)
-        self.dependency_picker.grid(row=5, column=0, columnspan=2, sticky="ew", pady=4)
+        self.dependency_picker.grid(row=7, column=0, columnspan=2, sticky="ew", pady=4)
         self._build_repeat(self.more_frame)
         self.more_open = False
         #: What the record being edited is ("task", "series", "occurrence"); a new record is a "task".
@@ -415,7 +424,7 @@ class TaskEditor(Card):
     def _build_repeat(self, parent) -> None:
         """The "Repeats" controls (a series; docs/recurrence.md)."""
         frame = self.repeat_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        frame.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(8, 4))
+        frame.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(8, 4))
         frame.columnconfigure((0, 1), weight=1, uniform="repeat")
         self.repeat_select = LabeledSelect(frame, "Repeats", list(REPEAT_LABELS),
                                            command=lambda _value: self._show_repeat())
@@ -526,8 +535,22 @@ class TaskEditor(Card):
                 label += f" ({choice.id})"
             self._project_ids[label] = choice.id
         self.project_select.set_values(list(self._project_ids))
+        self._type_ids = {OWN_TYPE: None}
+        for choice in options.task_types:
+            label = choice.label
+            while label in self._type_ids or label == NEW_TYPE:
+                label += f" ({choice.id})"
+            self._type_ids[label] = choice.id
+        self.type_select.set_values([*self._type_ids, NEW_TYPE])
         self.dependency_picker.set_choices(options.dependencies)
         self.timezone_label.configure(text=f"Times are in {options.timezone}.")
+
+    def _show_new_type(self) -> None:
+        """The name field appears only while "New type..." is chosen."""
+        if self.type_select.get() == NEW_TYPE:
+            self.new_type_field.grid(row=6, column=0, columnspan=2, sticky="ew", pady=4)
+        else:
+            self.new_type_field.grid_remove()
 
     def set_dependencies(self, dependency_ids: list[uuid.UUID]) -> None:
         self.dependency_picker.set_choices(self.options.dependencies, tuple(dependency_ids))
@@ -538,7 +561,10 @@ class TaskEditor(Card):
 
     def draft(self) -> TaskDraft:
         project_label = self.project_select.get()
+        type_label = self.type_select.get()
         return TaskDraft(
+            task_type_id=self._type_ids.get(type_label),
+            new_type_label=self.new_type_field.get().strip() if type_label == NEW_TYPE else "",
             kind=self.kind, name=self.name_field.get(), category=self.category_select.get(), date=self.date_text,
             duration=self.duration_field.get(), priority=self.priority_select.get(), points=self.points_field.get(),
             required=self.required_var.get(),
@@ -577,6 +603,11 @@ class TaskEditor(Card):
         self.deadline_time.variable.set(draft.deadline_time)
         project = next((label for label, value in self._project_ids.items() if value == draft.project_id), NO_PROJECT)
         self.project_select.variable.set(project)
+        chosen_type = next((label for label, value in self._type_ids.items()
+                            if value is not None and value == draft.task_type_id), OWN_TYPE)
+        self.type_select.variable.set(chosen_type)
+        self.new_type_field.variable.set("")
+        self._show_new_type()
         self.dependency_picker.set_choices(self.options.dependencies, draft.dependency_ids)
         self.tag_input.set_tags(list(draft.tags))
         self.start_field.variable.set(draft.start)
@@ -595,7 +626,7 @@ class TaskEditor(Card):
         if self.recurrence_role == "occurrence":
             self.repeat_frame.grid_remove()  # one occurrence does not repeat; its series does
         else:
-            self.repeat_frame.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(8, 4))
+            self.repeat_frame.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(8, 4))
         note = draft.recurrence_note if editing else ""
         self.recurrence_note.configure(text=note)
         if note:

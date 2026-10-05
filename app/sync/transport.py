@@ -160,7 +160,8 @@ def capabilities_via(request, token: str) -> dict:
 
 
 def pull_via(request, token: str, after: int, limit: int) -> PullPage:
-    page = request("GET", f"/changes?after={int(after)}&limit={int(limit)}", token, None)
+    # include_task_types: this client stores task-type records; an older server ignores the parameter.
+    page = request("GET", f"/changes?after={int(after)}&limit={int(limit)}&include_task_types=true", token, None)
     return PullPage(changes=page["changes"], cursor=int(page["cursor"]), has_more=bool(page["has_more"]))
 
 

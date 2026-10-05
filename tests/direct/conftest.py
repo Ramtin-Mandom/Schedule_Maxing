@@ -20,6 +20,7 @@ from sqlalchemy import make_url, text
 from app.persistence.direct import DirectBackend
 from backend.database import create_backend_engine
 from backend.migrate import upgrade
+from tests.db_template import clone_migrated
 from backend.settings import normalize_database_url
 
 PASSWORD = "correct horse battery"
@@ -71,7 +72,10 @@ def blank_engine(tmp_path):
 
 @pytest.fixture
 def engine(blank_engine):
-    upgrade(blank_engine)
+    if postgres_url() is None:
+        clone_migrated(blank_engine)  # a private copy of a migrated database (tests/db_template.py)
+    else:
+        upgrade(blank_engine)
     return blank_engine
 
 

@@ -137,6 +137,7 @@ from app.planning.external_dependencies import (
     satisfaction_instants,
 )
 from app.planning.models import (
+    PLACEMENT_SNAPSHOT_FIELDS,
     DayScheduleOutput,
     FixedBlock,
     OccurrenceState,
@@ -675,7 +676,7 @@ def generate_from(
             error.failed_date = day  # which date could not be generated (the error names only tasks)
             raise
         stored = reservations.days[day].stored
-        outputs[day] = _with_category_snapshots(output, stored)
+        outputs[day] = _with_category_snapshots(output, stored, service)
         expected.update({placement.id: placement.version for placement in stored})
         kept[day] = sorted(reservations.days[day].kept, key=str)
     order = _kept_order_problems(service, outputs, reservations, inputs)
@@ -750,23 +751,32 @@ def _check_deadline(deadline: float | None) -> None:
                                    "Try fewer dates or fewer tasks.")
 
 
-def _with_category_snapshots(output: DayScheduleOutput, stored: list[ScheduledTask]) -> DayScheduleOutput:
+def _with_category_snapshots(
+    output: DayScheduleOutput, stored: list[ScheduledTask], service: PlanningService
+) -> DayScheduleOutput:
     """
     The output as it will be saved: a placement the engine kept (same id)
-    keeps its stored category snapshot, origin and manual intent; a new one
-    takes its task's category now and is generated -- so what generation
-    returns is exactly what is stored.
+    keeps its stored planning snapshot, origin and manual intent; a new one
+    takes its task's snapshot now (category, name, tags, points, estimate,
+    type) and is generated -- so what generation returns is exactly what is
+    stored.
     """
     by_id = {placement.id: placement for placement in stored}
+    new_tasks = {placement.task_id: output.tasks.get(placement.task_id)
+                 for placement in output.placements if placement.id not in by_id}
+    snapshots = service.placement_snapshots(new_tasks.values()) if new_tasks else {}
     placements = []
     for placement in output.placements:
         previous = by_id.get(placement.id)
         if previous is not None:
             placements.append(placement.model_copy(update={
-                "task_category": previous.task_category, "origin": previous.origin, "preserved": previous.preserved}))
+                **{name: getattr(previous, name) for name in PLACEMENT_SNAPSHOT_FIELDS},
+                "origin": previous.origin, "preserved": previous.preserved}))
         else:
+            current = snapshots[placement.task_id]
             placements.append(placement.model_copy(update={
-                "task_category": placement.task_category or output.tasks.get(placement.task_id).category,
+                **{name: getattr(placement, name) if getattr(placement, name) is not None else current[name]
+                   for name in PLACEMENT_SNAPSHOT_FIELDS},
                 "origin": placement.origin or PlacementOrigin.GENERATED}))
     return output.model_copy(update={"placements": placements})
 
@@ -1126,6 +1136,7 @@ def reschedule_placement(
     task_category: str | None = None,
     at: datetime | None = None,
     template: object = PROJECT_TEMPLATE,
+    snapshot: Mapping[str, object] | None = None,
 ) -> PlacementReschedule:
     """
     Move one saved placement to a new interval -- explicitly, atomically and
@@ -1160,6 +1171,9 @@ def reschedule_placement(
                 id=replacement_id or uuid.uuid4(), task_id=task.id, user_id=previous.user_id,
                 planned_date=planned_date, timezone=timezone_name, planned_start=planned_start,
                 planned_end=planned_end, task_category=task_category,
+                # A synchronized move carries the planning snapshot the device recorded for the replacement.
+                **{name: value for name, value in (snapshot or {}).items()
+                   if name in PLACEMENT_SNAPSHOT_FIELDS and name != "task_category" and value is not None},
             )
         except ValueError as error:
             raise InvalidEntityError(f"the destination is not a valid placement: {error}") from None

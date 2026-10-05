@@ -92,9 +92,12 @@ from backend import models
 from backend.errors import ApiError, invalid_reference
 from backend.preferences import effective_day_preferences
 from backend.record_mapping import (
+    PLACEMENT_SNAPSHOT_COLUMNS,
     check_optimization_metadata,
+    placement_snapshot,
     preference_overrides,
     task_content,
+    write_placement_snapshot,
     write_preference_overrides,
     write_task,
 )
@@ -152,6 +155,23 @@ class ProjectOut(ProjectFields, RecordMeta):
     pass
 
 
+class TaskTypeFields(Strict):
+    #: A reusable task type's display label (app.planning.models.TaskType); its id is the identity.
+    label: str = Field(min_length=1, max_length=500)
+
+
+class TaskTypeCreate(TaskTypeFields):
+    id: uuid.UUID | None = None
+
+
+class TaskTypeUpdate(TaskTypeFields, BaseVersion):
+    pass
+
+
+class TaskTypeOut(TaskTypeFields, RecordMeta):
+    pass
+
+
 #: Request bounds of a task's lists (validation errors, before any database work).
 MAX_TAGS = 50
 MAX_PREFERRED_DATES = 366
@@ -167,6 +187,9 @@ class TaskFields(Strict):
     priority: int = Field(ge=1, le=10)
     #: The user's productivity value (not the optimizer's placement score); omitted by older clients: the default.
     points: int = Field(default=DEFAULT_TASK_POINTS, ge=0, le=MAX_TASK_POINTS)
+    #: The task's reusable type (one of the caller's task types). Omitted or null (an older client): a create
+    #: stores none, an update keeps the stored one -- a type is never cleared.
+    task_type_id: uuid.UUID | None = None
     required: bool = False
     required_date: date_ | None = None
     preferred_dates: list[date_] = Field(default_factory=list, max_length=MAX_PREFERRED_DATES)
@@ -247,6 +270,14 @@ class PlacementFields(Strict):
     optimization_metadata: dict[str, Any] = Field(default_factory=dict)
     #: The task's category when the placement was saved (docs/execution-rescheduling.md).
     task_category: str | None = Field(default=None, min_length=1, max_length=100)
+    #: The rest of the planning snapshot (the task's name, tags, points, estimate and type when the placement was
+    #: saved). Each null = not recorded; a recorded value never changes (an omitted one keeps what is stored).
+    task_name: str | None = Field(default=None, min_length=1, max_length=500)
+    task_tags: list[Annotated[str, Field(max_length=100)]] | None = Field(default=None, max_length=MAX_TAGS)
+    task_points: int | None = Field(default=None, ge=0)
+    task_estimate_minutes: int | None = Field(default=None, gt=0)
+    task_type_id: uuid.UUID | None = None
+    task_type_label: str | None = Field(default=None, min_length=1, max_length=500)
     #: Set on a tombstone only: why it was removed, and the placement that replaced it.
     removal_reason: PlacementRemovalReason | None = None
     superseded_by_id: uuid.UUID | None = None
@@ -406,6 +437,27 @@ def _project_before_delete(mutator, row) -> None:
         raise ApiError(409, "in_use", "The project still has tasks; delete or move them first.")
 
 
+# -- task types ----------------------------------------------------------------
+
+
+def _task_type_content(_session, _user_id, row) -> dict:
+    return {"label": row.label}
+
+
+def _task_type_assign(_session, _user_id, row, payload) -> None:
+    row.label = payload.label
+
+
+def _task_type_before_delete(mutator, row) -> None:
+    in_use = mutator.session.scalars(
+        select(models.Task.id).where(
+            models.Task.user_id == mutator.user_id, models.Task.task_type_id == row.id, models.Task.deleted_at.is_(None)
+        ).limit(1)
+    ).first()
+    if in_use is not None:
+        raise ApiError(409, "in_use", "Tasks still have this type; give them another type first.")
+
+
 # -- tasks -------------------------------------------------------------------
 
 
@@ -430,6 +482,8 @@ def with_stored_omissions(row, payload: TaskFields) -> TaskFields:
     stored = task_content(row)
     sent = payload.model_fields_set
     update = {name: stored[name] for name in _KEPT_WHEN_OMITTED if name not in sent}
+    if payload.task_type_id is None and stored["task_type_id"] is not None:
+        update["task_type_id"] = stored["task_type_id"]  # omitted or null: a task's type is never cleared
     recurrence = payload.recurrence
     if (recurrence is not None and stored["recurrence"] is not None
             and not {"start_date", "timezone"} & recurrence.model_fields_set):
@@ -459,6 +513,9 @@ def _task_validate(session, user_id, payload: TaskFields, existing) -> None:
         payload = with_stored_omissions(existing, payload)
     if payload.project_id is not None and live(session, models.Project, user_id, payload.project_id) is None:
         raise invalid_reference("project_id does not name one of your projects.")
+    if (payload.task_type_id is not None and (existing is None or existing.task_type_id != payload.task_type_id)
+            and live(session, models.TaskType, user_id, payload.task_type_id) is None):
+        raise invalid_reference("task_type_id does not name one of your task types.")
     if existing is not None:
         if (existing.series_id, existing.occurrence_slot) != (payload.series_id, payload.occurrence_slot):
             raise ApiError(422, "validation_error", "An occurrence's series and original slot never change.")
@@ -648,8 +705,13 @@ def _generic_assign(schema: type[BaseModel]):
 # -- placements -------------------------------------------------------------
 
 
+#: The planning snapshot fields of a placement (app.planning.models.PLACEMENT_SNAPSHOT_FIELDS).
+_PLACEMENT_SNAPSHOT = (*PLACEMENT_SNAPSHOT_COLUMNS, "task_tags")
+
+
 def _placement_content(_session, _user_id, row) -> dict:
-    return {name: getattr(row, name) for name in PlacementFields.model_fields}
+    return {**{name: getattr(row, name) for name in PlacementFields.model_fields if name not in _PLACEMENT_SNAPSHOT},
+            **placement_snapshot(row)}
 
 
 #: Placement fields an update may omit (an older client does not know them): omitted ones keep the stored values.
@@ -667,20 +729,24 @@ def placement_with_stored_omissions(row, payload: PlacementFields) -> PlacementF
 
 def _placement_assign(session, user_id, row, payload: PlacementFields) -> None:
     """
-    The payload's content. task_category is a snapshot: kept when the payload
-    has none, and taken from the task's current category when a live
-    placement is created without one (a revision row stores exactly what it
-    is given: it is filled without a session).
+    The payload's content. The planning snapshot (task_category, task_name,
+    task_tags, ...) is history: a recorded value is kept when the payload has
+    none and is never replaced by an update. task_category alone is taken
+    from the task's current category when a live placement is created
+    without one (the pre-snapshot behaviour older clients rely on); the other
+    snapshot fields stay unknown until the writer supplies them -- the shared
+    planning service always does. A revision row stores exactly what it is
+    given: it is filled without a session.
     """
-    if session is not None and not inspect(row).pending:
+    stored = session is not None and not inspect(row).pending
+    if stored:
         payload = placement_with_stored_omissions(row, payload)  # an update of a stored row
     for name, value in _fields(payload, PlacementFields).items():
-        if name == "task_category":
+        if name in _PLACEMENT_SNAPSHOT:
             continue
         setattr(row, name, value.value if isinstance(value, (PlacementRemovalReason, PlacementOrigin)) else value)
-    if payload.task_category is not None:
-        row.task_category = payload.task_category
-    elif session is not None and inspect(row).pending and row.deleted_at is None:
+    write_placement_snapshot(row, payload, keep_recorded=stored)
+    if payload.task_category is None and session is not None and inspect(row).pending and row.deleted_at is None:
         task = session.get(models.Task, (user_id, payload.task_id))
         row.task_category = task.category if task is not None else None
 
@@ -701,6 +767,13 @@ def _placement_validate(session, user_id, payload: PlacementFields, existing) ->
             and payload.task_category != existing.task_category):
         raise ApiError(422, "validation_error", "task_category is the snapshot taken when the placement was saved; "
                                                 "it cannot change.")
+    if existing is not None:
+        recorded = placement_snapshot(existing)
+        for name in _PLACEMENT_SNAPSHOT:
+            value = getattr(payload, name)
+            if name != "task_category" and recorded[name] is not None and value is not None and value != recorded[name]:
+                raise ApiError(422, "validation_error", f"{name} is part of the snapshot taken when the placement "
+                                                        "was saved; it cannot change.")
     if live(session, models.Task, user_id, payload.task_id) is None:
         raise invalid_reference("task_id does not name one of your tasks.")
     if existing is not None and existing.task_id != payload.task_id:
@@ -778,6 +851,10 @@ PROJECTS = ResourceSpec(
     "projects", "project", "project", models.Project, ProjectCreate, ProjectUpdate, ProjectOut,
     content=_project_content, assign=_project_assign, before_delete=_project_before_delete,
 )
+TASK_TYPES = ResourceSpec(
+    "task-types", "task_type", "task type", models.TaskType, TaskTypeCreate, TaskTypeUpdate, TaskTypeOut,
+    content=_task_type_content, assign=_task_type_assign, before_delete=_task_type_before_delete,
+)
 TASKS = ResourceSpec(
     "tasks", "task", "task", models.Task, TaskCreate, TaskUpdate, TaskOut,
     content=_task_content, assign=_task_assign, validate=_task_validate, before_delete=_task_before_delete,
@@ -800,4 +877,4 @@ GENERATIONS = ResourceSpec(
     validate=_generation_validate,
 )
 
-CRUD_RESOURCES = (PROJECTS, TASKS, FIXED_BLOCKS, PLACEMENTS, PREFERENCES, GENERATIONS)
+CRUD_RESOURCES = (PROJECTS, TASK_TYPES, TASKS, FIXED_BLOCKS, PLACEMENTS, PREFERENCES, GENERATIONS)

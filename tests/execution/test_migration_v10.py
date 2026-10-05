@@ -72,6 +72,10 @@ def test_a_populated_v9_database_upgrades_without_guessing(tmp_path: Path) -> No
     try:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST_SCHEMA_VERSION >= 10
         after = {table: _rows(conn, table) for table in TABLES}
+        if "sync_dirty" in after:
+            # Later schemas (v12/v13) derive a type for each task and queue those new records for upload; the
+            # marks that existed before the upgrade are compared unchanged.
+            after["sync_dirty"] = [row for row in after["sync_dirty"] if row["entity_type"] != "task_type"]
         for table in TABLES:
             old_columns = before[table][0].keys() if before[table] else ()
             assert [{column: row[column] for column in old_columns} for row in after[table]] == before[table], table

@@ -70,7 +70,7 @@ from app.sync.transport import HttpTransport, SyncTransport
 from app.ui.background import WorkerRegistry, install_registry
 from app.ui.execution_controller import ExecutionController
 from app.ui.planning_controller import PlanningController
-from app.ui.productivity_controller import ProductivityController
+from app.ui.productivity_controller import ProductivityController, task_tags
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -222,7 +222,7 @@ def _build_controllers(
     )
     productivity = ProductivityController(
         ProductivityService(executions, history=planning_service.scoped(scope), timezone_name=timezone), execution,
-        storage="device" if scope.is_ownerless else "account",
+        storage="device" if scope.is_ownerless else "account", task_tags=lambda: task_tags(planning),
     )
     return planning, execution, productivity
 

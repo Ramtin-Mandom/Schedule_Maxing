@@ -83,6 +83,7 @@ def write_task(row, task) -> None:
         task.estimated_duration_minutes, task.priority, task.required,
     )
     row.points = task.points
+    row.task_type_id = task.task_type_id
     row.required_date = task.required_date
     row.preferred_window_start_minute = window.start_minute if window else None
     row.preferred_window_end_minute = window.end_minute if window else None
@@ -132,6 +133,7 @@ def task_content(row) -> dict:
         "tags": [item.tag for item in row.tag_rows],
         "estimated_duration_minutes": row.estimated_duration_minutes, "priority": row.priority,
         "points": row.points,
+        "task_type_id": row.task_type_id,
         "required": row.required, "required_date": row.required_date,
         "preferred_dates": [item.preferred_date for item in row.preferred_date_rows],
         "preferred_time_window": window,
@@ -141,6 +143,43 @@ def task_content(row) -> dict:
         "series_id": row.series_id, "occurrence_slot": row.occurrence_slot,
         "occurrence_state": row.occurrence_state, "series_version": row.series_version,
         "series_predecessor_id": row.series_predecessor_id,
+    }
+
+
+# -----------------------------------------------------------------------------
+# Placement planning snapshots
+# -----------------------------------------------------------------------------
+
+#: The scalar snapshot columns of a placements/placement_revisions row (task_tags are child rows).
+PLACEMENT_SNAPSHOT_COLUMNS = ("task_category", "task_name", "task_points", "task_estimate_minutes", "task_type_id",
+                              "task_type_label")
+
+
+def write_placement_snapshot(row, placement, *, keep_recorded: bool) -> None:
+    """
+    Write a placement's planning snapshot (PlacementFields/PlacementOut) into a
+    placements or placement_revisions row. A snapshot is history: a value the
+    payload does not carry (None) never clears a recorded one, and with
+    keep_recorded (an update of a stored row) a recorded value is never
+    replaced -- only a fact that was unknown is filled in.
+    """
+    for name in PLACEMENT_SNAPSHOT_COLUMNS:
+        value = getattr(placement, name)
+        if value is not None and not (keep_recorded and getattr(row, name) is not None):
+            setattr(row, name, value)
+    if placement.task_tags is not None and not (keep_recorded and row.task_tags_recorded):
+        tag = _child(row, "task_tag_rows")
+        row.task_tags_recorded = True
+        row.task_tag_rows = [tag(position=position, tag=value) for position, value in enumerate(placement.task_tags)]
+    elif row.task_tags_recorded is None:
+        row.task_tags_recorded = False
+
+
+def placement_snapshot(row) -> dict:
+    """A placements/placement_revisions row's planning snapshot as PlacementFields values."""
+    return {
+        **{name: getattr(row, name) for name in PLACEMENT_SNAPSHOT_COLUMNS},
+        "task_tags": [item.tag for item in row.task_tag_rows] if row.task_tags_recorded else None,
     }
 
 

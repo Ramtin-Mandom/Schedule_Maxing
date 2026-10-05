@@ -18,7 +18,7 @@ from pathlib import Path
 import customtkinter as ctk
 import pytest
 
-from app.ui import theme
+from app.ui import background, theme
 from app.ui.components import ConfirmDialog, Drawer, Notice, StateView, focus_target
 from app.ui.shell import COLLAPSED_WIDTH, EXPANDED_WIDTH
 from app.ui.shell_state import NAV_ITEMS, LayoutMode
@@ -43,7 +43,50 @@ def shown(app, tmp_path: Path):
     return app
 
 
+#: How long the app must stay unchanged before settle() returns.
+QUIET_SECONDS = 0.06
+
+
+def _activity(app) -> tuple:
+    """What changes while queued layout, paint or background work is still happening."""
+    shell = getattr(app, "shell", None)
+    return (
+        background.current_registry().active,
+        bool(shell is not None and shell.layout_checks.pending),
+        app.winfo_geometry(),
+        shell.host.winfo_width() if shell is not None else None,
+        getattr(getattr(app, "shell_state", None), "layout", None),
+        str(app.focus_get()) if app.focus_get() is not None else None,
+    )
+
+
 def settle(app, seconds: float = 0.4) -> None:
+    """
+    Let queued layout, paint and worker callbacks run: pump the event loop until
+    the app has stayed unchanged (no worker running, no layout check pending,
+    the same geometry, layout and focus) for QUIET_SECONDS, at most `seconds`
+    -- a safeguard, never a fixed wait. Idle callbacks run in every update();
+    the app's delayed callbacks (e.g. 10 ms card batches) fall inside the quiet
+    window. Use wait_fixed() to prove that nothing happens for a while.
+    """
+    started = time.monotonic()
+    deadline = started + seconds
+    last, quiet_since = None, started
+    while True:
+        app.update()
+        now = time.monotonic()
+        state = _activity(app)
+        if state != last:
+            last, quiet_since = state, now
+        elif now - quiet_since >= QUIET_SECONDS:
+            return
+        if now >= deadline:
+            return
+        time.sleep(0.005)
+
+
+def wait_fixed(app, seconds: float) -> None:
+    """Pump the event loop for exactly `seconds` -- for checks that nothing (e.g. a late event) happens meanwhile."""
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         app.update()
@@ -164,11 +207,11 @@ def test_moving_resizing_minimizing_and_scaling_settle_into_a_stable_layout(tmp_
             assert app.shell_state.layout == mode and day.layout == mode, geometry
             assert canvas.draw_count == draws  # resizing never repaints the schedule
             events.clear()
-            settle(app, 0.4)
+            wait_fixed(app, 0.4)  # measures that no late Configure arrives: a deliberate fixed wait
             if events:  # the window manager may deliver one late toplevel Configure; a feedback loop never stops
                 assert all(str(event.widget) == "." for event in events), f"page widgets still relayout after {geometry}"
                 events.clear()
-                settle(app, 0.4)
+                wait_fixed(app, 0.4)
             assert events == [], f"layout kept changing after {geometry}"  # settled: no Configure feedback loop
             assert not app.shell.layout_checks.pending
             page_width, host_width = day.winfo_reqwidth(), app.shell.host.winfo_width()

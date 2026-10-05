@@ -19,10 +19,11 @@ from tests.sync.conftest import server as server  # noqa: F401 - the in-process 
 BACKEND_URL = "http://backend.test"
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True, scope="module")
 def _collect_tk_garbage_on_this_thread():
     """Earlier desktop (Tk) tests may leave objects whose finalizers must run on the main thread, not in a
-    TestClient's event-loop thread (tkinter blocks there); collect them here first."""
+    TestClient's event-loop thread (tkinter blocks there); collect them here first. Once per module is
+    enough: no web test creates Tk objects, so new Tk garbage can only come from the modules before it."""
     gc.collect()
 
 
