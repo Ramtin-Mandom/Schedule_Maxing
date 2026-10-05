@@ -9,10 +9,16 @@ button). The page provides `page_controller` (a SchedulePageController),
 `reload()`, `show_panel(key)` and `_refuse_while_busy()`. Persistence and
 validation stay in the presenter and the planning services.
 
-Storage calls go through _io(): at once with local storage, in a worker
-with direct PostgreSQL storage (background_io; app/ui/background.run_io),
-the page counting as busy meanwhile so a second action waits. Whatever the
-storage, a failed save keeps everything typed in the form.
+Storage calls go through _io(): in a worker when the page runs inside the
+desktop app (background_io; app/ui/background.run_io), the page counting as
+busy meanwhile so a second action waits; at once for a page built on its own.
+Every call works on a copy of the presenter frozen at the dates shown when
+it was started (SchedulePageController.detached), so a worker neither reads
+dates the page has since left nor changes the page's own; everything typed
+or selected is read on the Tk thread before the call starts. Blocking calls
+share one serialized lane (background.WRITE_LANE); reads that only matter
+when newest replace their queued predecessors. Whatever the storage, a
+failed save keeps everything typed in the form.
 """
 
 from __future__ import annotations
@@ -21,18 +27,22 @@ from dataclasses import replace
 from tkinter import messagebox
 
 from app.persistence.errors import NotSignedInError
-from app.ui.background import ControllerResult, run_io
+from app.ui.background import WRITE_LANE, ControllerResult, run_io
 from app.ui.components import ChoiceDialog
 from app.ui.schedule_page_controller import RowRef
 from app.ui.task_form_model import FormErrors, TaskDraft
 
 
 class TaskFormActions:
-    #: True with direct PostgreSQL storage: storage calls run off the Tk thread.
+    #: True inside the desktop app (local and direct storage): storage calls run off the Tk thread.
     background_io = False
 
-    def _io(self, work, done, *, blocking: bool = True) -> None:
-        """Run a storage call (see the module docstring); `blocking` marks the page busy while it runs."""
+    def _io(self, work, done, *, blocking: bool = True, newest: str | None = None) -> None:
+        """
+        Run a storage call (see the module docstring). `blocking` marks the page
+        busy while it runs and orders it behind earlier changes; `newest` names
+        a read that a later one of the same name replaces.
+        """
         if blocking and self.background_io:
             self._busy = True
 
@@ -41,13 +51,20 @@ class TaskFormActions:
                 self._busy = False
             done(result)
 
-        if not run_io(self, work, finish, background=self.background_io) and blocking:
+        finish.__qualname__ = getattr(done, "__qualname__", finish.__qualname__)  # the name diagnostics report
+        if not run_io(self, work, finish, background=self.background_io, serial=WRITE_LANE if blocking else None,
+                      supersede=(id(self), newest) if newest and not blocking else None) and blocking:
             self._busy = False
 
     def _next_load(self) -> int:
         """A token for a load: only the newest load's result is shown."""
         self._load_token = getattr(self, "_load_token", 0) + 1
         return self._load_token
+
+    def _next_options(self) -> int:
+        """A token for a read of the form's choices: only the newest read's choices are shown."""
+        self._options_token = getattr(self, "_options_token", 0) + 1
+        return self._options_token
 
     def _load_failed(self, result) -> None:
         if isinstance(result.cause, NotSignedInError):
@@ -78,7 +95,8 @@ class TaskFormActions:
         self._save_with_scope(draft, editing, None)
 
     def _save_with_scope(self, draft: TaskDraft, editing, scope: str | None) -> None:
-        self._io(lambda: self.page_controller.save_draft(draft, editing=editing, scope=scope),
+        controller = self.page_controller.detached()
+        self._io(lambda: controller.save_draft(draft, editing=editing, scope=scope),
                  lambda result: self._task_saved(draft, result))
 
     def _task_saved(self, draft: TaskDraft, result) -> None:
@@ -104,12 +122,14 @@ class TaskFormActions:
         if self._refuse_while_busy():
             return
 
+        controller = self.page_controller.detached()
+
         def work():
-            draft = self.page_controller.draft_for(ref)
+            draft = controller.draft_for(ref)
             if not draft.ok:
                 return draft, None
-            return draft, self.page_controller.editor_options(ref, category=draft.value.category,
-                                                              project_id=draft.value.project_id)
+            return draft, controller.editor_options(ref, category=draft.value.category,
+                                                    project_id=draft.value.project_id)
 
         self._io(work, lambda loaded: self._edit_loaded(ref, loaded))
 
@@ -132,27 +152,32 @@ class TaskFormActions:
     def _reset_editor(self) -> None:
         """A blank form for this page's date, with current choices (dependencies, projects, categories)."""
 
+        token = self._next_options()
+
         def apply(options) -> None:
-            if options.ok:
+            if options.ok and token == self._options_token:
                 self.form.set_options(options.value)
             self.form.load(self.page_controller.blank_draft(self.form.kind), editing=False)
 
-        self._io(self.page_controller.editor_options, apply, blocking=False)
+        self._io(self.page_controller.detached().editor_options, apply, blocking=False)
 
     def _refresh_options(self) -> None:
         """Refresh the form's choices after a redraw (not while an edit is open)."""
 
+        token = self._next_options()
+
         def apply(options) -> None:
-            if options.ok and not self._editing:
+            if options.ok and not self._editing and token == self._options_token:
                 self.form.set_options(options.value)
 
-        self._io(self.page_controller.editor_options, apply, blocking=False)
+        self._io(self.page_controller.detached().editor_options, apply, blocking=False, newest="options")
 
     def remove_ref(self, ref: RowRef) -> None:
         """Remove one saved task/fixed block after confirming what goes with it."""
         if self._refuse_while_busy():
             return
-        self._io(lambda: (self.page_controller.delete_description(ref), self.page_controller.removal_choices(ref)),
+        controller = self.page_controller.detached()
+        self._io(lambda: (controller.delete_description(ref), controller.removal_choices(ref)),
                  lambda loaded: self._confirm_removal(ref, *loaded))
 
     def _confirm_removal(self, ref: RowRef, description, choices=None) -> None:
@@ -171,7 +196,8 @@ class TaskFormActions:
         self._remove_with_scope(ref, scope)
 
     def _remove_with_scope(self, ref: RowRef, scope: str | None) -> None:
-        self._io(lambda: self.page_controller.delete(ref, scope=scope), lambda result: self._removed(ref, result))
+        controller = self.page_controller.detached()
+        self._io(lambda: controller.delete(ref, scope=scope), lambda result: self._removed(ref, result))
 
     def _removed(self, ref: RowRef, result) -> None:
         self._render_result(result, "Could Not Remove Task")

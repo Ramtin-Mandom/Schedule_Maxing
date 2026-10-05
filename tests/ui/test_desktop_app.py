@@ -85,7 +85,7 @@ def pump(app, until=lambda: True, timeout: float = 10.0) -> None:
     deadline = time.monotonic() + timeout
     while True:
         app.update()
-        if until() and background.current_registry().active == 0:
+        if until() and background.current_registry().outstanding == 0:
             app.update()
             return
         if time.monotonic() > deadline:
@@ -93,8 +93,19 @@ def pump(app, until=lambda: True, timeout: float = 10.0) -> None:
         time.sleep(0.01)
 
 
+def finish_closing(app, timeout: float = 15.0) -> None:
+    """Closing never blocks the Tk thread: serve the event loop until the workers are done and the window is gone."""
+    deadline = time.monotonic() + timeout
+    while not app._closed:
+        if time.monotonic() > deadline:
+            raise AssertionError("timed out waiting for the window to close")
+        app.update()
+        time.sleep(0.005)
+
+
 def close_app(app) -> None:
     app._on_close()
+    finish_closing(app)
     cancel_stale_after_jobs(app)  # its leftover timers must not fire during later tests (tests/tk_cleanup.py)
     # Collect the closed window's Tk objects (fonts, images) now, on the Tk thread. Left for later, a
     # garbage collection on another thread (e.g. a TestClient's event loop) would call into Tcl from the
@@ -175,10 +186,13 @@ def test_create_edit_delete_schedule_execute_close_reopen_reset(tmp_path: Path, 
     # Create through the real submit button: committed before the table refresh.
     fill_form(week, name="Study", day="1")
     week.form.submit_button.invoke()
+    pump(app)
     fill_form(week, name="Study", day="2")  # a duplicate name on another day
     week.form.submit_button.invoke()
+    pump(app)
     fill_form(week, name="Lecture", day="1", fixed=True, start="480", end="540")
     week.form.submit_button.invoke()
+    pump(app)
     assert dialogs.errors == []
     assert sorted(tree_names(week)) == ["Lecture", "Study", "Study"]
     assert [task.name for task in stored_tasks(db_path)] == ["Study", "Study"]
@@ -186,20 +200,25 @@ def test_create_edit_delete_schedule_execute_close_reopen_reset(tmp_path: Path, 
     # Edit the Tuesday "Study" by its id (as its Day page's Available-task button does).
     tuesday_task = next(t for t in stored_tasks(db_path) if t.preferred_dates == [date(2024, 6, 4)])
     week.edit_ref(RowRef("task", tuesday_task.id, tuesday_task.version))
+    pump(app)
     assert week.form.submit_button.cget("text") == "Save changes"
     week.form.name_field.variable.set("Review")
     week.form.submit_button.invoke()
+    pump(app)
     assert sorted(tree_names(week)) == ["Lecture", "Review", "Study"]
     assert {t.id: t.name for t in stored_tasks(db_path)}[tuesday_task.id] == "Review"
 
     # Delete it again, by id.
     stored = next(t for t in stored_tasks(db_path) if t.id == tuesday_task.id)
     week.remove_ref(RowRef("task", stored.id, stored.version))
+    pump(app)
     assert sorted(tree_names(week)) == ["Lecture", "Study"]
 
     # Scheduling happens on Day: Open Day, Make Schedule (in the background), then mark it done there.
     week.select_date(date(2024, 6, 3))
+    pump(app)
     week.open_day_button.invoke()
+    pump(app)
     day = app.pages["day"]
     assert app.shell.current == "day" and day.page_controller.anchor_date == date(2024, 6, 3)
     day.make_schedule_button.invoke()
@@ -211,6 +230,7 @@ def test_create_edit_delete_schedule_execute_close_reopen_reset(tmp_path: Path, 
     press(app, day, "Study", "right")
     assert board_names(day) == {"pending": [], "completed": ["Study"], "uncompleted": []}
     day.back_button.invoke()
+    pump(app)
     assert app.shell.current == "week"
     assert week.snapshot.day(date(2024, 6, 3)).freshness_label == "Current"
     close_app(app)
@@ -230,6 +250,7 @@ def test_create_edit_delete_schedule_execute_close_reopen_reset(tmp_path: Path, 
 
         # Reset Week: previewed and confirmed; execution history is kept.
         week.reset_button.invoke()
+        pump(app)
         assert "Reset the week of Mon Jun 3" in dialogs.confirms[-1]
         assert dialogs.errors == [] and tree_names(week) == []
         assert week.snapshot.day(date(2024, 6, 3)).items == []
@@ -251,6 +272,7 @@ def test_invalid_input_shows_an_error_and_saves_nothing(tmp_path: Path, dialogs:
         fill_form(day, name="Bad", duration="0")
         day.form.window_start.hour_var.set("13")  # hours are 1-12 beside the AM/PM toggle
         day.form.submit_button.invoke()
+        pump(app)
         assert day.form.duration_field.error == "A task takes at least 1 minute."  # shown next to its field
         assert "hour goes from 1 to 12" in day.form.window_start.error
         assert day.form.notice.text.startswith("Error:")
@@ -287,23 +309,29 @@ def test_csv_upload_and_export_go_through_the_saved_data_boundary(tmp_path: Path
         day = app.pages["day"]
         week = app.pages["week"]
         day.import_button.invoke()  # a legacy file: imported only after the explicit choice and confirmation
+        pump(app)
         assert dialogs.errors == [] and "Imported 2 task(s) and 1 fixed block(s)" in day.notice.text
         assert sorted(tree_names(day)) == ["Lecture", "Read"]
         week.reload()
+        pump(app)
         assert sorted(tree_names(week)) == ["Lecture", "Read", "Summarise"]  # the other dates see it too
 
         chosen["file"] = str(bad)
         day.import_button.invoke()
+        pump(app)
         assert "Missing" in day.notice.text and "nothing was saved" in day.notice.text
         week.reload()
+        pump(app)
         assert sorted(tree_names(week)) == ["Lecture", "Read", "Summarise"]  # unchanged, re-read
 
         chosen["file"], chosen["mode"] = str(good), "replace"
         day.import_button.invoke()
+        pump(app)
         assert "replacing 2024-06-05 to 2024-06-06" in day.notice.text
         assert len(stored_tasks(db_path)) == 2  # replaced, not duplicated
 
         day.export_button.invoke()
+        pump(app)
         assert "Exported 1 task(s), 1 fixed block(s)" in day.notice.text
         assert (tmp_path / "export.csv").read_text(encoding="utf-8").startswith("record_type,id,task_id,date")
     finally:

@@ -74,12 +74,14 @@ class CalendarPage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         on_anchor_changed: Callable[[str, date], None] | None = None,
         on_open_day: Callable[[date], None] | None = None,
         background_io: bool = False,
+        task_defaults=None,
     ) -> None:
         super().__init__(parent, fg_color=theme.APP_BG, corner_radius=0)
         self.background_io = background_io
         self.mode_name = mode_name
         self.page_controller = page_controller
         self.productivity_controller = productivity_controller
+        self.task_defaults = task_defaults
         self._on_anchor_changed = on_anchor_changed
         self._on_open_day = on_open_day
         self.snapshot: CalendarSnapshot | None = None
@@ -183,7 +185,7 @@ class CalendarPage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         self.lower = lower = ctk.CTkFrame(self.body, fg_color="transparent")
         lower.grid(row=4, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_XL))
         self.form = TaskEditor(lower, on_submit=self.submit_task, on_cancel=self.cancel_edit,
-                               productivity_controller=self.productivity_controller)
+                               task_defaults=self.task_defaults)
         self.side = side = ctk.CTkFrame(lower, fg_color="transparent")
         side.columnconfigure(0, weight=1)
         actions = Card(side)
@@ -260,7 +262,7 @@ class CalendarPage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
             else:
                 self._load_failed(result)
 
-        self._io(self.page_controller.load, done, blocking=False)
+        self._io(self.page_controller.detached().load, done, blocking=False, newest="load")
 
     def on_show(self) -> None:
         if not self._busy:
@@ -277,7 +279,8 @@ class CalendarPage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         def done(result: ControllerResult[CalendarSnapshot]) -> None:
             self._loaded(token, period, result)
 
-        if not run_in_background(self, lambda: self.page_controller.load_for(period), done):
+        controller = self.page_controller.detached()
+        if not run_in_background(self, lambda: controller.load_for(period), done, supersede=(id(self), "load")):
             self.loading = False
 
     def _loaded(self, token: int, period: Period, result: ControllerResult[CalendarSnapshot]) -> None:
@@ -345,7 +348,7 @@ class CalendarPage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
     def reset_period(self) -> None:
         if self._refuse_while_busy():
             return
-        self._io(self.page_controller.reset_plan, self._reset_planned)
+        self._io(self.page_controller.detached().reset_plan, self._reset_planned)
 
     def _reset_planned(self, plan) -> None:
         if not plan.ok:
@@ -358,7 +361,8 @@ class CalendarPage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         if not self._confirm(f"Reset {unit}?", plan.value.message, f"Reset {unit}", danger=True):
             self.notice.show("info", "Reset cancelled; nothing was deleted.")
             return
-        self._io(lambda: self.page_controller.reset_period(plan.value), self._period_reset)
+        controller = self.page_controller.detached()
+        self._io(lambda: controller.reset_period(plan.value), self._period_reset)
 
     def _period_reset(self, result) -> None:
         if result.value is not None:
@@ -374,6 +378,8 @@ class CalendarPage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
     # ----------------------------- Rendering -----------------------------
 
     def _render(self, snapshot: CalendarSnapshot) -> None:
+        if snapshot.period is not None and snapshot.period.key != self.page_controller.period.key:
+            return  # the view of a week/month left while this was read or saved; the navigation's own load draws
         self._unfiltered = snapshot
         self._project_choices = project_choices(snapshot.projects)
         selected = self.project_filter.get()
@@ -441,7 +447,7 @@ class CalendarPage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
             else:
                 self.day_panel.notice.show("error", result.error or "The day could not be read.")
 
-        self._io(lambda: outcomes.detail(day), done, blocking=False)
+        self._io(lambda: outcomes.detail(day), done, blocking=False, newest="day-panel")
 
     def set_day_outcome(self, outcome: TaskOutcome) -> None:
         """All Tasks Complete / No Tasks Complete: every scheduled task of the selected day, in one transaction."""

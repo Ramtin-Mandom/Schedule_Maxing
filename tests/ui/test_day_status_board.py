@@ -24,6 +24,7 @@ def scheduled_day(db: Path, tmp_path: Path, names: tuple[str, ...]):
         start = 540 + 90 * index
         fill_form(day, name=name, duration="30", start=str(start), end=str(start + 60))
         day.form.submit_button.invoke()
+        pump(app)
     day.make_schedule_button.invoke()
     pump(app, until=lambda: not day._busy)
     pump(app)
@@ -57,8 +58,10 @@ def test_unscheduled_tasks_stay_out_and_a_rerun_keeps_every_status(tmp_path: Pat
         press(app, day, "C", "left")
         fill_form(day, name="Too long", duration="1440")  # a whole day: never fits beside the kept work
         day.form.submit_button.invoke()
+        pump(app)
         fill_form(day, name="D", duration="30", start="1200", end="1260")
         day.form.submit_button.invoke()
+        pump(app)
         day.make_schedule_button.invoke()
         pump(app, until=lambda: not day._busy)
         pump(app)
@@ -107,6 +110,7 @@ def test_the_columns_stack_on_a_narrow_window(tmp_path: Path, dialogs) -> None:
         rows = {outcome: column.grid_info()["row"] for outcome, column in board.columns.items()}
         assert len(set(rows.values())) == 1  # wide: side by side
         day.set_layout(LayoutMode.NARROW)
+        pump(app)
         rows = [column.grid_info()["row"] for column in board.columns.values()]
         assert rows == [0, 1, 2]  # narrow: stacked, same controls
         press(app, day, "Read", "right")

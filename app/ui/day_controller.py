@@ -347,7 +347,6 @@ class DayScheduleController(SchedulePageController):
                  today: Callable[[], date_] | None = None) -> None:
         super().__init__(planning, number_of_days=1, anchor_date=anchor_date, timezone=timezone)
         self._today = today
-        self.allocation_context: tuple[date_, date_, str, date_] | None = None
         self._explanations_lock = threading.Lock()
         #: (date, generation record id) -> task id -> genuine reason of the run that saved that record.
         self._explanations: dict[tuple[date_, uuid.UUID], dict[uuid.UUID, str]] = {}
@@ -539,10 +538,8 @@ class DayScheduleController(SchedulePageController):
         return self._run(day, GenerationMode.FULL)
 
     def _run(self, day: date_, mode: GenerationMode) -> ControllerResult[DayRun]:
-        context = self.allocation_context
-        start, end, fingerprint = (context[:3] if context and context[3] == day else (day, day, None))
-        result = self._planning.generate(start, end, generate_start=day, generate_end=day, mode=mode,
-                                         expected_fingerprint=fingerprint, preserve_on_empty=True)
+        result = self._planning.generate(day, day, generate_start=day, generate_end=day, mode=mode,
+                                         preserve_on_empty=True)
         if not result.ok:
             return self._run_failure(day, result)
         outcome: GenerationOutcome = result.value
@@ -649,7 +646,7 @@ class DayScheduleController(SchedulePageController):
         elif isinstance(cause, StaleInputsError):
             reasons = []
             message = ("Something changed while the schedule was being made. Nothing was saved; the previous "
-                       "schedule is unchanged. Recalculate Allocation Planning if opened from a preview; otherwise try again.")
+                       "schedule is unchanged. Try again.")
         else:
             reasons = []
             message = f"{result.error}\n\nNothing was saved; the previous schedule is unchanged."

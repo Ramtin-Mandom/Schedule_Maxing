@@ -1,8 +1,7 @@
 # Schedule Maxing
 
-The native desktop UI includes Day, Week, Month, Project Schedule and Allocation Planning, plus an in-app **How to Use** guide (before About).
-See [Projects and Allocation Planning](docs/desktop-projects-allocation.md) for date-only
-previews, selected-day scheduling, project assignment and display filters.
+The native desktop UI includes Day, Week, Month and Project Schedule, plus an in-app **How to Use** guide (before About).
+See [Projects](docs/desktop-projects-allocation.md) for project assignment and display filters.
 The optional web/server adapters remain independently launched components; desktop
 workflows call shared Python services directly ([boundaries](docs/desktop-web-boundaries.md)).
 
@@ -892,7 +891,7 @@ Protocol details: [docs/sync-protocol.md](docs/sync-protocol.md).
 
 ### Projects and recurrence
 
-Project Schedule manages persisted projects and task assignments; calendar and allocation filters display a project's work. See [Projects and Allocation](docs/desktop-projects-allocation.md).
+Project Schedule manages persisted projects and task assignments; calendar filters display a project's work. See [Projects](docs/desktop-projects-allocation.md).
 
 **Five scheduling modes.** Normal, ADHD friendly, Early finish, Night owl and Catch-up share the same hard rules and search; they differ in what they optimize (finishing early, starting late, or prioritizing categories you often skipped). Old Normal/ADHD choices keep working. See [Scheduling modes](docs/scheduling-modes.md).
 
@@ -973,7 +972,7 @@ The desktop UI now uses the shared services directly, with the optional web API 
 - **Task form:** minute-precise times/durations, multiple tags, project/dependency choices and fixed-block validation before saving.
 - **Day:** category-colored timeline, backlog, free gaps, current/stale status, explicit incremental generation and confirmed regeneration/reset.
 - **Engines:** Normal and ADHD friendly are beside Make Schedule. Day Preferences override persisted defaults without changing other dates.
-- **Projects / Allocation:** project CRUD and assignments, display filters, date-only capacity previews and selected-date generation.
+- **Projects:** project CRUD and assignments, display filters.
 - **Sync:** native account/association/status/conflict screens; offline work remains available.
 - **Settings:** native controls edit persisted scheduling defaults and the default engine, with date overrides in Day Preferences. The legacy runtime reward screen is no longer exposed. See [desktop Settings](docs/desktop-settings.md).
 
@@ -1040,7 +1039,7 @@ Possible next steps:
 - Feed productivity-derived duration predictions back into the optimizer as an opt-in input (currently the suggestion is shown but never applied automatically).
 - Add a real calendar-date mapping for the abstract day-index schedule model in the *legacy* pipeline (largely superseded by the canonical layer's real `datetime.date`, but the legacy `app/models.py` path itself still uses abstract day indexes).
 - If real usage history grows enough to clear the ML activation gate, surface the comparison result (and, once it wins honestly, the ML suggestion itself) in the desktop UI's duration-suggestion widget alongside the median predictor.
-- Implement project archiving; project CRUD, assignment, the separate Allocation Planning view and recurring series ([docs/recurrence.md](docs/recurrence.md)) are already available.
+- Implement project archiving; project CRUD, assignment and recurring series ([docs/recurrence.md](docs/recurrence.md)) are already available.
 
 ---
 
@@ -1050,7 +1049,7 @@ The project has these parts:
 
 - **Scheduling:** the original Milestone 0 greedy engine (the frozen baseline), and a canonical, UUID-identity-based day engine with `precise_greedy`/`adhd_friendly` modes and week/month task-to-date allocation.
 - **Persistence (Milestone 2):** a local SQLite store for all planning data and execution history, behind a transactional service boundary.
-- **Desktop app (Milestone 4):** reads and writes that store directly, with Day/Week/Month calendars, project management, Allocation Planning, both engines, default/date preferences, account/sync/conflict controls, CSV import/export, scoped resets, and restart-safe execution tracking.
+- **Desktop app (Milestone 4):** reads and writes that store directly, with Day/Week/Month calendars, project management, both engines, default/date preferences, account/sync/conflict controls, CSV import/export, scoped resets, and restart-safe execution tracking.
 - **CLI:** the same persistence-backed pipeline.
 - **Sync-ready local records (Milestone 3):**
   - every local record has an owner, a version, and a deletion marker;

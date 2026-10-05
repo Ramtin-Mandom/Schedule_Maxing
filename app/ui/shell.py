@@ -32,7 +32,7 @@ from collections.abc import Callable
 
 import customtkinter as ctk
 
-from app.ui import theme
+from app.ui import diagnostics, theme
 from app.ui.components import AppButton, Tooltip, font, focus_target
 from app.ui.layout import BoundedAnimation, Coalescer
 from app.ui.shell_state import NAV_ITEMS, LayoutMode, ShellState
@@ -55,6 +55,9 @@ class Sidebar(ctk.CTkFrame):
         self._state = state
         self._width = COLLAPSED_WIDTH
         self._animation_from = self._animation_to = COLLAPSED_WIDTH
+        #: What is drawn now, so a page switch repaints only what changed (each button repaint costs ~3 ms).
+        self._active_key: str | None = None
+        self._labels_open: bool | None = None
         self.animation = BoundedAnimation(self, self._animate, steps=6, interval_ms=15, on_done=self._settle)
 
         self.menu_button = AppButton(self, "☰", on_toggle, variant="ghost", height=40, width=44,
@@ -91,9 +94,14 @@ class Sidebar(ctk.CTkFrame):
         self.footer.configure(text=text)
 
     def set_active(self, key: str) -> None:
-        for item_key, button in self.buttons.items():
+        previous, self._active_key = self._active_key, key
+        if previous == key:
+            return
+        for item_key in (previous, key):  # the other items already look inactive
+            if item_key not in self.buttons:
+                continue
             active = item_key == key
-            button.configure(**(_SIDEBAR_ACTIVE if active else _SIDEBAR_BUTTON))
+            self.buttons[item_key].configure(**(_SIDEBAR_ACTIVE if active else _SIDEBAR_BUTTON))
             # A shape cue besides the color: the active item has a bar at its left edge.
             self.markers[item_key].configure(fg_color=theme.TEXT_ON_ACCENT if active else theme.SIDEBAR_BG)
 
@@ -123,6 +131,9 @@ class Sidebar(ctk.CTkFrame):
         self._apply_labels(open_=self._width == EXPANDED_WIDTH)
 
     def _apply_labels(self, *, open_: bool) -> None:
+        if open_ == self._labels_open:
+            return  # already drawn this way (every page switch asks again)
+        self._labels_open = open_
         for item in NAV_ITEMS:
             button = self.buttons[item.key]
             button.configure(text=f"  {item.label}" if open_ else item.glyph, anchor="w" if open_ else "center")
@@ -206,6 +217,10 @@ class AppShell(ctk.CTkFrame):
     def show_page(self, key: str) -> None:
         if key not in self.pages:
             raise KeyError(key)
+        with diagnostics.span(f"shell.show_page.{key}"):
+            self._show_page(key)
+
+    def _show_page(self, key: str) -> None:
         if key in self.state_keys():
             self.state.select(key)
             self.sidebar.set_active(key)

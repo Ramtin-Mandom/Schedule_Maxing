@@ -69,7 +69,7 @@ def pump(app, until=lambda: True, timeout: float = 15.0) -> None:
     deadline = time.monotonic() + timeout
     while True:
         app.update()
-        if until() and background.current_registry().active == 0:
+        if until() and background.current_registry().outstanding == 0:
             app.update()
             return
         if time.monotonic() > deadline:
@@ -78,7 +78,10 @@ def pump(app, until=lambda: True, timeout: float = 15.0) -> None:
 
 
 def close(app) -> None:
+    from tests.ui.test_desktop_app import finish_closing
+
     app._on_close()
+    finish_closing(app)
     cancel_stale_after_jobs(app)  # tests/tk_cleanup.py
     gc.collect()
 

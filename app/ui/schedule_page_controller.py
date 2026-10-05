@@ -58,6 +58,7 @@ own rules are untouched either way.
 
 from __future__ import annotations
 
+import copy
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import date as date_
@@ -264,13 +265,29 @@ class SchedulePageController:
     def dates(self) -> list[date_]:
         return [self._anchor + timedelta(days=offset) for offset in range(self.number_of_days)]
 
-    def set_anchor_date(self, value: str | date_) -> ControllerResult[PageSnapshot]:
+    def detached(self):
+        """
+        A copy frozen at the dates shown now, for one storage call in a worker:
+        whatever the page navigates to meanwhile, the call reads and re-reads
+        the dates it was started for, and it cannot change this controller's
+        own dates. The copy shares the (thread-safe) planning controller.
+        """
+        return copy.copy(self)
+
+    def move_to(self, value: str | date_) -> ControllerResult[date_]:
+        """Show another date (typed as YYYY-MM-DD, or a date); nothing is read from storage."""
         if isinstance(value, str):
             try:
                 value = date_.fromisoformat(value.strip())
             except ValueError:
                 return ControllerResult.failure(f"Start date must be YYYY-MM-DD, got {value!r}.")
         self._anchor = value
+        return ControllerResult.success(value)
+
+    def set_anchor_date(self, value: str | date_) -> ControllerResult[PageSnapshot]:
+        moved = self.move_to(value)
+        if not moved.ok:
+            return ControllerResult.failure(moved.error)
         return self.load()
 
     # ------------------------------------------------------------------
@@ -332,8 +349,8 @@ class SchedulePageController:
         return self._anchor
 
     def blank_draft(self, kind: str = "task") -> TaskDraft:
-        """An empty form for this page, dated on form_date."""
-        return TaskDraft(kind=kind, date=self.form_date.isoformat())
+        """An empty form for this page, dated on form_date, with no category chosen yet."""
+        return TaskDraft(kind=kind, category="", date=self.form_date.isoformat())
 
     def editor_options(self, editing: RowRef | None = None, *, category: str | None = None,
                        project_id: uuid.UUID | None = None) -> ControllerResult[EditorOptions]:

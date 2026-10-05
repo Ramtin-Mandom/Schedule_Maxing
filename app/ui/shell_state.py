@@ -5,8 +5,7 @@ The desktop shell's state, Tk-free (tests/ui/test_shell_state.py): which
 page is shown, whether the sidebar is open, which responsive layout the
 window width calls for, and the date each page last showed.
 
-Navigation: Day, Week and Month Schedule, Project Schedule, Allocation
-Planning, Productivity (the existing execution analytics; Execute stays in
+Navigation: Day, Week and Month Schedule, Project Schedule, Productivity (the existing execution analytics; Execute stays in
 each schedule page), Settings, Account, How to Use (the in-app guide) and
 About. The app starts on Day with the sidebar collapsed; the sidebar's open
 state is never persisted.
@@ -40,7 +39,6 @@ NAV_ITEMS: tuple[NavItem, ...] = (
     NavItem("week", "Week Schedule", "W"),
     NavItem("month", "Month Schedule", "M"),
     NavItem("projects", "Project Schedule", "P", placeholder=True),
-    NavItem("allocation", "Allocation Planning", "A", placeholder=True),
     NavItem("productivity", "Productivity", "%"),
     NavItem("settings", "Settings", "S"),
     NavItem("account", "Account", "@", placeholder=True),

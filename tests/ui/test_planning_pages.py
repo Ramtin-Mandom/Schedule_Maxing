@@ -3,7 +3,7 @@ from tests.ui.test_desktop_app import dialogs as dialogs, pytestmark as pytestma
 from app.planning.models import Task
 
 
-def test_native_projects_and_allocation(tmp_path, dialogs):
+def test_native_projects(tmp_path, dialogs):
     app = open_app(tmp_path / "planning.db", tmp_path)
     try:
         app.show_page("projects")
@@ -22,16 +22,9 @@ def test_native_projects_and_allocation(tmp_path, dialogs):
         page.on_show()
         pump(app, until=lambda: not page._busy)
         assert page.snapshot.tasks[0].status == "Not scheduled"
-        app.show_page("allocation")
-        allocation = app.pages["allocation"]
-        allocation.allocate_button.invoke()
-        pump(app, until=lambda: not allocation._busy)
-        assert allocation.preview.assigned_count == 1
-        allocation.open_day(WEDNESDAY)
-        pump(app, until=lambda: not allocation._busy)
+        page.on_open_day(WEDNESDAY)
         assert app.shell.current == "day"
         day = app.pages["day"]
-        assert day.page_controller.allocation_context[2] == allocation.preview.fingerprint
         day.make_schedule_button.invoke()
         pump(app, until=lambda: not day._busy)
         assert len(planning.get_placements(WEDNESDAY).value) == 1

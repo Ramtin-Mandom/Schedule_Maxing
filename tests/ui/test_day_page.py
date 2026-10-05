@@ -54,8 +54,10 @@ def test_the_persisted_day_flow(tmp_path: Path, dialogs) -> None:
         fill_form(day, name="Gym", fixed=True, start="540", end="630")
         day.form.category_select.variable.set("exercise")
         day.form.submit_button.invoke()
+        pump(app)
         fill_form(day, name="Read", duration="13", start="613", end="720")
         day.form.submit_button.invoke()
+        pump(app)
         assert dialogs.errors == [] and [item.name for item in day.snapshot.timeline] == ["Gym"]
         assert [chip.task.name for chip in day.chips] == ["Read"]  # available, not yet scheduled
         pump(app)
@@ -66,6 +68,7 @@ def test_the_persisted_day_flow(tmp_path: Path, dialogs) -> None:
         assert (gym[0], gym[2]) == (geometry.x(540), geometry.x(630))
 
         run_make_schedule(app, day)
+        pump(app)
         assert day.notice.text.startswith("Done: Scheduled 1 task(s)") and day.freshness_badge.cget("text") == "Current"
         read = item_named(day, "Read")
         assert (read.start_minute, read.end_minute, read.time_text) == (630, 643, "10:30 AM – 10:43 AM")
@@ -76,10 +79,12 @@ def test_the_persisted_day_flow(tmp_path: Path, dialogs) -> None:
 
         saved = saved_state(app)
         run_make_schedule(app, day)
+        pump(app)
         assert "already current" in day.notice.text and saved_state(app) == saved
 
         # The keyboard way to the same actions: the timeline selects and describes an item.
         day.schedule_canvas.select(read.key)
+        pump(app)
         assert "Read: 10:30 AM – 10:43 AM (13 min), scheduled" in day.schedule_canvas.details.cget("text")
 
         # Engine: saved for this date only (in the background, with the controls disabled meanwhile).
@@ -92,16 +97,21 @@ def test_the_persisted_day_flow(tmp_path: Path, dialogs) -> None:
         assert controller.date_preferences(WEDNESDAY).value.overrides.optimizer_mode == OptimizerMode.ADHD_FRIENDLY
         assert controller.user_preferences().value is None
         day.shift_date(1)
+        pump(app)
         assert day.engine_select.get() == "Normal"  # another date is unaffected
         day.shift_date(-1)
+        pump(app)
 
         # A 13-minute task still fits the quarter-hour rule, so nothing is regenerated: it is kept.
         run_make_schedule(app, day)
+        pump(app)
         assert day.notice.text.startswith("Done: Kept 1 scheduled task(s) in place")
         assert item_named(day, "Read").placement_id == read.placement_id
         fill_form(day, name="Essay", duration="45", start="600", end="900")
         day.form.submit_button.invoke()
+        pump(app)
         run_make_schedule(app, day)
+        pump(app)
         assert item_named(day, "Essay").start_minute % 15 == 0
         pump(app)
         assert len(day.snapshot.executables) == 2  # both scheduled tasks wait in the board's Tasks column
@@ -109,19 +119,26 @@ def test_the_persisted_day_flow(tmp_path: Path, dialogs) -> None:
 
         # Day Preferences: a native editor of the date layer, inherited values shown.
         day.open_preferences()
+        pump(app)
         dialog = day.preferences_dialog
         spacing = "reward.min_gap_between_tasks_minutes"
         assert "Inherited app default" in dialog.editor.rows[spacing].source
         assert "reward.short_gap_bonus_weight" in dialog.editor.rows  # ADHD friendly's own control
         dialog.editor.set_input(spacing, "45")
+        pump(app)
         dialog.editor.buttons[spacing]["save"].invoke()
+        pump(app)
         assert dialog.editor.rows[spacing].state == "set" and "saved" in dialog.notice.text
         dialog.editor.set_input("reward.weight_importance", "lots")
+        pump(app)
         dialog.editor.buttons["reward.weight_importance"]["save"].invoke()
+        pump(app)
         assert dialog.editor.error_labels["reward.weight_importance"].cget("text").startswith("Error:")
         dialog.primary_button.invoke()
+        pump(app)
         assert day.freshness_badge.cget("text") == "Out of date"  # the page re-read itself
         run_make_schedule(app, day)
+        pump(app)
         assert day.freshness_badge.cget("text") == "Current"
         timeline = [(item.name, item.start_minute, item.end_minute) for item in day.snapshot.timeline]
     finally:
@@ -137,11 +154,13 @@ def test_the_persisted_day_flow(tmp_path: Path, dialogs) -> None:
         dialogs.confirm = False
         before = saved_state(app)
         day.reset_button.invoke()
+        pump(app)
         assert "Reset Wed Jun 5?" in dialogs.confirms[-1] and "execution history" in dialogs.confirms[-1]
         assert "nothing was deleted" in day.notice.text and saved_state(app) == before
 
         dialogs.confirm = True
         day.reset_button.invoke()
+        pump(app)
         assert day.snapshot.timeline == [] and tree_names(day) == []
         assert day.engine_select.get() == "Normal" and day.freshness_badge.cget("text") == "Not scheduled yet"
         assert day.form.name_field.get() == "" and "was reset" in day.notice.text
@@ -164,13 +183,16 @@ def test_csv_v2_through_native_dialogs_and_the_way_back_to_week(tmp_path: Path, 
         day = app.pages["day"]
         fill_form(day, name="Plan", duration="30")
         day.form.submit_button.invoke()
+        pump(app)
         day.export_button.invoke()
+        pump(app)
         assert "CSV format v2" in day.notice.text
         text = exported.read_text(encoding="utf-8")
         assert text.startswith("record_type,id,task_id,date")
         exported.write_text(text.replace(",Plan,", ",Plan (renamed),"), encoding="utf-8")
 
         day.import_button.invoke()
+        pump(app)
         assert "updated 1 task(s)" in dialogs.confirms[-1]  # previewed before anything is written
         assert "Done:" in day.notice.text and tree_names(day) == ["Plan (renamed)"]
 
@@ -178,6 +200,7 @@ def test_csv_v2_through_native_dialogs_and_the_way_back_to_week(tmp_path: Path, 
         broken.write_text(text.replace(",2,", ",9,"), encoding="utf-8")  # an unsupported format version
         chosen["open"] = str(broken)
         day.import_button.invoke()
+        pump(app)
         assert day.notice.text.startswith("Error:") and tree_names(day) == ["Plan (renamed)"]
 
         legacy = tmp_path / "legacy.csv"
@@ -185,15 +208,19 @@ def test_csv_v2_through_native_dialogs_and_the_way_back_to_week(tmp_path: Path, 
                           "1,Old style,study,t,false,540,720,60,5,\n", encoding="utf-8")
         chosen["open"] = str(legacy)
         day.import_button.invoke()  # legacy only after an explicit Append choice and confirmation
+        pump(app)
         assert "Old style" in tree_names(day)
 
         # Week -> Day keeps the way back.
         week = app.pages["week"]
         app.show_page("week")
+        pump(app)
         app.open_day(WEDNESDAY + timedelta(days=1), return_to="week")
+        pump(app)
         assert app.shell.current == "day" and day.page_controller.anchor_date == WEDNESDAY + timedelta(days=1)
         assert day.back_button.winfo_manager() == "grid" and "Back to Week" in day.back_button.cget("text")
         day.back_button.invoke()
+        pump(app)
         assert app.shell.current == "week" and week.page_controller.anchor_date == WEDNESDAY - timedelta(days=2)
         assert dialogs.errors == []
     finally:

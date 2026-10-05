@@ -81,15 +81,19 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
         "another); on Week and Month it is the day you selected. The form shows that date above the fields.",
         (
             "Name, category, duration (like 45 min or 1 h 15 min) and priority are all you need.",
-            "Points (0 to 1000, default 1) is what finishing the task is worth to you. It is saved for your "
-            "productivity statistics and never changes where the scheduler puts the task.",
+            "Points (0 to 1000, default 1) is what finishing the task is worth to you; the - and + buttons change "
+            "it by 10. It is saved for your productivity statistics and never changes where the scheduler puts the "
+            "task.",
+            "Category and Project sit side by side. Without a category the task is saved as other. Project starts "
+            "at None and lists your projects.",
             "Times are entered as [hour] : [minute] [AM/PM]. Type the hour (1-12) and minute (00-59); click the "
             "AM/PM button, or type a or p, to switch. An end time of 12:00 AM means midnight at the end of the day.",
             "Required: the task must be scheduled; if it cannot be, the schedule is not saved and you are told why.",
-            "Only on this date: the task may be placed on its date only (otherwise it can move when planning a "
-            "week or month).",
-            "More options: preferred time, deadline, project and dependencies.",
-            "Editing a task keeps its own date; the form says so while you edit.",
+            "Add more options: preferred time, deadline, task type, dependencies and repeats.",
+            "Use default values fills in the name (if empty), duration, priority and points of the chosen "
+            "category, or the general ones without a category. Change them, and add your own categories, in "
+            "Settings > Task defaults and categories.",
+            "Editing a task keeps its own date.",
         ),
     )),
     GuideSection("fixed_blocks", "Fixed tasks (blocks)", (
