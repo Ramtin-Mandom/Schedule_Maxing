@@ -143,6 +143,10 @@ class Mutator:
         if existing is not None:
             if spec.entity_type == "task" and _same_occurrence(existing, payload):
                 return spec.serialize(self.session, self.user_id, existing)
+            if spec.entity_type == "task_type" and existing.deleted_at is None:
+                # A type id is derived from its root task, so two devices (or a device and the server's own
+                # migration) create the same type independently: they converge on the stored record.
+                return spec.serialize(self.session, self.user_id, existing)
             raise ApiError(409, "already_exists", f"This {spec.label} already exists.",
                            current=spec.serialize(self.session, self.user_id, existing))
         spec.validate(self.session, self.user_id, payload, None)
@@ -413,7 +417,8 @@ def _same_occurrence(existing, payload) -> bool:
 
     if getattr(payload, "series_id", None) is None or existing.series_id != payload.series_id:
         return False
-    bookkeeping = {"occurrence_state", "series_version"}
+    # task_type_id: a device that does not send types yet repeats the occurrence without one.
+    bookkeeping = {"occurrence_state", "series_version", "task_type_id"}
     stored = {key: value for key, value in TaskFields.model_validate(task_content(existing)).model_dump().items()
               if key not in bookkeeping}
     incoming = {key: value for key, value in payload.model_dump(include=set(TaskFields.model_fields)).items()

@@ -736,6 +736,7 @@ def reschedule(
     *,
     at: datetime | None = None,
     task_category: str | None = None,
+    snapshot: dict | None = None,
 ) -> PlacementReschedule:
     """
     workflow.reschedule_placement with the API's errors. A 409 (stale or
@@ -748,7 +749,7 @@ def reschedule(
         return workflow.reschedule_placement(
             service, placement_id, expected_version=request.base_version, planned_date=request.planned_date,
             timezone_name=request.timezone, planned_start=request.planned_start, planned_end=request.planned_end,
-            replacement_id=request.replacement_id, task_category=task_category, at=at,
+            replacement_id=request.replacement_id, task_category=task_category, at=at, snapshot=snapshot,
         )
     except Exception as error:  # noqa: BLE001 - every planning failure becomes the API's structured error
         failure = api_error(error)

@@ -614,15 +614,21 @@ def list_changes(
     request: Request,
     after: int = Query(default=0, ge=0, description="Return changes with seq greater than this."),
     limit: int | None = Query(default=None),
+    include_task_types: bool = Query(
+        default=False,
+        description="Also return task-type changes. Off by default: a client that predates task types does not "
+                    "know the record type, and its cursor still advances past them.",
+    ),
     user_id: uuid.UUID = Depends(current_user_id),
     session: Session = Depends(get_session),
 ) -> dict:
     size = _page_size(request, limit)
+    conditions = [models.ChangeLogEntry.user_id == user_id, models.ChangeLogEntry.seq > after]
+    if not include_task_types:
+        conditions.append(models.ChangeLogEntry.entity_type != "task_type")
     # Each entry's snapshot, its typed row and its child rows load for the whole page (a few queries per page).
     rows = list(session.scalars(
-        select(models.ChangeLogEntry)
-        .where(models.ChangeLogEntry.user_id == user_id, models.ChangeLogEntry.seq > after)
-        .order_by(models.ChangeLogEntry.seq).limit(size + 1)
+        select(models.ChangeLogEntry).where(*conditions).order_by(models.ChangeLogEntry.seq).limit(size + 1)
     ))
     more = len(rows) > size
     rows = rows[:size]

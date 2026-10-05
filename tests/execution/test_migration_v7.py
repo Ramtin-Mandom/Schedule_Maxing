@@ -71,6 +71,10 @@ def test_a_populated_v6_database_upgrades_without_touching_existing_values(tmp_p
     try:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST_SCHEMA_VERSION >= 7
         after = {table: _rows(conn, table) for table in TABLES}
+        if "sync_dirty" in after:
+            # Later schemas (v12/v13) derive a type for each task and queue those new records for upload; the
+            # marks that existed before the upgrade are compared unchanged.
+            after["sync_dirty"] = [row for row in after["sync_dirty"] if row["entity_type"] != "task_type"]
         for table in TABLES:
             old_columns = before[table][0].keys() if before[table] else ()
             assert [{column: row[column] for column in old_columns} for row in after[table]] == before[table], table
@@ -86,7 +90,9 @@ def test_a_populated_v6_database_upgrades_without_touching_existing_values(tmp_p
             conn.execute("UPDATE scheduled_tasks SET superseded_by_id = id WHERE id = ?", (TOMBSTONE_ID,))
 
         initialize_schema(conn)  # a repeated initialization is a no-op
-        assert {table: _rows(conn, table) for table in TABLES} == after
+        again = {table: _rows(conn, table) for table in TABLES}
+        again["sync_dirty"] = [row for row in again["sync_dirty"] if row["entity_type"] != "task_type"]
+        assert again == after
     finally:
         conn.close()
 

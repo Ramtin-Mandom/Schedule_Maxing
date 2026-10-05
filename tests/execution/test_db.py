@@ -13,6 +13,7 @@ from app.execution.db import LATEST_SCHEMA_VERSION, get_connection, initialize_s
 # Every table the latest schema defines: execution history (v1/v2) plus the
 # persisted planning entities added in v3.
 EXPECTED_TABLES = {
+    "task_types",
     "executions",
     "work_sessions",
     "projects",

@@ -16,6 +16,11 @@ Two views, deliberately separate (docs/analytics.md):
       intended occurrences planned in a local date range -- placements with
       or without an execution -- as of an explicit cutoff, in an explicit
       reporting timezone (app/productivity/schedule_cohort.py).
+
+The tracker (build_tracker_report, app/productivity/tracker.py) adds the
+awards, averages, per-type and time views. It keeps the bases apart: counts
+and due rates by planned date, earned points and completed activity by
+completion date; the execution-created statistics above are not part of it.
 """
 
 from __future__ import annotations
@@ -49,6 +54,7 @@ from app.productivity.segments import (
     global_stats,
 )
 from app.productivity.stats import ProductivityThresholds, SegmentStats
+from app.productivity.tracker import TrackerFilters, TrackerReport, build_tracker_report, read_tracker_data
 from app.productivity.trends import RecentTrend, compute_recent_trend
 
 _RECENT_TREND_WINDOW_DAYS = 7
@@ -159,6 +165,35 @@ class ProductivityService:
             self._history, start_date=start_date, end_date=end_date, timezone_name=tz,
             as_of=as_of or now, now=now, thresholds=self._thresholds,
         )
+
+    def build_tracker_report(
+        self,
+        *,
+        range_days: int | None = None,
+        filters: TrackerFilters | None = None,
+        timezone_name: str | None = None,
+        as_of: datetime | None = None,
+    ) -> TrackerReport:
+        """
+        The tracker report (awards, averages, per-type and time views) of the
+        last `range_days` local dates (None: all time) as of `as_of` (default:
+        now) in the reporting timezone. The whole recorded history is read in
+        bounded windows (app/productivity/tracker.py). Read-only.
+        """
+        if self._history is None:
+            raise ValueError("this productivity service has no schedule history source.")
+        tz = timezone_name or self._timezone
+        if tz is None:
+            raise ValueError("a reporting timezone is required (the host timezone is never assumed).")
+        now = self._clock()
+        cutoff = as_of or now
+        if cutoff.tzinfo is None or now.tzinfo is None:
+            raise ValueError("as_of and now must be aware instants")
+        if cutoff > now:
+            raise ValueError("as_of cannot be later than the current time.")
+        data = read_tracker_data(self._history, timezone_name=tz, as_of=cutoff, thresholds=self._thresholds)
+        return build_tracker_report(data, timezone_name=tz, as_of=cutoff, range_days=range_days, filters=filters,
+                                    thresholds=self._thresholds)
 
     def generate_report(
         self,

@@ -42,7 +42,8 @@ def test_every_kind_of_local_change_is_captured_in_its_own_transaction(alice_ser
     device.executions.start(execution.id)  # an execution session
 
     captured = {entity for entity, _, _ in device.dirty()}
-    assert captured == {"task", "fixed_block", "preference", "placement", "schedule_generation", "execution"}
+    assert captured == {"task", "task_type", "fixed_block", "preference", "placement", "schedule_generation",
+                        "execution"}  # a new task also creates its type record
 
     # A failed compound mutation leaves no capture behind (the capture is part of its transaction).
     before = device.dirty()
@@ -90,7 +91,7 @@ def test_network_failures_back_off_and_pending_work_survives_a_restart(alice_ser
         delays.append(device.sync.next_delay())
     assert delays == [1.0, 2.0, 4.0]  # bounded exponential backoff (max 8)
     op_ids = [op.op_id for op in device.sync._engine.store.pending_ops(device.sync.account.account_key)]
-    assert len(op_ids) == 1
+    assert len(op_ids) == 2  # the task's type record, then the task
 
     device.reopen()  # restart: the outbox is durable
     assert [op.op_id for op in device.sync._engine.store.pending_ops(device.sync.account.account_key)] == op_ids
@@ -163,7 +164,7 @@ def test_pull_pages_apply_atomically_and_replay_safely(alice_server, make_device
     assert reader.planning.list_tasks() == [] and reader.sync.account.pull_cursor == 0  # the page rolled back whole
 
     monkeypatch.undo()
-    assert reader.sync_now().pulled == 5
+    assert reader.sync_now().pulled == 5  # five tasks (their type records arrive with them, uncounted)
     assert sorted(t.name for t in reader.planning.list_tasks()) == [f"T{i}" for i in range(5)]
     cursor = reader.sync.account.pull_cursor
     replay = PullPage(changes=alice_server.changes("alice@example.com"), cursor=cursor, has_more=False)

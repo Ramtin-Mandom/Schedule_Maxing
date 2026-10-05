@@ -39,11 +39,16 @@ While building:
 - run a small targeted test only when needed to resolve uncertainty or diagnose a failure
 - add/update necessary tests without repeatedly executing them
 - do not rerun checks that already passed unless later changes affect them
-After all requested implementations in the current batch are complete, run final verification once:
-pytest
-python -m compileall .
-ruff check .
-If final verification fails, isolate the affected tests, fix the issue with focused reruns, then run the full suite once more.
+Testing Workflow
+- Development suite: `pytest -m dev` (~1,600 fast tests, ~2 minutes). Full suite: `pytest` (~1,900 tests, all tiers).
+- Default to focused tests while implementing (`pytest tests/path/test_x.py -k name`); never run the full suite after each step.
+- Before considering an implementation batch complete, run `pytest -m dev` once (plus `ruff check .`).
+- Reserve the full suite (`pytest`, `python -m compileall .`, `ruff check .`) for the end of a milestone, major
+  cross-cutting changes (storage, sync, migrations, desktop UI framework), an explicit request, or final
+  verification before merge/release -- once.
+- If a test fails, rerun only the affected tests while debugging; run the broader suite once after fixing.
+- Tiers are assigned automatically (tests/test_tiers.py): ui (real windows), system (sync/web/direct), slow,
+  integration, unit; mark a new slow test `@pytest.mark.slow`.
 Never weaken/delete meaningful tests just to make the suite pass.
 If the prompt explicitly requests a different test strategy, follow the prompt.
 Dependencies

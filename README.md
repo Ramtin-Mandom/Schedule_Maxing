@@ -984,13 +984,24 @@ backend. [Completion and verification](docs/milestone-4-completion.md) records t
 
 ## Verification
 
-Using the project's `.venv`:
+Using the project's `.venv`. During development, the fast suite (about 1,600 tests, about two minutes; real
+windows, sync/web/direct-mode suites and other slow tests are left out):
+
+```bash
+python -m pytest -m dev
+```
+
+The complete suite, for milestones and final verification (every tier: real desktop windows, migrations,
+sync, security, subprocess isolation, all storage modes):
 
 ```bash
 python -m pytest
 python -m compileall .
 ruff check .
 ```
+
+Other selections: `-m ui` (real windows), `-m system` (sync, local web, direct mode), `-m slow`,
+`-m integration`, `-m unit` -- assigned automatically by `tests/test_tiers.py`.
 
 Also run the CLI end to end after any change to the CSV loading, optimizer, or export path (the demo never touches your saved data):
 

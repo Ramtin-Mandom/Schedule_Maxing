@@ -113,7 +113,7 @@ def test_viewing_writes_nothing_and_repeated_actions_never_duplicate(stack: Stac
     task, placement = stack.planned()
     assert stack.value(stack.executions.find_execution_for_placement(placement.id)) is None
     stack.value(stack.executions.describe(placement, None))
-    assert stack.count("executions") == 0 and stack.count("sync_dirty") == 2  # only the task and placement
+    assert stack.count("executions") == 0 and stack.count("sync_dirty") == 3  # only the task, its type and the placement
 
     stack.clock.now = at(9)
     started = stack.value(stack.executions.perform(task, placement, "start", None))

@@ -17,7 +17,7 @@ from app.execution.db import get_connection
 from app.execution.repository import ExecutionRepository
 from app.execution.service import ExecutionService
 from app.planning.application import PlanningService
-from app.planning.models import FixedBlock, ScheduledTask, Task
+from app.planning.models import FixedBlock, ScheduledTask, Task, derived_task_type_id
 from app.planning.preferences import PreferenceOverrides, RewardPreferencesOverride
 from app.planning.repository import PlanningRepository
 from app.planning.provenance import StaleReason
@@ -63,7 +63,8 @@ def test_added_task_is_immediately_visible_via_get_and_list(controller: Planning
     controller.add_or_update_task(task)
 
     assert controller.get_task(task.id).value.id == task.id
-    assert task in controller.list_tasks().value
+    stored = task.model_copy(update={"task_type_id": derived_task_type_id(task.id)})  # its type is assigned on save
+    assert stored in controller.list_tasks().value
 
 
 def test_remove_task_clears_it(controller: PlanningController):
@@ -285,7 +286,8 @@ def test_controller_state_is_persisted_and_survives_reopen(db_path, tmp_path) ->
 
     second, connection = open_controller(db_path, tmp_path)
     try:
-        assert second.get_task(task.id).value == task
+        assert second.get_task(task.id).value == task.model_copy(
+            update={"task_type_id": derived_task_type_id(task.id)})
         assert second.get_fixed_blocks(date(2024, 6, 9)).value == [block]
         assert second.get_placements(assigned_date).value == output.placements
         # Render state is not persisted: a reopened controller has no allocation.

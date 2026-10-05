@@ -87,6 +87,7 @@ def test_sign_in_fails_identically_for_unknown_accounts_and_wrong_passwords(back
     assert backend.sign_in(username="REAL", password=PASSWORD).identity.username == "real"
 
 
+@pytest.mark.real_password_hashing  # checks the production Argon2 parameters
 def test_an_outdated_hash_is_upgraded_on_sign_in(backend, engine) -> None:
     backend.register(email="old@example.com", password=PASSWORD)
     weak = PasswordHasher(time_cost=1, memory_cost=8 * 1024, parallelism=1).hash(PASSWORD)

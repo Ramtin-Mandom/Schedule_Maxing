@@ -53,14 +53,14 @@ During implementation:
 - run a very small targeted test or command only when it is necessary to diagnose uncertain behavior or a regression
 - do not repeatedly rerun the same passing checks
 - add/update tests when the task requires coverage, but they do not need to be executed immediately
-After all requested implementation tasks in the current batch are finished, run final verification once:
-pytest
-python -m compileall .
-ruff check .
-If the full suite fails:
+Before considering an implementation batch complete, run the development suite once: `pytest -m dev`
+(~1,600 fast tests; real-window, multi-system and slow tests are excluded -- see tests/test_tiers.py).
+Run the full suite once (`pytest`, `python -m compileall .`, `ruff check .`) only at the end of a milestone,
+after major cross-cutting changes, on explicit request, or for final verification before merge/release.
+If a suite fails:
 1. identify failures related to the changes
 2. run only those focused tests while fixing them
-3. rerun the full suite once after fixes are complete
+3. rerun that suite once after fixes are complete
 Do not weaken, delete, or skip meaningful tests merely to obtain a passing result.
 If the user explicitly requests a different verification strategy, follow it.
 6. Dependencies

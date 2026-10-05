@@ -230,6 +230,7 @@ ALLOWED_JSON = {("placements", "optimization_metadata"), ("placement_revisions",
 ALLOWED_TEXT = {
     ("projects", "description"), ("project_revisions", "description"), ("executions", "note"),
     ("execution_revisions", "note"), ("task_tags", "tag"), ("task_revision_tags", "tag"),
+    ("placement_task_tags", "tag"), ("placement_revision_task_tags", "tag"),
     ("preference_category_multipliers", "category"), ("preference_category_windows", "category"),
     ("preference_tag_relations", "tag"), ("preference_related_tags", "tag"),
     ("preference_related_tags", "related_tag"), ("preference_revision_category_multipliers", "category"),

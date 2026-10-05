@@ -370,9 +370,17 @@ class SchedulePageController:
                 label = (f"{gone.name} (deleted project)" if gone is not None
                          else f"Unknown project {str(project_id)[:8]}")
                 projects.insert(0, Choice(project_id, label))
+            types = self._unwrap(self._planning.list_task_types())
+            type_names: dict[str, int] = {}
+            for task_type in types:
+                type_names[task_type.label] = type_names.get(task_type.label, 0) + 1
+            task_types = sorted(
+                (Choice(task_type.id, task_type.label if type_names[task_type.label] == 1
+                        else f"{task_type.label} #{str(task_type.id)[:4]}") for task_type in types),
+                key=lambda choice: choice.label.lower())
             return ControllerResult.success(EditorOptions(
                 timezone=self.timezone, categories=categories_for(category), dependencies=dependencies,
-                projects=projects,
+                projects=projects, task_types=task_types,
             ))
         except _Failure as failure:
             return ControllerResult.failure(failure.message, failure.cause)
@@ -458,6 +466,11 @@ class SchedulePageController:
                         raise _Failure("That task no longer exists.")
                 if stored is not None and stored.is_series and draft.needs_configuration and not draft.date.strip():
                     draft = replace(draft, date=self.form_date.isoformat())  # configuring: it starts on this page's date
+                if draft.new_type_label.strip():
+                    created = self._planning.create_task_type(draft.new_type_label)
+                    if not created.ok:
+                        raise _FormFailure(created.error or "The task type could not be created.", created.cause)
+                    draft = replace(draft, task_type_id=created.value.id, new_type_label="")
                 task = build_task(draft, timezone_name=self.timezone, existing=stored)
                 if stored is not None and (stored.is_occurrence or stored.is_series):
                     result = self._save_series_edit(stored, task, expected_version, scope)
