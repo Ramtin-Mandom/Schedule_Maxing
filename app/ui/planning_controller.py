@@ -92,7 +92,7 @@ from app.planning.csv_canonical import is_canonical_csv, parse_canonical_csv_fil
 from app.planning.csv_export import PlanningExportResult, export_planning_csv
 from app.planning.csv_import import ImportMode, ParsedImport, read_csv_text, parse_legacy_csv_file
 from app.planning.errors import HistoryProtectedError, PlanningError, RescheduleRejectedError, VersionConflictError
-from app.planning.models import DayScheduleOutput, FixedBlock, Project, ScheduledTask, Task, TaskRegistry
+from app.planning.models import DayScheduleOutput, FixedBlock, Project, ScheduledTask, Task, TaskRegistry, TaskType
 from app.planning.preferences import (
     ENGINE_DESCRIPTIONS,
     DayPreferences,
@@ -278,6 +278,14 @@ class PlanningController:
 
     def list_tasks(self) -> ControllerResult[list[Task]]:
         return self._call(self._service.list_tasks)
+
+    def list_task_types(self) -> ControllerResult[list[TaskType]]:
+        """The workspace's reusable task types (live ones)."""
+        return self._call(self._service.list_task_types)
+
+    def create_task_type(self, label: str) -> ControllerResult[TaskType]:
+        """Create a reusable task type; in an account workspace it belongs to that account."""
+        return self._call(lambda: self._service.create_task_type(self._owned(TaskType(label=label.strip()))))
 
     def list_projects(self, *, include_deleted: bool = False) -> ControllerResult[list[Project]]:
         """The workspace's projects (live ones, or with include_deleted also the deleted ones)."""

@@ -111,7 +111,11 @@ def build_history_page(
 
 def _entry(history, placement_id, task_id, local_date, status, category, item, occurrence) -> HistoryEntry:
     task = history.tasks.get(task_id)
-    if task is not None:
+    placement = history.placements.get(placement_id)
+    if placement is not None and placement.task_name is not None:
+        # The name the work had when it was planned: a later rename does not rewrite history.
+        name = placement.task_name + (" (deleted task)" if task is not None and task.deleted_at is not None else "")
+    elif task is not None:
         name = task.name + (" (deleted task)" if task.deleted_at is not None else "")
     elif item is not None:
         name = item.execution.task_name

@@ -23,7 +23,7 @@ from app.planning.errors import (
     InvalidReferenceError,
     ScopeError,
 )
-from app.planning.models import FixedBlock, Project, ScheduledTask, Task
+from app.planning.models import FixedBlock, Project, ScheduledTask, Task, derived_task_type_id
 from tests.planning.conftest import FakeClock
 
 MON, TUE, WED = date(2024, 6, 3), date(2024, 6, 4), date(2024, 6, 5)
@@ -59,7 +59,8 @@ def test_create_stores_exactly_as_given_and_rejects_duplicates(planning_service:
 
     created = planning_service.create_task(task)
 
-    assert created == task
+    # Stored exactly as given, plus the one thing the service assigns: the task's own (derived) type.
+    assert created == task.model_copy(update={"task_type_id": derived_task_type_id(task.id)})
     with pytest.raises(DuplicateEntityError):
         planning_service.create_task(task)
 

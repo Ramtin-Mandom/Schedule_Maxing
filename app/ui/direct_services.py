@@ -54,7 +54,7 @@ from app.ui.app_services import Workspace
 from app.ui.background import ControllerResult, WorkerRegistry, install_registry
 from app.ui.execution_controller import ExecutionController
 from app.ui.planning_controller import PlanningController
-from app.ui.productivity_controller import ProductivityController
+from app.ui.productivity_controller import ProductivityController, task_tags
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -180,7 +180,8 @@ def _build_controllers(account, timezone_name: str, project_root: str | None
                        ) -> tuple[PlanningController, ExecutionController, ProductivityController]:
     planning = PlanningController(service=account.planning_service(), timezone=timezone_name, project_root=project_root)
     execution = ExecutionController(account.execution_service(), sync_state=lambda _execution_id: "server")
-    productivity = ProductivityController(account.productivity_service(timezone_name), execution, storage="server")
+    productivity = ProductivityController(account.productivity_service(timezone_name), execution, storage="server",
+                                          task_tags=lambda: task_tags(planning))
     return planning, execution, productivity
 
 

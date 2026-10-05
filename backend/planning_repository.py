@@ -43,15 +43,31 @@ from datetime import date as date_
 from datetime import datetime
 
 from pydantic import ValidationError
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.planning.application import task_planned_date
 from app.planning.errors import DuplicateEntityError, InvalidEntityError, ScopeError
 from app.planning.external_dependencies import ExecutionFact
-from app.planning.history import ExecutionHistory, ScheduleHistory, collect_schedule_history
+from app.planning.history import (
+    CompletionHistory,
+    ExecutionHistory,
+    HistoryBounds,
+    ScheduleHistory,
+    collect_completion_history,
+    collect_schedule_history,
+)
 from app.execution.models import CancelReason, ExecutionStatus
-from app.planning.models import FixedBlock, OccurrenceState, PlacementRemovalReason, Project, ScheduledTask, Task
+from app.planning.models import (
+    PLACEMENT_SNAPSHOT_FIELDS,
+    FixedBlock,
+    OccurrenceState,
+    PlacementRemovalReason,
+    Project,
+    ScheduledTask,
+    Task,
+    TaskType,
+)
 from app.planning.preferences import PreferenceRecord, PreferenceScope
 from app.planning.provenance import GenerationRecord
 from app.planning.scope import OwnerScope
@@ -59,13 +75,14 @@ from app.planning.time import local_day_start_utc
 from backend import models
 from backend.executions import ActionIn, to_task_execution, to_work_session
 from backend.mutations import Mutator, mutation
-from backend.record_mapping import preference_overrides, task_content
+from backend.record_mapping import placement_snapshot, preference_overrides, task_content
 from backend.resources import (
     FIXED_BLOCKS,
     GENERATIONS,
     PLACEMENTS,
     PREFERENCES,
     PROJECTS,
+    TASK_TYPES,
     TASKS,
     FixedBlockCreate,
     GenerationCreate,
@@ -74,12 +91,13 @@ from backend.resources import (
     ProjectCreate,
     ResourceSpec,
     TaskCreate,
+    TaskTypeCreate,
 )
 
 _TABLES = {
     "projects": models.Project, "tasks": models.Task, "fixed_blocks": models.FixedBlock,
     "scheduled_tasks": models.Placement, "preference_overrides": models.Preference,
-    "schedule_generations": models.ScheduleGeneration,
+    "schedule_generations": models.ScheduleGeneration, "task_types": models.TaskType,
 }
 
 
@@ -231,6 +249,23 @@ class ServerPlanningRepository:
 
     def task_ids_for_project(self, project_id) -> list[uuid.UUID]:
         return sorted((row.id for row in self._rows(models.Task, models.Task.project_id == project_id)), key=str)
+
+    # ------------------------------------------------------------------
+    # Task types
+    # ------------------------------------------------------------------
+
+    def insert_task_type(self, task_type: TaskType) -> None:
+        self._insert(TASK_TYPES, task_type, _payload(TaskTypeCreate, {"label": task_type.label}))
+
+    def update_task_type(self, task_type: TaskType, *, expected_version: int) -> bool:
+        return self._update(TASK_TYPES, task_type, _payload(TaskTypeCreate, {"label": task_type.label}), expected_version)
+
+    def get_task_types(self, type_ids: Iterable, *, include_deleted: bool = False) -> dict[uuid.UUID, TaskType]:
+        return {row.id: _task_type(row) for row in self._by_ids(models.TaskType, type_ids, include_deleted)}
+
+    def list_task_types(self, *, include_deleted: bool = False) -> list[TaskType]:
+        rows = self._rows(models.TaskType, include_deleted=include_deleted)
+        return [_task_type(row) for row in sorted(rows, key=lambda row: (row.created_at, str(row.id)))]
 
     # ------------------------------------------------------------------
     # Tasks
@@ -407,7 +442,44 @@ class ServerPlanningRepository:
             start_utc, end_utc, in_range=self._placements_starting_between,
             superseded_by=self.placements_superseded_by, executions_for=self._executions_for_placements,
             tasks_for=lambda ids: self.get_tasks(ids, include_deleted=True),
+            types_for=lambda ids: self.get_task_types(ids, include_deleted=True),
         )
+
+    def _completed(self):
+        return (models.Execution.user_id == self._user_id, models.Execution.deleted_at.is_(None),
+                models.Execution.status == ExecutionStatus.COMPLETED.value)
+
+    def completion_history(self, start_utc: datetime, end_utc: datetime) -> CompletionHistory:
+        """The completion activity of [start_utc, end_utc) (see the SQLite repository); one consistent read."""
+        self._session.execute(
+            select(models.User.id).where(models.User.id == self._user_id).with_for_update(read=True)
+        )
+        unknown = self._session.scalar(
+            select(func.count()).select_from(models.Execution).where(
+                *self._completed(), models.Execution.actual_final_end_at.is_(None)))
+
+        def completed_between(start: datetime, end: datetime) -> list:
+            rows = self._session.scalars(select(models.Execution).where(
+                *self._completed(), models.Execution.actual_final_end_at >= start,
+                models.Execution.actual_final_end_at < end))
+            return [to_task_execution(row) for row in rows]
+
+        return collect_completion_history(
+            start_utc, end_utc, completed_between=completed_between,
+            placements_for=lambda ids: self.get_placements(ids, include_deleted=True),
+            tasks_for=lambda ids: self.get_tasks(ids, include_deleted=True),
+            types_for=lambda ids: self.get_task_types(ids, include_deleted=True),
+            unknown_completion_dates=unknown or 0,
+        )
+
+    def history_bounds(self) -> HistoryBounds:
+        planned = self._session.execute(
+            select(func.min(models.Placement.planned_start), func.max(models.Placement.planned_start))
+            .where(models.Placement.user_id == self._user_id)).one()
+        completed = self._session.execute(
+            select(func.min(models.Execution.actual_final_end_at), func.max(models.Execution.actual_final_end_at))
+            .where(*self._completed(), models.Execution.actual_final_end_at.is_not(None))).one()
+        return HistoryBounds(planned[0], planned[1], completed[0], completed[1])
 
     def _placements_starting_between(self, start_utc: datetime, end_utc: datetime) -> list[ScheduledTask]:
         rows = self._rows(models.Placement, models.Placement.planned_start >= start_utc,
@@ -568,6 +640,10 @@ def _project(row) -> Project:
     return Project(name=row.name, description=row.description, **_audit(row))
 
 
+def _task_type(row) -> TaskType:
+    return TaskType(label=row.label, **_audit(row))
+
+
 def _task(row) -> Task:
     return Task.model_validate({**_audit(row), **task_content(row)})
 
@@ -587,14 +663,14 @@ def _block(row) -> FixedBlock:
 
 def _placement_fields(placement: ScheduledTask) -> dict:
     return placement.model_dump(include={"task_id", "planned_date", "timezone", "planned_start", "planned_end", "score",
-                                         "optimization_metadata", "task_category", "removal_reason",
+                                         "optimization_metadata", *PLACEMENT_SNAPSHOT_FIELDS, "removal_reason",
                                          "superseded_by_id", "origin", "preserved"})
 
 
 def _placement(row) -> ScheduledTask:
     return ScheduledTask(task_id=row.task_id, planned_date=row.planned_date, timezone=row.timezone,
                          planned_start=row.planned_start, planned_end=row.planned_end, score=row.score,
-                         optimization_metadata=dict(row.optimization_metadata), task_category=row.task_category,
+                         optimization_metadata=dict(row.optimization_metadata), **placement_snapshot(row),
                          removal_reason=row.removal_reason, superseded_by_id=row.superseded_by_id,
                          origin=row.origin, preserved=bool(row.preserved), **_audit(row))
 

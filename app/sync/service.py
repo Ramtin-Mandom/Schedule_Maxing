@@ -104,6 +104,8 @@ RECURRENCE_FEATURE = "recurrence_occurrences"
 MANUAL_PLACEMENTS_FEATURE = "manual_placements"
 #: Early Finish, Night Owl and Catch-Up as preference/schedule-record values (docs/scheduling-modes.md).
 SCHEDULING_MODES_FEATURE = "scheduling_modes"
+#: Task types and placement planning snapshots (docs/productivity-redesign-plan.md).
+TASK_TYPES_FEATURE = "task_types"
 
 
 @dataclass(frozen=True)
@@ -430,9 +432,10 @@ class SyncService:
                 recurrence = RECURRENCE_FEATURE in features
                 manual = MANUAL_PLACEMENTS_FEATURE in features
                 modes = SCHEDULING_MODES_FEATURE in features
+                types = TASK_TYPES_FEATURE in features
                 for _ in range(MAX_PUSH_ROUNDS):
                     self._engine.prepare(account, recurrence=recurrence, manual_placements=manual,
-                                         scheduling_modes=modes)
+                                         scheduling_modes=modes, task_types=types)
                     batch = self._engine.next_batch(account, self._push_batch_size)
                     if not batch:
                         break
@@ -468,8 +471,8 @@ class SyncService:
             self._reachable(True)
             self._engine.store.set_last_synced(key, self._clock().isoformat())
             held = self._engine.held
-            message = (f"{held} record(s) wait here: the server does not support them yet (recurring series or "
-                       "the newer scheduling modes; update the server).") if held else ""
+            message = (f"{held} record(s) wait here: the server does not support them yet (recurring series, "
+                       "the newer scheduling modes or task types; update the server).") if held else ""
             return self._finish(SyncReport("ok", pushed, pulled, conflicts, message, held=held))
 
     def _push(self, token: str, account, batch: list):

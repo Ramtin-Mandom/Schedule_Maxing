@@ -89,7 +89,7 @@ feed with an integer cursor.
 import hashlib
 import json
 import uuid
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from datetime import date
 
@@ -107,15 +107,29 @@ from backend.executions import ACTIONS, EXECUTIONS, ActionIn, ExecutionCreate, F
 from backend.mutations import Mutator, mutation
 from backend.planning_api import RescheduleIn, reschedule
 from backend.planning_repository import ServerPlanningRepository
-from backend.resources import FIXED_BLOCKS, GENERATIONS, PLACEMENTS, PREFERENCES, PROJECTS, TASKS, Strict
+from backend.resources import (
+    FIXED_BLOCKS,
+    GENERATIONS,
+    MAX_TAGS,
+    PLACEMENTS,
+    PREFERENCES,
+    PROJECTS,
+    TASK_TYPES,
+    TASKS,
+    Strict,
+)
 
 MAX_PUSH_OPERATIONS = 200
 
 #: The synchronization protocol this server speaks, and its optional features (GET /sync/capabilities).
 SYNC_PROTOCOL_VERSION = 2
-SYNC_FEATURES = ("placement_reschedule", "recurrence_occurrences", "manual_placements", "scheduling_modes")
+#: "task_types": task-type records synchronize, tasks carry task_type_id and placements their planning snapshot
+#: (docs/productivity-redesign-plan.md). A client holds its type records back from a server without it.
+SYNC_FEATURES = ("placement_reschedule", "recurrence_occurrences", "manual_placements", "scheduling_modes",
+                 "task_types")
 
-SPECS = {spec.entity_type: spec for spec in (PROJECTS, TASKS, FIXED_BLOCKS, PLACEMENTS, PREFERENCES, GENERATIONS)}
+SPECS = {spec.entity_type: spec
+         for spec in (PROJECTS, TASK_TYPES, TASKS, FIXED_BLOCKS, PLACEMENTS, PREFERENCES, GENERATIONS)}
 ENTITY_TYPES = (*SPECS, "execution")
 
 
@@ -123,7 +137,8 @@ class SyncOperationIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     op_id: uuid.UUID
-    entity_type: Literal["project", "task", "fixed_block", "placement", "preference", "schedule_generation", "execution"]
+    entity_type: Literal["project", "task_type", "task", "fixed_block", "placement", "preference",
+                         "schedule_generation", "execution"]
     entity_id: uuid.UUID
     kind: Literal["create", "update", "delete", "action", "feedback"]
     base_version: int | None = Field(default=None, gt=0)
@@ -192,6 +207,14 @@ class SyncRescheduleIn(Strict):
     planned_start: AwareDatetime
     planned_end: AwareDatetime
     task_category: str | None = Field(default=None, min_length=1, max_length=100)
+    #: The rest of the replacement's planning snapshot as the device recorded it (omitted by an older client:
+    #: the server then takes the task as it is stored here).
+    task_name: str | None = Field(default=None, min_length=1, max_length=500)
+    task_tags: list[Annotated[str, Field(max_length=100)]] | None = Field(default=None, max_length=MAX_TAGS)
+    task_points: int | None = Field(default=None, ge=0)
+    task_estimate_minutes: int | None = Field(default=None, gt=0)
+    task_type_id: uuid.UUID | None = None
+    task_type_label: str | None = Field(default=None, min_length=1, max_length=500)
     #: When the move happened on the device (the cancelled execution's end time); default: server time.
     at: AwareDatetime | None = None
 
@@ -284,7 +307,10 @@ def _reschedule(
         base_version=base_version, planned_date=payload.planned_date, timezone=payload.timezone,
         planned_start=payload.planned_start, planned_end=payload.planned_end, replacement_id=payload.replacement_id,
     )
-    result = reschedule(service, placement_id, request, at=payload.at or now, task_category=payload.task_category)
+    snapshot = payload.model_dump(include={"task_name", "task_tags", "task_points", "task_estimate_minutes",
+                                           "task_type_id", "task_type_label"})
+    result = reschedule(service, placement_id, request, at=payload.at or now, task_category=payload.task_category,
+                        snapshot=snapshot)
 
     def placement(record_id: uuid.UUID) -> dict:
         return PLACEMENTS.serialize(session, mutator.user_id, session.get(models.Placement, (mutator.user_id, record_id)))

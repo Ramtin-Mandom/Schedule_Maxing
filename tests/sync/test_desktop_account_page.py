@@ -18,6 +18,7 @@ import pytest
 from app.planning.models import Task
 from app.planning.scope import OwnerScope
 from app.ui import background
+from tests.tk_cleanup import cancel_stale_after_jobs
 from tests.sync.conftest import PASSWORD, InProcessTransport, make_device as make_device  # noqa: F401
 from tests.sync.conftest import project_root as project_root  # noqa: F401 - used by make_device
 from tests.ui.test_desktop_app import Dialogs, fill_form, tree_names
@@ -78,6 +79,7 @@ def pump(app, until=lambda: True, timeout: float = 15.0) -> None:
 
 def close(app) -> None:
     app._on_close()
+    cancel_stale_after_jobs(app)  # tests/tk_cleanup.py
     gc.collect()
 
 

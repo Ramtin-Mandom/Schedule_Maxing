@@ -1,85 +1,135 @@
 """
 productivity_page.py
 
-The desktop UI's Productivity page: filters, summary stats, two native-canvas
-charts, best-supported time bucket per category, a recent-trend comparison,
-structured insights (each carrying its own evidence label and sample count),
-and a separated "Data" section for exporting or deleting execution history.
+The desktop UI's Productivity page. The section bar at the top chooses one
+of exactly three sections; each shows its figures as labelled boxes:
 
-Milestone 5 adds two sections built on the schedule cohort (docs/analytics.md):
-"Schedule follow-through" (due-work completion with its numerator and
-denominator, the date basis and reporting timezone, reschedules, workload and
-explainable signals) and "History" (browsable occurrences with their original
-plan, outcome, actual times, sessions and move lineage). The terminal-outcome
-tiles are labelled as such ("among resolved executions"). The Data section's
-wording follows where history is stored (ProductivityController.storage_copy).
+    General      the awards and the headline facts of the whole recorded
+                 history (no filters)
+    Task-based   filtered by period, category, tag and task type: the
+                 selected type's boxes, and one box per type
+    Time-based   filtered by date range, weekday and planned start: the
+                 totals, weekdays, weeks, months, one day, and the charts
 
-All data comes from ProductivityController calls run off the Tk main thread
-(see app/ui/background.py); the page re-reads persisted records whenever it is
-shown, so actions, synchronization and direct writes are reflected.
+Each section has its own filters and its own report, so a filter of one
+never changes another. The category filter offers the task form's categories
+and the tag filter every tag used so far (on a task or in the history).
+
+Nothing is calculated here. Figures come from ProductivityController's
+tracker report and are worded by app/ui/tracker_view.py. Every read runs off
+the Tk main thread (app/ui/background.py, which also drops a result of a
+previous account or a destroyed page); each section's request carries a
+number, so an answer to an older filter selection never replaces a newer
+one. A section re-reads the persisted records when it is next shown.
 """
 
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import filedialog, messagebox
-from typing import Literal
 
 import customtkinter as ctk
 
-from app.ui.paint_widgets import AppOptionMenu, AppTextbox
-
 from app.persistence.errors import NotSignedInError
 from app.productivity.buckets import TimeBucket
-from app.productivity.filters import ObservationFilters
-from app.productivity.reporting import ProductivityDashboard
-from app.ui import theme
+from app.productivity.tracker import WEEKDAYS, TrackerFilters, TrackerReport
+from app.ui import theme, tracker_view
 from app.ui.background import ControllerResult, run_in_background
-from app.productivity.schedule_cohort import ScheduleCohortReport
-from app.ui.cohort_view import cohort_view
-from app.ui.history_model import STATUS_LABELS as HISTORY_STATUS_LABELS
-from app.ui.history_model import STATUSES as HISTORY_STATUSES
-from app.ui.history_model import HistoryPage, detail_text
+from app.ui.components import AppButton
+from app.ui.paint_widgets import AppOptionMenu
 from app.ui.productivity_charts import CompletionRateByBucketChart, PlannedVsActualChart
 from app.ui.productivity_controller import ProductivityController
+from app.ui.task_form_model import CATEGORIES
+from app.ui.tracker_view import Stat
 
 _DAY_OPTIONS = {"All time": None, "Last 7 days": 7, "Last 30 days": 30, "Last 90 days": 90}
-_WINDOW_OPTIONS = {"Last 7 days": 7, "Last 30 days": 30, "Last 90 days": 90}
-_COHORT_TILES = ("Due completion", "Due skip rate", "Overdue, not started", "In progress / paused",
-                 "Cancelled (excluded)", "Not yet due")
-_NO_ENTRY = "(no history in this selection)"
+_PERIODS = dict(tracker_view.TYPE_PERIODS)
+_NO_TYPE = "(no task type yet)"
+_NO_DAY = "(no day in this selection)"
 _ANY = "(any)"
-_TIME_BUCKET_ORDER = [bucket.value for bucket in TimeBucket]
+_TIME_BUCKETS = [bucket.value for bucket in TimeBucket]
+_CHART_GROUPS = {"By category": "category", "By task type": "type"}
+_SECTION_LABELS = {name: name for name in tracker_view.SECTIONS}
+_GENERAL, _TASKS, _TIME = tracker_view.SECTIONS
+_TYPE_PAGE_SIZE = 8
+_PAGE_WIDTH = 880
 
 
 class _StatTile(ctk.CTkFrame):
-    """Small labeled stat card, styled independently of app.py's StatPill to avoid importing app.py."""
+    """One labelled box: the label, the value shown large, and a short caption."""
 
-    def __init__(self, parent: tk.Widget, label: str) -> None:
+    def __init__(self, parent: tk.Widget, wraplength: int) -> None:
         super().__init__(parent, fg_color=theme.CARD_BG, corner_radius=14, border_color=theme.CARD_BORDER, border_width=1)
-        self.value_label = ctk.CTkLabel(
-            self, text="--", font=ctk.CTkFont(size=18, weight="bold"), text_color=theme.TEXT_PRIMARY
-        )
-        self.value_label.pack(anchor="w", padx=14, pady=(12, 0))
-        ctk.CTkLabel(self, text=label, font=ctk.CTkFont(size=11), text_color=theme.TEXT_MUTED, anchor="w").pack(
-            anchor="w", padx=14, pady=(0, 12)
-        )
+        self.title_label = ctk.CTkLabel(self, text="", font=ctk.CTkFont(size=12, weight="bold"),
+                                        text_color=theme.TEXT_MUTED, anchor="w", justify="left", wraplength=wraplength)
+        self.title_label.pack(anchor="w", padx=14, pady=(12, 0))
+        self.value_label = ctk.CTkLabel(self, text="--", font=ctk.CTkFont(size=26, weight="bold"),
+                                        text_color=theme.TEXT_PRIMARY, anchor="w", justify="left", wraplength=wraplength)
+        self.value_label.pack(anchor="w", padx=14, pady=(2, 0))
+        self.caption_label = ctk.CTkLabel(self, text="", font=ctk.CTkFont(size=11), text_color=theme.TEXT_MUTED,
+                                          anchor="w", justify="left", wraplength=wraplength)
+        self.caption_label.pack(anchor="w", padx=14, pady=(0, 12))
 
-    def set_value(self, value: str) -> None:
-        self.value_label.configure(text=value)
+    def set(self, stat: Stat) -> None:
+        self.title_label.configure(text=stat.label)
+        self.value_label.configure(text=stat.value)
+        self.caption_label.configure(text=stat.caption)
+
+
+class _TileGrid(ctk.CTkFrame):
+    """A titled grid of stat boxes, `columns` to a row; says so when it has nothing to show."""
+
+    def __init__(self, parent: tk.Widget, title: str, columns: int, *, empty: str = "Nothing to show yet.") -> None:
+        super().__init__(parent, fg_color="transparent")
+        self._columns = columns
+        self.stats: list[Stat] = []
+        self.tiles: list[_StatTile] = []
+        self.columnconfigure(tuple(range(columns)), weight=1, uniform="tile")
+        self.title_label = ctk.CTkLabel(self, text=title, font=ctk.CTkFont(size=16, weight="bold"),
+                                        text_color=theme.TEXT_PRIMARY, anchor="w")
+        self.title_label.grid(row=0, column=0, columnspan=columns, sticky="w", padx=5, pady=(0, 4))
+        self.empty_label = ctk.CTkLabel(self, text=empty, text_color=theme.TEXT_MUTED, anchor="w")
+
+    def set_title(self, title: str) -> None:
+        self.title_label.configure(text=title)
+
+    def values(self) -> dict[str, str]:
+        return {stat.label: stat.value for stat in self.stats}
+
+    def show(self, stats: list[Stat]) -> None:
+        self.stats = list(stats)
+        while len(self.tiles) < len(stats):
+            self.tiles.append(_StatTile(self, _PAGE_WIDTH // self._columns - 40))
+        for index, tile in enumerate(self.tiles):
+            if index < len(stats):
+                tile.set(stats[index])
+                tile.grid(row=1 + index // self._columns, column=index % self._columns, sticky="nsew", padx=5, pady=5)
+            else:
+                tile.grid_remove()
+        if stats:
+            self.empty_label.grid_remove()
+        else:
+            self.empty_label.grid(row=1, column=0, columnspan=self._columns, sticky="w", padx=5, pady=5)
 
 
 class ProductivityPage(ctk.CTkFrame):
     def __init__(self, parent: tk.Widget, productivity_controller: ProductivityController) -> None:
         super().__init__(parent, fg_color=theme.APP_BG)
         self._controller = productivity_controller
-        self._latest_dashboard: ProductivityDashboard | None = None
-        self.latest_cohort: ScheduleCohortReport | None = None
-        self.history_page: HistoryPage | None = None
-        self._history_by_label: dict[str, object] = {}
+        #: Each section's own report, built for that section's filters.
+        self.reports: dict[str, TrackerReport | None] = dict.fromkeys(tracker_view.SECTIONS)
+        #: The newest request of each section; an answer carrying an older number is dropped.
+        self._requests = dict.fromkeys(tracker_view.SECTIONS, 0)
+        #: Sections whose report must be read again before it is shown.
+        self._stale: set[str] = set()
+        self.section = _GENERAL
+        self.type_page = 0
+        self._type_keys: dict[str, str] = {}
+        #: Every tag seen so far in this workspace; a tag stays offered once it has been used.
+        self._known_tags: set[str] = set()
 
         self.columnconfigure(0, weight=1)
         self._build()
+        self.show_section(self.section)
         self.refresh()
 
     # ------------------------------------------------------------------
@@ -87,462 +137,315 @@ class ProductivityPage(ctk.CTkFrame):
     # ------------------------------------------------------------------
 
     def _build(self) -> None:
-        self._build_header()
-        self._build_filters()
-        self._build_summary()
-        self._build_charts()
-        self._build_breakdowns()
-        self._build_cohort_section()
-        self._build_history_section()
-        self._build_data_section()
+        self._build_section_bar()
+        self.status_label = ctk.CTkLabel(self, text="", text_color=theme.TEXT_MUTED, anchor="w", justify="left",
+                                         wraplength=_PAGE_WIDTH)
+        self.section_host = ctk.CTkFrame(self, fg_color="transparent")
+        self.section_host.grid(row=2, column=0, sticky="ew", padx=15)
+        self.section_host.columnconfigure(0, weight=1)
+        self.section_frames = {
+            _GENERAL: self._build_general(self.section_host),
+            _TASKS: self._build_task_based(self.section_host),
+            _TIME: self._build_time_based(self.section_host),
+        }
 
-    def _build_cohort_section(self) -> None:
-        card = ctk.CTkFrame(self, fg_color=theme.CARD_BG, corner_radius=16, border_color=theme.CARD_BORDER, border_width=1)
-        card.grid(row=5, column=0, sticky="ew", padx=20, pady=(0, 12))
-        card.columnconfigure(tuple(range(len(_COHORT_TILES))), weight=1)
-        ctk.CTkLabel(card, text="Schedule follow-through (planned work that was due)",
-                     font=ctk.CTkFont(size=13, weight="bold"), text_color=theme.TEXT_PRIMARY).grid(
-            row=0, column=0, columnspan=4, sticky="w", padx=14, pady=(12, 2))
-        self.cohort_window_var = tk.StringVar(value="Last 7 days")
-        AppOptionMenu(card, variable=self.cohort_window_var, values=list(_WINDOW_OPTIONS),
-                          command=lambda _value: self.refresh_cohort()).grid(
-            row=0, column=len(_COHORT_TILES) - 1, sticky="e", padx=14, pady=(12, 2))
-        self.cohort_basis_label = ctk.CTkLabel(card, text="", font=ctk.CTkFont(size=11), text_color=theme.TEXT_MUTED,
-                                               anchor="w", justify="left", wraplength=900)
-        self.cohort_basis_label.grid(row=1, column=0, columnspan=len(_COHORT_TILES), sticky="w", padx=14)
-        self.cohort_tiles: dict[str, _StatTile] = {}
-        for column, name in enumerate(_COHORT_TILES):
-            tile = _StatTile(card, name)
-            tile.grid(row=2, column=column, sticky="ew", padx=6, pady=(6, 6))
-            self.cohort_tiles[name] = tile
-        self.cohort_text = ctk.CTkLabel(card, text="", justify="left", anchor="w", text_color=theme.TEXT_PRIMARY,
-                                        wraplength=900)
-        self.cohort_text.grid(row=3, column=0, columnspan=len(_COHORT_TILES), sticky="w", padx=14, pady=(0, 12))
+    def _card(self, parent: tk.Widget, title: str | None = None) -> ctk.CTkFrame:
+        card = ctk.CTkFrame(parent, fg_color=theme.CARD_BG, corner_radius=16, border_color=theme.CARD_BORDER,
+                            border_width=1)
+        if title:
+            ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=13, weight="bold"),
+                         text_color=theme.TEXT_PRIMARY).pack(anchor="w", padx=14, pady=(12, 6))
+        return card
 
-    def _build_history_section(self) -> None:
-        card = ctk.CTkFrame(self, fg_color=theme.CARD_BG, corner_radius=16, border_color=theme.CARD_BORDER, border_width=1)
-        card.grid(row=6, column=0, sticky="ew", padx=20, pady=(0, 12))
-        card.columnconfigure((0, 1, 2), weight=1)
-        ctk.CTkLabel(card, text="History", font=ctk.CTkFont(size=13, weight="bold"),
-                     text_color=theme.TEXT_PRIMARY).grid(row=0, column=0, sticky="w", padx=14, pady=(12, 2))
-        self.history_window_var = tk.StringVar(value="Last 30 days")
-        self.history_status_var = tk.StringVar(value=_ANY)
-        self.history_category_var = tk.StringVar(value=_ANY)
-        filters = ctk.CTkFrame(card, fg_color="transparent")
-        filters.grid(row=1, column=0, columnspan=3, sticky="ew")
-        filters.columnconfigure((0, 1, 2), weight=1)
-        self._filter_menu(filters, 0, "Dates", self.history_window_var, list(_WINDOW_OPTIONS)).configure(
-            command=lambda _value: self.refresh_history())
-        self._filter_menu(filters, 1, "Status", self.history_status_var,
-                          [_ANY, *(HISTORY_STATUS_LABELS[s] for s in HISTORY_STATUSES)]).configure(
-            command=lambda _value: self.refresh_history())
-        self.history_category_menu = self._filter_menu(filters, 2, "Category", self.history_category_var, [_ANY])
-        self.history_category_menu.configure(command=lambda _value: self.refresh_history())
-        self.history_entry_var = tk.StringVar(value=_NO_ENTRY)
-        self.history_entry_menu = AppOptionMenu(card, variable=self.history_entry_var, values=[_NO_ENTRY],
-                                                    command=self._show_history_entry)
-        self.history_entry_menu.grid(row=3, column=0, columnspan=3, sticky="ew", padx=10, pady=(0, 6))
-        self.history_detail = AppTextbox(card, height=170, wrap="word")
-        self.history_detail.grid(row=4, column=0, columnspan=3, sticky="ew", padx=10, pady=(0, 12))
-        self.history_detail.configure(state="disabled")
+    def _filter_card(self, parent: tk.Widget, columns: int, reset) -> tuple[ctk.CTkFrame, AppButton]:
+        """A section's own filter row: room for `columns` menus, and its reset button."""
+        card = self._card(parent)
+        card.grid(row=0, column=0, sticky="ew", padx=5, pady=(0, 14))
+        card.columnconfigure(tuple(range(columns + 1)), weight=1, uniform="filter")
+        button = AppButton(card, "Reset filters", reset, variant="secondary", height=30)
+        button.grid(row=1, column=columns, sticky="ew", padx=10, pady=(0, 12))
+        return card, button
 
-    def _build_header(self) -> None:
-        header = ctk.CTkFrame(self, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="ew", padx=20, pady=(18, 6))
-        ctk.CTkLabel(
-            header, text="Productivity", font=ctk.CTkFont(size=26, weight="bold"), text_color=theme.TEXT_PRIMARY
-        ).pack(anchor="w")
-        self.range_label = ctk.CTkLabel(
-            header, text="Selected range: all time", font=ctk.CTkFont(size=12), text_color=theme.TEXT_MUTED
-        )
-        ctk.CTkLabel(
-            header, text="The tiles and charts below count recorded executions by when they were created; "
-                         "completion there is completed / (completed + skipped + cancelled).",
-            font=ctk.CTkFont(size=11), text_color=theme.TEXT_MUTED,
-        ).pack(anchor="w")
-        self.range_label.pack(anchor="w", pady=(2, 0))
-
-    def _build_filters(self) -> None:
-        card = ctk.CTkFrame(self, fg_color=theme.CARD_BG, corner_radius=16, border_color=theme.CARD_BORDER, border_width=1)
-        card.grid(row=1, column=0, sticky="ew", padx=20, pady=(6, 12))
-        for column in range(6):
-            card.columnconfigure(column, weight=1)
-
-        self.days_var = tk.StringVar(value="All time")
-        self.category_var = tk.StringVar(value=_ANY)
-        self.tag_var = tk.StringVar(value=_ANY)
-        self.day_of_week_var = tk.StringVar(value=_ANY)
-        self.time_bucket_var = tk.StringVar(value=_ANY)
-
-        self._filter_menu(card, 0, "Range", self.days_var, list(_DAY_OPTIONS))
-        self.category_menu = self._filter_menu(card, 1, "Category", self.category_var, [_ANY])
-        self.tag_menu = self._filter_menu(card, 2, "Tag", self.tag_var, [_ANY])
-        self.day_of_week_menu = self._filter_menu(card, 3, "Day of week", self.day_of_week_var, [_ANY])
-        self.time_bucket_menu = self._filter_menu(card, 4, "Time bucket", self.time_bucket_var, [_ANY])
-
-        button_column = ctk.CTkFrame(card, fg_color="transparent")
-        button_column.grid(row=1, column=5, sticky="ew", padx=10, pady=(0, 12))
-        ctk.CTkButton(
-            button_column, text="Apply", height=32, fg_color=theme.ACCENT, hover_color=theme.ACCENT_HOVER,
-            command=self.refresh,
-        ).pack(fill="x", pady=(0, 4))
-        ctk.CTkButton(
-            button_column, text="Clear", height=28, fg_color=theme.SECONDARY_BG, hover_color=theme.SECONDARY_HOVER,
-            text_color=theme.TEXT_PRIMARY, command=self._clear_filters,
-        ).pack(fill="x")
-
-    def _filter_menu(
-        self, parent: tk.Widget, column: int, label: str, variable: tk.StringVar, values: list[str]
-    ) -> AppOptionMenu:
+    def _filter_menu(self, parent: tk.Widget, column: int, label: str, variable: tk.StringVar, values: list[str],
+                     command) -> AppOptionMenu:
         ctk.CTkLabel(parent, text=label, text_color=theme.TEXT_MUTED, font=ctk.CTkFont(size=11, weight="bold")).grid(
             row=0, column=column, sticky="w", padx=10, pady=(10, 2)
         )
-        menu = AppOptionMenu(parent, variable=variable, values=values)
+        menu = AppOptionMenu(parent, variable=variable, values=values, command=lambda _value: command())
         menu.grid(row=1, column=column, sticky="ew", padx=10, pady=(0, 12))
         return menu
 
-    def _build_summary(self) -> None:
-        row = ctk.CTkFrame(self, fg_color="transparent")
-        row.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 12))
-        for column in range(6):
-            row.columnconfigure(column, weight=1)
+    def _build_section_bar(self) -> None:
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.grid(row=0, column=0, sticky="ew", padx=16, pady=(18, 12))
+        self.section_buttons: dict[str, AppButton] = {}
+        for column, name in enumerate(tracker_view.SECTIONS):
+            bar.columnconfigure(column, weight=1, uniform="section")
+            button = AppButton(bar, name, lambda name=name: self.show_section(name), variant="secondary", height=40)
+            button.grid(row=0, column=column, sticky="ew", padx=4)
+            self.section_buttons[name] = button
 
-        self.completed_tile = _StatTile(row, "Completed")
-        self.skipped_tile = _StatTile(row, "Skipped")
-        self.completion_rate_tile = _StatTile(row, "Completion among resolved")
-        self.productive_minutes_tile = _StatTile(row, "Productive active time")
-        self.start_delay_tile = _StatTile(row, "Median start delay")
-        self.duration_error_tile = _StatTile(row, "Duration estimate error")
+    @staticmethod
+    def _mark(buttons: dict, selected, labels: dict | None = None) -> None:
+        """
+        Show which of a row of choice buttons is selected: by colour and, where
+        `labels` gives each button's plain text, by a leading mark as well
+        (colour is never the only signal).
+        """
+        for key, button in buttons.items():
+            chosen = key == selected
+            button.configure(
+                fg_color=theme.ACCENT if chosen else theme.SECONDARY_BG,
+                hover_color=theme.ACCENT_HOVER if chosen else theme.SECONDARY_HOVER,
+                text_color=theme.TEXT_ON_ACCENT if chosen else theme.TEXT_PRIMARY)
+            if labels is not None:
+                button.configure(text=("● " if chosen else "") + labels[key])
 
-        for column, tile in enumerate(
-            (
-                self.completed_tile, self.skipped_tile, self.completion_rate_tile,
-                self.productive_minutes_tile, self.start_delay_tile, self.duration_error_tile,
-            )
-        ):
-            tile.grid(row=0, column=column, sticky="ew", padx=6)
+    def show_section(self, name: str) -> None:
+        """Show one of the three sections (the others are hidden, not destroyed)."""
+        if name not in self.section_frames:
+            return
+        self.section = name
+        for key, frame in self.section_frames.items():
+            if key == name:
+                frame.grid(row=0, column=0, sticky="ew")
+            else:
+                frame.grid_remove()
+        self._mark(self.section_buttons, name, _SECTION_LABELS)
+        if name in self._stale:
+            self._load(name)
 
-    def _build_charts(self) -> None:
-        row = ctk.CTkFrame(self, fg_color="transparent")
-        row.grid(row=3, column=0, sticky="ew", padx=20, pady=(0, 12))
-        row.columnconfigure((0, 1), weight=1)
+    # -- General ------------------------------------------------------------------
 
-        left = self._chart_card(row, "Planned vs. actual duration by category")
+    def _build_general(self, parent: tk.Widget) -> ctk.CTkFrame:
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        frame.columnconfigure(0, weight=1)
+        self.award_tiles = _TileGrid(frame, "Your records", 5)
+        self.award_tiles.grid(row=0, column=0, sticky="ew", pady=(0, 14))
+        self.fact_tiles = _TileGrid(frame, "Your stats at a glance", 4)
+        self.fact_tiles.grid(row=1, column=0, sticky="ew", pady=(0, 14))
+        return frame
+
+    # -- Task-based ---------------------------------------------------------------
+
+    def _build_task_based(self, parent: tk.Widget) -> ctk.CTkFrame:
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        frame.columnconfigure(0, weight=1)
+
+        self.period_var = tk.StringVar(value=tracker_view.TYPE_PERIODS[-1][0])
+        self.category_var = tk.StringVar(value=_ANY)
+        self.tag_var = tk.StringVar(value=_ANY)
+        self.type_var = tk.StringVar(value=_NO_TYPE)
+        card, self.task_reset_button = self._filter_card(frame, 4, self._reset_task_filters)
+        self._filter_menu(card, 0, "Period", self.period_var, list(_PERIODS), self._on_period_changed)
+        self.category_menu = self._filter_menu(card, 1, "Category", self.category_var, [_ANY, *CATEGORIES],
+                                               lambda: self._load(_TASKS))
+        self.tag_menu = self._filter_menu(card, 2, "Tag", self.tag_var, [_ANY], lambda: self._load(_TASKS))
+        self.type_menu = self._filter_menu(card, 3, "Task type", self.type_var, [_NO_TYPE], self._render_types)
+
+        self.type_tiles = _TileGrid(frame, "Selected task type", 3, empty="No task types match these filters yet.")
+        self.type_tiles.grid(row=1, column=0, sticky="ew", pady=(0, 14))
+        self.type_cards = _TileGrid(frame, "All task types (completion rate)", 4,
+                                    empty="Plan or complete a task to see its type here.")
+        self.type_cards.grid(row=2, column=0, sticky="ew", pady=(0, 4))
+        pager = ctk.CTkFrame(frame, fg_color="transparent")
+        pager.grid(row=3, column=0, sticky="w", padx=5, pady=(0, 14))
+        self.type_prev = AppButton(pager, "Previous", lambda: self._turn_types(-1), variant="secondary", height=28,
+                                   width=90)
+        self.type_prev.pack(side="left")
+        self.type_page_label = ctk.CTkLabel(pager, text="", text_color=theme.TEXT_MUTED)
+        self.type_page_label.pack(side="left", padx=10)
+        self.type_next = AppButton(pager, "Next", lambda: self._turn_types(1), variant="secondary", height=28, width=90)
+        self.type_next.pack(side="left")
+        return frame
+
+    # -- Time-based ---------------------------------------------------------------
+
+    def _build_time_based(self, parent: tk.Widget) -> ctk.CTkFrame:
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        frame.columnconfigure(0, weight=1)
+
+        self.days_var = tk.StringVar(value="All time")
+        self.day_of_week_var = tk.StringVar(value=_ANY)
+        self.time_bucket_var = tk.StringVar(value=_ANY)
+        card, self.time_reset_button = self._filter_card(frame, 3, self._reset_time_filters)
+        self._filter_menu(card, 0, "Date range", self.days_var, list(_DAY_OPTIONS), lambda: self._load(_TIME))
+        self._filter_menu(card, 1, "Day of week", self.day_of_week_var, [_ANY, *WEEKDAYS], lambda: self._load(_TIME))
+        self._filter_menu(card, 2, "Time of day", self.time_bucket_var, [_ANY, *_TIME_BUCKETS],
+                          lambda: self._load(_TIME))
+
+        self.time_tiles = _TileGrid(frame, "In this selection", 4)
+        self.time_tiles.grid(row=1, column=0, sticky="ew", pady=(0, 14))
+        self.weekday_tiles = _TileGrid(frame, "By weekday (completion rate)", 7)
+        self.weekday_tiles.grid(row=2, column=0, sticky="ew", pady=(0, 14))
+        self.week_tiles = _TileGrid(frame, "Recent weeks (completion rate)", 4, empty="No weeks in this selection yet.")
+        self.week_tiles.grid(row=3, column=0, sticky="ew", pady=(0, 14))
+        self.month_tiles = _TileGrid(frame, "Recent months (completion rate)", 4,
+                                     empty="No months in this selection yet.")
+        self.month_tiles.grid(row=4, column=0, sticky="ew", pady=(0, 14))
+
+        self.day_tiles = _TileGrid(frame, "Day", 3, empty="No planned or completed work in this selection yet.")
+        self.day_tiles.grid(row=5, column=0, sticky="ew", pady=(0, 14))
+        self.day_var = tk.StringVar(value=_NO_DAY)
+        self.day_menu = AppOptionMenu(self.day_tiles, variable=self.day_var, values=[_NO_DAY], width=170,
+                                      command=lambda _value: self._render_day())
+        self.day_menu.grid(row=0, column=2, sticky="e", padx=5, pady=(0, 4))
+
+        charts = ctk.CTkFrame(frame, fg_color="transparent")
+        charts.grid(row=6, column=0, sticky="ew", padx=5, pady=(0, 14))
+        charts.columnconfigure((0, 1), weight=1, uniform="chart")
+        left = self._card(charts, "Planned vs. actual duration")
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        self.chart_group_var = tk.StringVar(value="By category")
+        AppOptionMenu(left, variable=self.chart_group_var, values=list(_CHART_GROUPS),
+                      command=lambda _value: self._render_charts()).pack(anchor="w", padx=10, pady=(0, 6))
         self.planned_vs_actual_chart = PlannedVsActualChart(left, height=170)
         self.planned_vs_actual_chart.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-
-        right = self._chart_card(row, "Completion rate by time bucket")
+        right = self._card(charts, "Completion rate by time of day")
         right.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
         self.completion_rate_chart = CompletionRateByBucketChart(right, height=170)
         self.completion_rate_chart.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-
-    def _chart_card(self, parent: tk.Widget, title: str) -> ctk.CTkFrame:
-        card = ctk.CTkFrame(parent, fg_color=theme.CARD_BG, corner_radius=16, border_color=theme.CARD_BORDER, border_width=1)
-        ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=13, weight="bold"), text_color=theme.TEXT_PRIMARY).pack(
-            anchor="w", padx=14, pady=(12, 6)
-        )
-        return card
-
-    def _build_breakdowns(self) -> None:
-        row = ctk.CTkFrame(self, fg_color="transparent")
-        row.grid(row=4, column=0, sticky="ew", padx=20, pady=(0, 12))
-        row.columnconfigure((0, 1, 2), weight=1)
-
-        best_card = self._text_card(row, "Best-supported time bucket per category")
-        best_card.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-        self.best_bucket_label = ctk.CTkLabel(
-            best_card, text="", justify="left", anchor="w", text_color=theme.TEXT_PRIMARY, wraplength=220
-        )
-        self.best_bucket_label.pack(anchor="w", padx=14, pady=(0, 12), fill="x")
-
-        trend_card = self._text_card(row, "Recent trend (last 7 days vs. selection)")
-        trend_card.grid(row=0, column=1, sticky="nsew", padx=6)
-        self.trend_label = ctk.CTkLabel(
-            trend_card, text="", justify="left", anchor="w", text_color=theme.TEXT_PRIMARY, wraplength=220
-        )
-        self.trend_label.pack(anchor="w", padx=14, pady=(0, 12), fill="x")
-
-        insights_card = self._text_card(row, "Insights")
-        insights_card.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
-        self.insights_label = ctk.CTkLabel(
-            insights_card, text="", justify="left", anchor="w", text_color=theme.TEXT_PRIMARY, wraplength=260
-        )
-        self.insights_label.pack(anchor="w", padx=14, pady=(0, 12), fill="x")
-
-    def _text_card(self, parent: tk.Widget, title: str) -> ctk.CTkFrame:
-        card = ctk.CTkFrame(parent, fg_color=theme.CARD_BG, corner_radius=16, border_color=theme.CARD_BORDER, border_width=1)
-        ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=13, weight="bold"), text_color=theme.TEXT_PRIMARY).pack(
-            anchor="w", padx=14, pady=(12, 6)
-        )
-        return card
-
-    def _build_data_section(self) -> None:
-        # Deliberately visually separated (its own bordered card, warning-toned header) from the
-        # rest of the page's normal navigation/filtering flow, per the requirement that any
-        # reset/delete control stay separate from normal navigation.
-        card = ctk.CTkFrame(self, fg_color=theme.CARD_BG, corner_radius=16, border_color=theme.CARD_BORDER, border_width=1)
-        card.grid(row=7, column=0, sticky="ew", padx=20, pady=(0, 20))
-        card.columnconfigure((0, 1, 2), weight=1)
-        copy = self._controller.storage_copy()
-
-        ctk.CTkLabel(
-            card, text="Data", font=ctk.CTkFont(size=13, weight="bold"), text_color=theme.TEXT_PRIMARY
-        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=14, pady=(12, 2))
-        ctk.CTkLabel(
-            card, text=copy.summary, font=ctk.CTkFont(size=11), text_color=theme.TEXT_MUTED,
-        ).grid(row=1, column=0, columnspan=3, sticky="w", padx=14, pady=(0, 10))
-
-        ctk.CTkButton(
-            card, text="Export history (CSV)", height=32, fg_color=theme.NEUTRAL_BG, hover_color=theme.NEUTRAL_HOVER,
-            command=lambda: self._export_history("csv"),
-        ).grid(row=2, column=0, sticky="ew", padx=(14, 6), pady=(0, 14))
-        ctk.CTkButton(
-            card, text="Export history (JSON)", height=32, fg_color=theme.NEUTRAL_BG, hover_color=theme.NEUTRAL_HOVER,
-            command=lambda: self._export_history("json"),
-        ).grid(row=2, column=1, sticky="ew", padx=6, pady=(0, 14))
-        self.reset_button = ctk.CTkButton(
-            card, text=copy.reset_button, height=32, fg_color=theme.DANGER, hover_color=theme.DANGER_HOVER,
-            command=self._confirm_reset,
-        )
-        self.reset_button.grid(row=2, column=2, sticky="ew", padx=(6, 14), pady=(0, 14))
+        return frame
 
     # ------------------------------------------------------------------
     # Refresh
     # ------------------------------------------------------------------
 
     def on_appearance_changed(self) -> None:
-        """Repaint the (raw Tk) charts in the new light/dark appearance."""
+        """Repaint the (raw Tk) charts and the selection mark in the new light/dark appearance."""
         self.planned_vs_actual_chart.redraw()
         self.completion_rate_chart.redraw()
+        self._mark(self.section_buttons, self.section, _SECTION_LABELS)
 
     def on_show(self) -> None:
         """Re-read persisted records each time the page is shown (after actions, a sync or direct writes)."""
         self.refresh()
 
     def refresh(self) -> None:
-        filters = self._current_filters()
-        run_in_background(self, lambda: self._controller.build_dashboard(filters), self._on_dashboard_loaded)
-        self.refresh_cohort()
-        self.refresh_history()
+        """Reload the shown section now, and each other section when it is next shown."""
+        self._stale = set(tracker_view.SECTIONS)
+        self._load(self.section)
 
-    def refresh_cohort(self) -> None:
-        days = _WINDOW_OPTIONS[self.cohort_window_var.get()]
-        run_in_background(self, lambda: self._controller.schedule_cohort_for_last(days), self._on_cohort_loaded)
+    def _choice(self, variable: tk.StringVar) -> str | None:
+        return None if variable.get() == _ANY else variable.get()
 
-    def _on_cohort_loaded(self, result: ControllerResult[ScheduleCohortReport]) -> None:
-        if not result.ok:
-            if isinstance(result.cause, NotSignedInError):
-                return
-            self.cohort_basis_label.configure(text=f"Unavailable: {result.error}")
-            return
-        self.latest_cohort = result.value
-        view = cohort_view(result.value)
-        self.cohort_basis_label.configure(text=view.basis)
-        for name, tile in self.cohort_tiles.items():
-            tile.set_value(view.tiles.get(name, "--"))
-        parts = [view.notes] if view.empty else [
-            view.workload, view.reschedules, "Workload signals:\n" + view.days,
-            "Underestimation:\n" + view.underestimation, view.notes]
-        self.cohort_text.configure(text="\n\n".join(part for part in parts if part))
+    def _selection(self, section: str) -> tuple[int | None, TrackerFilters]:
+        """The date range and filters of one section; another section's filters never apply to it."""
+        if section == _TASKS:
+            return None, TrackerFilters(category=self._choice(self.category_var), tag=self._choice(self.tag_var))
+        if section == _TIME:
+            return _DAY_OPTIONS.get(self.days_var.get()), TrackerFilters(
+                weekday=self._choice(self.day_of_week_var), time_bucket=self._choice(self.time_bucket_var))
+        return None, TrackerFilters()
 
-    def refresh_history(self) -> None:
-        days = _WINDOW_OPTIONS[self.history_window_var.get()]
-        label = self.history_status_var.get()
-        status = next((key for key, text in HISTORY_STATUS_LABELS.items() if text == label), None)
-        category = None if self.history_category_var.get() == _ANY else self.history_category_var.get()
-        run_in_background(self, lambda: self._controller.history(days, status=status, category=category),
-                          self._on_history_loaded)
+    def _load(self, section: str) -> None:
+        """Read one section's report off the Tk thread; deliver it only while it is still that section's newest."""
+        self._stale.discard(section)
+        range_days, filters = self._selection(section)
+        self._requests[section] += 1
+        number = self._requests[section]
 
-    def _on_history_loaded(self, result: ControllerResult[HistoryPage]) -> None:
-        if not result.ok:
-            if isinstance(result.cause, NotSignedInError):
-                return
-            self._set_history_detail(f"History unavailable: {result.error}")
-            return
-        page = self.history_page = result.value
-        self.history_category_menu.configure(values=[_ANY, *page.categories])
-        self._history_by_label = {entry.label: entry for entry in page.entries}
-        labels = list(self._history_by_label) or [_NO_ENTRY]
-        self.history_entry_menu.configure(values=labels)
-        self.history_entry_var.set(labels[0])
-        if page.entries:
-            self._show_history_entry(labels[0])
-        else:
-            self._set_history_detail("Nothing matches this selection." if page.total else
-                                     "No planned work on these dates yet.")
+        def done(loaded: tuple[ControllerResult[TrackerReport], list[str]]) -> None:
+            if number == self._requests[section]:
+                self._on_loaded(section, *loaded)
 
-    def _show_history_entry(self, label: str) -> None:
-        entry = self._history_by_label.get(label)
-        if entry is not None:
-            self._set_history_detail(detail_text(entry))
+        run_in_background(
+            self, lambda: (self._controller.build_tracker(range_days, filters), self._controller.used_tags()), done)
 
-    def _set_history_detail(self, text: str) -> None:
-        self.history_detail.configure(state="normal")
-        self.history_detail.delete("1.0", "end")
-        self.history_detail.insert("1.0", text)
-        self.history_detail.configure(state="disabled")
-
-    def _clear_filters(self) -> None:
-        self.days_var.set("All time")
-        self.category_var.set(_ANY)
-        self.tag_var.set(_ANY)
-        self.day_of_week_var.set(_ANY)
-        self.time_bucket_var.set(_ANY)
-        self.refresh()
-
-    def _current_filters(self) -> ObservationFilters:
-        return ObservationFilters(
-            days=_DAY_OPTIONS.get(self.days_var.get()),
-            category=None if self.category_var.get() == _ANY else self.category_var.get(),
-            tag=None if self.tag_var.get() == _ANY else self.tag_var.get(),
-            day_of_week=None if self.day_of_week_var.get() == _ANY else self.day_of_week_var.get(),
-            time_bucket=None if self.time_bucket_var.get() == _ANY else TimeBucket(self.time_bucket_var.get()),
-        )
-
-    def _on_dashboard_loaded(self, result: ControllerResult[ProductivityDashboard]) -> None:
+    def _on_loaded(self, section: str, result: ControllerResult[TrackerReport], used_tags: list[str]) -> None:
         if not result.ok:
             if isinstance(result.cause, NotSignedInError):
                 return  # direct storage before sign-in: the Account page says so
-            messagebox.showerror("Productivity Data Error", result.error or "An unknown error occurred.", parent=self)
+            self.status_label.configure(text=f"Productivity data is unavailable: {result.error}")
+            self.status_label.grid(row=1, column=0, sticky="w", padx=20, pady=(0, 8))
             return
+        self.status_label.grid_remove()
+        report = self.reports[section] = result.value
+        # The task form's categories (then any other the history holds), and every tag used so far -- on a task
+        # or in the history -- so a chosen filter never narrows its own choices.
+        self.category_menu.configure(
+            values=[_ANY, *CATEGORIES, *(name for name in report.categories if name not in CATEGORIES)])
+        self._known_tags.update(report.tags, used_tags)
+        self.tag_menu.configure(values=[_ANY, *sorted(self._known_tags, key=str.casefold)])
+        {_GENERAL: self._render_general, _TASKS: self._render_task_based, _TIME: self._render_time_based}[section]()
 
-        dashboard = result.value
-        self._latest_dashboard = dashboard
-        self._refresh_filter_options(dashboard)
-        self._render_range_label()
-        self._render_summary(dashboard)
-        self._render_charts(dashboard)
-        self._render_breakdowns(dashboard)
+    def _reset_task_filters(self) -> None:
+        self.period_var.set(tracker_view.TYPE_PERIODS[-1][0])
+        self.category_var.set(_ANY)
+        self.tag_var.set(_ANY)
+        self.type_page = 0
+        self._load(_TASKS)
 
-    def _refresh_filter_options(self, dashboard: ProductivityDashboard) -> None:
-        self.category_menu.configure(values=[_ANY, *sorted(dashboard.by_category)])
-        self.tag_menu.configure(values=[_ANY, *sorted(dashboard.by_tag)])
-        self.day_of_week_menu.configure(values=[_ANY, *sorted(dashboard.by_day_of_week)])
-        self.time_bucket_menu.configure(values=[_ANY, *sorted(dashboard.by_time_bucket)])
+    def _reset_time_filters(self) -> None:
+        self.days_var.set("All time")
+        self.day_of_week_var.set(_ANY)
+        self.time_bucket_var.set(_ANY)
+        self._load(_TIME)
 
-    def _render_range_label(self) -> None:
-        parts = [self.days_var.get()]
-        for label, variable in (
-            ("category", self.category_var), ("tag", self.tag_var),
-            ("day", self.day_of_week_var), ("time bucket", self.time_bucket_var),
-        ):
-            if variable.get() != _ANY:
-                parts.append(f"{label}={variable.get()}")
-        self.range_label.configure(text="Selected range: " + ", ".join(parts))
+    # -- rendering ----------------------------------------------------------------
 
-    def _render_summary(self, dashboard: ProductivityDashboard) -> None:
-        stats = dashboard.global_stats
+    def _render_general(self) -> None:
+        report = self.reports[_GENERAL]
+        self.award_tiles.show(tracker_view.award_cards(report))
+        self.fact_tiles.show(tracker_view.general_facts(report))
 
-        completed_count = round(stats.terminal_count * stats.completion_rate) if stats.completion_rate is not None else 0
-        skipped_count = stats.terminal_count - completed_count if stats.completion_rate is not None else 0
+    def _render_task_based(self) -> None:
+        self._type_keys = {label: key for key, label in tracker_view.type_choices(self.reports[_TASKS])}
+        labels = list(self._type_keys) or [_NO_TYPE]
+        self.type_menu.configure(values=labels)
+        if self.type_var.get() not in self._type_keys:
+            self.type_var.set(labels[0])
+        self._render_types()
 
-        self.completed_tile.set_value(str(completed_count))
-        self.skipped_tile.set_value(str(skipped_count))
-        self.completion_rate_tile.set_value(_format_rate(stats.completion_rate))
-        self.productive_minutes_tile.set_value(f"{stats.productive_active_minutes:g} min")
-        self.start_delay_tile.set_value(_format_minutes(stats.median_start_delay_minutes))
-        self.duration_error_tile.set_value(_format_minutes(stats.duration_mae_minutes))
+    def _on_period_changed(self) -> None:
+        self.type_page = 0
+        self._render_types()
 
-    def _render_charts(self, dashboard: ProductivityDashboard) -> None:
-        planned_vs_actual_rows = [
-            (category, stats.median_planned_duration_minutes, stats.median_actual_duration_minutes)
-            for category, stats in sorted(dashboard.by_category.items())
-        ]
-        self.planned_vs_actual_chart.draw(planned_vs_actual_rows)
+    def _turn_types(self, step: int) -> None:
+        self.type_page += step
+        self._render_types()
 
-        completion_rows = [
-            (bucket, dashboard.by_time_bucket[bucket].completion_rate, dashboard.by_time_bucket[bucket].observation_count)
-            for bucket in _TIME_BUCKET_ORDER
-            if bucket in dashboard.by_time_bucket
-        ]
-        self.completion_rate_chart.draw(completion_rows)
-
-    def _render_breakdowns(self, dashboard: ProductivityDashboard) -> None:
-        if not dashboard.best_supported_time_bucket_by_category:
-            self.best_bucket_label.configure(text="Not enough history yet.")
-        else:
-            lines = []
-            for category in sorted(dashboard.best_supported_time_bucket_by_category):
-                time_bucket = dashboard.best_supported_time_bucket_by_category[category]
-                stats = dashboard.by_category_and_time_bucket[f"{category}/{time_bucket}"]
-                lines.append(
-                    f"{category.capitalize()}: {time_bucket} "
-                    f"(evidence: {stats.evidence_level.value}, n={stats.completed_duration_count})"
-                )
-            self.best_bucket_label.configure(text="\n".join(lines))
-
-        trend = dashboard.recent_trend
-        if trend.recent_observation_count == 0:
-            self.trend_label.configure(
-                text=f"No activity in the last 7 days (evidence: {trend.recent_evidence_level.value})."
-            )
-        else:
-            self.trend_label.configure(
-                text=(
-                    f"Last 7 days: {_format_rate(trend.recent_completion_rate)} completion rate "
-                    f"(n={trend.recent_observation_count}, evidence: {trend.recent_evidence_level.value})\n"
-                    f"Selection baseline: {_format_rate(trend.baseline_completion_rate)} "
-                    f"(n={trend.baseline_observation_count})"
-                )
-            )
-
-        if not dashboard.insights:
-            self.insights_label.configure(text="Not enough history yet for insights.")
-        else:
-            lines = [
-                f"- {insight.text} [evidence: {insight.evidence_level.value}, n={insight.sample_count}]"
-                for insight in dashboard.insights
-            ]
-            self.insights_label.configure(text="\n".join(lines))
-
-    # ------------------------------------------------------------------
-    # Data management
-    # ------------------------------------------------------------------
-
-    def _export_history(self, export_format: Literal["csv", "json"]) -> None:
-        extension = f".{export_format}"
-        path = filedialog.asksaveasfilename(
-            title="Export Execution History",
-            defaultextension=extension,
-            filetypes=[(export_format.upper(), f"*{extension}"), ("All files", "*.*")],
-        )
-        if not path:
+    def _render_types(self) -> None:
+        report = self.reports[_TASKS]
+        if report is None:
             return
+        period = _PERIODS[self.period_var.get()]
+        key = self._type_keys.get(self.type_var.get(), "")
+        self.type_tiles.set_title(f"{self.type_var.get()} · {self.period_var.get()}" if key
+                                  else "Selected task type")
+        self.type_tiles.show(tracker_view.type_stats(report, key, period))
+        cards = tracker_view.type_cards(report, period)
+        pages = max(1, -(-len(cards) // _TYPE_PAGE_SIZE))
+        self.type_page = min(max(self.type_page, 0), pages - 1)
+        self.type_cards.show(cards[self.type_page * _TYPE_PAGE_SIZE:(self.type_page + 1) * _TYPE_PAGE_SIZE])
+        self.type_page_label.configure(text=f"Page {self.type_page + 1} of {pages}")
+        self.type_prev.configure(state="normal" if self.type_page > 0 else "disabled")
+        self.type_next.configure(state="normal" if self.type_page < pages - 1 else "disabled")
 
-        run_in_background(
-            self,
-            lambda: self._controller.export_execution_history(path, export_format),
-            self._on_export_done,
-        )
+    def _render_time_based(self) -> None:
+        report = self.reports[_TIME]
+        self.time_tiles.show(tracker_view.time_stats(report))
+        self.weekday_tiles.show(tracker_view.weekday_stats(report))
+        self.week_tiles.show(tracker_view.week_stats(report))
+        self.month_tiles.show(tracker_view.month_stats(report))
+        days = tracker_view.day_choices(report) or [_NO_DAY]
+        self.day_menu.configure(values=days)
+        if self.day_var.get() not in days:
+            self.day_var.set(days[0])
+        self._render_day()
+        self._render_charts()
 
-    def _on_export_done(self, result: ControllerResult[int]) -> None:
-        if not result.ok:
-            messagebox.showerror("Export Error", result.error or "An unknown error occurred.", parent=self)
+    def _render_day(self) -> None:
+        report, day = self.reports[_TIME], self.day_var.get()
+        if report is None:
             return
-        messagebox.showinfo("Export Complete", f"Exported {result.value} execution record(s).", parent=self)
+        self.day_tiles.set_title(tracker_view.day_title(report, day) if day != _NO_DAY else "Day")
+        self.day_tiles.show(tracker_view.day_stats(report, day) if day != _NO_DAY else [])
 
-    def _confirm_reset(self) -> None:
-        # A dedicated confirmation dialog, deliberately separate from the export buttons above,
-        # for this destructive, irreversible action.
-        copy = self._controller.storage_copy()
-        confirmed = messagebox.askyesno(copy.reset_title, copy.reset_message, icon="warning", parent=self)
-        if not confirmed:
+    def _render_charts(self) -> None:
+        report = self.reports[_TIME]
+        if report is None:
             return
-
-        run_in_background(self, self._controller.reset_all_history, self._on_reset_done)
-
-    def _on_reset_done(self, result: ControllerResult[int]) -> None:
-        if not result.ok:
-            messagebox.showerror("Reset Error", result.error or "An unknown error occurred.", parent=self)
-            return
-        messagebox.showinfo("History Deleted", f"Deleted {result.value} execution record(s).", parent=self)
-        self.refresh()
-
-
-def _format_rate(rate: float | None) -> str:
-    return "n/a" if rate is None else f"{rate:.0%}"
-
-
-def _format_minutes(minutes: float | None) -> str:
-    return "n/a" if minutes is None else f"{minutes:g} min"
+        group = _CHART_GROUPS.get(self.chart_group_var.get(), "category")
+        self.planned_vs_actual_chart.draw(tracker_view.planned_vs_actual_rows(report, group))
+        self.completion_rate_chart.draw(tracker_view.bucket_chart_rows(report))

@@ -69,16 +69,28 @@ V9_TASK_COLUMNS = ("recurrence_start_date", "recurrence_timezone", "series_id", 
 #: Schema v10 (manual placements, docs/execution-rescheduling.md) -- placement and execution columns.
 V10_PLACEMENT_COLUMNS = {"origin": None, "preserved": 0}
 V10_EXECUTION_COLUMNS = ("cancel_reason",)
+#: Schema v12 (task types and placement planning snapshots, docs/productivity-redesign-plan.md).
+V12_TASK_COLUMNS = ("task_type_id",)
+V12_PLACEMENT_COLUMNS = ("task_name", "task_tags", "task_points", "task_estimate_minutes", "task_type_id",
+                         "task_type_label")
 
 
 @contextmanager
 def pre_v8_writers():
-    """The planning and execution repositories as they were before schema v8: no points or recurrence columns."""
+    """
+    The planning and execution repositories as they were before schema v8: no points or recurrence columns --
+    and a planning service that, like that code, knows no task types or planning snapshots (schema v12).
+    """
     from app.execution import repository as execution_repository
     from app.planning import repository as planning_repository
+    from app.planning.application import PlanningService as CurrentService
+    from app.planning.models import PLACEMENT_SNAPSHOT_FIELDS
 
-    absent = (*V8_COLUMNS, *V9_TASK_COLUMNS, *V10_EXECUTION_COLUMNS)
+    absent = (*V8_COLUMNS, *V9_TASK_COLUMNS, *V10_EXECUTION_COLUMNS, *V12_TASK_COLUMNS)
     with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(CurrentService, "_resolve_task_types", lambda self, tasks, stored: tasks)
+        patch.setattr(CurrentService, "placement_snapshots", lambda self, tasks: {
+            task.id: dict.fromkeys(PLACEMENT_SNAPSHOT_FIELDS) for task in tasks})
         for module, columns_name, to_row_name, from_row_name in (
             (planning_repository, "_TASK_COLUMNS", "_task_to_row", None),
             (execution_repository, "_EXECUTION_COLUMNS", "_execution_to_row", "_row_to_execution"),
@@ -93,7 +105,7 @@ def pre_v8_writers():
                     {**dict(row), **{column: None for column in (*V8_COLUMNS, *V10_EXECUTION_COLUMNS)}}))
         original_row_to_task = planning_repository._row_to_task
         patch.setattr(planning_repository, "_row_to_task", lambda row, *rest: original_row_to_task(
-            {**dict(row), "points": 1, **{column: None for column in V9_TASK_COLUMNS}}, *rest))
+            {**dict(row), "points": 1, **{column: None for column in (*V9_TASK_COLUMNS, *V12_TASK_COLUMNS)}}, *rest))
         yield
 
 
@@ -104,13 +116,14 @@ def milestone3_placement_writer():
 
     columns = repository._PLACEMENT_COLUMNS
     to_row, from_row = repository._placement_to_row, repository._row_to_placement
-    absent = (*V7_PLACEMENT_COLUMNS, *V10_PLACEMENT_COLUMNS)
+    absent = (*V7_PLACEMENT_COLUMNS, *V10_PLACEMENT_COLUMNS, *V12_PLACEMENT_COLUMNS)
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(repository, "_PLACEMENT_COLUMNS", tuple(c for c in columns if c not in absent))
         patch.setattr(repository, "_placement_to_row", lambda placement: tuple(
             value for column, value in zip(columns, to_row(placement)) if column not in absent))
         patch.setattr(repository, "_row_to_placement", lambda row: from_row(
-            {**dict(row), **{column: None for column in V7_PLACEMENT_COLUMNS}, **V10_PLACEMENT_COLUMNS}))
+            {**dict(row), **{column: None for column in (*V7_PLACEMENT_COLUMNS, *V12_PLACEMENT_COLUMNS)},
+             **V10_PLACEMENT_COLUMNS}))
         yield
 
 
@@ -186,7 +199,10 @@ def test_a_synchronized_milestone3_database_opens_unchanged_in_its_owners_worksp
         try:
             connection = services.connection
             assert connection.execute("PRAGMA user_version").fetchone()[0] == LATEST_SCHEMA_VERSION
-            assert {table: rows(connection, table, before_columns[table]) for table in PRESERVED_TABLES} == before
+            after = {table: rows(connection, table, before_columns[table]) for table in PRESERVED_TABLES}
+            # Schema v13 queues the task types that v12 derived for upload; every existing mark is untouched.
+            after["sync_dirty"] = [row for row in after["sync_dirty"] if row[0] != "task_type"]
+            assert after == before
             assert set(rows(connection, "scheduled_tasks", list(V7_PLACEMENT_COLUMNS))) == {(None, None, None)}
             account = connection.execute("SELECT pull_cursor, active, associated_at, last_synced_at FROM sync_accounts "
                                          "WHERE account_key = ?", (ACCOUNT_KEY,)).fetchone()

@@ -13,9 +13,27 @@ __pycache__/
 
 # Test cache
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+
+# Coverage reports
+.coverage
+.coverage.*
+htmlcov/
+/coverage.xml
+
+# Local logs, profiling traces, and temporary editor files
+*.log
+*.prof
+*.tmp
+*.swp
+*.swo
+*~
 
 # Editor
 .vscode/
+.idea/
 
 # OS files
 .DS_Store

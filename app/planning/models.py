@@ -219,6 +219,49 @@ class Project(BaseModel):
 
 
 # -----------------------------------------------------------------------------
+# Task type
+# -----------------------------------------------------------------------------
+
+
+#: The namespace of derived task-type ids: uuid5(TASK_TYPE_NAMESPACE, "<root task id>").
+TASK_TYPE_NAMESPACE = uuid.UUID("3b9d6c1e-52a7-4f0b-8e64-1c7a9d2f5e08")
+
+
+def derived_task_type_id(root_task_id: uuid.UUID) -> uuid.UUID:
+    """
+    The deterministic type id of the work `root_task_id` stands for: a
+    standalone task's own id, or the oldest provable root of a recurring
+    series' lineage. Every device and the server derive the same id from the
+    same root, and two unrelated tasks never share one (names are never
+    compared).
+    """
+    return uuid.uuid5(TASK_TYPE_NAMESPACE, str(root_task_id))
+
+
+class TaskType(BaseModel):
+    """
+    A reusable, owner-scoped kind of work (docs/productivity-redesign-plan.md,
+    contract A): a stable identity with a display label. Independent of a
+    task's category and tags, and distinct from an occurrence: every
+    occurrence of a recurring series shares its series' type.
+    """
+
+    id: uuid.UUID = Field(default_factory=_new_id)
+    user_id: uuid.UUID | None = None
+    label: str = Field(min_length=1, max_length=500)
+
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+    version: int = Field(default=1, gt=0)
+    deleted_at: datetime | None = None
+
+    @field_validator("created_at", "updated_at", "deleted_at")
+    @classmethod
+    def _timestamps_aware(cls, value: datetime | None) -> datetime | None:
+        return _utc_timestamp(value)
+
+
+# -----------------------------------------------------------------------------
 # Task
 # -----------------------------------------------------------------------------
 
@@ -254,6 +297,10 @@ class Task(BaseModel):
     #: The user's own productivity value of the task (the task form's "Points"): what finishing it is worth to
     #: them, for analytics. Not a scheduling input and unrelated to a placement's optimizer `score`.
     points: int = Field(default=DEFAULT_TASK_POINTS, ge=0, le=MAX_TASK_POINTS)
+    #: The reusable type (TaskType) this task is an instance of; not a scheduling input. None: not assigned --
+    #: PlanningService assigns one when the task is saved (an occurrence inherits its series' type, a series
+    #: segment its predecessor's), so None only survives on a record that predates types and was never rewritten.
+    task_type_id: uuid.UUID | None = None
 
     required: bool = False
     required_date: date_ | None = None
@@ -462,11 +509,16 @@ class ScheduledTask(BaseModel):
     Intentionally does not carry name/category/tags -- those live on the
     referenced Task (task_id) and should be read through a TaskRegistry /
     project_scheduled_task_display when a caller needs them for display.
-    The one exception is task_category, a *historical snapshot* taken when
-    the placement was saved (like an execution's category), so the plan
-    stays comparable by category after the task is edited, even when no
-    execution was ever created. The planned estimate needs no snapshot: it
-    is the placement's own interval.
+    The exception is the *planning snapshot* taken when the placement was
+    saved (like an execution's snapshot): task_category, task_name,
+    task_tags, task_points, task_estimate_minutes and the task's type
+    (task_type_id, task_type_label). The plan therefore stays readable and
+    comparable after the task is renamed, re-categorised, re-tagged or
+    re-pointed, even when no execution was ever created. A snapshot is
+    never rewritten: a move or regeneration tombstones the placement with
+    its snapshot intact and the replacement takes its own. Each field is
+    None when it was not recorded (a placement saved before snapshots):
+    unknown, never back-filled from the current task.
 
     Removal provenance (docs/execution-rescheduling.md): a tombstone keeps
     its planned values and records why it was removed (removal_reason) and,
@@ -489,6 +541,14 @@ class ScheduledTask(BaseModel):
 
     #: The task's category when the placement was saved (None: saved before it was recorded).
     task_category: str | None = Field(default=None, min_length=1)
+    #: The rest of the planning snapshot (see the class docstring); each None = not recorded. An empty tag
+    #: list and zero points are known values.
+    task_name: str | None = Field(default=None, min_length=1)
+    task_tags: list[str] | None = None
+    task_points: int | None = Field(default=None, ge=0)
+    task_estimate_minutes: int | None = Field(default=None, gt=0)
+    task_type_id: uuid.UUID | None = None
+    task_type_label: str | None = Field(default=None, min_length=1)
     removal_reason: PlacementRemovalReason | None = None
     superseded_by_id: uuid.UUID | None = None
     #: How it came to be (None: unknown, saved before origins were recorded).
@@ -527,6 +587,21 @@ class ScheduledTask(BaseModel):
         if self.preserved and self.origin != PlacementOrigin.MANUAL:
             raise ValueError("only a manual placement can be preserved")
         return self
+
+
+#: The planning snapshot of a placement: history, written once when the placement is saved.
+PLACEMENT_SNAPSHOT_FIELDS = ("task_category", "task_name", "task_tags", "task_points", "task_estimate_minutes",
+                             "task_type_id", "task_type_label")
+
+
+def placement_snapshot(task: Task, task_type: TaskType | None = None) -> dict[str, Any]:
+    """The planning snapshot of `task` as it is now (task_type: its type record, when there is one)."""
+    return {
+        "task_category": task.category, "task_name": task.name, "task_tags": list(task.tags),
+        "task_points": task.points, "task_estimate_minutes": task.estimated_duration_minutes,
+        "task_type_id": task.task_type_id,
+        "task_type_label": task_type.label if task_type is not None and task_type.id == task.task_type_id else None,
+    }
 
 
 class ScheduledTaskDisplay(BaseModel):
