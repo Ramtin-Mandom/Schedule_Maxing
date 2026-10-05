@@ -1,4 +1,4 @@
-"""Native project management and date-allocation previews; services own all writes."""
+"""Native project management; services own all writes."""
 from __future__ import annotations
 
 import customtkinter as ctk
@@ -6,8 +6,7 @@ import customtkinter as ctk
 from app.ui.paint_widgets import AppScrollableFrame
 
 from app.ui import theme
-from app.ui.allocation_controller import filter_view
-from app.ui.background import run_in_background
+from app.ui.background import WRITE_LANE, run_in_background
 from app.ui.components import AppButton, LabeledEntry, LabeledSelect, Notice, ask_confirm, font
 from app.ui.pages import PageHeader
 from app.ui.projects_controller import project_choices
@@ -50,7 +49,7 @@ class PlanningPage(ctk.CTkFrame):
             else:
                 self.notice.show("error", result.error)
 
-        if not run_in_background(self, operation, finish):
+        if not run_in_background(self, operation, finish, serial=WRITE_LANE):  # in order with other changes
             self._busy = False
 
     def clear(self):
@@ -151,98 +150,3 @@ class ProjectsPage(PlanningPage):
         if ask_confirm(self, title="Move tasks?", message=f"Move all tasks of this project to {self.move_select.get()}?",
                        confirm_text="Move tasks"):
             self.work(lambda: self.controller.reassign_tasks(source, target), lambda _: self.on_show())
-
-
-class AllocationPage(PlanningPage):
-    def __init__(self, parent, controller, *, on_open_day):
-        super().__init__(parent, "Allocation Planning",
-                         "A date-only preview. Exact times are saved only when you schedule a date.")
-        self.controller, self.on_open_day = controller, on_open_day
-        self.preview = None
-        self.choices = {}
-        self.mode = LabeledSelect(self.controls, "Range", ["Week", "Month"], command=self.set_mode)
-        self.mode.grid(row=0, column=0, sticky="ew")
-        self.range_label = ctk.CTkLabel(self.controls, text=controller.period.title, font=font())
-        self.range_label.grid(row=1, column=0, sticky="w")
-        bar = ctk.CTkFrame(self.controls, fg_color="transparent")
-        bar.grid(row=2, column=0, sticky="w", pady=8)
-        AppButton(bar, "Previous", lambda: self.shift(-1), variant="secondary", width=90).grid(row=0, column=0)
-        AppButton(bar, "Next", lambda: self.shift(1), variant="secondary", width=90).grid(row=0, column=1, padx=6)
-        self.allocate_button = AppButton(bar, "Allocate / Recalculate", self.allocate)
-        self.allocate_button.grid(row=0, column=2)
-        self.project_select = LabeledSelect(self.controls, "Show project (display only)", ["All projects"],
-                                            command=lambda _: self.render())
-        self.project_select.grid(row=3, column=0, sticky="ew")
-        self.line("Choose a range, then Allocate. No preview is saved as a schedule.", 0)
-
-    def set_mode(self, label):
-        if not self._busy:
-            self.controller.set_mode(label.lower())
-            self.reset_preview()
-
-    def shift(self, delta):
-        if not self._busy:
-            self.controller.shift(delta)
-            self.reset_preview()
-
-    def reset_preview(self):
-        self.preview = None
-        self.range_label.configure(text=self.controller.period.title)
-        self.clear()
-        self.line("Choose Allocate to preview this range.", 0)
-
-    def allocate(self):
-        period = self.controller.period
-        self.work(lambda: self.controller.allocate(period), self.allocated)
-
-    def allocated(self, view):
-        self.preview = view
-        self.choices = project_choices(view.projects)
-        selected = self.project_select.get()
-        self.project_select.set_values(["All projects", *self.choices],
-                                       selected=selected if selected in self.choices else "All projects")
-        self.render()
-
-    def on_show(self):
-        if self.preview is not None:
-            preview = self.preview
-            self.work(lambda: self.controller.is_stale(preview), self.checked)
-
-    def checked(self, stale):
-        if stale:
-            self.notice.show("warning", "Preview is out of date. Recalculate before scheduling a date.")
-
-    def render(self):
-        if self.preview is None:
-            return
-        self.clear()
-        view = filter_view(self.preview, self.choices.get(self.project_select.get()))
-        self.line(f"Preview · {view.assigned_count} assigned · {len(view.unallocated)} without a date", 0)
-        row = 1
-        for day in view.days:
-            freshness = {"none": "Not scheduled", "stale": "Out of date", "current": "Current"}[day.freshness.value]
-            self.line(f"{day.date} · {day.free_text} free · {freshness}\n" +
-                      ("\n".join(f"{t.name} · {t.duration_minutes} min · {t.project_name or 'No project'}"
-                                 + (f" · deadline {t.deadline_text}" if t.deadline_text else "")
-                                 for t in day.tasks) or "No tasks allocated"), row)
-            bar = ctk.CTkFrame(self.body, fg_color="transparent")
-            bar.grid(row=row + 1, column=0, sticky="w", pady=4)
-            AppButton(bar, "Open Day", lambda date=day.date: self.open_day(date), variant="secondary").grid(row=0, column=0)
-            AppButton(bar, "Schedule this date", lambda date=day.date: self.schedule(date)).grid(row=0, column=1, padx=8)
-            row += 2
-        for item in view.unallocated:
-            self.line(f"{item.task.name}: {item.reason}\n{item.explanation}\n{item.certainty}", row)
-            row += 1
-
-    def open_day(self, day):
-        if self._busy:
-            return
-        preview = self.preview
-        self.work(lambda: self.controller.is_stale(preview),
-                  lambda stale: self.checked(True) if stale else self.on_open_day(day))
-
-    def schedule(self, day):
-        preview = self.preview
-        if preview is not None:
-            self.work(lambda: self.controller.schedule_date(preview, day),
-                      lambda message: self.notice.show("success", message))

@@ -13,8 +13,8 @@ on wide and medium windows, one on narrow ones):
   timezone, "Back to Week/Month" when the date was opened from there, and
   the freshness of the saved schedule (Current / Out of date and why).
   The Day page shows today (the computer's date) when it is opened from the
-  navigation; another date only when opened for it (Week, Month, Projects,
-  Allocation) or moved to with the date controls.
+  navigation; another date only when opened for it (Week, Month, Projects)
+  or moved to with the date controls.
 - The Day Window (app/ui/day_window_bar.py): the date's start and end of
   the usable day -- the Settings default, or the date's own override.
 - The horizontal timeline (app/ui/day_timeline.py): fixed blocks in their
@@ -51,7 +51,7 @@ from app.ui.paint_widgets import AppScrollableFrame
 from app.planning.csv_import import ImportMode
 from app.planning.workflow import Freshness
 from app.ui import theme
-from app.ui.background import ControllerResult, run_in_background
+from app.ui.background import WRITE_LANE, ControllerResult, run_in_background
 from app.ui.components import AppButton, Card, ChoiceDialog, LabeledSelect, Notice, SectionTitle, ask_confirm, font, focus_target
 from app.ui.day_controller import DayRun, DayScheduleController, DaySnapshot, TimelineItem, engine_label
 from app.ui.day_timeline import DayTimeline
@@ -87,6 +87,7 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         on_return: Callable[[str], None] | None = None,
         return_context: tuple[str, date] | None = None,
         background_io: bool = False,
+        task_defaults=None,
     ) -> None:
         super().__init__(parent, fg_color=theme.APP_BG, corner_radius=0)
         self.page_controller = page_controller
@@ -94,6 +95,7 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         self.number_of_days = 1
         self.execution_controller = execution_controller
         self.productivity_controller = productivity_controller
+        self.task_defaults = task_defaults
         self._on_anchor_changed = on_anchor_changed
         self._on_return = on_return
         self.return_context = return_context
@@ -207,7 +209,7 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         self.lower = lower = ctk.CTkFrame(self.body, fg_color="transparent")
         lower.grid(row=3, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_XL))
         self.form = TaskEditor(lower, on_submit=self.submit_task, on_cancel=self.cancel_edit,
-                               productivity_controller=self.productivity_controller)
+                               task_defaults=self.task_defaults)
         self.side = side = ctk.CTkFrame(lower, fg_color="transparent")
         side.columnconfigure(0, weight=1)
         self._build_actions(side)
@@ -337,7 +339,7 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
             else:
                 self._load_failed(result)
 
-        self._io(self.page_controller.load, done, blocking=False)
+        self._io(self.page_controller.detached().load, done, blocking=False, newest="load")
 
     def on_show(self) -> None:
         """Called when the page is shown: other pages, imports or a sync may have changed shared data."""
@@ -380,13 +382,18 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
     def _go_to(self, value) -> None:
         if self._refuse_while_busy():
             return
+        # The date changes here, on the Tk thread; the worker only reads the new date's saved state.
+        moved = self.page_controller.move_to(value)
+        if not moved.ok:
+            self._went_to(moved)
+            return
         token = self._next_load()
 
         def done(result) -> None:
             if token == self._load_token:
                 self._went_to(result)
 
-        self._io(lambda: self.page_controller.set_anchor_date(value), done, blocking=False)
+        self._io(self.page_controller.detached().load, done, blocking=False, newest="load")
 
     def _went_to(self, result) -> None:
         if not result.ok:
@@ -422,11 +429,11 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
                                 f"({engine_label(snapshot.engine.inherited)}) again.")
 
     def _save_engine(self, mode, done: str) -> None:
-        version = self.snapshot.preference_version
+        version, controller = self.snapshot.preference_version, self.page_controller.detached()
         self._set_busy(True, saving=True)
 
         def work() -> ControllerResult[DaySnapshot]:
-            return self.page_controller.set_engine(mode, expected_version=version)
+            return controller.set_engine(mode, expected_version=version)
 
         def finish(result: ControllerResult[DaySnapshot]) -> None:
             self._set_busy(False)
@@ -443,7 +450,7 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
                 extra = " The saved schedule is now out of date; Make Schedule keeps the work that still fits."
             self.notice.show("success", done + extra)
 
-        if not run_in_background(self, work, finish):
+        if not run_in_background(self, work, finish, serial=WRITE_LANE):
             self._set_busy(False)
 
     # ----------------------------- Generation -----------------------------
@@ -464,7 +471,8 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
             return
         day = self.page_controller.anchor_date
         self._set_busy(True)
-        if not run_in_background(self, lambda: operation(day), lambda result: self._on_run_done(day, result)):
+        if not run_in_background(self, lambda: operation(day), lambda result: self._on_run_done(day, result),
+                                 serial=WRITE_LANE):
             self._set_busy(False)
 
     def _on_run_done(self, day: date, result: ControllerResult[DayRun]) -> None:
@@ -499,7 +507,7 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
     def reset_day(self) -> None:
         if self._refuse_while_busy():
             return
-        self._io(self.page_controller.reset_plan, self._reset_planned)
+        self._io(self.page_controller.detached().reset_plan, self._reset_planned)
 
     def _reset_planned(self, plan) -> None:
         if not plan.ok:
@@ -511,7 +519,8 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         if not self._confirm("Reset Day?", plan.value.message, "Reset Day", danger=True):
             self.notice.show("info", "Reset cancelled; nothing was deleted.")
             return
-        self._io(lambda: self.page_controller.reset_day(plan.value), self._day_reset)
+        controller = self.page_controller.detached()
+        self._io(lambda: controller.reset_day(plan.value), self._day_reset)
 
     def _day_reset(self, result) -> None:
         if result.value is not None:
@@ -533,7 +542,8 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
                                           filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
         if not path:
             return
-        self._io(lambda: self.page_controller.csv_plan(path), lambda plan: self._csv_planned(path, plan))
+        controller = self.page_controller.detached()
+        self._io(lambda: controller.csv_plan(path), lambda plan: self._csv_planned(path, plan))
 
     def _csv_planned(self, path: str, plan) -> None:
         if not plan.ok:
@@ -558,7 +568,8 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
             self._apply_csv(plan, legacy_mode=mode)
 
     def _apply_csv(self, plan, *, legacy_mode: ImportMode | None = None) -> None:
-        self._io(lambda: self.page_controller.apply_csv(plan, legacy_mode=legacy_mode), self._csv_applied)
+        controller = self.page_controller.detached()
+        self._io(lambda: controller.apply_csv(plan, legacy_mode=legacy_mode), self._csv_applied)
 
     def _csv_applied(self, result) -> None:
         if not result.ok:
@@ -578,7 +589,8 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
                                             filetypes=[("CSV files", "*.csv")])
         if not path:
             return
-        self._io(lambda: self.page_controller.export_csv(path), self._csv_exported)
+        controller = self.page_controller.detached()
+        self._io(lambda: controller.export_csv(path), self._csv_exported)
 
     def _csv_exported(self, result) -> None:
         if not result.ok:
@@ -611,7 +623,8 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
             self.notice.show("success", f"{item.name} was released: it stays where it is, but Make Schedule may "
                                         "now replace it like generated work.")
 
-        if not run_in_background(self, lambda: self.page_controller.release_manual_placement(item), finish):
+        controller = self.page_controller.detached()
+        if not run_in_background(self, lambda: controller.release_manual_placement(item), finish, serial=WRITE_LANE):
             self._set_busy(False)
 
     # ----------------------------- Rendering -----------------------------
@@ -652,7 +665,8 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
             else:
                 self.status_board.notice.show("error", result.error or "The task statuses could not be read.")
 
-        self._io(lambda: self.status_controller.board(day, executables), done, blocking=False)
+        controller = self.status_controller
+        self._io(lambda: controller.board(day, executables), done, blocking=False, newest="board")
 
     def move_task(self, card, target) -> None:
         """Persist one card's move to another column, then redraw the board from what was saved."""
@@ -669,7 +683,8 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
             if self.snapshot is not None:
                 self._refresh_status_board(self.snapshot)
 
-        self._io(lambda: self.status_controller.move(card, target), done)
+        controller = self.status_controller
+        self._io(lambda: controller.move(card, target), done)
 
     def _show_freshness(self, snapshot: DaySnapshot) -> None:
         tone = theme.TONES[_FRESHNESS_TONE[snapshot.freshness]]

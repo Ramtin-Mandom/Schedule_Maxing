@@ -22,7 +22,7 @@ from app.ui import background, theme
 from app.ui.components import ConfirmDialog, Drawer, Notice, StateView, focus_target
 from app.ui.shell import COLLAPSED_WIDTH, EXPANDED_WIDTH
 from app.ui.shell_state import NAV_ITEMS, LayoutMode
-from tests.ui.test_desktop_app import WEDNESDAY, close_app, fill_form, open_app, tree_names
+from tests.ui.test_desktop_app import WEDNESDAY, close_app, fill_form, open_app, pump, tree_names
 from tests.ui.test_desktop_app import dialogs as dialogs  # noqa: F401 - the dialog-recorder fixture
 from tests.ui.test_desktop_app import pytestmark as pytestmark  # noqa: F401 - skip without a display
 from tests.window_placement import place
@@ -51,7 +51,7 @@ def _activity(app) -> tuple:
     """What changes while queued layout, paint or background work is still happening."""
     shell = getattr(app, "shell", None)
     return (
-        background.current_registry().active,
+        background.current_registry().outstanding,
         bool(shell is not None and shell.layout_checks.pending),
         app.winfo_geometry(),
         shell.host.winfo_width() if shell is not None else None,
@@ -271,14 +271,17 @@ def test_dialogs_drawers_and_the_task_list_work_from_the_keyboard(tmp_path: Path
 
         dialog = ConfirmDialog(day, title="Confirm", message="Do it?", on_result=results.append).present()
         key(dialog, "Return")
+        pump(app)
         assert results == [False, True]
         danger = ConfirmDialog(day, title="Delete", message="Delete it?", danger=True,
                                on_result=results.append).present()
         settle(app, 0.1)
         assert app.focus_get() == focus_target(danger.cancel_button)  # destructive: Cancel is the default
         key(danger, "Return")
+        pump(app)
         assert danger.winfo_exists() and results == [False, True]  # Enter does not confirm a destructive action
         danger.cancel()
+        pump(app)
 
         drawer = Drawer(day, "Details")
         entry.focus_force()
@@ -292,9 +295,11 @@ def test_dialogs_drawers_and_the_task_list_work_from_the_keyboard(tmp_path: Path
 
         notice = Notice(day)
         notice.show("error", "The file is not UTF-8.")
+        pump(app)
         assert notice.text == "Error: The file is not UTF-8."  # said in words, not only by color
         state = StateView(day)
         state.error("Offline", retry=lambda: None)
+        pump(app)
         assert state.message_label.cget("text") == "Error: Offline"
 
         # The Day timeline is the keyboard way to act on scheduled items: Enter edits, Delete removes, the
@@ -305,14 +310,19 @@ def test_dialogs_drawers_and_the_task_list_work_from_the_keyboard(tmp_path: Path
         timeline = day.schedule_canvas
         timeline.canvas.focus_force()
         key(timeline.canvas, "Home")
+        pump(app)
         entries = timeline._menu_items(None)
         assert [entry.label for entry in entries] == ["Edit...", "Release manual placement", "Remove..."]
         assert not entries[1].enabled  # a fixed block is not a manual placement
         key(timeline.canvas, "Return")
+        pump(app)
         assert day.form.editing and day.form.name_field.get() == "Read"
         day.cancel_edit()
+        pump(app)
         key(timeline.canvas, "Home")
+        pump(app)
         key(timeline.canvas, "Delete")
+        pump(app)
         assert tree_names(day) == [] and dialogs.errors == []
     finally:
         close_app(app)

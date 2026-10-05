@@ -13,17 +13,27 @@ Controls:
   shared [ Hour ] : [ Minute ] [ AM/PM ] input (app/ui/clock_input.py),
   exact to the minute; an end time of 12:00 AM means the next midnight.
   No minutes-from-midnight and no spinners anywhere.
-- The date is not typed: a new task or block belongs to the date the page
-  has selected (Day: its date, today unless opened for another; Week/Month:
-  the selected day). The page passes it with set_date(); the form shows it.
-  Editing keeps the record's own date (an undated imported task stays
-  undated).
+- The date is not typed or shown: a new task or block belongs to the date
+  the page has selected (Day: its date, today unless opened for another;
+  Week/Month: the selected day). The page passes it with set_date(). Editing
+  keeps the record's own date (an undated imported task stays undated) and
+  whether it is pinned to it.
+- Category and Project sit side by side. No category chosen saves as
+  "other"; the categories are the built-in ones plus those added in Settings
+  (app/ui/task_defaults.py). Project starts at "None" and lists the
+  workspace's live projects.
+- Points: typed, or stepped by 10 with the - / + buttons.
 - DurationField: minutes typed as "13", "1 h 13 min" or "1:13", or stepped
   (1 minute, 15 with Shift).
 - DateField (the optional deadline date): YYYY-MM-DD, Up/Down move a day.
 - TagInput: Enter adds the typed tag as a chip (it never submits the form);
   a chip's button (or Enter/Space on it) removes it; Backspace in the empty
-  entry removes the last tag. Tags keep their order.
+  entry removes the last tag. Tags keep their order. The chips are one row,
+  scrolled sideways when they are wider than the form.
+- Above the submit button: "Add more options" (window, deadline, type,
+  dependencies, repeats) and "Use default values", which fills the name (if
+  empty), duration, priority and points from the chosen category's defaults
+  (the general ones when no category is chosen).
 - DependencyPicker: checkboxes labelled by task name and date, kept by id.
 - Repeats (docs/recurrence.md): does not repeat / daily / weekly (weekday
   checkboxes) / monthly (day of month), every N, ending never, on a date or
@@ -61,8 +71,17 @@ from app.ui.components import (
     font,
     make_keyboard_accessible,
 )
-from app.planning.models import DEFAULT_TASK_POINTS
-from app.ui.task_form_model import CATEGORIES, PRIORITIES, WEEKDAY_NAMES, Choice, EditorOptions, TaskDraft
+from app.planning.models import DEFAULT_TASK_POINTS, MAX_TASK_POINTS
+from app.ui.task_defaults import TaskDefaultsStore
+from app.ui.task_form_model import (
+    CATEGORIES,
+    PRIORITIES,
+    WEEKDAY_NAMES,
+    Choice,
+    EditorOptions,
+    TaskDraft,
+    parse_points,
+)
 from app.ui.time_fields import (
     FieldError,
     format_date,
@@ -71,7 +90,11 @@ from app.ui.time_fields import (
     parse_duration,
 )
 
-NO_PROJECT = "(no project)"
+NO_PROJECT = "None"
+#: The category choice that is not a category: the task is saved as UNSET_CATEGORY and uses the general defaults.
+NO_CATEGORY = "(none)"
+UNSET_CATEGORY = "other"
+POINTS_STEP = 10
 #: The task-type choices that are not a stored type: keep the task's own type / create one from the name below.
 OWN_TYPE = "(its own type)"
 NEW_TYPE = "New type..."
@@ -162,25 +185,54 @@ class DateField(_SteppedField):
             pass
 
 
-class TagInput(ctk.CTkFrame):
-    """Ordered tags as removable chips; Enter adds the typed tag without submitting the form."""
+class PointsField(LabeledEntry):
+    """Points, typed or stepped by POINTS_STEP with the - / + buttons (kept within 0..MAX_TASK_POINTS)."""
 
-    PER_ROW = 2
+    def __init__(self, parent) -> None:
+        super().__init__(parent, "Points", placeholder="e.g. 20",
+                         hint=f"What finishing it is worth to you (0-{MAX_TASK_POINTS}).", wraplength=200)
+        self.minus_button = AppButton(self, "−", lambda: self.step(-POINTS_STEP), variant="secondary", width=40)
+        self.plus_button = AppButton(self, "+", lambda: self.step(POINTS_STEP), variant="secondary", width=40)
+        self.minus_button.grid(row=1, column=1, padx=(6, 0))
+        self.plus_button.grid(row=1, column=2, padx=(4, 0))
+        Tooltip(self.minus_button, f"{POINTS_STEP} points less")
+        Tooltip(self.plus_button, f"{POINTS_STEP} points more")
+
+    def step(self, delta: int) -> None:
+        try:
+            current = parse_points(self.get())
+        except FieldError:
+            current = 0
+        self.variable.set(str(min(MAX_TASK_POINTS, max(0, current + delta))))
+        self.set_error(None)
+
+
+class TagInput(ctk.CTkFrame):
+    """Ordered tags as removable chips in one row; Enter adds the typed tag without submitting the form."""
 
     def __init__(self, parent, on_change: Callable[[], None] | None = None) -> None:
         super().__init__(parent, fg_color="transparent")
         self.columnconfigure(0, weight=1)
         self.tags: list[str] = []
         self._on_change = on_change
-        self.field = LabeledEntry(self, "Tags", placeholder="Type a tag, then Enter",
-                                  hint="Enter adds a tag; ✕ removes it. Order is kept.")
+        self.field = LabeledEntry(self, "Tags", placeholder="Type a tag, then Enter")
         self.field.grid(row=0, column=0, sticky="ew")
         self.field.entry.bind("<Return>", self._add_typed, add="+")
         self.field.entry.bind("<KP_Enter>", self._add_typed, add="+")
         self.field.entry.bind("<BackSpace>", self._backspace, add="+")
-        self.chips = ctk.CTkFrame(self, fg_color="transparent")
-        self.chips.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        # One chip high; the scrollbar is shown only while the chips are wider than the form.
+        self.chips = AppScrollableFrame(self, orientation="horizontal", height=32, fg_color="transparent")
+        self.overflowing = False
+        self.chips.bind("<Configure>", self._show_scrollbar, add="+")
+        self.chips._parent_canvas.bind("<Configure>", self._show_scrollbar, add="+")
         self.chip_buttons: dict[str, AppButton] = {}
+
+    def _show_scrollbar(self, _event=None) -> None:
+        self.overflowing = self.chips.winfo_reqwidth() > self.chips._parent_canvas.winfo_width()
+        if self.overflowing:
+            self.chips._scrollbar.grid()
+        else:
+            self.chips._scrollbar.grid_remove()
 
     def _add_typed(self, _event=None) -> str:
         self.add(self.field.get())
@@ -214,9 +266,13 @@ class TagInput(ctk.CTkFrame):
         for index, tag in enumerate(self.tags):
             chip = AppButton(self.chips, f"{tag}  ✕", lambda tag=tag: self.remove(tag), variant="ghost", height=28,
                              font=font(theme.SIZE_SMALL))
-            chip.grid(row=index // self.PER_ROW, column=index % self.PER_ROW, sticky="w", padx=(0, 6), pady=2)
+            chip.grid(row=0, column=index, sticky="w", padx=(0, 6), pady=2)
             Tooltip(chip, f"Remove the tag “{tag}”")
             self.chip_buttons[tag] = chip
+        if self.tags:
+            self.chips.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        else:
+            self.chips.grid_remove()
         if self._on_change is not None:
             self._on_change()
 
@@ -277,8 +333,12 @@ class TaskEditor(Card):
     REPEAT_FIELDS = ("repeat", "repeat_interval", "repeat_day_of_month", "repeat_until", "repeat_count", "repeat_end")
 
     def __init__(self, parent, *, on_submit: Callable[[TaskDraft], None], on_cancel: Callable[[], None],
-                 productivity_controller=None) -> None:
+                 task_defaults: TaskDefaultsStore | None = None) -> None:
         super().__init__(parent)
+        #: The default values and added categories (Settings); in memory only when the page gave none.
+        self.task_defaults = task_defaults or TaskDefaultsStore()
+        #: "Pinned to its date" of the loaded draft (an edited record): not shown, kept as stored.
+        self._pin_to_date = False
         self.columnconfigure(0, weight=1)
         self._on_submit, self._on_cancel = on_submit, on_cancel
         self.kind = "task"
@@ -307,20 +367,9 @@ class TaskEditor(Card):
         body.columnconfigure((0, 1), weight=1, uniform="editor")
         self.name_field = LabeledEntry(body, "Name", placeholder="e.g. Study math")
         self.name_field.entry.bind("<Return>", lambda _e: (self.submit(), "break")[1], add="+")
-        self.category_select = LabeledSelect(body, "Category", CATEGORIES)
-        self.date_display = date_display = ctk.CTkFrame(body, fg_color="transparent")
-        date_display.columnconfigure(0, weight=1)
-        ctk.CTkLabel(date_display, text="Date", text_color=theme.TEXT_MUTED, font=font(theme.SIZE_SMALL, "bold"),
-                     anchor="w").grid(row=0, column=0, sticky="ew", pady=(0, 4))
-        self.date_label = ctk.CTkLabel(date_display, text="", text_color=theme.TEXT_PRIMARY, anchor="w",
-                                       font=font(theme.SIZE_BODY, "bold"), height=theme.CONTROL_HEIGHT)
-        self.date_label.grid(row=1, column=0, sticky="ew")
-        self.date_hint = ctk.CTkLabel(date_display, text="", text_color=theme.TEXT_MUTED, anchor="w", justify="left",
-                                      font=font(theme.SIZE_CAPTION), wraplength=130)
-        self.date_hint.grid(row=2, column=0, sticky="ew")
+        self.category_select = LabeledSelect(body, "Category", [NO_CATEGORY, *CATEGORIES])
+        self.project_select = LabeledSelect(body, "Project", [NO_PROJECT])
         self.name_field.grid(row=0, column=0, columnspan=2, sticky="ew", pady=4)
-        self.category_select.grid(row=1, column=0, sticky="new", padx=(0, 6), pady=4)
-        date_display.grid(row=1, column=1, sticky="new", padx=(6, 0), pady=4)
 
         # Flexible task fields
         self.task_frame = ctk.CTkFrame(body, fg_color="transparent")
@@ -330,26 +379,17 @@ class TaskEditor(Card):
         self.priority_select.variable.set("5")
         self.duration_field.grid(row=0, column=0, sticky="new", padx=(0, 6), pady=4)
         self.priority_select.grid(row=0, column=1, sticky="new", padx=(6, 0), pady=4)
-        self.points_field = LabeledEntry(self.task_frame, "Points", placeholder="e.g. 1",
-                                         hint="What finishing it is worth to you (0-1000). Not used by the scheduler.",
-                                         wraplength=280)
+        self.points_field = PointsField(self.task_frame)
         self.points_field.variable.set(str(DEFAULT_TASK_POINTS))
         self.points_field.grid(row=1, column=0, columnspan=2, sticky="new", pady=4)
         self.required_var = tk.BooleanVar(value=False)
-        self.pin_var = tk.BooleanVar(value=False)
         self.required_check = ctk.CTkCheckBox(self.task_frame, text="Required (must be scheduled)",
                                               variable=self.required_var, text_color=theme.TEXT_PRIMARY,
                                               fg_color=theme.ACCENT)
-        self.pin_check = ctk.CTkCheckBox(self.task_frame, text="Only on this date", variable=self.pin_var,
-                                         text_color=theme.TEXT_PRIMARY, fg_color=theme.ACCENT)
-        for row, box in enumerate((self.required_check, self.pin_check), start=2):
-            box.grid(row=row, column=0, columnspan=2, sticky="w", pady=3)
-            make_keyboard_accessible(box, activate=box.toggle, ring=False)
+        self.required_check.grid(row=2, column=0, columnspan=2, sticky="w", pady=3)
+        make_keyboard_accessible(self.required_check, activate=self.required_check.toggle, ring=False)
         self.tag_input = TagInput(self.task_frame)
         self.tag_input.grid(row=4, column=0, columnspan=2, sticky="ew", pady=4)
-        self.more_button = AppButton(self.task_frame, "More options ▸", self.toggle_more, variant="ghost",
-                                     height=30)
-        self.more_button.grid(row=5, column=0, columnspan=2, sticky="w", pady=(4, 0))
         self.more_frame = ctk.CTkFrame(self.task_frame, fg_color="transparent")
         self.more_frame.columnconfigure((0, 1), weight=1, uniform="more")
         # One time input per row: [hh]:[mm][AM/PM] stays whole even in the narrow form column.
@@ -361,8 +401,6 @@ class TaskEditor(Card):
         self.deadline_time = ClockInput(self.more_frame, "Deadline time")
         self.deadline_date.grid(row=2, column=0, columnspan=2, sticky="new", pady=4)
         self.deadline_time.grid(row=3, column=0, columnspan=2, sticky="new", pady=4)
-        self.project_select = LabeledSelect(self.more_frame, "Project", [NO_PROJECT])
-        self.project_select.grid(row=4, column=0, columnspan=2, sticky="ew", pady=4)
         # The reusable task type: independent of category and tags; several tasks may share one.
         self.type_select = LabeledSelect(self.more_frame, "Task type", [OWN_TYPE, NEW_TYPE],
                                          command=lambda _value: self._show_new_type())
@@ -390,35 +428,24 @@ class TaskEditor(Card):
                                            anchor="w")
         self.timezone_label.grid(row=4, column=0, columnspan=2, sticky="ew")
 
-        self.duration_suggestion = None
-        if productivity_controller is not None:
-            from app.ui.duration_suggestion import DurationSuggestionWidget, SuggestionContext
-
-            def context():
-                try:
-                    start = self.window_start.value()
-                except FieldError:
-                    return None
-                try:
-                    estimate = float(self.duration_field.value())
-                except FieldError:
-                    estimate = 0.0
-                return SuggestionContext(category=self.category_select.get(), planned_start=start,
-                                         original_estimate_minutes=estimate)
-
-            self.duration_suggestion = DurationSuggestionWidget(
-                self.task_frame, productivity_controller, get_context=context,
-                apply_duration=lambda minutes: self.duration_field.show(minutes))
-            self.duration_suggestion.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(4, 0))
-
         self.notice = Notice(self, wraplength=280)
         self.notice.grid(row=3, column=0, sticky="ew", padx=theme.SPACE_L, pady=(8, 0))
         self.notice.hide()
+        bar = self.options_bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.grid(row=4, column=0, sticky="ew", padx=theme.SPACE_L, pady=(10, 0))
+        bar.columnconfigure((0, 1), weight=1, uniform="options")
+        self.more_button = AppButton(bar, "Add more options ▸", self.toggle_more, variant="ghost", height=32,
+                                     font=font(theme.SIZE_SMALL, "bold"))
+        self.more_button.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        self.defaults_button = AppButton(bar, "Use default values", self.use_defaults, variant="secondary", height=32,
+                                         font=font(theme.SIZE_SMALL, "bold"))
+        self.defaults_button.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        Tooltip(self.defaults_button, "Fill in the defaults of the chosen category (set in Settings)")
         self.submit_button = AppButton(self, "+ Add task", self.submit, height=44)
-        self.submit_button.grid(row=4, column=0, sticky="ew", padx=theme.SPACE_L, pady=(10, 8))
+        self.submit_button.grid(row=5, column=0, sticky="ew", padx=theme.SPACE_L, pady=(8, 8))
         self.cancel_edit_button = AppButton(self, "Cancel edit", lambda: self._on_cancel(), variant="secondary",
                                             height=34)
-        ctk.CTkFrame(self, fg_color="transparent", height=10).grid(row=6, column=0)
+        ctk.CTkFrame(self, fg_color="transparent", height=10).grid(row=7, column=0)
         self.set_kind("task")
 
     def _build_repeat(self, parent) -> None:
@@ -490,30 +517,20 @@ class TaskEditor(Card):
             self.block_frame.grid_remove()
             self.task_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
             self.name_field.label.configure(text="Name")
+            self.category_select.grid(row=1, column=0, columnspan=1, sticky="new", padx=(0, 6), pady=4)
+            self.project_select.grid(row=1, column=1, sticky="new", padx=(6, 0), pady=4)
         else:
             self.task_frame.grid_remove()
             self.block_frame.grid(row=3, column=0, columnspan=2, sticky="ew")
             self.name_field.label.configure(text="Label")
+            self.project_select.grid_remove()  # a fixed block has no project
+            self.category_select.grid(row=1, column=0, columnspan=2, sticky="new", padx=0, pady=4)
+        self.more_button.configure(state="normal" if kind == "task" else "disabled")
         self._title()
 
     def set_date(self, day: date | str | None) -> None:
         """The date a new task/block gets (the page's selected date); an edited record's own date while editing."""
-        text = day.isoformat() if isinstance(day, date) else (day or "").strip()
-        self.date_text = text
-        if text:
-            try:
-                value = date.fromisoformat(text)
-                shown = f"{value:%a}, {value:%b} {value.day}, {value.year}"
-            except ValueError:
-                shown = text
-        else:
-            shown = "Any date"
-        self.date_label.configure(text=shown)
-        if self.editing:
-            hint = "The record's own date." if text else "Not tied to a date."
-        else:
-            hint = "The selected day."
-        self.date_hint.configure(text=hint)
+        self.date_text = day.isoformat() if isinstance(day, date) else (day or "").strip()
 
     def toggle_more(self) -> None:
         self.more_open = not self.more_open
@@ -521,11 +538,28 @@ class TaskEditor(Card):
             self.more_frame.grid(row=6, column=0, columnspan=2, sticky="ew")
         else:
             self.more_frame.grid_remove()
-        self.more_button.configure(text="Fewer options ▾" if self.more_open else "More options ▸")
+        self.more_button.configure(text="Fewer options ▾" if self.more_open else "Add more options ▸")
+
+    def _category(self) -> str:
+        """The chosen category ("" while none is chosen)."""
+        chosen = self.category_select.get()
+        return "" if chosen == NO_CATEGORY else chosen
+
+    def use_defaults(self) -> None:
+        """Fill the chosen category's default values (the general ones without a category); a typed name stays."""
+        default = self.task_defaults.value.for_category(self._category())
+        if not self.name_field.get().strip():
+            self.name_field.variable.set(default.name)
+        if self.kind == "task":
+            self.duration_field.show(default.duration)
+            self.priority_select.variable.set(str(default.priority))
+            self.points_field.variable.set(str(default.points))
+        self.clear_errors()
 
     def set_options(self, options: EditorOptions) -> None:
         self.options = options
-        self.category_select.set_values(options.categories)
+        added = [name for name in self.task_defaults.value.custom_categories if name not in options.categories]
+        self.category_select.set_values([NO_CATEGORY, *options.categories, *added])
         self._project_ids = {NO_PROJECT: None}
         for choice in options.projects:
             label = choice.label
@@ -565,10 +599,11 @@ class TaskEditor(Card):
         return TaskDraft(
             task_type_id=self._type_ids.get(type_label),
             new_type_label=self.new_type_field.get().strip() if type_label == NEW_TYPE else "",
-            kind=self.kind, name=self.name_field.get(), category=self.category_select.get(), date=self.date_text,
+            kind=self.kind, name=self.name_field.get(), category=self._category() or UNSET_CATEGORY,
+            date=self.date_text,
             duration=self.duration_field.get(), priority=self.priority_select.get(), points=self.points_field.get(),
             required=self.required_var.get(),
-            pin_to_date=self.pin_var.get(), window_start=self.window_start.get(), window_end=self.window_end.get(),
+            pin_to_date=self._pin_to_date, window_start=self.window_start.get(), window_end=self.window_end.get(),
             deadline_date=self.deadline_date.get(), deadline_time=self.deadline_time.get(),
             dependency_ids=self.dependency_picker.selected(), project_id=self._project_ids.get(project_label),
             tags=tuple(self.tag_input.tags), start=self.start_field.get(), end=self.end_field.get(),
@@ -587,16 +622,17 @@ class TaskEditor(Card):
         self.editing = editing
         self.set_kind(draft.kind)
         self.name_field.variable.set(draft.name)
-        if draft.category not in self.category_select.values:
-            self.category_select.set_values([*self.category_select.values, draft.category])
-        self.category_select.variable.set(draft.category)
+        category = draft.category or NO_CATEGORY
+        if category not in self.category_select.values:
+            self.category_select.set_values([*self.category_select.values, category])
+        self.category_select.variable.set(category)
         # Editing shows the record's own date; a new blank draft without one keeps the page's selected day.
         self.set_date(draft.date if editing or draft.date else self.date_text)
         self.duration_field.variable.set(draft.duration)
         self.priority_select.variable.set(draft.priority if draft.priority in PRIORITIES else "5")
         self.points_field.variable.set(draft.points)
         self.required_var.set(draft.required)
-        self.pin_var.set(draft.pin_to_date)
+        self._pin_to_date = draft.pin_to_date
         self.window_start.variable.set(draft.window_start)
         self.window_end.variable.set(draft.window_end)
         self.deadline_date.variable.set(draft.deadline_date)
@@ -634,15 +670,13 @@ class TaskEditor(Card):
         else:
             self.recurrence_note.grid_remove()
         self.clear_errors()
-        has_more = any((draft.window_start, draft.deadline_date, draft.project_id, draft.dependency_ids, draft.repeat))
+        has_more = any((draft.window_start, draft.deadline_date, draft.dependency_ids, draft.repeat))
         if has_more != self.more_open and draft.kind == "task":
             self.toggle_more()
         if editing:
-            self.cancel_edit_button.grid(row=5, column=0, sticky="ew", padx=theme.SPACE_L, pady=(0, 8))
+            self.cancel_edit_button.grid(row=6, column=0, sticky="ew", padx=theme.SPACE_L, pady=(0, 8))
         else:
             self.cancel_edit_button.grid_remove()
-            if self.duration_suggestion is not None:
-                self.duration_suggestion.reset()
         self._title()
 
     def _title(self) -> None:
@@ -671,5 +705,5 @@ class TaskEditor(Card):
 
     def reset_for_next(self, date_text: str) -> None:
         """After a successful add: a blank form of the same kind, on the same date."""
-        self.load(replace(TaskDraft(kind=self.kind), date=date_text, category=self.category_select.get()),
+        self.load(replace(TaskDraft(kind=self.kind), date=date_text, category=self._category()),
                   editing=False)

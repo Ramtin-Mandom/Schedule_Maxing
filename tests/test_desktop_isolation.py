@@ -68,7 +68,7 @@ def test_python_m_app_app_launches_offline_and_closes_cleanly(tmp_path: Path) ->
     if not report["display"]:
         pytest.skip("no display available for Tk")
     assert report["startup_error"] is None
-    assert report["pages"] == ["about", "account", "allocation", "day", "guide", "month", "productivity", "projects",
+    assert report["pages"] == ["about", "account", "day", "guide", "month", "productivity", "projects",
                                "settings", "week"]
     assert report["current_page"] == "day" and report["sidebar_open"] is False
     assert report["workspace"] == "the ownerless local workspace"

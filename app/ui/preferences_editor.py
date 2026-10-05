@@ -24,7 +24,7 @@ from app.ui.paint_widgets import AppScrollableFrame
 
 from app.planning.errors import PlanningError
 from app.ui import theme
-from app.ui.background import run_io
+from app.ui.background import WRITE_LANE, run_io
 from app.ui.clock_input import ClockInput
 from app.ui.components import AppButton, LabeledEntry, ModalDialog, Notice, font
 from app.ui.preferences_model import FieldInput, PreferenceRow
@@ -45,8 +45,39 @@ class PreferencesEditor(AppScrollableFrame):
         self.buttons: dict[str, dict[str, AppButton]] = {}
         self.error_labels: dict[str, ctk.CTkLabel] = {}
         self.value_labels: dict[str, ctk.CTkLabel] = {}
+        #: The widgets of each row and where it sits, so an unchanged row is kept instead of rebuilt.
+        self._frames: dict[str, ctk.CTkFrame] = {}
+        self._grid_rows: dict[str, int] = {}
+        #: How many rows the last render() had to build (the rest were kept).
+        self.rows_built = 0
 
     def render(self, rows: list[PreferenceRow]) -> None:
+        """
+        Show `rows`. Building a row's widgets is the expensive part (a whole
+        page of them takes about a second), so when the same fields are shown
+        again -- the page is revisited, or one value was saved -- only rows
+        whose content changed are rebuilt; an unchanged row just gets its
+        stored value back in its inputs and its error cleared, exactly what a
+        rebuild would show.
+        """
+        previous = self.rows
+        same_layout = bool(previous) and [(row.spec.key, row.spec.group) for row in rows] == [
+            (row.spec.key, row.spec.group) for row in previous.values()]
+        if not same_layout:
+            self._build_all(rows)
+            return
+        self.rows = {row.spec.key: row for row in rows}
+        self.rows_built = 0
+        for row in rows:
+            key = row.spec.key
+            if row == previous[key]:
+                self.set_input(key, row.edit)
+                self.error_labels[key].configure(text="")
+                continue
+            self._frames[key].destroy()
+            self._place(row, self._grid_rows[key])
+
+    def _build_all(self, rows: list[PreferenceRow]) -> None:
         for child in self.winfo_children():
             child.destroy()
         self.rows = {row.spec.key: row for row in rows}
@@ -54,6 +85,9 @@ class PreferencesEditor(AppScrollableFrame):
         self.buttons.clear()
         self.error_labels.clear()
         self.value_labels.clear()
+        self._frames.clear()
+        self._grid_rows.clear()
+        self.rows_built = 0
         grid_row, group = 0, None
         for row in rows:
             if row.spec.group != group:
@@ -61,8 +95,14 @@ class PreferencesEditor(AppScrollableFrame):
                 ctk.CTkLabel(self, text=group, font=font(theme.SIZE_BODY, "bold"), text_color=theme.TEXT_PRIMARY,
                              anchor="w").grid(row=grid_row, column=0, sticky="ew", padx=4, pady=(12, 2))
                 grid_row += 1
-            self._row(row).grid(row=grid_row, column=0, sticky="ew", padx=2, pady=3)
+            self._place(row, grid_row)
             grid_row += 1
+
+    def _place(self, row: PreferenceRow, grid_row: int) -> None:
+        frame = self._row(row)
+        frame.grid(row=grid_row, column=0, sticky="ew", padx=2, pady=3)
+        self._frames[row.spec.key], self._grid_rows[row.spec.key] = frame, grid_row
+        self.rows_built += 1
 
     def _row(self, row: PreferenceRow) -> ctk.CTkFrame:
         key, spec = row.spec.key, row.spec
@@ -153,7 +193,8 @@ class DayPreferencesDialog(ModalDialog):
 
     def __init__(self, parent, controller, *, on_closed: Callable[[], None], background_io: bool = False) -> None:
         super().__init__(parent, "Day Preferences", width=640)
-        self._controller = controller
+        #: Frozen at the date the dialog was opened for: its workers never follow the page to another date.
+        self._controller = controller.detached()
         self._background_io = background_io
         self._on_closed = on_closed
         self.view = None
@@ -173,9 +214,10 @@ class DayPreferencesDialog(ModalDialog):
         self.add_buttons("Done", self.close, cancel_text="Close")
         self.refresh()
 
-    def _io(self, work, done) -> None:
-        """A storage call: at once locally, in a worker with direct PostgreSQL storage (app/ui/background.run_io)."""
-        run_io(self, work, done, background=self._background_io, still_current=lambda: not self._closed)
+    def _io(self, work, done, *, write: bool = True) -> None:
+        """A storage call: in a worker inside the desktop app (app/ui/background.run_io); changes run in order."""
+        run_io(self, work, done, background=self._background_io, still_current=lambda: not self._closed,
+               serial=WRITE_LANE if write else None)
 
     def refresh(self, then: Callable[[], None] | None = None) -> None:
         def done(result) -> None:
@@ -186,7 +228,7 @@ class DayPreferencesDialog(ModalDialog):
             if then is not None:
                 then()
 
-        self._io(self._controller.preferences, done)
+        self._io(self._controller.preferences, done, write=False)
 
     def _show(self, view) -> None:
         self.view = view
