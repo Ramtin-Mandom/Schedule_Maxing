@@ -91,13 +91,10 @@ def test_statuses_survive_a_restart_and_reach_the_history(tmp_path: Path, dialog
         pump(app)
         assert board_names(day) == {"uncompleted": ["Missed"], "pending": ["Open"], "completed": ["Kept"]}
 
-        app.show_page("productivity")
-        page = app.pages["productivity"].content
-        page.history_window_var.set("Last 90 days")
         monkeypatch.setattr(controller_module, "local_date_of", lambda _now, _tz: WEDNESDAY + timedelta(days=1))
-        page.refresh_history()
-        pump(app, until=lambda: page.history_page is not None and page.history_page.entries)
-        statuses = {entry.name: entry.status for entry in page.history_page.entries}
+        history = app.productivity_controller.history(90)
+        assert history.ok and history.value.entries
+        statuses = {entry.name: entry.status for entry in history.value.entries}
         assert statuses["Kept"] == "completed" and statuses["Missed"] == "skipped"
     finally:
         close_app(app)

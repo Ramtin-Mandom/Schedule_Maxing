@@ -107,6 +107,15 @@ provenance, and series lineage. See _V9_STATEMENTS.
 Version 10: placement origin and manual intent (preserved), and the reason
 of an execution's cancellation. See _V10_STATEMENTS.
 
+Version 12 (docs/productivity-redesign-plan.md, contract A): reusable task
+types (task_types, tasks.task_type_id) and the planning snapshot of a
+placement (its task's name, tags, points, estimate and type when it was
+saved). See _migrate_v11_to_v12: existing tasks get a deterministic type;
+existing placements keep NULL snapshots (unknown, never back-filled).
+
+Version 13: task types become synchronizable -- change capture for
+task_types, and every existing type marked for upload. See _V13_STATEMENTS.
+
 Execution <-> planning links (the legacy compatibility strategy):
     executions.task_id / scheduled_task_id are *historical identity*: they
     record which task/placement an execution was created for, alongside the
@@ -745,8 +754,9 @@ def _migrate_v3_to_v4(connection: sqlite3.Connection) -> None:
     connection.execute("COMMIT")
 
 
-#: (entity type on the wire, local table) for every synchronizable table.
-SYNC_TABLES: tuple[tuple[str, str], ...] = (
+#: (entity type on the wire, local table) of the tables that were synchronizable at schema v5. Frozen: the
+#: v5 and v11 migrations create their triggers from exactly this list.
+_V5_SYNC_TABLES: tuple[tuple[str, str], ...] = (
     ("project", "projects"),
     ("task", "tasks"),
     ("fixed_block", "fixed_blocks"),
@@ -756,6 +766,9 @@ SYNC_TABLES: tuple[tuple[str, str], ...] = (
     ("execution", "executions"),
 )
 
+#: (entity type on the wire, local table) for every synchronizable table (task types since schema v13).
+SYNC_TABLES: tuple[tuple[str, str], ...] = (*_V5_SYNC_TABLES, ("task_type", "task_types"))
+
 #: True while synchronization applies pulled records (app/sync): change
 #: capture is suppressed (no outbound echo) and link checks are left to the
 #: server, which already validated the records within the user's scope.
@@ -763,6 +776,11 @@ _APPLYING_REMOTE = "(SELECT value FROM sync_control WHERE name = 'applying_remot
 
 
 def _v5_capture_triggers() -> tuple[str, ...]:
+    """The change-capture triggers of the tables synchronizable at schema v5 (see _capture_triggers)."""
+    return _capture_triggers(_V5_SYNC_TABLES, work_sessions=True)
+
+
+def _capture_triggers(tables: tuple[tuple[str, str], ...], *, work_sessions: bool) -> tuple[str, ...]:
     """
     Change capture (app/sync, docs/sync-protocol.md). Every local write to a
     synchronizable row -- whatever code path makes it: a service method, CSV
@@ -777,7 +795,9 @@ def _v5_capture_triggers() -> tuple[str, ...]:
         "ON CONFLICT (entity_type, entity_id) DO UPDATE SET local_rev = local_rev + 1, changed_at = excluded.changed_at"
     )
     statements = []
-    targets = [(entity, table, "id") for entity, table in SYNC_TABLES] + [("execution", "work_sessions", "execution_id")]
+    targets = [(entity, table, "id") for entity, table in tables]
+    if work_sessions:
+        targets.append(("execution", "work_sessions", "execution_id"))
     for entity, table, column in targets:
         for event, ref in (("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD")):
             name = f"trg_sync_{table}_{event.lower()}"
@@ -786,7 +806,7 @@ def _v5_capture_triggers() -> tuple[str, ...]:
                 f"CREATE TRIGGER {name} AFTER {event} ON {table} FOR EACH ROW WHEN NOT {_APPLYING_REMOTE} "
                 f"BEGIN {mark.format(type=entity, ref=ref, column=column)}; END"
             )
-    for _, table in SYNC_TABLES:
+    for _, table in tables:
         # Records created while an account is *active* on this device belong to it; nothing
         # existing is reassigned (that is the explicit association step in app/sync).
         name = f"trg_sync_{table}_owner"
@@ -1057,6 +1077,132 @@ _V11_STATEMENTS: tuple[str, ...] = (
 )
 
 
+# Version 12 (docs/productivity-redesign-plan.md, contract A): task types and placement planning snapshots.
+# task_types is one owner-scoped row per reusable type (tombstones kept). tasks.task_type_id is deliberately
+# not a foreign key: a pulled task may name a type this device has not received yet. The scheduled_tasks
+# columns extend task_category (v7): the task's name, tags (a JSON list; NULL = not recorded, '[]' = none),
+# points, estimate and type when the placement was saved. Existing placements keep NULL everywhere.
+_V12_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS task_types (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        label TEXT NOT NULL CHECK (length(label) > 0),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        version INTEGER NOT NULL CHECK (version > 0),
+        deleted_at TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_task_types_user_id ON task_types(user_id)",
+    "ALTER TABLE tasks ADD COLUMN task_type_id TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_tasks_task_type_id ON tasks(task_type_id) WHERE task_type_id IS NOT NULL",
+    "ALTER TABLE scheduled_tasks ADD COLUMN task_name TEXT CHECK (task_name IS NULL OR length(task_name) > 0)",
+    "ALTER TABLE scheduled_tasks ADD COLUMN task_tags TEXT",
+    "ALTER TABLE scheduled_tasks ADD COLUMN task_points INTEGER CHECK (task_points IS NULL OR task_points >= 0)",
+    "ALTER TABLE scheduled_tasks ADD COLUMN task_estimate_minutes INTEGER CHECK (task_estimate_minutes IS NULL OR "
+    "task_estimate_minutes > 0)",
+    "ALTER TABLE scheduled_tasks ADD COLUMN task_type_id TEXT",
+    "ALTER TABLE scheduled_tasks ADD COLUMN task_type_label TEXT CHECK (task_type_label IS NULL OR "
+    "length(task_type_label) > 0)",
+    # Like every synchronizable table (see _v5_capture_triggers): a type created while an account is active
+    # belongs to it, so a task and its type always get the same owner.
+    "DROP TRIGGER IF EXISTS trg_task_types_owner",
+    "CREATE TRIGGER trg_task_types_owner AFTER INSERT ON task_types FOR EACH ROW "
+    f"WHEN NEW.user_id IS NULL AND NOT {_APPLYING_REMOTE} AND EXISTS (SELECT 1 FROM sync_accounts WHERE active = 1) "
+    "BEGIN UPDATE task_types SET user_id = (SELECT user_id FROM sync_accounts WHERE active = 1) "
+    "WHERE id = NEW.id; END",
+)
+
+
+# Version 13 (docs/productivity-redesign-plan.md, step 3): task types synchronize like every other record --
+# the standard capture and owner triggers (replacing v12's owner-only trigger), and every type that already
+# exists is marked for upload once (a server that already derived the same type answers with its own copy).
+_V13_STATEMENTS: tuple[str, ...] = (
+    "DROP TRIGGER IF EXISTS trg_task_types_owner",
+    *_capture_triggers((("task_type", "task_types"),), work_sessions=False),
+    "INSERT INTO sync_dirty (entity_type, entity_id, local_rev, changed_at) "
+    "SELECT 'task_type', id, 1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now') FROM task_types WHERE true "
+    "ON CONFLICT (entity_type, entity_id) DO NOTHING",
+)
+
+
+def legacy_task_type_roots(tasks: dict[str, tuple[str | None, str | None, str | None]]) -> dict[str, str]:
+    """
+    {task id: id of the task its type is derived from} for tasks stored before
+    types existed. `tasks` maps each task id to (owner, series_id,
+    series_predecessor_id). An occurrence takes its series' root; a series
+    segment the oldest *provable* segment of its lineage -- the walk stops at
+    a predecessor that is missing, belongs to another owner or closes a cycle,
+    so a broken chain is grouped on its own and never merged with anything.
+    Every other task is its own root: tasks are never grouped by name.
+    Shared with the backend migration, so both stores derive the same types.
+    """
+    roots: dict[str, str] = {}
+    for task_id, (owner, series_id, _) in tasks.items():
+        current = series_id if series_id is not None and series_id in tasks else task_id
+        seen = {current}
+        while True:
+            previous = tasks[current][2]
+            if previous is None or previous in seen or previous not in tasks or tasks[previous][0] != owner:
+                break
+            seen.add(previous)
+            current = previous
+        roots[task_id] = current if tasks[current][0] == owner else task_id
+    return roots
+
+
+def _migrate_v11_to_v12(connection: sqlite3.Connection) -> None:
+    """
+    Version 12: task types and placement planning snapshots (_V12_STATEMENTS),
+    plus the deterministic type of every existing task (tombstones included,
+    so removed work stays groupable): uuid5 in the dedicated namespace of its
+    root (legacy_task_type_roots), with one type record per root labelled with
+    the root's name. That label is the type's current display label, created
+    now -- not a historical fact -- so the record's timestamps are the
+    migration instant. No placement, execution, version or timestamp of an
+    existing record is rewritten, and change capture is suppressed while the
+    derived ids are written: nothing is marked for synchronization.
+
+    A callable because the ids are derived in Python (uuid5). One transaction
+    with its user_version bump and foreign_key_check: a failure leaves v11.
+    """
+    from app.planning.models import derived_task_type_id
+
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        for statement in _V12_STATEMENTS:
+            connection.execute(statement)
+
+        rows = connection.execute("SELECT id, user_id, name, series_id, series_predecessor_id FROM tasks").fetchall()
+        tasks = {row[0]: (row[1], row[3], row[4]) for row in rows}
+        names = {row[0]: row[2] for row in rows}
+        roots = legacy_task_type_roots(tasks)
+        type_ids = {root: str(derived_task_type_id(uuid.UUID(root))) for root in set(roots.values())}
+
+        now = datetime.now(timezone.utc).isoformat()
+        capture = connection.execute("SELECT value FROM sync_control WHERE name = 'applying_remote'").fetchone()[0]
+        connection.execute("UPDATE sync_control SET value = 1 WHERE name = 'applying_remote'")
+        connection.executemany(
+            "INSERT INTO task_types (id, user_id, label, created_at, updated_at, version, deleted_at) "
+            "VALUES (?, ?, ?, ?, ?, 1, NULL)",
+            [(type_id, tasks[root][0], names[root], now, now) for root, type_id in sorted(type_ids.items())],
+        )
+        connection.executemany(
+            "UPDATE tasks SET task_type_id = ? WHERE id = ?",
+            [(type_ids[root], task_id) for task_id, root in sorted(roots.items())],
+        )
+        connection.execute("UPDATE sync_control SET value = ? WHERE name = 'applying_remote'", (capture,))
+
+        _check_foreign_keys(connection, 12)
+        connection.execute("PRAGMA user_version = 12")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+    connection.execute("COMMIT")
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     (
         1,
@@ -1118,6 +1264,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     (9, _V9_STATEMENTS),
     (10, _V10_STATEMENTS),
     (11, _V11_STATEMENTS),
+    (12, _migrate_v11_to_v12),
+    (13, _V13_STATEMENTS),
 )
 
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1][0]

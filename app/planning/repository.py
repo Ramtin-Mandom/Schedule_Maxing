@@ -72,8 +72,23 @@ from app.execution.lifecycle import TRANSITIONS
 from app.execution.models import CancelReason, ExecutionStatus, TaskExecution, WorkSession
 from app.planning.errors import DuplicateEntityError, InvalidEntityError, ScopeError
 from app.planning.external_dependencies import ExecutionFact
-from app.planning.history import ExecutionHistory, ScheduleHistory, collect_schedule_history
-from app.planning.models import FixedBlock, OccurrenceState, PlacementRemovalReason, Project, ScheduledTask, Task
+from app.planning.history import (
+    CompletionHistory,
+    ExecutionHistory,
+    HistoryBounds,
+    ScheduleHistory,
+    collect_completion_history,
+    collect_schedule_history,
+)
+from app.planning.models import (
+    FixedBlock,
+    OccurrenceState,
+    PlacementRemovalReason,
+    Project,
+    ScheduledTask,
+    Task,
+    TaskType,
+)
 from app.planning.preferences import (
     PreferenceRecord,
     PreferenceScope,
@@ -91,9 +106,11 @@ _LIVE = "deleted_at IS NULL"
 
 _PROJECT_COLUMNS = ("id", "user_id", "name", "description", "created_at", "updated_at", "version", "deleted_at")
 
+_TASK_TYPE_COLUMNS = ("id", "user_id", "label", "created_at", "updated_at", "version", "deleted_at")
+
 _TASK_COLUMNS = (
     "id", "user_id", "project_id", "name", "category",
-    "estimated_duration_minutes", "priority", "points", "required", "required_date",
+    "estimated_duration_minutes", "priority", "points", "task_type_id", "required", "required_date",
     "preferred_window_start_minute", "preferred_window_end_minute",
     "deadline", "deadline_utc",
     "recurrence_frequency", "recurrence_interval", "recurrence_day_of_month",
@@ -110,7 +127,8 @@ _FIXED_BLOCK_COLUMNS = (
 _PLACEMENT_COLUMNS = (
     "id", "task_id", "user_id", "planned_date", "timezone", "planned_start", "planned_end",
     "planned_start_utc", "planned_end_utc", "score", "optimization_metadata",
-    "task_category", "removal_reason", "superseded_by_id", "origin", "preserved",
+    "task_category", "task_name", "task_tags", "task_points", "task_estimate_minutes", "task_type_id",
+    "task_type_label", "removal_reason", "superseded_by_id", "origin", "preserved",
     "created_at", "updated_at", "version", "deleted_at",
 )
 
@@ -308,7 +326,7 @@ class PlanningRepository:
     def record_states(self, table: str, ids: Iterable[object]) -> dict[str, tuple[int, bool]]:
         """{id: (version, is_deleted)} for every stored row (live or tombstoned) among `ids` (in scope)."""
         if table not in {"projects", "tasks", "fixed_blocks", "scheduled_tasks", "preference_overrides",
-                         "schedule_generations"}:
+                         "schedule_generations", "task_types"}:
             raise ValueError(f"unknown table {table!r}")
         owner_sql, owner_params = self._owner_sql()
         found: dict[str, tuple[int, bool]] = {}
@@ -366,6 +384,48 @@ class PlanningRepository:
                 (str(project_id), *owner_params),
             ).fetchall()
         return [uuid.UUID(row["id"]) for row in rows]
+
+    # ------------------------------------------------------------------
+    # Task types
+    # ------------------------------------------------------------------
+
+    def insert_task_type(self, task_type: TaskType) -> None:
+        with self.transaction():
+            self._insert("task_types", _TASK_TYPE_COLUMNS, _task_type_to_row(task_type), "task type", task_type.id)
+
+    def update_task_type(self, task_type: TaskType, *, expected_version: int) -> bool:
+        with self.transaction():
+            return self._compare_and_update(
+                "task_types", _TASK_TYPE_COLUMNS, _task_type_to_row(task_type), expected_version, "task type",
+                task_type.id,
+            )
+
+    def get_task_types(
+        self, type_ids: Iterable[uuid.UUID], *, include_deleted: bool = False
+    ) -> dict[uuid.UUID, TaskType]:
+        found: dict[uuid.UUID, TaskType] = {}
+        owner_sql, owner_params = self._owner_sql()
+        with self._read():
+            for chunk in _chunks(_ids(type_ids)):
+                rows = self._connection.execute(
+                    f"SELECT * FROM task_types WHERE id IN ({_placeholders(chunk)}) "
+                    f"AND {_live_clause(include_deleted)}{owner_sql}",
+                    (*chunk, *owner_params),
+                ).fetchall()
+                for row in rows:
+                    task_type = _row_to_task_type(row)
+                    found[task_type.id] = task_type
+        return found
+
+    def list_task_types(self, *, include_deleted: bool = False) -> list[TaskType]:
+        """Task types in scope, ordered by (created_at, id)."""
+        owner_sql, owner_params = self._owner_sql()
+        with self._read():
+            rows = self._connection.execute(
+                f"SELECT * FROM task_types WHERE {_live_clause(include_deleted)}{owner_sql} ORDER BY created_at, id",
+                owner_params,
+            ).fetchall()
+        return [_row_to_task_type(row) for row in rows]
 
     # ------------------------------------------------------------------
     # Tasks
@@ -727,7 +787,62 @@ class PlanningRepository:
                 start_utc, end_utc, in_range=self._placements_starting_between,
                 superseded_by=self.placements_superseded_by, executions_for=self._executions_for_placements,
                 tasks_for=lambda ids: self.get_tasks(ids, include_deleted=True),
+                types_for=lambda ids: self.get_task_types(ids, include_deleted=True),
             )
+
+    def completion_history(self, start_utc: datetime, end_utc: datetime) -> CompletionHistory:
+        """
+        The completion activity of [start_utc, end_utc) (app/planning/history.py)
+        in this repository's owner scope, read in one transaction: completed
+        work is found by its recorded completion instant, whatever its planned
+        date and whether or not its placement or task still exists. Writes nothing.
+        """
+        with self.transaction():
+            owner_sql, owner_params = self._owner_sql()
+            unknown = self._connection.execute(
+                f"SELECT COUNT(*) FROM executions WHERE status = ? AND {_LIVE} AND actual_final_end_at IS NULL"
+                f"{owner_sql}", (ExecutionStatus.COMPLETED.value, *owner_params),
+            ).fetchone()[0]
+            return collect_completion_history(
+                start_utc, end_utc, completed_between=self._completed_between,
+                placements_for=lambda ids: self.get_placements(ids, include_deleted=True),
+                tasks_for=lambda ids: self.get_tasks(ids, include_deleted=True),
+                types_for=lambda ids: self.get_task_types(ids, include_deleted=True),
+                unknown_completion_dates=unknown,
+            )
+
+    def _completed_between(self, start_utc: datetime, end_utc: datetime) -> list[TaskExecution]:
+        # actual_final_end_at keeps its original UTC offset, so it is normalized by SQLite's datetime() (whole
+        # seconds, UTC) for the range test; the caller applies the exact bounds to the parsed instants.
+        owner_sql, owner_params = self._owner_sql()
+        rows = self._connection.execute(
+            f"SELECT * FROM executions WHERE status = ? AND {_LIVE} AND actual_final_end_at IS NOT NULL "
+            f"AND datetime(actual_final_end_at) >= datetime(?) AND datetime(actual_final_end_at) <= datetime(?)"
+            f"{owner_sql} ORDER BY id",
+            (ExecutionStatus.COMPLETED.value, _utc_text(start_utc), _utc_text(end_utc), *owner_params),
+        ).fetchall()
+        return [TaskExecution.model_validate(dict(row)) for row in rows]
+
+    def history_bounds(self) -> HistoryBounds:
+        """Where this scope's recorded history starts and ends (two aggregate queries; writes nothing)."""
+        owner_sql, owner_params = self._owner_sql()
+        with self._read():
+            planned = self._connection.execute(
+                f"SELECT MIN(planned_start_utc), MAX(planned_start_utc) FROM scheduled_tasks WHERE 1 = 1{owner_sql}",
+                owner_params,
+            ).fetchone()
+            completed = self._connection.execute(
+                "SELECT MIN(datetime(actual_final_end_at)), MAX(datetime(actual_final_end_at)) FROM executions "
+                f"WHERE status = ? AND {_LIVE} AND actual_final_end_at IS NOT NULL{owner_sql}",
+                (ExecutionStatus.COMPLETED.value, *owner_params),
+            ).fetchone()
+
+        def instant(value: str | None) -> datetime | None:
+            if value is None:
+                return None
+            return datetime.fromisoformat(value.replace("Z", "+00:00").replace(" ", "T")).replace(tzinfo=timezone.utc)
+
+        return HistoryBounds(instant(planned[0]), instant(planned[1]), instant(completed[0]), instant(completed[1]))
 
     def _placements_starting_between(self, start_utc: datetime, end_utc: datetime) -> list[ScheduledTask]:
         owner_sql, owner_params = self._owner_sql()
@@ -1013,6 +1128,7 @@ class PlanningRepository:
         """
         table, columns, to_row = {
             "project": ("projects", _PROJECT_COLUMNS, _project_to_row),
+            "task_type": ("task_types", _TASK_TYPE_COLUMNS, _task_type_to_row),
             "task": ("tasks", _TASK_COLUMNS, _task_to_row),
             "fixed_block": ("fixed_blocks", _FIXED_BLOCK_COLUMNS, _fixed_block_to_row),
             "placement": ("scheduled_tasks", _PLACEMENT_COLUMNS, _placement_to_row),
@@ -1073,6 +1189,18 @@ def _row_to_project(row: sqlite3.Row) -> Project:
     return Project.model_validate(dict(row))
 
 
+def _task_type_to_row(task_type: TaskType) -> tuple:
+    return (
+        str(task_type.id), _str_or_none(task_type.user_id), task_type.label,
+        task_type.created_at.isoformat(), task_type.updated_at.isoformat(), task_type.version,
+        _iso(task_type.deleted_at),
+    )
+
+
+def _row_to_task_type(row: sqlite3.Row) -> TaskType:
+    return TaskType.model_validate(dict(row))
+
+
 def _task_to_row(task: Task) -> tuple:
     window = task.preferred_time_window
     recurrence = task.recurrence
@@ -1085,6 +1213,7 @@ def _task_to_row(task: Task) -> tuple:
         task.estimated_duration_minutes,
         task.priority,
         task.points,
+        _str_or_none(task.task_type_id),
         int(task.required),
         _iso(task.required_date),
         window.start_minute if window else None,
@@ -1141,6 +1270,7 @@ def _row_to_task(
             "estimated_duration_minutes": row["estimated_duration_minutes"],
             "priority": row["priority"],
             "points": row["points"],
+            "task_type_id": _uuid_or_none(row["task_type_id"]),
             "required": bool(row["required"]),
             "required_date": _date_or_none(row["required_date"]),
             "preferred_dates": [date_.fromisoformat(value) for value in preferred_dates],
@@ -1203,6 +1333,12 @@ def _placement_to_row(placement: ScheduledTask) -> tuple:
         _utc_text(placement.planned_start), _utc_text(placement.planned_end),
         placement.score, metadata,
         placement.task_category,
+        placement.task_name,
+        json.dumps(placement.task_tags) if placement.task_tags is not None else None,
+        placement.task_points,
+        placement.task_estimate_minutes,
+        _str_or_none(placement.task_type_id),
+        placement.task_type_label,
         placement.removal_reason.value if placement.removal_reason is not None else None,
         _str_or_none(placement.superseded_by_id),
         placement.origin.value if placement.origin is not None else None,
@@ -1225,6 +1361,12 @@ def _row_to_placement(row: sqlite3.Row) -> ScheduledTask:
             "score": row["score"],
             "optimization_metadata": json.loads(row["optimization_metadata"]),
             "task_category": row["task_category"],
+            "task_name": row["task_name"],
+            "task_tags": json.loads(row["task_tags"]) if row["task_tags"] is not None else None,
+            "task_points": row["task_points"],
+            "task_estimate_minutes": row["task_estimate_minutes"],
+            "task_type_id": _uuid_or_none(row["task_type_id"]),
+            "task_type_label": row["task_type_label"],
             "removal_reason": row["removal_reason"],
             "superseded_by_id": _uuid_or_none(row["superseded_by_id"]),
             "origin": row["origin"],

@@ -23,6 +23,7 @@ from backend.app import create_app
 from backend.database import create_backend_engine
 from backend.migrate import upgrade
 from backend.settings import BackendSettings, normalize_database_url
+from tests.db_template import clone_migrated
 
 TEST_SECRET = "unit-test-secret-" + "x" * 32
 PASSWORD = "correct horse battery"
@@ -64,7 +65,7 @@ def engine():
     url = _postgres_url()
     if url is None:
         engine = create_backend_engine("sqlite://")
-        upgrade(engine)
+        clone_migrated(engine)  # a private copy of a migrated database (tests/db_template.py)
         try:
             yield engine
         finally:

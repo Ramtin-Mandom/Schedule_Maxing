@@ -27,6 +27,7 @@ import sqlalchemy as sa
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
+from app.planning.models import derived_task_type_id
 from backend import models
 from backend.app import create_app
 from backend.database import JSONDocument, UTCDateTime, create_backend_engine
@@ -454,6 +455,16 @@ RECURRENCE_FIELDS_SINCE_0009 = {"start_date": None, "timezone": None}
 #: (a proven move is recognized from its lineage when read, not rewritten); an execution's cancel reason is unknown.
 PLACEMENT_FIELDS_SINCE_0010 = {"origin": None, "preserved": False}
 EXECUTION_FIELDS_SINCE_0010 = {"cancel_reason": None}
+#: 0013 (docs/productivity-redesign-plan.md): a historical task record has no type and an existing placement no
+#: planning snapshot (unknown, never back-filled). A *live* task gets its deterministic type (live_task_at_head).
+TASK_FIELDS_SINCE_0013 = {"task_type_id": None}
+PLACEMENT_FIELDS_SINCE_0013 = {"task_name": None, "task_tags": None, "task_points": None,
+                               "task_estimate_minutes": None, "task_type_id": None, "task_type_label": None}
+
+
+def live_task_at_head(record: dict) -> dict:
+    """A fixture task as its live row reads at head: 0013 derived its type from its own id (no series here)."""
+    return {**record, "task_type_id": str(derived_task_type_id(uuid.UUID(record["id"])))}
 
 
 def as_of_head(value):
@@ -467,9 +478,10 @@ def as_of_head(value):
     if isinstance(value, dict):
         converted = {key: as_of_head(item) for key, item in value.items()}
         if {"task_id", "planned_start", "optimization_metadata"} <= set(value):
-            converted = {**PLACEMENT_FIELDS_SINCE_0007, **PLACEMENT_FIELDS_SINCE_0010, **converted}
+            converted = {**PLACEMENT_FIELDS_SINCE_0007, **PLACEMENT_FIELDS_SINCE_0010, **PLACEMENT_FIELDS_SINCE_0013,
+                         **converted}
         if {"estimated_duration_minutes", "priority", "dependency_ids"} <= set(value):
-            converted = {**TASK_FIELDS_SINCE_0008, **TASK_FIELDS_SINCE_0009, **converted}
+            converted = {**TASK_FIELDS_SINCE_0008, **TASK_FIELDS_SINCE_0009, **TASK_FIELDS_SINCE_0013, **converted}
         if {"frequency", "interval"} <= set(value):
             converted = {**RECURRENCE_FIELDS_SINCE_0009, **converted}
         if {"task_name", "planned_duration", "status"} <= set(value):
@@ -518,7 +530,7 @@ def test_a_populated_0003_database_upgrades_losslessly(predecessor, monkeypatch,
 
         read("projects", PROJECT)
         for record in (TASK1, TASK2, TASK3):  # ordered tags/dates with repeats, recurrence, deadline offset, tombstone
-            read("tasks", record)
+            read("tasks", live_task_at_head(record))
         assert client.get(f"/tasks/{T1}", headers=headers).json()["deadline"] == "2026-03-05T17:00:00-05:00"
         for record in (PLACEMENT1, PLACEMENT2, PLACEMENT3):
             read("placements", record)

@@ -182,17 +182,21 @@ class SyncStore:
     def pending_records(self, key: str, user_id: str) -> set[tuple[str, str]]:
         """
         (entity type, local id) of every record of the account still waiting for the server: a dirty record it
-        owns, or one with outbox operations. A record that is both is counted once.
+        owns, or one with outbox operations. A record that is both is counted once. Task-type records are left
+        out: they wait with the task they belong to, which is the change the user made.
         """
         pending: set[tuple[str, str]] = set()
         with self._read():
             for entity_type, table in SYNC_TABLES:
+                if entity_type == "task_type":
+                    continue
                 rows = self._execute(
                     f"SELECT d.entity_id FROM sync_dirty AS d JOIN {table} AS t ON t.id = d.entity_id "
                     "WHERE d.entity_type = ? AND t.user_id = ?", (entity_type, user_id),
                 ).fetchall()
                 pending.update((entity_type, row["entity_id"]) for row in rows)
-            rows = self._execute("SELECT DISTINCT entity_type, local_id FROM sync_outbox WHERE account_key = ?", (key,))
+            rows = self._execute("SELECT DISTINCT entity_type, local_id FROM sync_outbox WHERE account_key = ? "
+                                 "AND entity_type <> 'task_type'", (key,))
             pending.update((row["entity_type"], row["local_id"]) for row in rows.fetchall())
         return pending
 

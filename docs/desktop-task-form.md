@@ -24,6 +24,7 @@ show the date, and a short id suffix where names and dates still collide.
 | More options → Preferred from / until | An optional preferred window. Leave both empty for "any time" |
 | More options → Deadline | Date and time. Both are needed if either is given |
 | More options → Project, Depends on | Chosen by name, kept by id |
+| More options → Task type | The reusable type the task counts under on the Productivity page. "(its own type)" keeps the stored type (a new task gets one of its own); pick an existing type to share it, or "New type..." and a name to create one. Independent of category and tags; an occurrence always has its series' type |
 
 ## Fixed block
 

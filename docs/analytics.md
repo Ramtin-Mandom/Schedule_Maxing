@@ -225,3 +225,92 @@ timezone or a future/naive cutoff; `401` without credentials.
   appears only from when it reached the server.
 - Legacy (day-index) executions have no calendar anchor and appear only in
   the terminal-outcome view.
+
+## 5. The tracker (awards, averages, task types and time views)
+
+`ProductivityService.build_tracker_report(range_days=None, filters=None)`
+(`app/productivity/tracker.py`) feeds the desktop Productivity page's three
+sections: General, Task-based and Time-based. It is read-only and recomputed
+from the stored records every time. There is no stored counter and no award
+ledger, so a reopened or deleted completion stops counting and a
+re-completion counts once.
+
+### Date bases
+
+Three bases are kept apart and are named wherever a figure is shown.
+
+| Basis | Used for | A record belongs to |
+| --- | --- | --- |
+| Execution created | The terminal-outcome statistics of sections 1 (unchanged) | the execution's `created_at` |
+| Planned date | Status counts, due rates, day classes, streaks, type counts, durations | the local date of the applicable planned start (one placement lineage = one occurrence, counted once) |
+| Completion date | Earned points, completed activity, productive minutes, point awards | the local date of `actual_final_end_at`, whatever the planned date and whether or not the plan or task still exists |
+
+Dates are local dates in the explicit reporting timezone. Weeks are
+Monday–Sunday. Planned-start buckets (night 22:00–05:59, morning
+06:00–11:59, afternoon 12:00–17:59, evening 18:00–21:59) use each plan's own
+timezone, as the cohort does.
+
+### Formulas
+
+- **Due completion** = due completed / (due completed + skipped + not started + in progress + paused).
+  Cancelled, future and removed occurrences are excluded and shown separately.
+  **Due skip** uses the same denominator. A zero denominator is unavailable, never 0%.
+- **Completion among resolved** (execution-based, unchanged) = completed / (completed + skipped + cancelled).
+  `SegmentStats.completed_count`, `skipped_count` and `cancelled_count` are the actual counts.
+- **Unresolved** = not started + in progress + paused. **Overdue, not started** is its due, not-started part.
+- **Points** are the execution's `points` snapshot, never a placement's optimizer `score` and never the
+  task's current value. A completion without a snapshot has unknown points; it is counted, its points are not.
+- **Highest-point day**: the largest sum of known points over finished local dates. Today is returned as the
+  partial period and cannot be the record.
+- **Best week**: the largest sum of known points over whole Monday–Sunday weeks that lie between the first
+  activity and yesterday. The current week is the partial period.
+- **Most completed type**: the type with the most completions in the range; its due-completion rate is shown
+  beside it and does not decide the ranking.
+- **Green-day streaks**: a day is green when `classify_day` says at least 60% of its scheduled occurrences are
+  completed (both green classes; a cancelled attempt counts as uncompleted there). An empty day and a finished
+  non-green day end a streak. Today is provisional while it has no occurrences or any unresolved one. The
+  longest streak is searched in the selected range; the current streak uses the whole history.
+- **Averages**: per elapsed calendar day from the first planned-or-completed activity in the range through
+  yesterday, zero-work days included; per complete Monday–Sunday week (unavailable when there is none).
+  The average daily due completion is the unweighted mean over days with due work; the pooled rate is separate.
+- **Highest-completion weekday**: the highest due-completion rate among weekdays with at least
+  `ProductivityThresholds.low` (5) due occurrences. **Highest-points weekday**: known points divided by the
+  elapsed calendar dates of that weekday (dates without points count as zero).
+- **Most-supported slot**: the planned-start bucket with the most timed completions. It says where the evidence
+  is, not where performance is best.
+
+Every tie is returned (earliest or alphabetically first is the representative). Evidence levels use
+`ProductivityThresholds` (5 / 15 / 30) on the metric's own denominator.
+
+### Task types
+
+A task type (`TaskType`, `Task.task_type_id`) is an identity separate from category, tags and occurrences. A new
+task gets a type derived from its own id unless the user picks an existing type or names a new one in the task
+form. Every occurrence of a recurring series, and every later segment of the series, shares the series' type.
+Tasks are never grouped by name. Category and tag filters select records by their snapshots and never regroup
+types. Items whose type is unknown are grouped apart under "Unknown type".
+
+Schema v12 (desktop) and revision 0013 (server) gave every existing task its derived type. Existing placements
+keep an unknown planning snapshot.
+
+### Completeness and historical gaps
+
+- The whole history is read in windows of at most 366 days, merged as raw records, so medians are exact and a
+  streak can cross a window. Reading stops 30 × 366 days back; older history sets `history_truncated`.
+- A chain of moves longer than 64 steps sets `lineage_truncated`.
+- Completions without `actual_final_end_at` cannot be dated and are counted in `unknown_completion_dates`.
+- Placements saved before planning snapshots have no recorded name, tags or points; their name falls back to the
+  execution's snapshot when there is one, and their type to the task's current type.
+- Any of these marks the report incomplete and qualifies the awards it could change.
+
+### Storage profiles and deletion
+
+- **This device** (ownerless local workspace), **synchronized account** (local database plus HTTP sync) and
+  **direct server** (PostgreSQL, no offline replica) all run the same service over their own repository and give
+  the same report for the same records.
+- Deleting execution history removes its completions, points and timed metrics from every figure above. Plans
+  are not deleted, so due plans become overdue and not started. In a synchronized account the deletion reaches
+  the server and the other devices and is not resurrected by a stale device.
+- Deleting a task or removing a placement does not delete a recorded completion: it still counts on its
+  completion date, with the name, type and points recorded at the time.
+- Exports (CSV / JSON) contain the whole workspace's execution history regardless of the page's filters.

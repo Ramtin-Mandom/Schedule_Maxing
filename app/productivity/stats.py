@@ -115,6 +115,10 @@ class SegmentStats(BaseModel):
 
     observation_count: int
     terminal_count: int
+    #: The actual status counts behind the rates (completed + skipped + cancelled = terminal_count), so a caller
+    #: shows real counts instead of reconstructing them from a rounded rate.
+    completed_count: int = 0
+    skipped_count: int = 0
     cancelled_count: int = 0
     completed_duration_count: int
     evidence_level: EvidenceLevel
@@ -210,6 +214,8 @@ def compute_segment_stats(
     return SegmentStats(
         observation_count=observation_count,
         terminal_count=len(terminal),
+        completed_count=len(completed),
+        skipped_count=sum(1 for observation in terminal if observation.is_skipped),
         cancelled_count=sum(1 for observation in observations if observation.is_cancelled),
         completed_duration_count=len(completed_durations),
         evidence_level=evidence_level,

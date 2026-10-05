@@ -193,7 +193,7 @@ def test_nested_transactions_are_savepoints_of_one_unit_of_work(alice, engine) -
         assert change_count(engine, alice.user_id) == 0  # nothing committed before the outer block ends
     assert sorted(t.name for t in planning.list_tasks()) == ["Also kept", "Kept"]
     feed = change_count(engine, alice.user_id)
-    assert feed == 2  # the rolled-back savepoint left no change-log entry and no gap
+    assert feed == 4  # each kept task and its type record; the rolled-back savepoint left no entry and no gap
 
 
 def test_sessions_are_closed_after_reads_writes_and_errors(alice, engine) -> None:
@@ -233,7 +233,8 @@ def test_concurrent_workers_each_use_their_own_session(alice, engine) -> None:
     with session_factory(engine)() as session:
         seqs = list(session.scalars(select(models.ChangeLogEntry.seq).where(
             models.ChangeLogEntry.user_id == alice.user_id).order_by(models.ChangeLogEntry.seq)))
-    assert seqs == list(range(1, 21))  # the per-user lock kept the feed gap-free and ordered
+    # Twenty tasks, each with its type record: the per-user lock kept the feed gap-free and ordered.
+    assert seqs == list(range(1, 41))
     assert engine.pool.checkedout() == 0
 
 

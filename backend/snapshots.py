@@ -39,6 +39,7 @@ _EXECUTION_COLUMNS = tuple(name for name in ExecutionFields.model_fields if name
 
 REVISION_MODELS: dict[str, type[models.RecordRevision]] = {
     "project": models.ProjectRevision,
+    "task_type": models.TaskTypeRevision,
     "task": models.TaskRevision,
     "fixed_block": models.FixedBlockRevision,
     "placement": models.PlacementRevision,

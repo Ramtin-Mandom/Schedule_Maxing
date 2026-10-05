@@ -34,13 +34,19 @@ from app.execution.errors import ExecutionNotFoundError
 from app.execution.lifecycle import TRANSITIONS, reopen_target
 from app.execution.models import TERMINAL_STATUSES, ExecutionStatus, TaskExecution
 from app.execution.repository import ExecutionRepository
-from app.planning.models import FixedBlock, Project, ScheduledTask, Task
+from app.planning.models import PLACEMENT_SNAPSHOT_FIELDS, FixedBlock, Project, ScheduledTask, Task, TaskType
 from app.planning.preferences import PreferenceOverrides, PreferenceRecord, PreferenceScope
 from app.planning.provenance import GenerationRecord
 from app.planning.repository import PlanningRepository
 
 #: Creates/updates are sent in this order (a record after what it references); deletes in reverse.
-ENTITY_ORDER = ("project", "task", "fixed_block", "placement", "preference", "schedule_generation", "execution")
+ENTITY_ORDER = ("project", "task_type", "task", "fixed_block", "placement", "preference", "schedule_generation",
+                "execution")
+
+#: Sent only to a server with "task_types": a task's type, and the planning snapshot of a placement beyond
+#: task_category (which older servers already know).
+TASK_TYPE_FIELDS = ("task_type_id",)
+PLACEMENT_HISTORY_FIELDS = tuple(name for name in PLACEMENT_SNAPSHOT_FIELDS if name != "task_category")
 
 _TASK_FIELDS = (
     "project_id", "name", "category", "tags", "estimated_duration_minutes", "priority", "points", "required",
@@ -111,6 +117,9 @@ class LocalRecords:
         #: Whether the server knows placement origin/manual intent and cancel reasons ("manual_placements"):
         #: without it they are left out of payloads (an older server rejects unknown fields).
         self.manual_placements = True
+        #: Whether the server synchronizes task types and planning snapshots ("task_types"): without it the
+        #: fields are left out of payloads (they stay recorded here and are uploaded once the server has it).
+        self.task_types = True
         self.planning = planning
         self.executions = executions
 
@@ -124,15 +133,20 @@ class LocalRecords:
         if entity_type == "project":
             model = self.planning.get_project(record_id, include_deleted=True)
             payload = model and {"name": model.name, "description": model.description}
+        elif entity_type == "task_type":
+            model = self.planning.get_task_types([record_id], include_deleted=True).get(record_id)
+            payload = model and {"label": model.label}
         elif entity_type == "task":
             model = self.planning.get_task(record_id, include_deleted=True)
-            payload = model and _dump(model, _TASK_FIELDS)
+            payload = model and _dump(model, (*_TASK_FIELDS, *TASK_TYPE_FIELDS) if self.task_types else _TASK_FIELDS)
         elif entity_type == "fixed_block":
             model = self.planning.get_fixed_blocks([record_id], include_deleted=True).get(record_id)
             payload = model and _dump(model, _BLOCK_FIELDS)
         elif entity_type == "placement":
             model = self.planning.get_placements([record_id], include_deleted=True).get(record_id)
             fields = (*_PLACEMENT_FIELDS, *_PLACEMENT_INTENT_FIELDS) if self.manual_placements else _PLACEMENT_FIELDS
+            if self.task_types:
+                fields = (*fields, *PLACEMENT_HISTORY_FIELDS)
             payload = model and _dump(model, fields)
         elif entity_type == "preference":
             model = self.planning.get_preference_by_id(record_id, include_deleted=True)
@@ -207,6 +221,7 @@ class LocalRecords:
             "replacement_id": replacement.local_id,
             **{name: replacement.payload[name]
                for name in ("planned_date", "timezone", "planned_start", "planned_end", "task_category")},
+            **{name: replacement.payload[name] for name in PLACEMENT_HISTORY_FIELDS if name in replacement.payload},
             "at": record.model.deleted_at.isoformat(),
         }
 
@@ -236,22 +251,32 @@ class LocalRecords:
             return
         if entity_type == "project":
             model = Project.model_validate({**meta, "name": record["name"], "description": record["description"]})
+        elif entity_type == "task_type":
+            model = TaskType.model_validate({**meta, "label": record["label"]})
         elif entity_type == "task":
+            # The server's type is taken when it has one; a record without it (an older server, or a task an
+            # older client created) never erases the type this device recorded.
+            stored = self.planning.get_task(uuid.UUID(str(meta["id"])), include_deleted=True)
+            local_type = stored.task_type_id if stored is not None else None
             model = Task.model_validate({**meta, **{
                 name: record.get(name) if name in _TASK_FIELDS_SINCE_RECURRENCE else record[name]
-                for name in _TASK_FIELDS}})
+                for name in _TASK_FIELDS}, "task_type_id": record.get("task_type_id") or local_type})
         elif entity_type == "fixed_block":
             model = FixedBlock.model_validate({**meta, **{name: record[name] for name in _BLOCK_FIELDS}})
         elif entity_type == "placement":
             # .get: a record acknowledged before the server had these fields (an older shadow) has none of them.
             fields = {name: record.get(name) for name in (*_PLACEMENT_FIELDS, *_PLACEMENT_REMOVAL_FIELDS)}
+            stored = self.planning.get_placements([uuid.UUID(str(meta["id"]))], include_deleted=True).get(
+                uuid.UUID(str(meta["id"])))
             if "preserved" in record:
                 fields.update(origin=record.get("origin"), preserved=bool(record["preserved"]))
-            else:  # a server without manual placements: the local origin and manual intent stay
-                stored = self.planning.get_placements([uuid.UUID(str(meta["id"]))], include_deleted=True).get(
-                    uuid.UUID(str(meta["id"])))
-                if stored is not None:
-                    fields.update(origin=stored.origin, preserved=stored.preserved)
+            elif stored is not None:  # a server without manual placements: the local origin and manual intent stay
+                fields.update(origin=stored.origin, preserved=stored.preserved)
+            # The planning snapshot is history recorded when the placement was saved: what this device recorded
+            # is never replaced or cleared by a server record; a fact unknown here takes the server's.
+            for name in PLACEMENT_SNAPSHOT_FIELDS:
+                recorded = getattr(stored, name) if stored is not None else None
+                fields[name] = recorded if recorded is not None else record.get(name)
             model = ScheduledTask.model_validate({**meta, **fields})
         elif entity_type == "preference":
             model = PreferenceRecord.model_validate({
