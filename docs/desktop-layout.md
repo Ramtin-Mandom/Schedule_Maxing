@@ -15,7 +15,7 @@ It opens on **Day Schedule** with the sidebar collapsed.
 | --- | --- |
 | Day Schedule | Today's workspace ([desktop-day.md](desktop-day.md)): the Day Window, the horizontal timeline, available tasks, the task form, the Engine choice beside Make Schedule, Day Preferences, CSV, Reset Day, the task list and the **Execute** tab |
 | Week / Month Schedule | Real calendar week and month ([desktop-calendar.md](desktop-calendar.md)): select a day, **Open Day**, the task form on the selected date, Reset Week/Month, the task list |
-| Project Schedule / Allocation Planning | Persisted project CRUD, project tasks, date-only allocation previews and selected-date scheduling ([details](desktop-projects-allocation.md)) |
+| Project Schedule | Persisted project CRUD and project tasks ([details](desktop-projects-allocation.md)) |
 | Account | Registration/sign-in, explicit local-data association, profile, sync status and conflict resolution |
 | How to Use | The in-app guide: what the app does and how every view and feature works (`app/ui/guide_page.py`, text in `app/ui/guide_content.py`) |
 | About | Project purpose and creator attribution |

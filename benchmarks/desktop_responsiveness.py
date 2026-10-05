@@ -371,7 +371,7 @@ def main():
                         root.geometry(f"{1000 + n % 30 * 10}x{700 + n % 15 * 5}")
                     elif phase == "pages" and n % 10 == 0:
                         probe.counts[phase]["input_operations"] += 1
-                        pages = ["day", "week", "month", "productivity", "settings", "projects", "allocation"]
+                        pages = ["day", "week", "month", "productivity", "settings", "projects"]
                         root.show_page(pages[n // 10 % len(pages)])
                     elif phase == "generate" and n == 0:
                         root.show_page("day")

@@ -1,0 +1,1838 @@
+{
+  "environment": {
+    "python": "3.10.11",
+    "os": "Windows-10-10.0.19045-SP0",
+    "tk": "8.6.12",
+    "tk_scaling": 1.3333333333333333,
+    "customtkinter": "5.2.2"
+  },
+  "heartbeat_ms": 20,
+  "late_threshold_ms": 33.0,
+  "slow_threshold_ms": 16.0,
+  "duration_s": 51.859,
+  "phases": {
+    "startup": {
+      "counts": {
+        "configure_events": 3736,
+        "ticks": 18,
+        "max_active_jobs": 0,
+        "late_ticks": 8,
+        "late.unattributed": 6,
+        "late.app": 2,
+        "root_configure_events": 1,
+        "expose_events": 53
+      },
+      "timings": {
+        "coalesced:DaySchedulePage._render_available": {
+          "n": 7,
+          "total_ms": 24.003,
+          "mean_ms": 3.429,
+          "p50_ms": 0.072,
+          "p95_ms": 23.636,
+          "max_ms": 23.636
+        },
+        "io.work:SchedulePageController.load": {
+          "n": 2,
+          "total_ms": 10.944,
+          "mean_ms": 5.472,
+          "p50_ms": 5.136,
+          "p95_ms": 5.808,
+          "max_ms": 5.808
+        },
+        "io.work:SchedulePageController.editor_options": {
+          "n": 7,
+          "total_ms": 16.469,
+          "mean_ms": 2.353,
+          "p50_ms": 2.298,
+          "p95_ms": 2.568,
+          "max_ms": 2.568
+        },
+        "io.deliver:TaskFormActions._refresh_options.<locals>.apply": {
+          "n": 4,
+          "total_ms": 563.554,
+          "mean_ms": 140.888,
+          "p50_ms": 186.593,
+          "p95_ms": 187.587,
+          "max_ms": 187.587
+        },
+        "io.work:DaySchedulePage._refresh_status_board.<locals>.<lambda>": {
+          "n": 2,
+          "total_ms": 0.072,
+          "mean_ms": 0.036,
+          "p50_ms": 0.029,
+          "p95_ms": 0.043,
+          "max_ms": 0.043
+        },
+        "io.deliver:DaySchedulePage._refresh_status_board.<locals>.done": {
+          "n": 2,
+          "total_ms": 1.703,
+          "mean_ms": 0.852,
+          "p50_ms": 0.851,
+          "p95_ms": 0.852,
+          "max_ms": 0.852
+        },
+        "io.work:DayWindowActions._refresh_day_window.<locals>.<lambda>": {
+          "n": 4,
+          "total_ms": 1.382,
+          "mean_ms": 0.345,
+          "p50_ms": 0.332,
+          "p95_ms": 0.414,
+          "max_ms": 0.414
+        },
+        "io.deliver:DayWindowActions._refresh_day_window.<locals>.done": {
+          "n": 4,
+          "total_ms": 32.289,
+          "mean_ms": 8.072,
+          "p50_ms": 9.388,
+          "p95_ms": 10.101,
+          "max_ms": 10.101
+        },
+        "io.deliver:DaySchedulePage.reload.<locals>.done": {
+          "n": 2,
+          "total_ms": 235.834,
+          "mean_ms": 117.917,
+          "p50_ms": 11.994,
+          "p95_ms": 223.84,
+          "max_ms": 223.84
+        },
+        "io.deliver:TaskFormActions._reset_editor.<locals>.apply": {
+          "n": 3,
+          "total_ms": 148.638,
+          "mean_ms": 49.546,
+          "p50_ms": 49.818,
+          "p95_ms": 50.21,
+          "max_ms": 50.21
+        },
+        "coalesced:DayTimeline._paint": {
+          "n": 2,
+          "total_ms": 2.367,
+          "mean_ms": 1.183,
+          "p50_ms": 1.004,
+          "p95_ms": 1.362,
+          "max_ms": 1.362
+        },
+        "io.work:CalendarController.load": {
+          "n": 2,
+          "total_ms": 10.35,
+          "mean_ms": 5.175,
+          "p50_ms": 4.942,
+          "p95_ms": 5.407,
+          "max_ms": 5.407
+        },
+        "io.work:CalendarPage._refresh_day_panel.<locals>.<lambda>": {
+          "n": 2,
+          "total_ms": 3.468,
+          "mean_ms": 1.734,
+          "p50_ms": 1.693,
+          "p95_ms": 1.775,
+          "max_ms": 1.775
+        },
+        "io.deliver:CalendarPage._refresh_day_panel.<locals>.done": {
+          "n": 2,
+          "total_ms": 4.318,
+          "mean_ms": 2.159,
+          "p50_ms": 2.011,
+          "p95_ms": 2.307,
+          "max_ms": 2.307
+        },
+        "io.deliver:CalendarPage.reload.<locals>.done": {
+          "n": 2,
+          "total_ms": 411.76,
+          "mean_ms": 205.88,
+          "p50_ms": 205.611,
+          "p95_ms": 206.149,
+          "max_ms": 206.149
+        },
+        "coalesced:CalendarView._paint": {
+          "n": 4,
+          "total_ms": 15.377,
+          "mean_ms": 3.844,
+          "p50_ms": 2.467,
+          "p95_ms": 6.811,
+          "max_ms": 6.811
+        },
+        "worker:ProductivityPage._load.<locals>.<lambda>": {
+          "n": 1,
+          "total_ms": 2.9,
+          "mean_ms": 2.9,
+          "p50_ms": 2.9,
+          "p95_ms": 2.9,
+          "max_ms": 2.9
+        },
+        "app.refresh_status": {
+          "n": 1,
+          "total_ms": 1.178,
+          "mean_ms": 1.178,
+          "p50_ms": 1.178,
+          "p95_ms": 1.178,
+          "max_ms": 1.178
+        },
+        "shell.show_page.day": {
+          "n": 1,
+          "total_ms": 67.227,
+          "mean_ms": 67.227,
+          "p50_ms": 67.227,
+          "p95_ms": 67.227,
+          "max_ms": 67.227
+        },
+        "heartbeat_late": {
+          "n": 18,
+          "total_ms": 5668.006,
+          "mean_ms": 314.889,
+          "p50_ms": 25.606,
+          "p95_ms": 4977.182,
+          "max_ms": 4977.182
+        },
+        "coalesced:TaskStatusBoard._refresh_viewport": {
+          "n": 5,
+          "total_ms": 0.103,
+          "mean_ms": 0.021,
+          "p50_ms": 0.026,
+          "p95_ms": 0.037,
+          "max_ms": 0.037
+        },
+        "gc.gen0": {
+          "n": 1,
+          "total_ms": 9.438,
+          "mean_ms": 9.438,
+          "p50_ms": 9.438,
+          "p95_ms": 9.438,
+          "max_ms": 9.438
+        },
+        "gc.timer_collect": {
+          "n": 1,
+          "total_ms": 9.456,
+          "mean_ms": 9.456,
+          "p50_ms": 9.456,
+          "p95_ms": 9.456,
+          "max_ms": 9.456
+        },
+        "coalesced:CalendarView._check_width": {
+          "n": 2,
+          "total_ms": 0.025,
+          "mean_ms": 0.013,
+          "p50_ms": 0.01,
+          "p95_ms": 0.015,
+          "max_ms": 0.015
+        },
+        "background.deliver:ProductivityPage._load.<locals>.done": {
+          "n": 1,
+          "total_ms": 79.328,
+          "mean_ms": 79.328,
+          "p50_ms": 79.328,
+          "p95_ms": 79.328,
+          "max_ms": 79.328
+        },
+        "coalesced:AppShell._check_layout": {
+          "n": 1,
+          "total_ms": 49.919,
+          "mean_ms": 49.919,
+          "p50_ms": 49.919,
+          "p95_ms": 49.919,
+          "max_ms": 49.919
+        }
+      }
+    },
+    "idle": {
+      "counts": {
+        "configure_events": 69,
+        "expose_events": 155,
+        "ticks": 159,
+        "max_active_jobs": 0
+      },
+      "timings": {
+        "heartbeat_late": {
+          "n": 159,
+          "total_ms": 1827.219,
+          "mean_ms": 11.492,
+          "p50_ms": 11.198,
+          "p95_ms": 24.805,
+          "max_ms": 27.695
+        },
+        "coalesced:TaskStatusBoard._refresh_viewport": {
+          "n": 1,
+          "total_ms": 0.031,
+          "mean_ms": 0.031,
+          "p50_ms": 0.031,
+          "p95_ms": 0.031,
+          "max_ms": 0.031
+        },
+        "gc.gen0": {
+          "n": 1,
+          "total_ms": 0.669,
+          "mean_ms": 0.669,
+          "p50_ms": 0.669,
+          "p95_ms": 0.669,
+          "max_ms": 0.669
+        },
+        "gc.timer_collect": {
+          "n": 1,
+          "total_ms": 0.686,
+          "mean_ms": 0.686,
+          "p50_ms": 0.686,
+          "p95_ms": 0.686,
+          "max_ms": 0.686
+        },
+        "app.refresh_status": {
+          "n": 1,
+          "total_ms": 1.875,
+          "mean_ms": 1.875,
+          "p50_ms": 1.875,
+          "p95_ms": 1.875,
+          "max_ms": 1.875
+        },
+        "app.poll_status": {
+          "n": 1,
+          "total_ms": 1.89,
+          "mean_ms": 1.89,
+          "p50_ms": 1.89,
+          "p95_ms": 1.89,
+          "max_ms": 1.89
+        }
+      }
+    },
+    "move": {
+      "counts": {
+        "configure_events": 93,
+        "root_configure_events": 93,
+        "ticks": 175,
+        "max_active_jobs": 0
+      },
+      "timings": {
+        "heartbeat_late": {
+          "n": 175,
+          "total_ms": 1574.824,
+          "mean_ms": 8.999,
+          "p50_ms": 11.104,
+          "p95_ms": 22.921,
+          "max_ms": 25.943
+        },
+        "app.refresh_status": {
+          "n": 1,
+          "total_ms": 1.849,
+          "mean_ms": 1.849,
+          "p50_ms": 1.849,
+          "p95_ms": 1.849,
+          "max_ms": 1.849
+        },
+        "app.poll_status": {
+          "n": 1,
+          "total_ms": 1.863,
+          "mean_ms": 1.863,
+          "p50_ms": 1.863,
+          "p95_ms": 1.863,
+          "max_ms": 1.863
+        }
+      }
+    },
+    "resize": {
+      "counts": {
+        "configure_events": 2836,
+        "root_configure_events": 50,
+        "ticks": 32,
+        "max_active_jobs": 0,
+        "late_ticks": 27,
+        "late.unattributed": 27,
+        "expose_events": 381
+      },
+      "timings": {
+        "heartbeat_late": {
+          "n": 32,
+          "total_ms": 4483.011,
+          "mean_ms": 140.094,
+          "p50_ms": 159.662,
+          "p95_ms": 249.506,
+          "max_ms": 253.983
+        },
+        "coalesced:AppShell._check_layout": {
+          "n": 21,
+          "total_ms": 0.28,
+          "mean_ms": 0.013,
+          "p50_ms": 0.013,
+          "p95_ms": 0.015,
+          "max_ms": 0.015
+        },
+        "coalesced:TaskStatusBoard._refresh_viewport": {
+          "n": 24,
+          "total_ms": 0.878,
+          "mean_ms": 0.037,
+          "p50_ms": 0.037,
+          "p95_ms": 0.042,
+          "max_ms": 0.043
+        },
+        "coalesced:DaySchedulePage._render_available": {
+          "n": 15,
+          "total_ms": 1.113,
+          "mean_ms": 0.074,
+          "p50_ms": 0.074,
+          "p95_ms": 0.09,
+          "max_ms": 0.09
+        },
+        "app.refresh_status": {
+          "n": 2,
+          "total_ms": 3.033,
+          "mean_ms": 1.516,
+          "p50_ms": 1.516,
+          "p95_ms": 1.517,
+          "max_ms": 1.517
+        },
+        "app.poll_status": {
+          "n": 2,
+          "total_ms": 3.054,
+          "mean_ms": 1.527,
+          "p50_ms": 1.525,
+          "p95_ms": 1.528,
+          "max_ms": 1.528
+        }
+      }
+    },
+    "navigation": {
+      "counts": {
+        "expose_events": 683,
+        "ticks": 99,
+        "max_active_jobs": 0,
+        "late_ticks": 18,
+        "late.app": 7,
+        "configure_events": 1941,
+        "late.unattributed": 11
+      },
+      "timings": {
+        "io.work:SchedulePageController.load": {
+          "n": 1,
+          "total_ms": 5.716,
+          "mean_ms": 5.716,
+          "p50_ms": 5.716,
+          "p95_ms": 5.716,
+          "max_ms": 5.716
+        },
+        "io.work:SchedulePageController.editor_options": {
+          "n": 3,
+          "total_ms": 6.895,
+          "mean_ms": 2.298,
+          "p50_ms": 2.293,
+          "p95_ms": 2.31,
+          "max_ms": 2.31
+        },
+        "io.deliver:TaskFormActions._refresh_options.<locals>.apply": {
+          "n": 3,
+          "total_ms": 6.579,
+          "mean_ms": 2.193,
+          "p50_ms": 2.185,
+          "p95_ms": 2.236,
+          "max_ms": 2.236
+        },
+        "io.work:DaySchedulePage._refresh_status_board.<locals>.<lambda>": {
+          "n": 1,
+          "total_ms": 0.028,
+          "mean_ms": 0.028,
+          "p50_ms": 0.028,
+          "p95_ms": 0.028,
+          "max_ms": 0.028
+        },
+        "io.deliver:DaySchedulePage._refresh_status_board.<locals>.done": {
+          "n": 1,
+          "total_ms": 1.183,
+          "mean_ms": 1.183,
+          "p50_ms": 1.183,
+          "p95_ms": 1.183,
+          "max_ms": 1.183
+        },
+        "io.work:DayWindowActions._refresh_day_window.<locals>.<lambda>": {
+          "n": 3,
+          "total_ms": 0.84,
+          "mean_ms": 0.28,
+          "p50_ms": 0.299,
+          "p95_ms": 0.306,
+          "max_ms": 0.306
+        },
+        "io.deliver:DayWindowActions._refresh_day_window.<locals>.done": {
+          "n": 3,
+          "total_ms": 10.93,
+          "mean_ms": 3.643,
+          "p50_ms": 3.641,
+          "p95_ms": 3.748,
+          "max_ms": 3.748
+        },
+        "io.deliver:DaySchedulePage.reload.<locals>.done": {
+          "n": 1,
+          "total_ms": 14.631,
+          "mean_ms": 14.631,
+          "p50_ms": 14.631,
+          "p95_ms": 14.631,
+          "max_ms": 14.631
+        },
+        "shell.show_page.day": {
+          "n": 1,
+          "total_ms": 82.015,
+          "mean_ms": 82.015,
+          "p50_ms": 82.015,
+          "p95_ms": 82.015,
+          "max_ms": 82.015
+        },
+        "heartbeat_late": {
+          "n": 99,
+          "total_ms": 3317.695,
+          "mean_ms": 33.512,
+          "p50_ms": 11.198,
+          "p95_ms": 153.084,
+          "max_ms": 1015.156
+        },
+        "coalesced:TaskStatusBoard._refresh_viewport": {
+          "n": 9,
+          "total_ms": 0.274,
+          "mean_ms": 0.03,
+          "p50_ms": 0.031,
+          "p95_ms": 0.037,
+          "max_ms": 0.037
+        },
+        "coalesced:DaySchedulePage._render_available": {
+          "n": 9,
+          "total_ms": 0.599,
+          "mean_ms": 0.067,
+          "p50_ms": 0.073,
+          "p95_ms": 0.082,
+          "max_ms": 0.082
+        },
+        "coalesced:AppShell._check_layout": {
+          "n": 4,
+          "total_ms": 0.058,
+          "mean_ms": 0.014,
+          "p50_ms": 0.014,
+          "p95_ms": 0.017,
+          "max_ms": 0.017
+        },
+        "coalesced:DayTimeline._paint": {
+          "n": 1,
+          "total_ms": 1.24,
+          "mean_ms": 1.24,
+          "p50_ms": 1.24,
+          "p95_ms": 1.24,
+          "max_ms": 1.24
+        },
+        "io.work:CalendarController.load": {
+          "n": 2,
+          "total_ms": 10.679,
+          "mean_ms": 5.34,
+          "p50_ms": 5.088,
+          "p95_ms": 5.591,
+          "max_ms": 5.591
+        },
+        "io.work:CalendarPage._refresh_day_panel.<locals>.<lambda>": {
+          "n": 2,
+          "total_ms": 3.175,
+          "mean_ms": 1.588,
+          "p50_ms": 1.585,
+          "p95_ms": 1.59,
+          "max_ms": 1.59
+        },
+        "io.deliver:CalendarPage._refresh_day_panel.<locals>.done": {
+          "n": 2,
+          "total_ms": 6.628,
+          "mean_ms": 3.314,
+          "p50_ms": 3.312,
+          "p95_ms": 3.316,
+          "max_ms": 3.316
+        },
+        "io.deliver:CalendarPage.reload.<locals>.done": {
+          "n": 2,
+          "total_ms": 32.049,
+          "mean_ms": 16.025,
+          "p50_ms": 15.956,
+          "p95_ms": 16.093,
+          "max_ms": 16.093
+        },
+        "shell.show_page.week": {
+          "n": 1,
+          "total_ms": 90.803,
+          "mean_ms": 90.803,
+          "p50_ms": 90.803,
+          "p95_ms": 90.803,
+          "max_ms": 90.803
+        },
+        "coalesced:CalendarView._paint": {
+          "n": 4,
+          "total_ms": 9.979,
+          "mean_ms": 2.495,
+          "p50_ms": 2.106,
+          "p95_ms": 3.075,
+          "max_ms": 3.075
+        },
+        "coalesced:CalendarView._check_width": {
+          "n": 2,
+          "total_ms": 0.038,
+          "mean_ms": 0.019,
+          "p50_ms": 0.018,
+          "p95_ms": 0.02,
+          "max_ms": 0.02
+        },
+        "shell.show_page.month": {
+          "n": 1,
+          "total_ms": 91.109,
+          "mean_ms": 91.109,
+          "p50_ms": 91.109,
+          "p95_ms": 91.109,
+          "max_ms": 91.109
+        },
+        "worker:ProductivityPage._load.<locals>.<lambda>": {
+          "n": 1,
+          "total_ms": 2.637,
+          "mean_ms": 2.637,
+          "p50_ms": 2.637,
+          "p95_ms": 2.637,
+          "max_ms": 2.637
+        },
+        "shell.show_page.productivity": {
+          "n": 1,
+          "total_ms": 72.078,
+          "mean_ms": 72.078,
+          "p50_ms": 72.078,
+          "p95_ms": 72.078,
+          "max_ms": 72.078
+        },
+        "background.deliver:ProductivityPage._load.<locals>.done": {
+          "n": 1,
+          "total_ms": 5.813,
+          "mean_ms": 5.813,
+          "p50_ms": 5.813,
+          "p95_ms": 5.813,
+          "max_ms": 5.813
+        },
+        "worker:ProjectsPage.on_show.<locals>.<lambda>": {
+          "n": 1,
+          "total_ms": 2.069,
+          "mean_ms": 2.069,
+          "p50_ms": 2.069,
+          "p95_ms": 2.069,
+          "max_ms": 2.069
+        },
+        "shell.show_page.projects": {
+          "n": 1,
+          "total_ms": 70.684,
+          "mean_ms": 70.684,
+          "p50_ms": 70.684,
+          "p95_ms": 70.684,
+          "max_ms": 70.684
+        },
+        "background.deliver:PlanningPage.work.<locals>.finish": {
+          "n": 1,
+          "total_ms": 1.824,
+          "mean_ms": 1.824,
+          "p50_ms": 1.824,
+          "p95_ms": 1.824,
+          "max_ms": 1.824
+        },
+        "shell.show_page.allocation": {
+          "n": 1,
+          "total_ms": 63.18,
+          "mean_ms": 63.18,
+          "p50_ms": 63.18,
+          "p95_ms": 63.18,
+          "max_ms": 63.18
+        },
+        "app.refresh_status": {
+          "n": 1,
+          "total_ms": 2.124,
+          "mean_ms": 2.124,
+          "p50_ms": 2.124,
+          "p95_ms": 2.124,
+          "max_ms": 2.124
+        },
+        "app.poll_status": {
+          "n": 1,
+          "total_ms": 2.142,
+          "mean_ms": 2.142,
+          "p50_ms": 2.142,
+          "p95_ms": 2.142,
+          "max_ms": 2.142
+        },
+        "gc.gen0": {
+          "n": 1,
+          "total_ms": 0.982,
+          "mean_ms": 0.982,
+          "p50_ms": 0.982,
+          "p95_ms": 0.982,
+          "max_ms": 0.982
+        },
+        "gc.timer_collect": {
+          "n": 1,
+          "total_ms": 0.997,
+          "mean_ms": 0.997,
+          "p50_ms": 0.997,
+          "p95_ms": 0.997,
+          "max_ms": 0.997
+        },
+        "io.work:SettingsController.load": {
+          "n": 1,
+          "total_ms": 0.604,
+          "mean_ms": 0.604,
+          "p50_ms": 0.604,
+          "p95_ms": 0.604,
+          "max_ms": 0.604
+        },
+        "io.deliver:SettingsPage._loaded": {
+          "n": 1,
+          "total_ms": 943.499,
+          "mean_ms": 943.499,
+          "p50_ms": 943.499,
+          "p95_ms": 943.499,
+          "max_ms": 943.499
+        },
+        "shell.show_page.settings": {
+          "n": 1,
+          "total_ms": 1009.296,
+          "mean_ms": 1009.296,
+          "p50_ms": 1009.296,
+          "p95_ms": 1009.296,
+          "max_ms": 1009.296
+        }
+      }
+    },
+    "generate": {
+      "counts": {
+        "expose_events": 244,
+        "ticks": 112,
+        "max_active_jobs": 1,
+        "late_ticks": 11,
+        "late.app": 1,
+        "configure_events": 2142,
+        "late.unattributed": 10
+      },
+      "timings": {
+        "io.work:SchedulePageController.load": {
+          "n": 1,
+          "total_ms": 5.225,
+          "mean_ms": 5.225,
+          "p50_ms": 5.225,
+          "p95_ms": 5.225,
+          "max_ms": 5.225
+        },
+        "io.work:SchedulePageController.editor_options": {
+          "n": 2,
+          "total_ms": 4.73,
+          "mean_ms": 2.365,
+          "p50_ms": 2.307,
+          "p95_ms": 2.423,
+          "max_ms": 2.423
+        },
+        "io.deliver:TaskFormActions._refresh_options.<locals>.apply": {
+          "n": 2,
+          "total_ms": 4.519,
+          "mean_ms": 2.26,
+          "p50_ms": 2.259,
+          "p95_ms": 2.261,
+          "max_ms": 2.261
+        },
+        "io.work:DaySchedulePage._refresh_status_board.<locals>.<lambda>": {
+          "n": 2,
+          "total_ms": 0.647,
+          "mean_ms": 0.323,
+          "p50_ms": 0.029,
+          "p95_ms": 0.617,
+          "max_ms": 0.617
+        },
+        "io.deliver:DaySchedulePage._refresh_status_board.<locals>.done": {
+          "n": 2,
+          "total_ms": 15.508,
+          "mean_ms": 7.754,
+          "p50_ms": 1.184,
+          "p95_ms": 14.324,
+          "max_ms": 14.324
+        },
+        "io.work:DayWindowActions._refresh_day_window.<locals>.<lambda>": {
+          "n": 2,
+          "total_ms": 0.551,
+          "mean_ms": 0.275,
+          "p50_ms": 0.247,
+          "p95_ms": 0.304,
+          "max_ms": 0.304
+        },
+        "io.deliver:DayWindowActions._refresh_day_window.<locals>.done": {
+          "n": 2,
+          "total_ms": 7.085,
+          "mean_ms": 3.542,
+          "p50_ms": 3.513,
+          "p95_ms": 3.572,
+          "max_ms": 3.572
+        },
+        "io.deliver:DaySchedulePage.reload.<locals>.done": {
+          "n": 1,
+          "total_ms": 14.515,
+          "mean_ms": 14.515,
+          "p50_ms": 14.515,
+          "p95_ms": 14.515,
+          "max_ms": 14.515
+        },
+        "shell.show_page.day": {
+          "n": 1,
+          "total_ms": 83.219,
+          "mean_ms": 83.219,
+          "p50_ms": 83.219,
+          "p95_ms": 83.219,
+          "max_ms": 83.219
+        },
+        "heartbeat_late": {
+          "n": 112,
+          "total_ms": 2830.873,
+          "mean_ms": 25.276,
+          "p50_ms": 11.216,
+          "p95_ms": 113.286,
+          "max_ms": 375.132
+        },
+        "heartbeat_late.jobs_active": {
+          "n": 1,
+          "total_ms": 82.144,
+          "mean_ms": 82.144,
+          "p50_ms": 82.144,
+          "p95_ms": 82.144,
+          "max_ms": 82.144
+        },
+        "coalesced:TaskStatusBoard._refresh_viewport": {
+          "n": 5,
+          "total_ms": 13.236,
+          "mean_ms": 2.647,
+          "p50_ms": 0.067,
+          "p95_ms": 12.775,
+          "max_ms": 12.775
+        },
+        "worker:DaySchedulePage._start_run.<locals>.<lambda>": {
+          "n": 1,
+          "total_ms": 226.757,
+          "mean_ms": 226.757,
+          "p50_ms": 226.757,
+          "p95_ms": 226.757,
+          "max_ms": 226.757
+        },
+        "coalesced:DayTimeline._paint": {
+          "n": 2,
+          "total_ms": 3.244,
+          "mean_ms": 1.622,
+          "p50_ms": 1.198,
+          "p95_ms": 2.046,
+          "max_ms": 2.046
+        },
+        "background.deliver:DaySchedulePage._start_run.<locals>.<lambda>": {
+          "n": 1,
+          "total_ms": 62.228,
+          "mean_ms": 62.228,
+          "p50_ms": 62.228,
+          "p95_ms": 62.228,
+          "max_ms": 62.228
+        },
+        "gc.gen1": {
+          "n": 1,
+          "total_ms": 14.017,
+          "mean_ms": 14.017,
+          "p50_ms": 14.017,
+          "p95_ms": 14.017,
+          "max_ms": 14.017
+        },
+        "gc.timer_collect": {
+          "n": 2,
+          "total_ms": 16.305,
+          "mean_ms": 8.152,
+          "p50_ms": 2.268,
+          "p95_ms": 14.036,
+          "max_ms": 14.036
+        },
+        "app.refresh_status": {
+          "n": 1,
+          "total_ms": 1.686,
+          "mean_ms": 1.686,
+          "p50_ms": 1.686,
+          "p95_ms": 1.686,
+          "max_ms": 1.686
+        },
+        "app.poll_status": {
+          "n": 1,
+          "total_ms": 1.699,
+          "mean_ms": 1.699,
+          "p50_ms": 1.699,
+          "p95_ms": 1.699,
+          "max_ms": 1.699
+        },
+        "gc.gen0": {
+          "n": 1,
+          "total_ms": 2.254,
+          "mean_ms": 2.254,
+          "p50_ms": 2.254,
+          "p95_ms": 2.254,
+          "max_ms": 2.254
+        }
+      }
+    },
+    "sync": {
+      "counts": {
+        "configure_events": 5,
+        "expose_events": 2,
+        "ticks": 159,
+        "max_active_jobs": 1
+      },
+      "timings": {
+        "heartbeat_late": {
+          "n": 159,
+          "total_ms": 1911.868,
+          "mean_ms": 12.024,
+          "p50_ms": 11.219,
+          "p95_ms": 20.454,
+          "max_ms": 26.293
+        },
+        "heartbeat_late.jobs_active": {
+          "n": 63,
+          "total_ms": 758.591,
+          "mean_ms": 12.041,
+          "p50_ms": 11.222,
+          "p95_ms": 20.82,
+          "max_ms": 24.41
+        },
+        "gc.gen0": {
+          "n": 1,
+          "total_ms": 0.638,
+          "mean_ms": 0.638,
+          "p50_ms": 0.638,
+          "p95_ms": 0.638,
+          "max_ms": 0.638
+        },
+        "gc.timer_collect": {
+          "n": 1,
+          "total_ms": 0.651,
+          "mean_ms": 0.651,
+          "p50_ms": 0.651,
+          "p95_ms": 0.651,
+          "max_ms": 0.651
+        },
+        "app.refresh_status": {
+          "n": 2,
+          "total_ms": 4.943,
+          "mean_ms": 2.471,
+          "p50_ms": 2.273,
+          "p95_ms": 2.67,
+          "max_ms": 2.67
+        },
+        "app.poll_status": {
+          "n": 1,
+          "total_ms": 2.685,
+          "mean_ms": 2.685,
+          "p50_ms": 2.685,
+          "p95_ms": 2.685,
+          "max_ms": 2.685
+        },
+        "worker:AccountController.sync_now": {
+          "n": 1,
+          "total_ms": 2019.421,
+          "mean_ms": 2019.421,
+          "p50_ms": 2019.421,
+          "p95_ms": 2019.421,
+          "max_ms": 2019.421
+        },
+        "background.deliver:ScheduleOptimizerApp.sync_now.<locals>.<lambda>": {
+          "n": 1,
+          "total_ms": 2.284,
+          "mean_ms": 2.284,
+          "p50_ms": 2.284,
+          "p95_ms": 2.284,
+          "max_ms": 2.284
+        }
+      }
+    },
+    "idle_after": {
+      "counts": {
+        "ticks": 165,
+        "max_active_jobs": 0
+      },
+      "timings": {
+        "heartbeat_late": {
+          "n": 165,
+          "total_ms": 1736.597,
+          "mean_ms": 10.525,
+          "p50_ms": 11.204,
+          "p95_ms": 17.252,
+          "max_ms": 25.747
+        },
+        "app.refresh_status": {
+          "n": 2,
+          "total_ms": 4.779,
+          "mean_ms": 2.389,
+          "p50_ms": 2.345,
+          "p95_ms": 2.434,
+          "max_ms": 2.434
+        },
+        "app.poll_status": {
+          "n": 2,
+          "total_ms": 4.802,
+          "mean_ms": 2.401,
+          "p50_ms": 2.358,
+          "p95_ms": 2.444,
+          "max_ms": 2.444
+        }
+      }
+    },
+    "native_move_request": {
+      "counts": {
+        "configure_events": 1,
+        "root_configure_events": 1,
+        "ticks": 24,
+        "max_active_jobs": 0
+      },
+      "timings": {
+        "heartbeat_late": {
+          "n": 24,
+          "total_ms": 226.379,
+          "mean_ms": 9.432,
+          "p50_ms": 11.2,
+          "p95_ms": 16.659,
+          "max_ms": 17.042
+        }
+      }
+    },
+    "native_move_size": {
+      "counts": {
+        "configure_events": 1619,
+        "root_configure_events": 101,
+        "expose_events": 2156
+      },
+      "timings": {
+        "app.refresh_status": {
+          "n": 2,
+          "total_ms": 4.417,
+          "mean_ms": 2.209,
+          "p50_ms": 2.132,
+          "p95_ms": 2.285,
+          "max_ms": 2.285
+        },
+        "app.poll_status": {
+          "n": 2,
+          "total_ms": 4.448,
+          "mean_ms": 2.224,
+          "p50_ms": 2.145,
+          "p95_ms": 2.303,
+          "max_ms": 2.303
+        },
+        "coalesced:AppShell._check_layout": {
+          "n": 11,
+          "total_ms": 0.164,
+          "mean_ms": 0.015,
+          "p50_ms": 0.015,
+          "p95_ms": 0.016,
+          "max_ms": 0.016
+        },
+        "coalesced:TaskStatusBoard._refresh_viewport": {
+          "n": 22,
+          "total_ms": 7.915,
+          "mean_ms": 0.36,
+          "p50_ms": 0.353,
+          "p95_ms": 0.405,
+          "max_ms": 0.427
+        }
+      }
+    },
+    "native_move": {
+      "counts": {
+        "ticks": 164,
+        "max_active_jobs": 0
+      },
+      "timings": {
+        "heartbeat_late": {
+          "n": 164,
+          "total_ms": 1014.726,
+          "mean_ms": 6.187,
+          "p50_ms": 4.285,
+          "p95_ms": 16.261,
+          "max_ms": 27.15
+        }
+      }
+    },
+    "native_resize_request": {
+      "counts": {
+        "ticks": 32,
+        "max_active_jobs": 0
+      },
+      "timings": {
+        "heartbeat_late": {
+          "n": 32,
+          "total_ms": 381.44,
+          "mean_ms": 11.92,
+          "p50_ms": 11.22,
+          "p95_ms": 17.988,
+          "max_ms": 18.131
+        }
+      }
+    },
+    "native_resize": {
+      "counts": {
+        "ticks": 151,
+        "max_active_jobs": 0
+      },
+      "timings": {
+        "heartbeat_late": {
+          "n": 151,
+          "total_ms": 995.508,
+          "mean_ms": 6.593,
+          "p50_ms": 4.818,
+          "p95_ms": 14.759,
+          "max_ms": 28.202
+        }
+      }
+    }
+  },
+  "native_episodes": [
+    {
+      "kind": "native_move",
+      "duration_ms": 4310.2,
+      "ticks": 164,
+      "max_late_ms": 27.15,
+      "late_ticks": 0,
+      "configure_events": 90,
+      "root_configure_events": 90
+    },
+    {
+      "kind": "native_resize",
+      "duration_ms": 4022.4,
+      "ticks": 151,
+      "max_late_ms": 28.202,
+      "late_ticks": 0,
+      "configure_events": 1529,
+      "root_configure_events": 11
+    }
+  ],
+  "slow_events": [
+    {
+      "at_s": 0.96,
+      "phase": "startup",
+      "name": "io.deliver:TaskFormActions._refresh_options.<locals>.apply",
+      "ms": 187.165
+    },
+    {
+      "at_s": 0.993,
+      "phase": "startup",
+      "name": "io.deliver:DaySchedulePage.reload.<locals>.done",
+      "ms": 223.84
+    },
+    {
+      "at_s": 1.044,
+      "phase": "startup",
+      "name": "io.deliver:TaskFormActions._reset_editor.<locals>.apply",
+      "ms": 48.61
+    },
+    {
+      "at_s": 1.348,
+      "phase": "startup",
+      "name": "coalesced:DaySchedulePage._render_available",
+      "ms": 23.636
+    },
+    {
+      "at_s": 2.368,
+      "phase": "startup",
+      "name": "io.deliver:TaskFormActions._refresh_options.<locals>.apply",
+      "ms": 186.593
+    },
+    {
+      "at_s": 2.384,
+      "phase": "startup",
+      "name": "io.deliver:CalendarPage.reload.<locals>.done",
+      "ms": 206.149
+    },
+    {
+      "at_s": 2.436,
+      "phase": "startup",
+      "name": "io.deliver:TaskFormActions._reset_editor.<locals>.apply",
+      "ms": 50.21
+    },
+    {
+      "at_s": 3.552,
+      "phase": "startup",
+      "name": "io.deliver:TaskFormActions._refresh_options.<locals>.apply",
+      "ms": 187.587
+    },
+    {
+      "at_s": 3.568,
+      "phase": "startup",
+      "name": "io.deliver:CalendarPage.reload.<locals>.done",
+      "ms": 205.611
+    },
+    {
+      "at_s": 3.62,
+      "phase": "startup",
+      "name": "io.deliver:TaskFormActions._reset_editor.<locals>.apply",
+      "ms": 49.818
+    },
+    {
+      "at_s": 4.995,
+      "phase": "startup",
+      "name": "shell.show_page.day",
+      "ms": 67.227
+    },
+    {
+      "at_s": 4.997,
+      "phase": "startup",
+      "name": "heartbeat_late",
+      "ms": 4977.182,
+      "cause": "unattributed",
+      "measured_app_ms": 912.622,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 5.09,
+      "phase": "startup",
+      "name": "background.deliver:ProductivityPage._load.<locals>.done",
+      "ms": 79.328
+    },
+    {
+      "at_s": 5.09,
+      "phase": "startup",
+      "name": "heartbeat_late",
+      "ms": 72.486,
+      "cause": "app",
+      "measured_app_ms": 88.813,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 5.151,
+      "phase": "startup",
+      "name": "heartbeat_late",
+      "ms": 41.237,
+      "cause": "unattributed",
+      "measured_app_ms": 5.061,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 5.315,
+      "phase": "startup",
+      "name": "heartbeat_late",
+      "ms": 143.981,
+      "cause": "unattributed",
+      "measured_app_ms": 0.0,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 5.469,
+      "phase": "startup",
+      "name": "heartbeat_late",
+      "ms": 133.931,
+      "cause": "unattributed",
+      "measured_app_ms": 0.0,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 5.539,
+      "phase": "startup",
+      "name": "heartbeat_late",
+      "ms": 49.848,
+      "cause": "unattributed",
+      "measured_app_ms": 0.0,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 5.74,
+      "phase": "startup",
+      "name": "coalesced:AppShell._check_layout",
+      "ms": 49.919
+    },
+    {
+      "at_s": 5.78,
+      "phase": "startup",
+      "name": "heartbeat_late",
+      "ms": 80.465,
+      "cause": "app",
+      "measured_app_ms": 49.919,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 6.029,
+      "phase": "startup",
+      "name": "heartbeat_late",
+      "ms": 33.164,
+      "cause": "unattributed",
+      "measured_app_ms": 0.0,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 16.188,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 38.442,
+      "cause": "unattributed",
+      "measured_app_ms": 0.0,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 16.309,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 40.149,
+      "cause": "unattributed",
+      "measured_app_ms": 0.014,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 16.453,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 59.6,
+      "cause": "unattributed",
+      "measured_app_ms": 0.026,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 16.512,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 38.562,
+      "cause": "unattributed",
+      "measured_app_ms": 0.015,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 16.605,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 73.365,
+      "cause": "unattributed",
+      "measured_app_ms": 0.0,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 16.672,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 46.068,
+      "cause": "unattributed",
+      "measured_app_ms": 0.112,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 16.8,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 108.529,
+      "cause": "unattributed",
+      "measured_app_ms": 0.038,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 16.939,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 118.595,
+      "cause": "unattributed",
+      "measured_app_ms": 0.0,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 17.073,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 114.074,
+      "cause": "unattributed",
+      "measured_app_ms": 1.577,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 17.217,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 124.128,
+      "cause": "unattributed",
+      "measured_app_ms": 0.111,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 17.397,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 159.662,
+      "cause": "unattributed",
+      "measured_app_ms": 0.05,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 17.577,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 159.987,
+      "cause": "unattributed",
+      "measured_app_ms": 0.053,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 17.767,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 170.13,
+      "cause": "unattributed",
+      "measured_app_ms": 0.121,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 17.97,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 182.445,
+      "cause": "unattributed",
+      "measured_app_ms": 0.047,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 18.186,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 195.913,
+      "cause": "unattributed",
+      "measured_app_ms": 0.129,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 18.412,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 206.39,
+      "cause": "unattributed",
+      "measured_app_ms": 0.048,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 18.644,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 211.992,
+      "cause": "unattributed",
+      "measured_app_ms": 0.132,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 18.889,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 224.594,
+      "cause": "unattributed",
+      "measured_app_ms": 0.118,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 19.153,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 243.769,
+      "cause": "unattributed",
+      "measured_app_ms": 0.129,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 19.414,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 241.451,
+      "cause": "unattributed",
+      "measured_app_ms": 0.142,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 19.688,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 253.983,
+      "cause": "unattributed",
+      "measured_app_ms": 0.127,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 19.951,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 242.63,
+      "cause": "unattributed",
+      "measured_app_ms": 0.127,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 20.219,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 247.73,
+      "cause": "unattributed",
+      "measured_app_ms": 0.122,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 20.488,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 249.506,
+      "cause": "unattributed",
+      "measured_app_ms": 0.122,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 20.743,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 234.789,
+      "cause": "unattributed",
+      "measured_app_ms": 0.124,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 20.996,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 232.683,
+      "cause": "unattributed",
+      "measured_app_ms": 0.12,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 21.254,
+      "phase": "resize",
+      "name": "heartbeat_late",
+      "ms": 237.991,
+      "cause": "unattributed",
+      "measured_app_ms": 1.643,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 21.336,
+      "phase": "navigation",
+      "name": "shell.show_page.day",
+      "ms": 82.015
+    },
+    {
+      "at_s": 21.336,
+      "phase": "navigation",
+      "name": "heartbeat_late",
+      "ms": 62.336,
+      "cause": "app",
+      "measured_app_ms": 82.053,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 21.577,
+      "phase": "navigation",
+      "name": "heartbeat_late",
+      "ms": 220.576,
+      "cause": "unattributed",
+      "measured_app_ms": 1.365,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 21.784,
+      "phase": "navigation",
+      "name": "heartbeat_late",
+      "ms": 186.813,
+      "cause": "unattributed",
+      "measured_app_ms": 0.119,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 21.97,
+      "phase": "navigation",
+      "name": "heartbeat_late",
+      "ms": 165.746,
+      "cause": "unattributed",
+      "measured_app_ms": 0.121,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 22.143,
+      "phase": "navigation",
+      "name": "heartbeat_late",
+      "ms": 153.084,
+      "cause": "unattributed",
+      "measured_app_ms": 0.125,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 22.301,
+      "phase": "navigation",
+      "name": "heartbeat_late",
+      "ms": 137.589,
+      "cause": "unattributed",
+      "measured_app_ms": 0.105,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 22.392,
+      "phase": "navigation",
+      "name": "shell.show_page.week",
+      "ms": 90.803
+    },
+    {
+      "at_s": 22.392,
+      "phase": "navigation",
+      "name": "heartbeat_late",
+      "ms": 71.498,
+      "cause": "app",
+      "measured_app_ms": 90.838,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 22.473,
+      "phase": "navigation",
+      "name": "heartbeat_late",
+      "ms": 60.433,
+      "cause": "unattributed",
+      "measured_app_ms": 1.952,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 22.624,
+      "phase": "navigation",
+      "name": "heartbeat_late",
+      "ms": 40.024,
+      "cause": "unattributed",
+      "measured_app_ms": 0.069,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 22.68,
+      "phase": "navigation",
+      "name": "heartbeat_late",
+      "ms": 35.924,
+      "cause": "unattributed",
+      "measured_app_ms": 0.0,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 22.988,
+      "phase": "navigation",
+      "name": "io.deliver:CalendarPage.reload.<locals>.done",
+      "ms": 16.093
+    },
+    {
+      "at_s": 23.026,
+      "phase": "navigation",
+      "name": "shell.show_page.month",
+      "ms": 91.109
+    },
+    {
+      "at_s": 23.027,
+      "phase": "navigation",
+      "name": "heartbeat_late",
+      "ms": 87.424,
+      "cause": "app",
+      "measured_app_ms": 91.109,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 23.668,
+      "phase": "navigation",
+      "name": "shell.show_page.productivity",
+      "ms": 72.078
+    },
+    {
+      "at_s": 23.669,
+      "phase": "navigation",
+      "name": "heartbeat_late",
+      "ms": 68.239,
+      "cause": "app",
+      "measured_app_ms": 72.078,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 23.843,
+      "phase": "navigation",
+      "name": "heartbeat_late",
+      "ms": 40.184,
+      "cause": "unattributed",
+      "measured_app_ms": 0.0,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 24.263,
+      "phase": "navigation",
+      "name": "shell.show_page.projects",
+      "ms": 70.684
+    },
+    {
+      "at_s": 24.264,
+      "phase": "navigation",
+      "name": "heartbeat_late",
+      "ms": 66.927,
+      "cause": "app",
+      "measured_app_ms": 70.684,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 24.893,
+      "phase": "navigation",
+      "name": "shell.show_page.allocation",
+      "ms": 63.18
+    },
+    {
+      "at_s": 24.893,
+      "phase": "navigation",
+      "name": "heartbeat_late",
+      "ms": 43.752,
+      "cause": "app",
+      "measured_app_ms": 63.18,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 26.402,
+      "phase": "navigation",
+      "name": "io.deliver:SettingsPage._loaded",
+      "ms": 943.499
+    },
+    {
+      "at_s": 26.441,
+      "phase": "navigation",
+      "name": "shell.show_page.settings",
+      "ms": 1009.296
+    },
+    {
+      "at_s": 26.441,
+      "phase": "navigation",
+      "name": "heartbeat_late",
+      "ms": 1015.156,
+      "cause": "app",
+      "measured_app_ms": 1009.296,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 26.497,
+      "phase": "navigation",
+      "name": "heartbeat_late",
+      "ms": 36.69,
+      "cause": "unattributed",
+      "measured_app_ms": 0.0,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 26.556,
+      "phase": "navigation",
+      "name": "heartbeat_late",
+      "ms": 38.825,
+      "cause": "unattributed",
+      "measured_app_ms": 0.0,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 26.64,
+      "phase": "generate",
+      "name": "shell.show_page.day",
+      "ms": 83.219
+    },
+    {
+      "at_s": 26.659,
+      "phase": "generate",
+      "name": "heartbeat_late",
+      "ms": 82.144,
+      "cause": "app",
+      "measured_app_ms": 83.219,
+      "active_jobs": 1
+    },
+    {
+      "at_s": 26.884,
+      "phase": "generate",
+      "name": "worker:DaySchedulePage._start_run.<locals>.<lambda>",
+      "ms": 226.757
+    },
+    {
+      "at_s": 27.054,
+      "phase": "generate",
+      "name": "background.deliver:DaySchedulePage._start_run.<locals>.<lambda>",
+      "ms": 62.228
+    },
+    {
+      "at_s": 27.054,
+      "phase": "generate",
+      "name": "heartbeat_late",
+      "ms": 375.132,
+      "cause": "unattributed",
+      "measured_app_ms": 63.493,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 27.323,
+      "phase": "generate",
+      "name": "heartbeat_late",
+      "ms": 248.935,
+      "cause": "unattributed",
+      "measured_app_ms": 2.046,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 27.638,
+      "phase": "generate",
+      "name": "heartbeat_late",
+      "ms": 295.157,
+      "cause": "unattributed",
+      "measured_app_ms": 0.0,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 27.938,
+      "phase": "generate",
+      "name": "heartbeat_late",
+      "ms": 252.223,
+      "cause": "unattributed",
+      "measured_app_ms": 0.0,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 28.129,
+      "phase": "generate",
+      "name": "heartbeat_late",
+      "ms": 171.637,
+      "cause": "unattributed",
+      "measured_app_ms": 0.007,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 28.263,
+      "phase": "generate",
+      "name": "heartbeat_late",
+      "ms": 113.286,
+      "cause": "unattributed",
+      "measured_app_ms": 0.0,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 28.368,
+      "phase": "generate",
+      "name": "heartbeat_late",
+      "ms": 84.926,
+      "cause": "unattributed",
+      "measured_app_ms": 0.005,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 28.464,
+      "phase": "generate",
+      "name": "heartbeat_late",
+      "ms": 53.076,
+      "cause": "unattributed",
+      "measured_app_ms": 0.0,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 28.521,
+      "phase": "generate",
+      "name": "heartbeat_late",
+      "ms": 37.196,
+      "cause": "unattributed",
+      "measured_app_ms": 0.0,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 30.122,
+      "phase": "generate",
+      "name": "heartbeat_late",
+      "ms": 72.352,
+      "cause": "unattributed",
+      "measured_app_ms": 12.775,
+      "active_jobs": 0
+    },
+    {
+      "at_s": 33.657,
+      "phase": "sync",
+      "name": "worker:AccountController.sync_now",
+      "ms": 2019.421
+    }
+  ],
+  "tasks": 60,
+  "phase_seconds": 5.0,
+  "startup_ms": 5138.4,
+  "manual": false,
+  "native_injected_drag": true,
+  "profiled": false,
+  "physical_mouse_drag": "only if performed by hand in --manual"
+}

@@ -9,7 +9,7 @@ Run from the project root with:
 Shell (Milestone 4, app/ui/shell.py): a left sidebar that starts collapsed
 and opens with its hamburger button (or Ctrl+B; Ctrl+1..9 jump to a page),
 and one page at a time: Day, Week and Month Schedule, Project Schedule,
-Allocation Planning, Productivity, Settings, Account and About. The app
+Productivity, Settings, Account and About. The app
 opens on Day. Execute stays on Day and Productivity has its own page.
 Appearance (light/dark) and the interface size are saved beside the database
 (app/ui/ui_settings.py). docs/desktop-layout.md describes the layout.
@@ -64,7 +64,7 @@ except ImportError as error:  # pragma: no cover - runtime dependency message
 from app.ui.paint_widgets import AppScrollableFrame
 from app.execution.db import resolve_db_path
 from app.sync.transport import HttpTransport, SyncTransport
-from app.ui import theme
+from app.ui import diagnostics, theme
 from app.ui.account_controller import AccountController, ConnectionView
 from app.ui.account_page import AccountPage
 from app.ui.app_services import AppServices, describe_startup_failure, open_app_services
@@ -74,13 +74,12 @@ from app.ui.direct_services import (
     describe_direct_startup_failure,
     open_direct_app_services,
 )
-from app.ui.background import run_in_background
+from app.ui.background import current_registry, run_in_background
 from app.ui.day_controller import DayScheduleController
 from app.ui.calendar_controller import CalendarController
 from app.ui.calendar_page import CalendarPage
-from app.ui.allocation_controller import AllocationController
 from app.ui.projects_controller import ProjectsController
-from app.ui.planning_pages import AllocationPage, ProjectsPage
+from app.ui.planning_pages import ProjectsPage
 from app.ui.day_page import DaySchedulePage
 from app.ui.components import (
     AppButton,
@@ -95,6 +94,7 @@ from app.ui.productivity_controller import ProductivityController
 from app.ui.productivity_page import ProductivityPage
 from app.ui.shell import AppShell
 from app.ui.shell_state import ShellState
+from app.ui.task_defaults import FILENAME as TASK_DEFAULTS_FILENAME, TaskDefaultsStore
 from app.ui.ui_settings import UISettings, UISettingsStore, settings_path_for
 from app.ui.settings_controller import SettingsController, TaskDataResetController
 from app.ui.tk_lifecycle import DesktopCollection, release_resources
@@ -238,10 +238,14 @@ class ScheduleOptimizerApp(ctk.CTk):
         self.storage = storage or settings.resolve_storage_mode()
         self.ui_store = UISettingsStore(ui_settings_path or settings_path_for(resolve_db_path(db_path)))
         self.ui_settings: UISettings = self.ui_store.load()
+        #: The task form's default values and the added categories (Settings), beside the appearance file.
+        self.task_defaults = TaskDefaultsStore(self.ui_store.path.with_name(TASK_DEFAULTS_FILENAME))
         ctk.set_appearance_mode(self.ui_settings.appearance)
         ctk.set_widget_scaling(self.ui_settings.ui_scale)
         super().__init__()
         self._collection = DesktopCollection(self)
+        # Opt-in (SCHEDULE_MAXING_UI_DIAGNOSTICS): event-loop lateness and callback timings, app/ui/diagnostics.py.
+        self._diagnostics = diagnostics.install_from_env(self, jobs=lambda: current_registry().active)
         ctk.set_default_color_theme("blue")
 
         self.title("Schedule Maxing")
@@ -262,7 +266,12 @@ class ScheduleOptimizerApp(ctk.CTk):
         self.account_controller: AccountController | DirectAccountController | None = None
         self._status_poll = None
         self._seen_report = None
+        #: One status read at a time (refresh_status); requests made while it runs become one more read.
+        self._status_reading = False
+        self._status_again = False
         self._closing = False
+        #: True once the window is destroyed and its storage closed (the end of _on_close's polling).
+        self._closed = False
 
         self._configure_treeview_style()
         try:
@@ -335,11 +344,6 @@ class ScheduleOptimizerApp(ctk.CTk):
             source = self.pages[return_to]
             controller = getattr(source, "page_controller", getattr(source, "controller", None))
             context = (return_to, getattr(controller, "selected_date", day))
-        page.page_controller.allocation_context = None
-        if return_to == "allocation":
-            preview = self.pages["allocation"].preview
-            if preview is not None:
-                page.page_controller.allocation_context = (preview.period.start, preview.period.end, preview.fingerprint, day)
         self.shell_state.remember("day_return", context)
         page.open_date(day, return_to=context)
         self.show_page("day")
@@ -361,7 +365,11 @@ class ScheduleOptimizerApp(ctk.CTk):
         run_in_background(self, TaskDataResetController(services).reset, finished)
 
     def _task_data_was_reset(self) -> None:
-        for key in ("day", "week", "month", "projects", "allocation", "productivity"):
+        self.task_defaults.reset()  # added categories and changed default values go with the data
+        settings_page = self.pages.get("settings")
+        if settings_page is not None:
+            settings_page.render_task_defaults()
+        for key in ("day", "week", "month", "projects", "productivity"):
             page = self.pages.get(key)
             if page is not None and hasattr(page, "on_show") and not getattr(page, "_busy", False):
                 page.on_show()  # re-read now: nothing stale stays on any page
@@ -372,7 +380,15 @@ class ScheduleOptimizerApp(ctk.CTk):
         if self.services is not None:
             self.services.close()
 
+    #: How often a closing window checks whether its background work has finished.
+    CLOSE_POLL_MS = 100
+
     def _on_close(self) -> None:
+        """
+        The user closed the window. Nothing here waits: new background work is
+        refused from this call on, the window is hidden if work is still
+        running, and _finish_close polls until storage can be closed safely.
+        """
         if self._closing:
             return
         self._closing = True
@@ -382,14 +398,19 @@ class ScheduleOptimizerApp(ctk.CTk):
             except tk.TclError:
                 pass
             self._status_poll = None
-        self._finish_close(timeout=10.0)
+        self._finish_close()
 
     def _finish_close(self, timeout: float = 0.0) -> None:
-        if self.services is not None and not self.services.close(timeout=timeout):
-            # Keep Tcl and SQLite alive for outstanding workers; retry without blocking Tk.
-            self.withdraw()
-            self.after(100, self._finish_close)
+        if self._closed:
             return
+        if self.services is not None and not self.services.close(timeout=timeout):
+            # Keep Tcl and storage alive for outstanding workers and the sync loop; look again without blocking Tk.
+            self.withdraw()
+            self.after(self.CLOSE_POLL_MS, self._finish_close)
+            return
+        self._closed = True
+        if self._diagnostics is not None:
+            self._diagnostics.close()
         self.destroy()
         release_resources(self)
         self._collection.close()
@@ -422,11 +443,42 @@ class ScheduleOptimizerApp(ctk.CTk):
         if page is not None and hasattr(page, "on_show") and not getattr(page, "_busy", False):
             page.on_show()
 
-    def refresh_status(self) -> ConnectionView | None:
-        """Update the status bar from the durable sync status; re-read the visible page after remote changes."""
+    def refresh_status(self) -> None:
+        """
+        Ask for a status-bar update from the durable sync status (and a re-read
+        of the visible page after remote changes). The status is read in a
+        worker -- it queries the database, which a sync or a schedule run may
+        be holding -- so this returns at once. Only one read runs at a time:
+        requests made meanwhile are coalesced into a single further read.
+        """
         if self.account_controller is None or self.shell is None:
-            return None
-        result = self.account_controller.connection()
+            return
+        with diagnostics.span("app.refresh_status"):
+            if self._status_reading:
+                self._status_again = True
+                return
+            self._read_status()
+
+    def _read_status(self) -> None:
+        controller, current = self.account_controller, self.services.workspace_guard()
+        self._status_reading, self._status_again = True, False
+        # The guard is applied in _status_read (not by the registry), so an obsolete result still frees the slot.
+        if not run_in_background(self, controller.connection, lambda result: self._status_read(result, current),
+                                 still_current=lambda: True, supersede=(id(self), "status")):
+            self._status_reading = False  # shutting down
+
+    def _status_read(self, result, current: Callable[[], bool]) -> None:
+        self._status_reading = False
+        if self._closing or self.shell is None:
+            return
+        if not current() or self._status_again:
+            # Another workspace's status, or something changed while it was read: read once more instead.
+            self._read_status()
+            if not current():
+                return
+        self._show_status(result)
+
+    def _show_status(self, result) -> ConnectionView | None:
         if not result.ok:
             self.shell.status_bar.show(f"Sync status unavailable: {result.error}", can_sync=False, syncing=False)
             return None
@@ -447,7 +499,8 @@ class ScheduleOptimizerApp(ctk.CTk):
         self._status_poll = None
         if self.services is None or self.services.closed:
             return
-        self.refresh_status()
+        with diagnostics.span("app.poll_status"):
+            self.refresh_status()
         self._status_poll = self.after(self.STATUS_POLL_MS, self._poll_status)
 
     def sync_now(self) -> None:
@@ -561,7 +614,8 @@ class ScheduleOptimizerApp(ctk.CTk):
                                                       timezone=services.timezone, today=self.today),
                     services.execution_controller, services.productivity_controller,
                     on_anchor_changed=self.shell_state.remember, on_return=self.show_page,
-                    return_context=self.shell_state.selection("day_return"), background_io=self.direct,
+                    return_context=self.shell_state.selection("day_return"), background_io=True,
+                    task_defaults=self.task_defaults,
                 ))
                 continue
             add(mode_name, CalendarPage(
@@ -571,20 +625,17 @@ class ScheduleOptimizerApp(ctk.CTk):
                                    executions=services.execution_controller),
                 services.productivity_controller, on_anchor_changed=self.shell_state.remember,
                 on_open_day=lambda day, mode_name=mode_name: self.open_day(day, return_to=mode_name),
-                background_io=self.direct,
+                background_io=True, task_defaults=self.task_defaults,
             ))
         add("productivity", ScrollPage(
             shell.host, lambda parent: ProductivityPage(parent, services.productivity_controller)))
         add("projects", ProjectsPage(
             shell.host, ProjectsController(services.planning_controller, timezone=services.timezone),
             on_open_day=lambda day: self.open_day(day, return_to="projects")))
-        add("allocation", AllocationPage(
-            shell.host, AllocationController(services.planning_controller, timezone=services.timezone, selected=today),
-            on_open_day=lambda day: self.open_day(day, return_to="allocation")))
         add("settings", SettingsPage(
             shell.host, self.ui_settings, on_appearance=self.set_appearance, on_scale=self.set_ui_scale,
-            controller=SettingsController(services.planning_controller, today=self.today), background_io=self.direct,
-            on_reset_task_data=self.reset_task_data))
+            controller=SettingsController(services.planning_controller, today=self.today), background_io=True,
+            on_reset_task_data=self.reset_task_data, task_defaults=self.task_defaults))
 
 
 def main(argv: list[str] | None = None) -> None:

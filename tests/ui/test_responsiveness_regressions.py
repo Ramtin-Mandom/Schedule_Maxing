@@ -150,7 +150,7 @@ def test_unchanged_dependency_choices_do_not_fire_variable_traces():
 
 def test_available_chips_reuse_widgets_but_refresh_versions_and_remove_deleted_tasks(tmp_path, monkeypatch):
     from app.planning.models import Task
-    from tests.ui.test_desktop_app import open_app, close_app, WEDNESDAY, _display_available
+    from tests.ui.test_desktop_app import open_app, close_app, pump, WEDNESDAY, _display_available
 
     if not _display_available():
         pytest.skip("no display available for Tk")
@@ -160,19 +160,24 @@ def test_available_chips_reuse_widgets_but_refresh_versions_and_remove_deleted_t
         task = planning.add_or_update_task(Task(name="Synthetic", category="study", priority=5,
                                                estimated_duration_minutes=15, preferred_dates=[WEDNESDAY])).value
         day.reload()
+        pump(app)
         chip = day.chips[0]
         day.reload()
+        pump(app)
         assert day.chips[0] is chip
         changed = planning.add_or_update_task(task.model_copy(update={"priority": 6}), expected_version=task.version)
         assert changed.ok
         day.reload()
+        pump(app)
         assert day.chips[0] is chip
         selected = []
         monkeypatch.setattr(day, "edit_ref", selected.append)
         chip.invoke()
+        pump(app)
         assert selected[0].version == changed.value.version
         assert planning.remove_task(task.id, expected_version=changed.value.version).ok
         day.reload()
+        pump(app)
         assert day.chips == [] and not chip.winfo_exists()
     finally:
         close_app(app)

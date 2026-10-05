@@ -200,6 +200,25 @@ class SyncStore:
             pending.update((row["entity_type"], row["local_id"]) for row in rows.fetchall())
         return pending
 
+    def pending_count(self, key: str, user_id: str) -> int:
+        """
+        len(pending_records(key, user_id)) counted by SQLite in one statement: the same ownership join per
+        table, the same outbox filter, and UNION counts a record that is both dirty and queued once.
+        """
+        parts, parameters = [], []
+        for entity_type, table in SYNC_TABLES:
+            if entity_type == "task_type":
+                continue
+            parts.append(f"SELECT d.entity_type AS entity_type, d.entity_id AS local_id FROM sync_dirty AS d "
+                         f"JOIN {table} AS t ON t.id = d.entity_id WHERE d.entity_type = ? AND t.user_id = ?")
+            parameters += [entity_type, user_id]
+        parts.append("SELECT entity_type, local_id FROM sync_outbox WHERE account_key = ? "
+                     "AND entity_type <> 'task_type'")
+        parameters.append(key)
+        with self._read():
+            row = self._execute(f"SELECT COUNT(*) AS n FROM ({' UNION '.join(parts)})", tuple(parameters)).fetchone()
+        return int(row["n"])
+
     def setting(self, name: str) -> str | None:
         with self._read():
             row = self._execute("SELECT value FROM local_settings WHERE name = ?", (name,)).fetchone()
@@ -372,6 +391,13 @@ class SyncStore:
                     "SELECT * FROM sync_conflicts WHERE account_key = ? AND status = ? ORDER BY created_at", (key, status)
                 )
             return [self._conflict(row) for row in rows.fetchall()]
+
+    def conflict_count(self, key: str, status: str = "open") -> int:
+        """len(conflicts(key, status)) without reading and decoding the conflicting records."""
+        with self._read():
+            row = self._execute("SELECT COUNT(*) AS n FROM sync_conflicts WHERE account_key = ? AND status = ?",
+                                (key, status)).fetchone()
+        return int(row["n"])
 
     def conflict(self, conflict_id: str) -> Conflict | None:
         with self._read():

@@ -181,6 +181,8 @@ class SyncService:
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._thread: threading.Thread | None = None
+        #: A loop thread that stop() asked to end but that had not finished when stop() returned.
+        self._stopping: threading.Thread | None = None
         #: (transport, token, features) of the last capability answer.
         self._capabilities: tuple[object, str, frozenset[str]] | None = None
 
@@ -554,8 +556,8 @@ class SyncService:
             backend_reachable=self.backend_reachable, backend_checked_at=self.backend_checked_at,
             signed_in=token is not None, auth_required=account is not None and token is None, account=account,
             in_progress=self._sync_lock.locked(),
-            pending=len(store.pending_records(durable.account_key, durable.user_id)) if durable else None,
-            conflicts=len(store.conflicts(durable.account_key, "open")) if durable else 0,
+            pending=store.pending_count(durable.account_key, durable.user_id) if durable else None,
+            conflicts=store.conflict_count(durable.account_key, "open") if durable else 0,
             last_successful_sync_at=durable.last_synced_at if durable else None,
             last_report=report,
             last_error=report.message if report.status in ("offline", "auth_required", "error") else None,
@@ -599,11 +601,16 @@ class SyncService:
             self._wake.clear()
 
     def stop(self, timeout: float = 10.0) -> bool:
-        """Stop the loop and wait for a running sync to finish. True if it stopped in time."""
+        """
+        Stop the loop and wait up to `timeout` for a running sync to finish. True
+        if it has stopped. Safe to call again (e.g. polling with timeout=0): it
+        keeps answering False until the loop thread has really ended.
+        """
         self._stop.set()
         self._wake.set()
-        thread, self._thread = self._thread, None
+        thread, self._thread = self._thread or self._stopping, None
         if thread is None:
             return True
         thread.join(timeout)
-        return not thread.is_alive()
+        self._stopping = thread if thread.is_alive() else None
+        return self._stopping is None

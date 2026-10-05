@@ -4,6 +4,8 @@ import threading
 import tkinter as tk
 from tkinter.font import Font
 
+from app.ui import diagnostics
+
 _owners = 0
 _restore_automatic = False
 
@@ -34,7 +36,8 @@ class DesktopCollection:
                 generation = 0
                 if counts[1] >= thresholds[1]:
                     generation = 2 if counts[2] >= thresholds[2] else 1
-                gc.collect(generation)
+                with diagnostics.span("gc.timer_collect"):
+                    gc.collect(generation)
             self.timer = self.root.after(2000, self.collect)
 
     def close(self):

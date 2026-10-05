@@ -86,10 +86,12 @@ def test_card_batches_yield_reuse_and_cancel_stale_results(tmp_path):
                          placement=original.placement.model_copy(update={"id": uuid.uuid4()}))
                  for i in range(40)]
         board.render(StatusBoard(day=board.board.day, cards=cards))
+        pump(app)
         assert board._render_timer is not None and len(board.card_widgets) < 40
         assert all(not value["frame"].winfo_manager() for value in board.card_widgets.values())
         yielded = []
         app.after(0, lambda: yielded.append(len(board.card_widgets)))
+        pump(app)
         deadline = time.monotonic() + 10
         while board._render_timer is not None:
             app.update()
@@ -112,21 +114,28 @@ def test_card_batches_yield_reuse_and_cancel_stale_results(tmp_path):
         assert board.card_widgets[cards[0].key]["frame"].winfo_manager() == "grid"
         widgets = dict(board.card_widgets)
         board.render(StatusBoard(day=board.board.day, cards=cards))
+        pump(app)
         assert all(board.card_widgets[key] is value for key, value in widgets.items())
         board.set_layout(LayoutMode.NARROW)
+        pump(app)
         assert all(board.card_widgets[key] is value for key, value in widgets.items())
         current = replace(cards[0], task=cards[0].task.model_copy(update={"version": 7}))
         selected = []
         board._on_move = lambda card, target: selected.append(card)
         board.render(StatusBoard(cards=[current]))
+        pump(app)
         board.card_widgets[current.key]["right"].invoke()
+        pump(app)
         assert selected[-1].task.version == 7
         board.render(StatusBoard(cards=cards))
+        pump(app)
         board.render(StatusBoard())  # account/date replacement before the next batch
         pump(app)
         assert not board.card_widgets and board._render_timer is None
         board.render(StatusBoard(cards=cards))
+        pump(app)
         board.destroy()
+        pump(app)
         assert board._render_timer is None
         pump(app)
     finally:

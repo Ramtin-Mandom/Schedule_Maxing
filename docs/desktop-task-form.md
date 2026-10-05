@@ -13,17 +13,19 @@ show the date, and a short id suffix where names and dates still collide.
 
 | Field | Meaning |
 | --- | --- |
-| Name, Category | Required. A category the list lacks, for example an imported one, is kept and offered for that record. It is never renamed |
-| Date | Not typed. A new task gets the date the page has selected -- Day: the date shown (today unless opened for another date); Week/Month: the selected day -- and the form shows it. That real date becomes the first preferred date. Editing keeps the record's own date (and its other preferred dates); an undated imported task stays undated |
-| Only on this date | Pins the task to the date (`required_date`, a hard constraint). Other preferred dates it already had are kept |
+| Name, Category | Name is required. Category starts at "(none)", which saves as `other`. The list is the built-in categories plus those added in Settings (`app/ui/task_defaults.py`). A category the list lacks, for example an imported one, is kept and offered for that record. It is never renamed |
+| Project | Next to Category. Starts at "None" and lists the workspace's live projects; chosen by name, kept by id |
+| Date | Not typed. A new task gets the date the page has selected -- Day: the date shown (today unless opened for another date); Week/Month: the selected day; the form does not show it. That real date becomes the first preferred date. Editing keeps the record's own date (and its other preferred dates); an undated imported task stays undated |
+| Pinned date | No longer a form control. A new task is not pinned; editing a task that is pinned (`required_date`, a hard constraint) keeps it pinned |
 | Required | The task must be scheduled (`required`) |
 | Duration | Whole minutes, from 1 minute to 24 h: `13`, `13 min`, `1 h 13 min`, `1h13m`, `1:13` |
 | Priority | 1 (low) to 10 (high) |
-| Points | 0 to 1000, default 1: what finishing the task is worth to the user, for productivity analytics. Not a scheduling input (the inputs fingerprint excludes it) and never the optimizer's placement `score`. Each execution snapshots the task's points when it is created |
-| Tags | An ordered list. **Enter** adds the typed tag as a chip and never submits the task. A chip's ✕ removes it, and **Backspace** in the empty tag field removes the last one. Blank and repeated tags are ignored. There is no mandatory tag. The scoring adapter still reads only the first tag, and the engine is unchanged |
+| Points | 0 to 1000, default 1, typed or changed by 10 with − / +: what finishing the task is worth to the user, for productivity analytics. Not a scheduling input (the inputs fingerprint excludes it) and never the optimizer's placement `score`. Each execution snapshots the task's points when it is created |
+| Tags | An ordered list. **Enter** adds the typed tag as a chip and never submits the task. A chip's ✕ removes it, and **Backspace** in the empty tag field removes the last one. The chips stay on one row and scroll sideways when they are wider than the form. Blank and repeated tags are ignored. There is no mandatory tag. The scoring adapter still reads only the first tag, and the engine is unchanged |
 | More options → Preferred from / until | An optional preferred window. Leave both empty for "any time" |
 | More options → Deadline | Date and time. Both are needed if either is given |
-| More options → Project, Depends on | Chosen by name, kept by id |
+| More options → Depends on | Chosen by name, kept by id |
+| Use default values | Fills the name (if empty), duration, priority and points from the chosen category's defaults, or the general ones when no category is chosen. Out of the box: priority 5, 60 minutes, 20 points, named after the category. Changed in Settings, stored in `task_defaults.json` beside the database (this device only); "Reset All Task Data" removes added categories and changed values |
 | More options → Task type | The reusable type the task counts under on the Productivity page. "(its own type)" keeps the stored type (a new task gets one of its own); pick an existing type to share it, or "New type..." and a name to create one. Independent of category and tags; an occurrence always has its series' type |
 
 ## Fixed block

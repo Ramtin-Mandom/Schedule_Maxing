@@ -158,22 +158,23 @@ class DayWindowActions:
             else:
                 self.window_bar.show_error(result.error or "The day window could not be read.")
 
-        self._io(lambda: self.day_window.state(day), done, blocking=False)
+        controller = self.day_window
+        self._io(lambda: controller.state(day), done, blocking=False, newest="day-window")
 
     def apply_day_window(self, start_text: str, end_text: str) -> None:
         state = self.window_bar.state
         if state is None or self._refuse_while_busy():
             return
-        day, version = state.day, state.version
-        self._io(lambda: self.day_window.save(day, start_text, end_text, expected_version=version),
+        day, version, controller = state.day, state.version, self.day_window
+        self._io(lambda: controller.save(day, start_text, end_text, expected_version=version),
                  lambda result: self._day_window_saved(day, result, "own"))
 
     def use_default_day_window(self) -> None:
         state = self.window_bar.state
         if state is None or not state.overridden or self._refuse_while_busy():
             return
-        day, version = state.day, state.version
-        self._io(lambda: self.day_window.use_default(day, expected_version=version),
+        day, version, controller = state.day, state.version, self.day_window
+        self._io(lambda: controller.use_default(day, expected_version=version),
                  lambda result: self._day_window_saved(day, result, "default"))
 
     def _day_window_saved(self, day: date, result, what: str) -> None:
