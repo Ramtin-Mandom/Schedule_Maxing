@@ -111,7 +111,7 @@ def test_connection_register_sign_in_profile_and_sign_out(make_desktop, server) 
     transport = InProcessTransport(server.client)
     desktop = make_desktop("desk", transport)
     view = desktop.state()
-    assert view.state == "unconfigured" and "no backend configured" in view.headline
+    assert view.state == "unconfigured" and "no server configured" in view.headline
 
     bad = desktop.account.configure_backend("ftp://nope")
     assert not bad.ok and bad.error.startswith("The backend URL must start with https://")

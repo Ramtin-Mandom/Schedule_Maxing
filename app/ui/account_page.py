@@ -1,9 +1,10 @@
 """
 app/ui/account_page.py
 
-The Account page (Milestone 4, Prompt 2): backend connection, registration,
+The Account page (Milestone 4, Prompt 2): connection status, registration,
 sign-in and sign-out, the explicit association of this device's ownerless
-records, synchronization status with Sync now, and conflict review.
+records, synchronization status with Sync now, and conflict review. The
+server address is not asked for: it is the app's own API (config/settings.py).
 
 Widgets only: everything goes through AccountController (Tk-free), and every
 network call runs in a background worker (app/ui/background.py) with its
@@ -15,12 +16,14 @@ sign-out, association, another backend), on_workspace_changed() lets the app
 switch the workspace and rebuild its pages.
 
 Nothing here stores a password: the password field is cleared after every
-attempt and the session token stays inside SyncService.
+attempt and the session token stays inside SyncService. "Keep me signed in"
+keeps the session (never the password) in the system credential store until
+sign-out (app/sync/credentials.py).
 
 Direct PostgreSQL storage (a controller with storage_mode == "postgres",
 app/ui/direct_services.DirectAccountController): the same page registers,
 signs in, shows the profile and signs out directly against the database.
-The backend address, association, synchronization and conflict cards are
+The association, synchronization and conflict cards are
 hidden -- there is no local copy to associate or synchronize -- and
 "Check connection" checks the database and its schema revision.
 """
@@ -162,7 +165,7 @@ class AccountPage(ctk.CTkFrame):
         self.rowconfigure(1, weight=1)
         subtitle = ("Sign in to your account in the PostgreSQL database. This mode needs the network; nothing is "
                     "kept on this computer." if self.direct else
-                    "Connect to a backend to sign in and synchronize. Everything also works offline.")
+                    "Sign in to synchronize your schedule across devices. Everything also works offline.")
         PageHeader(self, "Account", subtitle).grid(row=0, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(22, 12))
         self.body = AppScrollableFrame(self, fg_color="transparent")
         self.body.grid(row=1, column=0, sticky="nsew", padx=theme.SPACE_M, pady=(0, theme.SPACE_L))
@@ -178,8 +181,7 @@ class AccountPage(ctk.CTkFrame):
                      wraplength=440, anchor="w", justify="left", text_color=theme.TEXT_MUTED).grid(
                          row=1, column=0, sticky="ew", padx=16, pady=(0, 16))
         if self.direct:
-            for widget in (self.backend_field, self.save_backend_button, self.offline_button, self.association_card,
-                           self.sync_card, self.conflicts_card):
+            for widget in (self.association_card, self.sync_card, self.conflicts_card, self.keep_box):
                 widget.grid_remove()
             self.check_button.configure(text="Check database")
         self.refresh()
@@ -195,25 +197,17 @@ class AccountPage(ctk.CTkFrame):
         return card
 
     def _build_connection(self) -> None:
-        card = self.connection_card = self._card(0, "Connection")
+        card = self.connection_card = self._card(0, "Status")
         self.headline = ctk.CTkLabel(card, text="", font=font(theme.SIZE_BODY, "bold"), text_color=theme.TEXT_PRIMARY,
                                      anchor="w", justify="left", wraplength=460)
         self.headline.grid(row=1, column=0, columnspan=3, sticky="ew", padx=theme.SPACE_L)
         self.detail = ctk.CTkLabel(card, text="", font=font(theme.SIZE_SMALL), text_color=theme.TEXT_MUTED, anchor="w",
                                    justify="left", wraplength=460)
         self.detail.grid(row=2, column=0, columnspan=3, sticky="ew", padx=theme.SPACE_L, pady=(2, 10))
-        self.backend_field = LabeledEntry(card, "Backend address", placeholder="https://your-backend.example.com",
-                                          hint="https:// (or http:// for a server on this computer). No password here.")
-        self.backend_field.grid(row=3, column=0, columnspan=3, sticky="ew", padx=theme.SPACE_L)
-        self.backend_field.entry.bind("<Return>", lambda _e: self.save_backend(), add="+")
         buttons = ctk.CTkFrame(card, fg_color="transparent")
-        buttons.grid(row=4, column=0, columnspan=3, sticky="w", padx=theme.SPACE_L, pady=(10, 0))
-        self.save_backend_button = AppButton(buttons, "Save address", self.save_backend)
-        self.save_backend_button.grid(row=0, column=0, padx=(0, 8), pady=4)
+        buttons.grid(row=4, column=0, columnspan=3, sticky="w", padx=theme.SPACE_L)
         self.check_button = AppButton(buttons, "Check connection", self.check_backend, variant="secondary")
-        self.check_button.grid(row=0, column=1, padx=(0, 8), pady=4)
-        self.offline_button = AppButton(buttons, "Work offline", self.remove_backend, variant="ghost")
-        self.offline_button.grid(row=0, column=2, pady=4)
+        self.check_button.grid(row=0, column=0, padx=(0, 8), pady=4)
         self.connection_notice = Notice(card, wraplength=440)
         self.connection_notice.grid(row=5, column=0, columnspan=3, sticky="ew", padx=theme.SPACE_L, pady=(8, 0))
         self.connection_notice.hide()
@@ -234,8 +228,8 @@ class AccountPage(ctk.CTkFrame):
         sign_out_note = ("Signing out closes access to your records on this computer until you sign in again. They "
                          "stay in the database." if getattr(self, "direct", False) else
                          "Signing out hides this account's records on this device and opens a separate guest "
-                         "workspace. Changes not sent yet are kept and sent when you sign in again. (The backend's "
-                         "token simply expires; it is not revoked.)")
+                         "workspace. Changes not sent yet are kept and sent when you sign in again. It also "
+                         "ends \"Keep me signed in\" on this computer.")
         ctk.CTkLabel(self.signed_in_frame, text=sign_out_note,
                      font=font(theme.SIZE_CAPTION), text_color=theme.TEXT_MUTED, anchor="w", justify="left",
                      wraplength=440).grid(row=3, column=0, sticky="ew", pady=(6, 0))
@@ -255,14 +249,21 @@ class AccountPage(ctk.CTkFrame):
         self.password_field.entry.configure(show="•")
         self.password_field.grid(row=2, column=0, columnspan=2, sticky="ew", pady=4)
         self.name_field = LabeledEntry(self.form_frame, "Display name (optional)")
+        #: Stay signed in across restarts until sign-out. Disabled where there is no system credential store.
+        self.keep_variable = tk.BooleanVar(value=False)
+        self.keep_box = ctk.CTkCheckBox(self.form_frame, text="Keep me signed in", variable=self.keep_variable,
+                                        font=font(theme.SIZE_SMALL), text_color=theme.TEXT_PRIMARY)
+        self.keep_box.grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        if not getattr(self.controller, "can_keep_signed_in", False):
+            self.keep_box.configure(state="disabled", text="Keep me signed in (not available on this computer)")
         self.submit_button = AppButton(self.form_frame, "Sign in", self.submit_account)
-        self.submit_button.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        self.submit_button.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         #: What the chosen action does to the work already on this device, in plain words.
         self.mode_note = ctk.CTkLabel(self.form_frame, text="", font=font(theme.SIZE_CAPTION),
                                       text_color=theme.TEXT_MUTED, anchor="w", justify="left", wraplength=440)
-        self.mode_note.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        self.mode_note.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         self.forgot_button = AppButton(self.form_frame, "Forgot password?", self.open_recovery, variant="ghost")
-        self.forgot_button.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self.forgot_button.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         for entry in (self.email_field.entry, self.password_field.entry, self.name_field.entry):
             entry.bind("<Return>", lambda _e: self.submit_account(), add="+")
         self.account_notice = Notice(card, wraplength=440)
@@ -405,8 +406,6 @@ class AccountPage(ctk.CTkFrame):
         self.view = view
         self.headline.configure(text=view.headline)
         self.detail.configure(text=view.detail)
-        if not self.backend_field.get() and view.backend_url:
-            self.backend_field.variable.set(view.backend_url)
         if view.state == "signed_in":
             self.form_frame.grid_remove()
             self.signed_in_label.configure(text=f"Signed in as {masked_email(view.signed_in_email)}")
@@ -428,7 +427,7 @@ class AccountPage(ctk.CTkFrame):
                 }.get(view.state, "guest (no account; saved on this device only)")
         lines = [
             f"Mode: {mode}",
-            f"Connection: {connection if view.state != 'unconfigured' else 'no backend configured'}",
+            f"Connection: {connection if view.state != 'unconfigured' else 'no server configured'}",
             f"Last successful sync: {view.last_success_text}",
             f"Changes waiting to be sent: {view.pending if view.pending is not None else 'none (no account)'}",
             f"Open conflicts: {view.conflicts}",
@@ -445,13 +444,12 @@ class AccountPage(ctk.CTkFrame):
             return
         configured = self.direct or view.state != "unconfigured"
         self._enable(self.check_button, configured and "check" not in self.busy)
-        self._enable(self.offline_button, configured and "backend" not in self.busy)
         self._enable(self.submit_button, configured and "account" not in self.busy)
         self._enable(self.sync_button, view.can_sync and "sync" not in self.busy)
         can_associate = bool(self.preview and self.preview.total and not self.preview.problems)
         self._enable(self.associate_button, can_associate and "associate" not in self.busy)
         if not configured:
-            self.submit_button.configure(text="Enter a backend address first")
+            self.submit_button.configure(text="No server configured")
         elif "account" in self.busy:
             self.submit_button.configure(text="Please wait...")
         else:
@@ -464,27 +462,6 @@ class AccountPage(ctk.CTkFrame):
 
     # ----------------------------------------------------------------- connection
 
-    def save_backend(self) -> None:
-        address = self.backend_field.get().strip()
-        self.backend_field.set_error(None)
-        self._run("backend", lambda: self.controller.configure_backend(address), self._backend_saved,
-                  (self.save_backend_button,))
-
-    def remove_backend(self) -> None:
-        self.backend_field.variable.set("")
-        self._run("backend", lambda: self.controller.configure_backend(None), self._backend_saved,
-                  (self.offline_button,))
-
-    def _backend_saved(self, result: ControllerResult[ConnectionView]) -> None:
-        if not result.ok:
-            self.backend_field.set_error(result.error)
-            self.connection_notice.show("error", result.error)
-            return
-        self.connection_notice.show("success", "Backend saved." if result.value.backend_url else
-                                    "Working offline; no backend is configured.")
-        self._on_workspace_changed()  # a backend switch ends the session: the workspace may change
-        self.render(result.value)
-
     def check_backend(self) -> None:
         def done(result: ControllerResult[ConnectionView]) -> None:
             if not result.ok:
@@ -495,10 +472,10 @@ class AccountPage(ctk.CTkFrame):
                 return
             self.render(result.value)
             if result.value.reachable:
-                self.connection_notice.show("success", "The backend answered.")
+                self.connection_notice.show("success", "The server answered.")
             else:
-                self.connection_notice.show("warning", "The backend did not answer. Check the address and your "
-                                                       "network; everything keeps working offline.")
+                self.connection_notice.show("warning", "The server did not answer. Check your network; "
+                                                       "everything keeps working offline.")
 
         self._run("check", self.controller.check_backend, done, (self.check_button,))
 
@@ -539,14 +516,15 @@ class AccountPage(ctk.CTkFrame):
         for field_widget in (self.email_field, self.password_field, self.name_field):
             field_widget.set_error(None)
         self.password_field.variable.set("")  # never kept, whatever happens next
+        keep = {"keep": True} if not self.direct and self.keep_variable.get() else {}
         if self.mode == "register" and not self.direct:
-            self._run("account", lambda: self.controller.create_account(email, password, display_name=name),
+            self._run("account", lambda: self.controller.create_account(email, password, display_name=name, **keep),
                       lambda result: self._account_created(result, email), (self.submit_button,))
         elif self.mode == "register":
             self._run("account", lambda: self.controller.register(email, password, display_name=name),
                       lambda result: self._registered(result, email), (self.submit_button,))
         else:
-            self._run("account", lambda: self.controller.sign_in(email, password), self._signed_in,
+            self._run("account", lambda: self.controller.sign_in(email, password, **keep), self._signed_in,
                       (self.submit_button,))
 
     def _field_errors(self, result: ControllerResult) -> None:
