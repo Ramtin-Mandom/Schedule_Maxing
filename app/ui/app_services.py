@@ -31,8 +31,8 @@ workspace's widgets. Signing in never claims ownerless records; that stays
 SyncService.associate_local_data(confirmation=...).
 
 Synchronization (app/sync): a SyncService is always created. It is inert
-unless SCHEDULE_MAXING_BACKEND_URL (or backend_url=) names a backend and an
-account signs in through its service API. When a backend is configured its
+until an account signs in to the configured backend (config/settings.py:
+the built-in API address, SCHEDULE_MAXING_BACKEND_URL or backend_url=). When a backend is configured its
 background loop is started; it never holds a SQLite transaction across a
 network call, and a failing backend never blocks local work.
 
@@ -65,6 +65,7 @@ from app.planning.scope import OwnerScope
 from app.planning.time import validate_timezone
 from app.productivity.reporting import ProductivityService
 from app.sync.service import SyncService
+from app.sync import credentials
 from app.sync.store import BACKEND_URL_SETTING, SyncStore
 from app.sync.transport import HttpTransport, SyncTransport
 from app.ui.background import WorkerRegistry, install_registry
@@ -255,9 +256,12 @@ def open_app_services(
         connection = get_connection(db_path)
         planning_service = PlanningService(PlanningRepository(connection))
         execution_repository = ExecutionRepository(connection)
-        # An explicit URL, else SCHEDULE_MAXING_BACKEND_URL, else the one saved on the Account page.
+        # An explicit URL, else the configured API (config/settings.py: the built-in address unless
+        # SCHEDULE_MAXING_BACKEND_URL names another or turns it off), else one saved by an older version.
         backend_url = backend_url or settings.BACKEND_URL or SyncStore(connection).setting(BACKEND_URL_SETTING)
-        sync_service = SyncService(connection, _sync_transport(backend_url, transport_factory))
+        # "Keep me signed in" lives in the system credential store; never with an injected test transport.
+        vault = credentials.system_vault() if transport_factory is HttpTransport else None
+        sync_service = SyncService(connection, _sync_transport(backend_url, transport_factory), vault=vault)
         scope = sync_service.workspace_scope()
         planning_controller, execution_controller, productivity_controller = _build_controllers(
             planning_service, execution_repository, scope, timezone, project_root, sync_service

@@ -39,11 +39,12 @@ password in this (default) mode.
    python -m app.app
    ```
 
-3. **Point it at the backend:** Account page -> Backend address (for example
-   `http://127.0.0.1:8000`, or your `https://...` address) -> **Save address**.
-   Setting `SCHEDULE_MAXING_BACKEND_URL` before starting does the same and
-   overrides the saved address. **Check connection** only asks the backend
-   whether it answers; it never reads, writes or uploads a record.
+3. **Nothing to point at:** the app already knows its API address
+   (`DEFAULT_BACKEND_URL` in `config/settings.py`). Only for development, set
+   `SCHEDULE_MAXING_BACKEND_URL` before starting to use another server (for
+   example `http://127.0.0.1:8000`), or to `off` for no backend at all.
+   **Check connection** only asks the backend whether it answers; it never
+   reads, writes or uploads a record.
 4. **Create an account** (or sign in) on the same page. From then on nothing
    else is needed: saving is local, and uploading and downloading are automatic.
 
@@ -64,15 +65,28 @@ PostgreSQL is the only copy, so there is nothing to associate or synchronize.
 
 ## The Account page (sidebar → Account, or **Account** in the status bar)
 
-**Connection**
+**Status**
 
-- Enter the backend address (`https://…`, or `http://` for a server on this
-  computer), then **Save address**. The address is kept in the database's
-  `local_settings`. `SCHEDULE_MAXING_BACKEND_URL` still overrides it.
-- **Check connection** tests whether the backend answers.
-- **Work offline** removes the backend. This ends the session but changes no
-  records.
-- Switching to another backend also ends the current session first.
+- Shows whether you are signed in and whether the server can be reached.
+  There is no address to enter: the app uses its own API.
+- **Check connection** tests whether the server answers.
+- Nothing is sent until you sign in, so the app still works fully offline.
+
+**Keep me signed in**
+
+- Tick the box above **Sign in** (or **Create account**) to stay signed in
+  after closing the app, until you choose **Sign out**.
+- What is kept is the session's renewable credential, in the operating
+  system's credential store (Windows Credential Manager, macOS Keychain) --
+  never your password, and never in the app's database or a file.
+- **Sign out** removes it from this computer and ends the session on the
+  server. A password reset, or the server's session lifetime
+  (`REFRESH_TOKEN_EXPIRE_DAYS`, 30 days by default), also ends it; then you
+  sign in once more.
+- Without the box, the session lasts while the app is open and is renewed
+  in the background, so you are not asked again every few minutes.
+- The option needs the `keyring` package (in `requirements-desktop.txt`);
+  where no credential store exists the box is disabled.
 
 **Create an account**
 

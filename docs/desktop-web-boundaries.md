@@ -104,7 +104,7 @@ the backend's HTTP modules unimportable and every socket refused.
 | Hosted backend (optional) | `python -m pip install -r requirements-backend.txt` | `DATABASE_URL=... JWT_SECRET=... python -m backend.migrate upgrade` then `uvicorn --factory backend.app:create_app --host 127.0.0.1 --port 8000` |
 | PostgreSQL tests (optional) | disposable DB whose name contains `test` | `TEST_DATABASE_URL=postgresql://.../schedule_maxing_test python -m pytest -m postgres tests/backend` |
 
-Desktop startup with `SCHEDULE_MAXING_BACKEND_URL` unset and no
+Desktop startup with `SCHEDULE_MAXING_BACKEND_URL=off` and no
 `DATABASE_URL`/`JWT_SECRET`: no web or server module is imported, no socket is
 bound or connected, no background thread keeps running (the sync loop is not
 started), no cloud database is migrated and no browser session exists. With a backend URL configured, the

@@ -30,8 +30,9 @@ CLOUD_VARIABLES = ("SCHEDULE_MAXING_BACKEND_URL", "DATABASE_URL", "JWT_SECRET", 
 
 def run_probe(tmp_path: Path, *args: str, timeout: float = 120) -> dict:
     env = {key: value for key, value in os.environ.items() if key not in CLOUD_VARIABLES}
+    # "off": no backend at all (unset would mean the app's built-in API address, config/settings.py).
     env.update(SCHEDULE_MAXING_DATA_DIR=str(tmp_path / "data"), SCHEDULE_MAXING_TIMEZONE="UTC",
-               PYTHONPATH=str(ROOT), PYTHONDONTWRITEBYTECODE="1")
+               SCHEDULE_MAXING_BACKEND_URL="off", PYTHONPATH=str(ROOT), PYTHONDONTWRITEBYTECODE="1")
     completed = subprocess.run([sys.executable, str(PROBE), *args], cwd=str(ROOT), env=env, capture_output=True,
                                text=True, timeout=timeout)
     assert completed.returncode == 0, completed.stderr[-4000:]
