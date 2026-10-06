@@ -123,9 +123,13 @@ class SettingsPage(ctk.CTkFrame):
         background_io: bool = False,
         on_reset_task_data: Callable[[Callable], None] | None = None,
         task_defaults: TaskDefaultsStore | None = None,
+        updates=None,
     ) -> None:
         super().__init__(parent, fg_color=theme.APP_BG, corner_radius=0)
         self.task_defaults = task_defaults or TaskDefaultsStore()
+        #: The window's UpdateFlow (app/ui/update_view.py); None where updates do not apply (direct storage, tests).
+        self.updates = updates
+        self.updates_card = None
         #: Runs the reset in a worker and calls back with its ControllerResult (the app wires TaskDataResetController).
         self._on_reset_task_data = on_reset_task_data
         #: Inside the desktop app the defaults are read and saved in workers (app/ui/background.run_io).
@@ -195,8 +199,14 @@ class SettingsPage(ctk.CTkFrame):
 
         self._build_task_defaults(body)
 
+        if updates is not None:
+            from app.ui.update_view import UpdatesCard
+
+            self.updates_card = UpdatesCard(body, updates)
+            self.updates_card.grid(row=3, column=0, sticky="ew", padx=theme.SPACE_S, pady=(0, theme.SPACE_M))
+
         danger = Card(body, border_color=theme.DANGER)
-        danger.grid(row=3, column=0, sticky="ew", padx=theme.SPACE_S, pady=(0, theme.SPACE_M))
+        danger.grid(row=4, column=0, sticky="ew", padx=theme.SPACE_S, pady=(0, theme.SPACE_M))
         danger.columnconfigure(0, weight=1)
         SectionTitle(danger, "Reset all task data",
                      "Removes every task, fixed block, project, schedule and completion record of this workspace "

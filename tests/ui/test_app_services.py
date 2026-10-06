@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from app.execution.db import MigrationError
+from app.execution.db import BackupError, MigrationError, NewerSchemaError
 from app.execution.models import ExecutionStatus
 from app.execution.repository import ExecutionRepository
 from app.execution.service import ExecutionService
@@ -89,9 +89,26 @@ def test_startup_refuses_a_newer_database_and_invalid_timezone(tmp_path: Path) -
     with pytest.raises(MigrationError):
         open_services(future, tmp_path)
 
+    message = describe_startup_failure(NewerSchemaError("newer"), future)
+    assert "newer version of Schedule Maxing" in message and "Install the latest version" in message
+
     with pytest.raises(ValueError):
         open_app_services(tmp_path / "ok.db", timezone="Not/AZone")
     assert not (tmp_path / "ok.db").exists()  # validated before anything is opened
+
+
+def test_startup_failures_name_the_safety_copies_and_never_suggest_deleting_data(tmp_path: Path) -> None:
+    path = tmp_path / "executions.db"
+    backups = str(tmp_path / "backups")
+    failed_backup = describe_startup_failure(BackupError("disk full"), path)
+    failed_migration = describe_startup_failure(MigrationError("failed to migrate database to schema v9"), path)
+    damaged = describe_startup_failure(sqlite3.DatabaseError("file is not a database"), path)
+
+    assert "safety copy could not be made" in failed_backup and backups in failed_backup
+    assert "update was undone" in failed_migration and backups in failed_migration and "log" in failed_migration
+    assert "may be damaged" in damaged and backups in damaged
+    for message in (failed_backup, failed_migration, damaged):
+        assert "delete" not in message.lower()
 
 
 # -----------------------------------------------------------------------------

@@ -45,6 +45,7 @@ def _no_real_backend_or_credential_store(monkeypatch):
     from app.sync import credentials
 
     monkeypatch.setattr(settings, "BACKEND_URL", None)
+    monkeypatch.setattr(settings, "UPDATE_REPOSITORY", None)  # no update check reaches GitHub from a test
     monkeypatch.setattr(credentials, "system_vault", lambda: None)
 
 

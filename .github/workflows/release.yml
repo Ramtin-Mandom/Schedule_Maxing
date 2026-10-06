@@ -1,0 +1,176 @@
+name: Release
+
+# Publishes a Windows release (docs/windows-distribution.md, "Releasing"):
+#
+#   git tag vX.Y.Z && git push origin vX.Y.Z      (X.Y.Z must be the version in app/version.py)
+#
+#   verify -> test -> build (PyInstaller, bundle checks, packaged self-test, Inno Setup,
+#   install/upgrade/uninstall test, checksums) -> publish (GitHub Release with the installer
+#   and SHA256SUMS.txt).
+#
+# Any failing job stops everything after it: nothing is published unless all of it passed.
+# A manual run (workflow_dispatch) builds and tests the same way but never publishes; its
+# installer is only a workflow artifact.
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    # The tag must be exactly "v" + app/version.py's version, and must not have been released before.
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Read the version
+        id: version
+        run: echo "version=$(python packaging/windows/version_info.py)" >> "$GITHUB_OUTPUT"
+
+      - name: Tag matches the version
+        if: github.event_name == 'push'
+        run: python packaging/windows/version_info.py --check-tag "$GITHUB_REF_NAME"
+
+      - name: Not released yet
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "A release for $GITHUB_REF_NAME already exists." >&2
+            exit 1
+          fi
+
+  test:
+    # The complete suite, exactly as CI runs it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Install virtual desktop
+        run: sudo apt-get update && sudo apt-get install -y xvfb xauth python3-tk
+
+      - name: Run tests
+        run: xvfb-run -a python -m pytest
+
+      - name: Check compilation
+        run: python -m compileall .
+
+      - name: Run Ruff
+        run: python -m ruff check .
+
+  build:
+    needs: [verify, test]
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          architecture: "x64"
+
+      - name: Packaging and start-up tests on Windows
+        run: |
+          python -m pip install --quiet -r requirements-desktop.txt pytest
+          python -m pytest -q tests/test_packaging_config.py tests/test_release_workflow.py tests/test_runtime.py tests/test_desktop_entry.py tests/test_logging_setup.py tests/execution/test_backup.py tests/update
+
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --version=6.4.3 --yes --no-progress }
+          if (-not (Test-Path $iscc)) { throw "Inno Setup 6 is not available on this runner." }
+
+      - name: Signing certificate (optional)
+        # Only when the repository has the signing secrets; otherwise the build is unsigned and says so.
+        id: signing
+        shell: pwsh
+        env:
+          SM_SIGN_PFX_BASE64: ${{ secrets.SM_SIGN_PFX_BASE64 }}
+        run: |
+          if ($env:SM_SIGN_PFX_BASE64) {
+            $pfx = Join-Path $env:RUNNER_TEMP "signing.pfx"
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SM_SIGN_PFX_BASE64))
+            "pfx=$pfx" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Host "No signing certificate configured: this is an unsigned build."
+          }
+
+      - name: Build, check, smoke-test and package
+        shell: pwsh
+        env:
+          SM_SIGN_PFX: ${{ steps.signing.outputs.pfx }}
+          SM_SIGN_PFX_PASSWORD: ${{ secrets.SM_SIGN_PFX_PASSWORD }}
+        run: packaging\windows\build_windows.ps1 -SkipTests
+
+      - name: Install, restart, upgrade and uninstall
+        shell: pwsh
+        run: python packaging\windows\test_installer.py "dist\installer\ScheduleMaxing-Setup-$env:VERSION.exe"
+
+      - name: Verify checksums
+        shell: pwsh
+        run: python packaging\windows\checksums.py --verify "dist\installer\ScheduleMaxing-Setup-$env:VERSION.exe"
+
+      - name: Remove the signing certificate
+        if: always()
+        shell: pwsh
+        run: Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:RUNNER_TEMP "signing.pfx")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ScheduleMaxing-Setup-${{ needs.verify.outputs.version }}
+          path: |
+            dist/installer/ScheduleMaxing-Setup-${{ needs.verify.outputs.version }}.exe
+            dist/installer/SHA256SUMS.txt
+          if-no-files-found: error
+
+  publish:
+    # Tag pushes only. A stable release: not a draft, not a pre-release -- the updater offers it to everyone.
+    needs: [verify, build]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ScheduleMaxing-Setup-${{ needs.verify.outputs.version }}
+          path: release
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "release/ScheduleMaxing-Setup-$VERSION.exe" "release/SHA256SUMS.txt" \
+            --repo "$GITHUB_REPOSITORY" --title "Schedule Maxing $VERSION" --generate-notes --verify-tag --latest
