@@ -12,3 +12,6 @@ scikit-learn>=1.4.0
 joblib>=1.2.0
 # IANA time zones (zoneinfo) where the host has no time zone database, e.g. Windows.
 tzdata>=2024.1
+# "Keep me signed in": the operating system's credential store (app/sync/credentials.py).
+# Optional at run time -- without it the option is simply not offered.
+keyring>=24

@@ -16,7 +16,11 @@ not exceptions.
 
 Credentials: the access token is only held in memory by SyncService and is
 passed per call; it is never written to disk or logged. Passwords are sent
-once to /auth/login and never stored.
+once to /auth/login and never stored. A login also returns a single-use
+refresh credential (when the server issues them): refresh() exchanges it for
+a new pair, logout() revokes its session. SyncService holds it in memory and,
+only for "Keep me signed in", in the operating system's credential store
+(app/sync/credentials.py).
 """
 
 from __future__ import annotations
@@ -52,6 +56,14 @@ class LoginResult:
     token: str
     user_id: str
     email: str
+    #: None from a server that predates rotating native sessions.
+    refresh_token: str | None = None
+
+
+@dataclass(frozen=True)
+class TokenPair:
+    token: str
+    refresh_token: str
 
 
 @dataclass(frozen=True)
@@ -94,6 +106,10 @@ class SyncTransport(Protocol):
 
     def reset_password(self, token: str, new_password: str) -> dict: ...
 
+    # Optional (SyncService looks them up with getattr; a transport without them simply cannot renew a session):
+    #     refresh(refresh_token) -> TokenPair    consume the credential for a new pair (never retry a lost answer)
+    #     logout(refresh_token) -> None          revoke the credential's session on the server
+
 
 def _classify(status: int, body: dict | None) -> Exception:
     code = ((body or {}).get("error") or {}).get("code", "")
@@ -107,9 +123,20 @@ def _classify(status: int, body: dict | None) -> Exception:
 
 def login_via(request, email: str, password: str) -> LoginResult:
     """The login exchange on top of any `request(method, path, token, body) -> dict` function."""
-    token = request("POST", "/auth/login", None, {"email": email, "password": password})["access_token"]
+    answer = request("POST", "/auth/login", None, {"email": email, "password": password})
+    token = answer["access_token"]
     profile = request("GET", "/me", token, None)
-    return LoginResult(token=token, user_id=profile["id"], email=profile["email"])
+    return LoginResult(token=token, user_id=profile["id"], email=profile["email"],
+                       refresh_token=answer.get("refresh_token"))
+
+
+def refresh_via(request, refresh_token: str) -> TokenPair:
+    answer = request("POST", "/auth/refresh", None, {"refresh_token": refresh_token})
+    return TokenPair(token=answer["access_token"], refresh_token=answer["refresh_token"])
+
+
+def logout_via(request, refresh_token: str) -> None:
+    request("POST", "/auth/logout", None, {"refresh_token": refresh_token})
 
 
 def register_via(request, email: str, password: str, username: str | None, display_name: str | None) -> dict:
@@ -196,6 +223,12 @@ class HttpTransport:
 
     def login(self, email: str, password: str) -> LoginResult:
         return login_via(self._request, email, password)
+
+    def refresh(self, refresh_token: str) -> TokenPair:
+        return refresh_via(self._request, refresh_token)
+
+    def logout(self, refresh_token: str) -> None:
+        logout_via(self._request, refresh_token)
 
     def push(self, token: str, operations: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return self._request("POST", "/sync/push", token, {"operations": operations})["results"]

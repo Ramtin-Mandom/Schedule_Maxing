@@ -16,7 +16,8 @@ Milestone 3 connects the desktop's local SQLite records
 
 The desktop runs offline unless **both** of these are true:
 
-- `SCHEDULE_MAXING_BACKEND_URL` names a backend (or `open_app_services(backend_url=...)` is used);
+- a backend is configured: the built-in API address by default, another one named by
+  `SCHEDULE_MAXING_BACKEND_URL` or `open_app_services(backend_url=...)` (`off` means none);
 - an account has signed in through `SyncService.sign_in(email, password)`.
 
 Otherwise `sync_now()` returns `inert`, nothing is sent, and no login,

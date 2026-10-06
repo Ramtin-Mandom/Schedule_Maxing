@@ -36,6 +36,19 @@ def _isolate_default_data_location(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_backend_or_credential_store(monkeypatch):
+    """
+    Tests never reach the built-in API address or the operating system's
+    credential store: no backend is configured unless a test names one, and
+    "Keep me signed in" has no vault unless a test injects one.
+    """
+    from app.sync import credentials
+
+    monkeypatch.setattr(settings, "BACKEND_URL", None)
+    monkeypatch.setattr(credentials, "system_vault", lambda: None)
+
+
+@pytest.fixture(autouse=True)
 def _cheap_test_password_hashing(request, monkeypatch):
     """
     Test-only, explicit: Argon2id with minimal cost parameters (still Argon2id, still verified for real), so the

@@ -86,3 +86,16 @@ def test_a_history_reset_deletes_the_synchronized_executions_on_the_server(alice
 
     remote = alice_server.get("alice@example.com", f"/executions/{execution.id}", include_deleted=True)
     assert remote["deleted_at"] is not None and device.dirty() == []
+
+
+def test_refresh_and_logout_over_real_http(http_backend) -> None:
+    transport = HttpTransport(http_backend, timeout=5)
+    first = transport.login("alice@example.com", PASSWORD)
+    pair = transport.refresh(first.refresh_token)
+    assert pair.token != first.token and pair.refresh_token != first.refresh_token
+    assert transport.profile(pair.token)["email"] == "alice@example.com"
+    assert transport.logout(pair.refresh_token) is None  # 204, no body
+    with pytest.raises(AuthenticationError):
+        transport.profile(pair.token)
+    with pytest.raises(AuthenticationError):
+        transport.refresh(pair.refresh_token)
