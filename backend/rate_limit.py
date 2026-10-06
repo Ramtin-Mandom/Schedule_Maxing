@@ -50,6 +50,8 @@ LIMITS: dict[str, Limit] = {
     "login_ip": Limit(30, 300),
     "login_identifier": Limit(10, 900),
     "register_ip": Limit(10, 3600),
+    "refresh_ip": Limit(60, 300),
+    "logout_ip": Limit(60, 300),
     "recovery_ip": Limit(10, 3600),
     "recovery_identifier": Limit(3, 3600),
     "reset_ip": Limit(20, 3600),

@@ -52,7 +52,8 @@ class IssuedToken:
 
 
 def issue_access_token(
-    user_id: uuid.UUID, settings: BackendSettings, now: datetime, credential_epoch: int = 0
+    user_id: uuid.UUID, settings: BackendSettings, now: datetime, credential_epoch: int = 0,
+    *, session_id: uuid.UUID | None = None,
 ) -> IssuedToken:
     expires_at = now + timedelta(minutes=settings.access_token_ttl_minutes)
     claims = {
@@ -66,6 +67,8 @@ def issue_access_token(
         "jti": uuid.uuid4().hex,
         "typ": TOKEN_TYPE,
     }
+    if session_id is not None:
+        claims["sid"] = str(session_id)
     token = jwt.encode(claims, settings.jwt_secret, algorithm=JWT_ALGORITHM)
     return IssuedToken(token=token, expires_at=expires_at, expires_in=settings.access_token_ttl_minutes * 60)
 
@@ -77,6 +80,12 @@ def verify_access_token(token: str, settings: BackendSettings, now: datetime) ->
 
 def verify_access_token_claims(token: str, settings: BackendSettings, now: datetime) -> tuple[uuid.UUID, int]:
     """(user id, credential epoch) of a valid access token; TokenError otherwise."""
+    user_id, epoch, _ = verify_access_identity(token, settings, now)
+    return user_id, epoch
+
+
+def verify_access_identity(token: str, settings: BackendSettings, now: datetime) -> tuple[uuid.UUID, int, uuid.UUID | None]:
+    """Verified identity and optional native-session id; legacy tokens remain compatible."""
     try:
         claims = jwt.decode(
             token,
@@ -93,12 +102,12 @@ def verify_access_token_claims(token: str, settings: BackendSettings, now: datet
         raise TokenError(type(error).__name__) from None
     # Time claims are checked against the injectable server clock (not PyJWT's wall clock), with no leeway.
     times = [claims.get(name) for name in ("exp", "nbf", "iat")]
-    if not all(isinstance(value, int) for value in times):
+    if not all(isinstance(value, int) and not isinstance(value, bool) for value in times):
         raise TokenError("malformed time claims")
-    exp, nbf, _ = times
+    exp, nbf, iat = times
     if now.timestamp() >= exp:
         raise TokenError("ExpiredSignatureError")
-    if now.timestamp() < nbf:
+    if now.timestamp() < nbf or now.timestamp() < iat:
         raise TokenError("ImmatureSignatureError")
     if claims.get("typ") != TOKEN_TYPE:
         raise TokenError("wrong token type")
@@ -106,6 +115,7 @@ def verify_access_token_claims(token: str, settings: BackendSettings, now: datet
     if not isinstance(epoch, int) or isinstance(epoch, bool) or epoch < 0:
         raise TokenError("malformed credential epoch")
     try:
-        return uuid.UUID(claims["sub"]), epoch
+        session_id = uuid.UUID(claims["sid"]) if "sid" in claims else None
+        return uuid.UUID(claims["sub"]), epoch, session_id
     except (ValueError, TypeError, AttributeError):
         raise TokenError("invalid subject") from None

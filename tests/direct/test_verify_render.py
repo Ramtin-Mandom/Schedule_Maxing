@@ -226,3 +226,13 @@ def test_pytest_never_takes_its_database_from_database_url() -> None:
         text = path.read_text(encoding="utf-8")
         assert "dotenv" not in text and "env_file" not in text
         assert text.replace("TEST_DATABASE_URL", "").count('"DATABASE_URL"') == 0, path
+
+
+def test_password_audit_still_rejects_an_unexpected_plaintext_column(engine):
+    from sqlalchemy import text
+
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE users ADD COLUMN plaintext_secret VARCHAR(100)"))
+    code, output = run(engine, ARGS)
+    assert code == 2
+    assert "credential column that is not a hash" in output

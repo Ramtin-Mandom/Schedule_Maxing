@@ -17,6 +17,7 @@ first; /ready reports 503 until the database is at the latest revision.
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from fastapi import FastAPI
@@ -28,7 +29,7 @@ from backend.api import install_routes
 from backend.database import create_backend_engine, session_factory
 from backend.http_errors import install_error_handlers
 from backend.planning_api import build_planning_router, hosted_capabilities, hosted_context_dependency
-from backend.protection import BodySizeLimit, install_access_log_redaction
+from backend.protection import BodySizeLimit, PrivateResponses, install_access_log_redaction
 from backend.rate_limit import RateLimiter
 from backend.recovery_api import recovery
 from backend.recovery_delivery import RecoveryDeliveryAdapter, delivery_for
@@ -57,12 +58,27 @@ def create_app(
     default: SMTP when the settings configure recovery, else none.
     """
     settings = settings or load_settings()
+    owns_engine = engine is None
     engine = engine or create_backend_engine(settings.database_url, **_engine_options(settings))
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        try:
+            yield
+        finally:
+            if owns_engine:
+                engine.dispose()
 
     app = FastAPI(
         title="Schedule Maxing API",
         version=API_VERSION,
         description="User-scoped, versioned planning and execution records for Schedule Maxing clients.",
+        lifespan=lifespan,
+        responses={code: {"description": description} for code, description in {
+            401: "Missing, expired or revoked credentials.", 404: "Resource not found in the authenticated scope.",
+            409: "Version, state or relationship conflict.", 422: "Invalid request.",
+            429: "Rate limit exceeded; observe Retry-After.", 500: "Unexpected internal error (details withheld).",
+        }.items()},
     )
     app.state.settings = settings
     app.state.engine = engine
@@ -83,6 +99,7 @@ def create_app(
                            allow_headers=["Authorization", "Content-Type", "X-CSRF-Token"])
     if settings.allowed_hosts:
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
+    app.add_middleware(PrivateResponses)
     install_access_log_redaction()
     return app
 

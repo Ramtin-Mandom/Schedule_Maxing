@@ -1361,6 +1361,36 @@ class PasswordRecoveryToken(Base):
     )
 
 
+class NativeSession(Base):
+    """One native-client login/refresh family, with an absolute expiration."""
+
+    __tablename__ = "native_sessions"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False)
+    credential_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ix_native_sessions_user", "user_id"),
+        Index("ix_native_sessions_expiry", "expires_at"),
+        CheckConstraint("credential_epoch >= 0", name="ck_native_sessions_epoch"),
+        CheckConstraint("expires_at > created_at", name="ck_native_sessions_expiry"),
+    )
+
+
+class RefreshCredential(Base):
+    """A refresh digest; retain consumed rows until the family expires to detect replay."""
+
+    __tablename__ = "refresh_credentials"
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("native_sessions.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    __table_args__ = (Index("ix_refresh_credentials_session", "session_id"),)
+
+
 class RateLimitBucket(Base):
     """
     A fixed-window request counter shared by every worker and replica
