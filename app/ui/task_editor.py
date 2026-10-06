@@ -377,8 +377,9 @@ class TaskEditor(Card):
         self.name_field.entry.bind("<Return>", lambda _e: (self.submit(), "break")[1], add="+")
         self.category_select = LabeledSelect(body, "Category", [NO_CATEGORY, *CATEGORIES])
         self.project_select = LabeledSelect(body, "Project", [NO_PROJECT])
-        self.date_field = DateField(body, "Date", hint=DateField.FORMAT_HINT)
         if date_selector:
+            # Only the Projects page's form has a date to type; every other form takes its page's date.
+            self.date_field = DateField(body, "Date", hint=DateField.FORMAT_HINT)
             switch.grid_remove()
         self.name_field.grid(row=0, column=0, columnspan=2, sticky="ew", pady=4)
 
