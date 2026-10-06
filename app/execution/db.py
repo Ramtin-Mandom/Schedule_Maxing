@@ -175,6 +175,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 
+from app.execution.backup import backup_before_migration
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -195,6 +196,14 @@ class MigrationError(StorageError):
 
 class IntegrityCheckError(StorageError):
     """PRAGMA foreign_key_check / quick_check reported a problem after migrating."""
+
+
+class BackupError(StorageError):
+    """The database could not be backed up before a migration, so it was not migrated (it is unchanged)."""
+
+
+class NewerSchemaError(MigrationError):
+    """The database was written by a newer version of the application; it is refused untouched."""
 
 
 class LegacyAdoptionError(StorageError):
@@ -1338,7 +1347,7 @@ def initialize_schema(connection: sqlite3.Connection, *, target_version: int | N
 
         current_version = connection.execute("PRAGMA user_version").fetchone()[0]
         if current_version > latest:
-            raise MigrationError(
+            raise NewerSchemaError(
                 f"database schema version {current_version} is newer than this application supports ({latest}); "
                 "refusing to open it"
             )
@@ -1368,8 +1377,11 @@ def initialize_schema(connection: sqlite3.Connection, *, target_version: int | N
             except IntegrityCheckError:
                 raise
             except Exception as error:
+                logger.error("Migrating the database to schema v%d failed; it stays at v%d.", version, version - 1)
                 raise MigrationError(f"failed to migrate database to schema v{version}: {error}") from error
             applied_any = True
+            if current_version:  # an upgrade of existing data (creating a new database is not worth a line per step)
+                logger.info("Migrated the database to schema v%d.", version)
 
         if applied_any:
             result = connection.execute("PRAGMA quick_check").fetchone()[0]
@@ -1490,6 +1502,24 @@ def _adopt_legacy_for_default_location(target: Path) -> None:
         )
 
 
+def _backup_if_migration_pending(connection: sqlite3.Connection, db_path: Path) -> Path | None:
+    """
+    Existing data about to be migrated is copied first (app/execution/backup.py).
+    A new database (version 0), a current one and one newer than this code
+    (refused by initialize_schema) are not copied. If the copy cannot be
+    made, BackupError is raised and nothing is migrated.
+    """
+    current_version = connection.execute("PRAGMA user_version").fetchone()[0]
+    if not 0 < current_version < LATEST_SCHEMA_VERSION:
+        return None
+    try:
+        return backup_before_migration(connection, db_path, current_version)
+    except (sqlite3.Error, OSError) as error:
+        raise BackupError(
+            f"could not back up the database before migrating it from schema v{current_version}: {error}"
+        ) from error
+
+
 def get_connection(db_path: str | Path | None = None) -> AppConnection:
     """
     Open (creating if necessary) the application database.
@@ -1497,7 +1527,8 @@ def get_connection(db_path: str | Path | None = None) -> AppConnection:
     Ensures the parent directory exists, enables row access by column name,
     turns on foreign-key enforcement (off by default in SQLite), puts the
     connection in autocommit mode so transaction() owns every transaction,
-    and applies any pending schema migrations before returning.
+    and applies any pending schema migrations before returning -- after
+    copying existing data to backups/ first (app/execution/backup.py).
 
     When no db_path is given and SCHEDULE_MAXING_DATA_DIR is not set, an
     existing repository-local database from earlier milestones is first
@@ -1508,7 +1539,7 @@ def get_connection(db_path: str | Path | None = None) -> AppConnection:
     in_memory = str(resolved_path) == ":memory:"
     if not in_memory:
         resolved_path.parent.mkdir(parents=True, exist_ok=True)
-        if db_path is None and not settings.DATA_DIR_OVERRIDDEN:
+        if db_path is None and not settings.DATA_DIR_OVERRIDDEN and settings.LEGACY_ADOPTION_ENABLED:
             _adopt_legacy_for_default_location(resolved_path)
 
     # The desktop UI opens this connection once on the Tk main thread but
@@ -1522,6 +1553,8 @@ def get_connection(db_path: str | Path | None = None) -> AppConnection:
     try:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
+        if not in_memory:
+            _backup_if_migration_pending(connection, resolved_path)
         initialize_schema(connection)
     except BaseException:
         connection.close()

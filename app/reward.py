@@ -56,6 +56,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
+from app import runtime
+
 
 # -----------------------------
 # Reward configuration model
@@ -199,9 +201,9 @@ def load_reward_settings(
 
 
 def _default_project_root() -> Path:
-    """This project's own root directory, derived from this module's file
-    location (app/reward.py -> app/ -> project root), independent of cwd."""
-    return Path(__file__).resolve().parent.parent
+    """Where config/ lives, independent of cwd: this project's own root from
+    source, the bundled resources in the packaged application (app/runtime.py)."""
+    return runtime.resource_root()
 
 
 def _resolve_config_path(
