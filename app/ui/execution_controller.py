@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from app.execution.errors import ExecutionError, ExecutionVersionConflictError, InvalidTransitionError
 from app.execution.lifecycle import TaskOutcome
 from app.execution.models import ExecutionStatus, TaskExecution
+from app.execution import direct_completion
 from app.execution.service import ExecutionService, compute_active_duration_minutes
 from app.planning.models import ScheduledTask as CanonicalScheduledTask
 from app.planning.models import Task as CanonicalTask
@@ -131,6 +132,14 @@ class ExecutionController:
         """
         return self._call(lambda: self._service.set_outcome(task, placement, outcome, expected_version=expected_version,
                                                             require_version=True))
+
+    def complete_directly(self, task: CanonicalTask) -> ControllerResult[TaskExecution]:
+        """Complete a task that has no placement (app/execution/direct_completion.py); repeating it changes nothing."""
+        return self._call(lambda: direct_completion.complete_directly(self._service, task))
+
+    def reopen_directly(self, task_id: uuid.UUID) -> ControllerResult[TaskExecution | None]:
+        """Undo a direct completion of the task (None: it had none)."""
+        return self._call(lambda: direct_completion.reopen_directly(self._service, task_id))
 
     def set_outcomes(self, items, outcome: TaskOutcome | str) -> ControllerResult:
         """Every (task, placement) of `items` to the column `outcome`, in one transaction (a BulkOutcomeResult)."""

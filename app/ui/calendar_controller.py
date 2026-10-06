@@ -47,7 +47,14 @@ from app.ui.day_controller import MINUTES_PER_DAY, ResetPlan, _interval_text, de
 from app.productivity.day_summary import DayStatusClass, DaySummary, summarize_range
 from app.ui.day_outcomes import DayOutcomeController
 from app.ui.planning_controller import PlanningController
-from app.ui.schedule_page_controller import PageSnapshot, RowRef, SchedulePageController, _Failure, day_label
+from app.ui.schedule_page_controller import (
+    PageSnapshot,
+    RowRef,
+    SchedulePageController,
+    _Failure,
+    day_label,
+    display_namer,
+)
 
 ItemKind = Literal["fixed", "scheduled", "stale", "unscheduled", "elsewhere"]
 _FRESHNESS_LABELS = {Freshness.CURRENT: "Current", Freshness.STALE: "Out of date", Freshness.NONE: ""}
@@ -152,7 +159,8 @@ class CalendarController(SchedulePageController):
         self._today = today
         self._executions = executions
         #: The selected-day panel's reads and bulk actions (None without execution tracking).
-        self.outcomes = DayOutcomeController(planning, executions) if executions is not None else None
+        self.outcomes = (DayOutcomeController(planning, executions, timezone=timezone)
+                         if executions is not None else None)
 
     # ------------------------------------------------------------------
     # Period and selection
@@ -247,6 +255,7 @@ class CalendarController(SchedulePageController):
         missing = [p.task_id for p in placed if p.task_id not in tasks]
         if missing:
             tasks.update(self._unwrap(planning.get_tasks(missing)).tasks)
+        shown = display_namer(planning, tasks.values(), self._unwrap)
         placed_ids = {p.task_id for p in placed}
         waiting = [task_id for task_id in planning_range.task_ids if task_id not in placed_ids]
         elsewhere = self._unwrap(planning.active_placement_dates(waiting)) if waiting else {}
@@ -266,7 +275,7 @@ class CalendarController(SchedulePageController):
                 start = local_minutes(placement.planned_start, day, placement.timezone)
                 end = local_minutes(placement.planned_end, day, placement.timezone) or MINUTES_PER_DAY
                 timed.append((start, end, str(placement.id), CalendarItem(
-                    kind, task.name if task else "(removed task)", task.category if task else "other",
+                    kind, shown(task) if task else "(removed task)", task.category if task else "other",
                     RowRef("task", placement.task_id, task.version if task else None), start, end,
                     _interval_text(placement.planned_start, placement.planned_end, day, placement.timezone))))
             by_day[day] = [item for *_, item in sorted(timed, key=lambda entry: entry[:3])]
@@ -282,7 +291,8 @@ class CalendarController(SchedulePageController):
                 continue
             dates = tuple(elsewhere.get(task_id, ()))
             by_day[planned].append(CalendarItem(
-                "elsewhere" if dates else "unscheduled", task.name, task.category, RowRef("task", task.id, task.version),
+                "elsewhere" if dates else "unscheduled", shown(task), task.category,
+                RowRef("task", task.id, task.version),
                 elsewhere=dates))
 
         summaries: dict[date_, DaySummary] = {}

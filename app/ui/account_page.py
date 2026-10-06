@@ -41,6 +41,7 @@ from app.ui.account_controller import (
     ENTITY_LABELS,
     RESOLUTION_LABELS,
     AccountController,
+    AccountCreationError,
     ConflictView,
     ConnectionView,
     InvalidInput,
@@ -48,7 +49,17 @@ from app.ui.account_controller import (
     profile_summary,
 )
 from app.ui.background import ControllerResult, run_in_background
-from app.ui.components import AppButton, Card, ConfirmDialog, LabeledEntry, ModalDialog, Notice, SectionTitle, font
+from app.ui.components import (
+    AppButton,
+    Card,
+    ChoiceDialog,
+    ConfirmDialog,
+    LabeledEntry,
+    ModalDialog,
+    Notice,
+    SectionTitle,
+    font,
+)
 from app.ui.pages import PageHeader
 
 
@@ -222,8 +233,9 @@ class AccountPage(ctk.CTkFrame):
         self.sign_out_button.grid(row=2, column=0, sticky="w")
         sign_out_note = ("Signing out closes access to your records on this computer until you sign in again. They "
                          "stay in the database." if getattr(self, "direct", False) else
-                         "Signing out forgets the session on this device. Your records stay here; the backend's token "
-                         "simply expires (it is not revoked).")
+                         "Signing out hides this account's records on this device and opens a separate guest "
+                         "workspace. Changes not sent yet are kept and sent when you sign in again. (The backend's "
+                         "token simply expires; it is not revoked.)")
         ctk.CTkLabel(self.signed_in_frame, text=sign_out_note,
                      font=font(theme.SIZE_CAPTION), text_color=theme.TEXT_MUTED, anchor="w", justify="left",
                      wraplength=440).grid(row=3, column=0, sticky="ew", pady=(6, 0))
@@ -245,6 +257,10 @@ class AccountPage(ctk.CTkFrame):
         self.name_field = LabeledEntry(self.form_frame, "Display name (optional)")
         self.submit_button = AppButton(self.form_frame, "Sign in", self.submit_account)
         self.submit_button.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        #: What the chosen action does to the work already on this device, in plain words.
+        self.mode_note = ctk.CTkLabel(self.form_frame, text="", font=font(theme.SIZE_CAPTION),
+                                      text_color=theme.TEXT_MUTED, anchor="w", justify="left", wraplength=440)
+        self.mode_note.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         self.forgot_button = AppButton(self.form_frame, "Forgot password?", self.open_recovery, variant="ghost")
         self.forgot_button.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         for entry in (self.email_field.entry, self.password_field.entry, self.name_field.entry):
@@ -258,8 +274,9 @@ class AccountPage(ctk.CTkFrame):
     def _build_association(self) -> None:
         card = self.association_card = self._card(
             2, "Records on this device without an account",
-            "Signing in never uploads or claims them. Associating makes them your account's, with the same ids and "
-            "history, and they are synchronized from then on.")
+            "This is work done on this device without an account. It is never uploaded or added to an account "
+            "without your say. Associating makes it this account's, with the same ids and history, and it is "
+            "synchronized from then on; leaving it keeps it separate.")
         self.association_label = ctk.CTkLabel(card, text="", font=font(theme.SIZE_BODY), text_color=theme.TEXT_PRIMARY,
                                               anchor="w", justify="left", wraplength=460)
         self.association_label.grid(row=1, column=0, columnspan=3, sticky="ew", padx=theme.SPACE_L)
@@ -404,7 +421,14 @@ class AccountPage(ctk.CTkFrame):
                 self.email_field.variable.set(view.workspace_email or "")
             self.association_card.grid_remove()
             self.preview = None
+        connection = {True: "online", False: "offline (the backend cannot be reached)"}.get(
+            view.reachable, "not checked yet")
+        mode = {"signed_in": f"signed in as {masked_email(view.signed_in_email)}",
+                "session_ended": f"{masked_email(view.workspace_email)}'s records, session ended (sign in again)",
+                }.get(view.state, "guest (no account; saved on this device only)")
         lines = [
+            f"Mode: {mode}",
+            f"Connection: {connection if view.state != 'unconfigured' else 'no backend configured'}",
             f"Last successful sync: {view.last_success_text}",
             f"Changes waiting to be sent: {view.pending if view.pending is not None else 'none (no account)'}",
             f"Open conflicts: {view.conflicts}",
@@ -491,6 +515,15 @@ class AccountPage(ctk.CTkFrame):
             self.name_field.grid(row=3, column=0, columnspan=2, sticky="ew", pady=4)
         else:
             self.name_field.grid_remove()
+        if getattr(self, "direct", False):
+            note = ""
+        elif mode == "register":
+            note = ("Creating an account keeps everything you have done on this device: it becomes the new "
+                    "account's and is uploaded automatically. Nothing is cleared or replaced.")
+        else:
+            note = ("Signing in to an existing account never changes the work done here without an account. You "
+                    "are asked whether to add it to the account or keep it separate.")
+        self.mode_note.configure(text=note)
         self._render_buttons()
 
     def open_recovery(self) -> None:
@@ -506,7 +539,10 @@ class AccountPage(ctk.CTkFrame):
         for field_widget in (self.email_field, self.password_field, self.name_field):
             field_widget.set_error(None)
         self.password_field.variable.set("")  # never kept, whatever happens next
-        if self.mode == "register":
+        if self.mode == "register" and not self.direct:
+            self._run("account", lambda: self.controller.create_account(email, password, display_name=name),
+                      lambda result: self._account_created(result, email), (self.submit_button,))
+        elif self.mode == "register":
             self._run("account", lambda: self.controller.register(email, password, display_name=name),
                       lambda result: self._registered(result, email), (self.submit_button,))
         else:
@@ -528,6 +564,29 @@ class AccountPage(ctk.CTkFrame):
         self.email_field.variable.set(email)
         self.account_notice.show("success", "Account created. Sign in with it now.")
 
+    def _account_created(self, result: ControllerResult, email: str) -> None:
+        """A new account: it is signed in to and this device's guest work is now its own (or nothing changed)."""
+        if not result.ok:
+            self._field_errors(result)
+            if isinstance(result.cause, AccountCreationError):
+                # The account exists; the work on this device is untouched. Signing in finishes it.
+                self.set_mode("sign_in")
+                self.email_field.variable.set(email)
+            self.refresh()
+            return
+        outcome = result.value
+        self.set_mode("sign_in")  # the form's next use (after signing out) is signing in to this account
+        note = "Account created and signed in."
+        if outcome.adopted:
+            note += (f" The {outcome.adopted} record(s) already on this device are now part of this account and "
+                     "are being uploaded.")
+        else:
+            note += " There was nothing on this device to add to it."
+        self.account_notice.show("success", note)
+        self._on_workspace_changed()
+        self.refresh()
+        self._load_profile()
+
     def _signed_in(self, result: ControllerResult) -> None:
         if not result.ok:
             self._field_errors(result)
@@ -541,6 +600,40 @@ class AccountPage(ctk.CTkFrame):
         self._on_workspace_changed()
         self.refresh()
         self._load_profile()
+        if outcome.unassociated and not self.direct:
+            self.ask_guest_data(outcome.unassociated)
+
+    def ask_guest_data(self, count: int) -> None:
+        """After signing in to an existing account: add the guest work to it, or keep it separate (the default)."""
+        account = masked_email(self.view.signed_in_email if self.view is not None else None)
+        self.dialog = ChoiceDialog(
+            self, title="Work done without an account",
+            prompt=(f"This device has {count} record(s) that were created without an account. What should happen "
+                    f"to them now that you are signed in to {account}?"),
+            options=[("separate", "Keep them separate (they stay on this device, outside the account)"),
+                     ("merge", "Add them to this account (they are uploaded and synchronized)")],
+            note=("Keeping them separate changes nothing: you see them again whenever you sign out, and you can "
+                  "still add them later from this page. Adding them cannot be undone from the app. Neither choice "
+                  "overwrites anything already in the account."),
+            on_choose=self._guest_choice)
+
+    def _guest_choice(self, choice: str) -> None:
+        self.dialog = None
+        if choice != "merge":
+            self.account_notice.show("info", "Kept separate. Those records stay on this device, outside the account.")
+            return
+
+        def done(result: ControllerResult[int]) -> None:
+            if not result.ok:
+                self.account_notice.show("error", result.error)
+                self.load_preview()
+                return
+            self.account_notice.show("success", f"Added {result.value} record(s) to this account; they are being "
+                                                "uploaded.")
+            self._on_workspace_changed()
+            self.refresh()
+
+        self._run("associate", self.controller.merge_guest_data, done, (self.associate_button,))
 
     def _load_profile(self) -> None:
         identity = (self.view.backend_url, self.view.signed_in_email)
@@ -560,8 +653,10 @@ class AccountPage(ctk.CTkFrame):
             if not result.ok:
                 self.account_notice.show("error", result.error)
                 return
-            self.account_notice.show("info", "Signed out. Your records stay in the database; sign in again to use "
-                                             "them." if self.direct else "Signed out. Your records stay on this device.")
+            self.account_notice.show("info", (
+                "Signed out. Your records stay in the database; sign in again to use them." if self.direct else
+                "Signed out. This account's records are hidden until you sign in again; unsent changes are kept. "
+                "You are now in guest mode."))
             self._on_workspace_changed()
             self.render(result.value)
 

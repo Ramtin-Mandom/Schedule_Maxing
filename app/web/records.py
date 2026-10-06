@@ -25,7 +25,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from app.planning.errors import VersionConflictError
-from app.planning.models import FixedBlock, Project, Task
+from app.planning.models import PROJECT_DETAIL_FIELDS, FixedBlock, Project, Task
 from app.planning.preferences import PreferenceScope
 from backend.api import page_model
 from backend.errors import ApiError, not_found
@@ -116,9 +116,11 @@ KINDS = (
         list_all=lambda service, deleted: service.list_projects(include_deleted=deleted),
         get=_get_project, to_out=project_out,
         create=lambda service, owner, record_id, payload: service.create_project(
-            Project(id=record_id, user_id=owner, name=payload.name, description=payload.description)),
+            Project(id=record_id, user_id=owner, **payload.model_dump(exclude={"id"}))),
         update=lambda service, owner, stored, payload: service.update_project(
-            stored.model_copy(update={"name": payload.name, "description": payload.description}),
+            # Details the request left out keep their stored values (a client that predates them sends none).
+            Project.model_validate({**stored.model_dump(), "name": payload.name, "description": payload.description,
+                                    **payload.model_dump(include=payload.model_fields_set & set(PROJECT_DETAIL_FIELDS))}),
             expected_version=payload.base_version),
         delete=lambda service, stored, base_version: service.delete_project(stored.id, expected_version=base_version),
     ),

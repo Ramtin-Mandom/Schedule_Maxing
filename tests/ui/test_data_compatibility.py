@@ -73,6 +73,8 @@ V10_EXECUTION_COLUMNS = ("cancel_reason",)
 V12_TASK_COLUMNS = ("task_type_id",)
 V12_PLACEMENT_COLUMNS = ("task_name", "task_tags", "task_points", "task_estimate_minutes", "task_type_id",
                          "task_type_label")
+#: Schema v14 (a project's planned dates, completion and milestones) -- project columns older code never wrote.
+V14_PROJECT_COLUMNS = ("start_date", "estimated_end_date", "completed_at", "milestones", "task_defaults")
 
 
 @contextmanager
@@ -103,6 +105,15 @@ def pre_v8_writers():
                 from_row = getattr(module, from_row_name)
                 patch.setattr(module, from_row_name, lambda row, from_row=from_row: from_row(
                     {**dict(row), **{column: None for column in (*V8_COLUMNS, *V10_EXECUTION_COLUMNS)}}))
+        project_columns, project_to_row = planning_repository._PROJECT_COLUMNS, planning_repository._project_to_row
+        row_to_project = planning_repository._row_to_project
+        patch.setattr(planning_repository, "_PROJECT_COLUMNS",
+                      tuple(c for c in project_columns if c not in V14_PROJECT_COLUMNS))
+        patch.setattr(planning_repository, "_project_to_row", lambda project: tuple(
+            value for column, value in zip(project_columns, project_to_row(project))
+            if column not in V14_PROJECT_COLUMNS))
+        patch.setattr(planning_repository, "_row_to_project", lambda row: row_to_project(
+            {**dict(row), **dict.fromkeys(V14_PROJECT_COLUMNS)}))
         original_row_to_task = planning_repository._row_to_task
         patch.setattr(planning_repository, "_row_to_task", lambda row, *rest: original_row_to_task(
             {**dict(row), "points": 1, **{column: None for column in (*V9_TASK_COLUMNS, *V12_TASK_COLUMNS)}}, *rest))

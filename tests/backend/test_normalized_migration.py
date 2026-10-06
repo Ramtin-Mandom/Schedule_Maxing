@@ -461,6 +461,10 @@ TASK_FIELDS_SINCE_0013 = {"task_type_id": None}
 PLACEMENT_FIELDS_SINCE_0013 = {"task_name": None, "task_tags": None, "task_points": None,
                                "task_estimate_minutes": None, "task_type_id": None, "task_type_label": None}
 
+#: 0014: an existing project has no planned dates, is ongoing and has no milestones.
+PROJECT_FIELDS_SINCE_0014 = {"start_date": None, "estimated_end_date": None, "completed_at": None, "milestones": [],
+                             "task_defaults": {"duration_minutes": None, "priority": None, "points": None}}
+
 
 def live_task_at_head(record: dict) -> dict:
     """A fixture task as its live row reads at head: 0013 derived its type from its own id (no series here)."""
@@ -484,6 +488,8 @@ def as_of_head(value):
             converted = {**TASK_FIELDS_SINCE_0008, **TASK_FIELDS_SINCE_0009, **TASK_FIELDS_SINCE_0013, **converted}
         if {"frequency", "interval"} <= set(value):
             converted = {**RECURRENCE_FIELDS_SINCE_0009, **converted}
+        if {"name", "description", "version"} <= set(value) and "category" not in value:  # a project record
+            converted = {**PROJECT_FIELDS_SINCE_0014, **converted}
         if {"task_name", "planned_duration", "status"} <= set(value):
             converted = {**EXECUTION_FIELDS_SINCE_0008, **EXECUTION_FIELDS_SINCE_0010, **converted}
         return converted

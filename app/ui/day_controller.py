@@ -71,8 +71,11 @@ from app.ui.schedule_page_controller import (
     RowRef,
     SchedulePageController,
     _batch_summary,
+    DirectCompletion,
     _Failure,
     day_label,
+    display_namer,
+    read_direct_completions,
 )
 from app.ui.time_fields import FieldError, format_clock, format_duration
 
@@ -240,6 +243,8 @@ class DaySnapshot(PageSnapshot):
     preference_version: int | None = None
     #: Tasks the saved run could not place whose reasons are not stored (known only as a count).
     unexplained_count: int = 0
+    #: Tasks completed on this date without a time slot (from their project): shown in the Completed column.
+    direct_completions: list[DirectCompletion] = field(default_factory=list)
 
 
 RunStatus = Literal["generated", "already_current", "nothing_placed", "needs_regeneration", "failed"]
@@ -414,6 +419,7 @@ class DayScheduleController(SchedulePageController):
             tasks.update(self._unwrap(planning.get_tasks(missing)).tasks)
 
         preserved = self._unwrap(planning.preserved_placement_ids(placements)) if placements else set()
+        shown = display_namer(planning, tasks.values(), self._unwrap)
         items: list[TimelineItem] = []
         for block in blocks:
             start = local_minutes(block.planned_start, day, block.timezone)
@@ -430,7 +436,7 @@ class DayScheduleController(SchedulePageController):
             start = local_minutes(placement.planned_start, day, placement.timezone)
             end = local_minutes(placement.planned_end, day, placement.timezone) or MINUTES_PER_DAY
             items.append(TimelineItem(
-                key=f"placement:{placement.id}", kind=kind, name=task.name if task else "(removed task)",
+                key=f"placement:{placement.id}", kind=kind, name=shown(task) if task else "(removed task)",
                 category=task.category if task else "other", start_minute=start, end_minute=end,
                 time_text=_interval_text(placement.planned_start, placement.planned_end, day, placement.timezone),
                 ref=RowRef("task", placement.task_id, task.version if task else None), placement_id=placement.id,
@@ -445,7 +451,7 @@ class DayScheduleController(SchedulePageController):
         record = freshness.record
         with self._explanations_lock:
             known = self._explanations.get((day, record.id)) if record is not None else None
-        unplaced = self._unplaced(planning_range.task_ids, tasks, placements, known or {})
+        unplaced = self._unplaced(planning_range.task_ids, tasks, placements, known or {}, shown)
         unexplained = record.unscheduled_count if record is not None and known is None else 0
 
         label, detail = self._freshness_text(freshness, engine)
@@ -457,6 +463,7 @@ class DayScheduleController(SchedulePageController):
             freshness_label=label, freshness_detail=detail, engine=engine,
             preference_version=view.date_layer.version if view.date_layer is not None else None,
             unexplained_count=unexplained,
+            direct_completions=read_direct_completions(planning, day, self.timezone, self._unwrap),
         )
 
     @staticmethod
@@ -478,7 +485,7 @@ class DayScheduleController(SchedulePageController):
 
     def _unplaced(
         self, task_ids: list[uuid.UUID], tasks: dict[uuid.UUID, Task], placements: list[ScheduledTask],
-        explanations: dict[uuid.UUID, str],
+        explanations: dict[uuid.UUID, str], shown: Callable[[Task], str] = lambda task: task.name,
     ) -> list[UnplacedTask]:
         placed_here = {placement.task_id for placement in placements}
         candidates = [task_id for task_id in task_ids if task_id not in placed_here]
@@ -491,7 +498,7 @@ class DayScheduleController(SchedulePageController):
             if planned is None and other_dates:
                 continue  # an undated task already scheduled on another date is not available here
             rows.append(UnplacedTask(
-                ref=RowRef("task", task.id, task.version), name=task.name, category=task.category,
+                ref=RowRef("task", task.id, task.version), name=shown(task), category=task.category,
                 duration_minutes=task.estimated_duration_minutes, required=task.required,
                 date_text=day_label(planned) if planned is not None else "Any date",
                 reason=explanations.get(task.id), elsewhere=other_dates,

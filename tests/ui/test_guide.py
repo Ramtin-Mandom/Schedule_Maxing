@@ -15,9 +15,10 @@ def _text(key: str) -> str:
 def test_every_topic_is_documented_once_in_reading_order() -> None:
     keys = [item.key for item in GUIDE_SECTIONS]
     assert keys == [
-        "overview", "day_view", "week_view", "month_view", "adding_tasks", "fixed_blocks", "flexible_tasks",
-        "preferred_times", "categories", "priority_points", "dependencies", "make_schedule", "scheduled_unscheduled",
-        "task_workflow", "day_window", "settings", "synchronization", "reset", "day_status_colours",
+        "overview", "day_view", "week_view", "month_view", "projects", "project_tasks", "adding_tasks",
+        "fixed_blocks", "flexible_tasks", "preferred_times", "categories", "priority_points", "dependencies",
+        "make_schedule", "scheduled_unscheduled", "task_workflow", "productivity", "day_window", "settings",
+        "synchronization", "reset", "day_status_colours",
     ]
     assert len(set(keys)) == len(keys) and all(item.title and item.blocks for item in GUIDE_SECTIONS)
 
@@ -38,6 +39,23 @@ def test_the_day_status_colours_are_explained_exactly() -> None:
                    "Dark green: 80% or more completed", "Yellow: a mixed result", "PAST date",
                    "actually scheduled"):
         assert phrase in text, phrase
+
+
+def test_projects_and_their_statistics_are_explained() -> None:
+    projects = _text("projects")
+    for phrase in ("YYYY-MM-DD", "Ongoing projects and Completed projects", "Double-click a project",
+                   "Mark complete", "View performance", "Homework (mat)"):
+        assert phrase in projects, phrase
+    tasks = _text("project_tasks")
+    for phrase in ("Add Task, Project Tasks and Milestones", "Done: tick it", "even one that has not been scheduled",
+                   "project tasks only", "Untick Done", "× on the left of a task", "then the category's",
+                   "1-3 neutral, 4-7 light green, 8-9 green, 10 dark green", "× on the left of a milestone"):
+        assert phrase in tasks, phrase
+    productivity = _text("productivity")
+    for phrase in ("General", "Specific", "Task-based", "Time-based", "Project: your projects",
+                   "every calendar day of the period", "0 points and no average"):
+        assert phrase in productivity, phrase
+    assert "completed with Done in its project" in _text("task_workflow")
 
 
 def test_points_are_explained_apart_from_the_schedulers_score() -> None:

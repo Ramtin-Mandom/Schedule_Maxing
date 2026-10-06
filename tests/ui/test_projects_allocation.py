@@ -51,7 +51,7 @@ def test_project_filter_is_display_only_after_scheduling_a_date(services):
     by_task = {p.task_id: p for p in placements}
     assert by_task[predecessor.id].planned_end <= by_task[successor.id].planned_start
     calendar = ok(CalendarController(planning, mode="week", selected=DAY, timezone="UTC").load())
-    assert [item.name for item in calendar.filtered(b.id).day(DAY).items] == ["Second"]
+    assert [item.name for item in calendar.filtered(b.id).day(DAY).items] == ["Second (B)"]  # with its project
     assert len(calendar.day(DAY).items) == 2
     snapshot = ok(projects.load(b.id))
     assert snapshot.tasks[0].dates == (DAY,) and "Not scheduled" not in snapshot.tasks[0].status

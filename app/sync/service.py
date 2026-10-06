@@ -18,12 +18,16 @@ are never stored or logged.
 
 Accounts: each (backend URL, server user) is a separate sync_accounts row
 with its own cursor, shadows, outbox operations and conflicts. Signing in
-makes that account current and deactivates any other; only records owned by
-the current account are pushed and pulled records are stored as its own.
-Existing ownerless local records are *not* claimed on sign-in: that is the
-explicit associate_local_data() step. (An account that was associated on
-this device before becomes active again when you sign back in, so records
-you create while signed in are owned by it.)
+makes that account current and the device's active one (deactivating any
+other), so its workspace stays in use offline and across restarts until an
+explicit sign-out -- losing the connection or the session is never a
+sign-out. Only records owned by the current account are pushed, and pulled
+records are stored as its own. Existing ownerless (guest) local records are
+*not* claimed by signing in to an existing account: that is the explicit
+associate_local_data() step, which the user chooses or declines. Creating a
+new account is different: create_account() registers it, signs in and
+adopts the guest workspace for it in one local transaction, so the work
+done before the account existed stays visible and is uploaded.
 
 sync_now(): push until the outbox is drained (bounded), then pull until
 caught up (bounded). Only one sync runs at a time. SQLite work happens in
@@ -43,7 +47,11 @@ reported. Conflicts and rejections are per record
 Background: start() runs sync_now() every `interval` seconds (or after the
 backoff delay) on a daemon thread; wake() triggers a run early; stop()
 ends it and waits for an in-progress run, and is called by
-AppServices.close() before the database is closed.
+AppServices.close() before the database is closed. While idle the loop also
+looks, every `pending_poll` seconds, at the durable count of pending
+records -- a local query, never a request -- and runs early when it changed
+since the last sync, so an edit is uploaded within seconds without any
+manual action. After a failure only the backoff decides the next attempt.
 
 Account switches never interleave with a sync (Milestone 4, the local web
 profile): sign_in, sign_out, set_transport and association wait for a
@@ -106,6 +114,8 @@ MANUAL_PLACEMENTS_FEATURE = "manual_placements"
 SCHEDULING_MODES_FEATURE = "scheduling_modes"
 #: Task types and placement planning snapshots (docs/productivity-redesign-plan.md).
 TASK_TYPES_FEATURE = "task_types"
+#: A project's planned dates, completion and milestones.
+PROJECT_DETAILS_FEATURE = "project_details"
 
 
 @dataclass(frozen=True)
@@ -118,6 +128,34 @@ class SyncReport:
     message: str = ""
     #: Records held back because the server does not support recurrence (they stay pending).
     held: int = 0
+
+
+class AccountCreationError(Exception):
+    """
+    create_account() could not finish after the server created the account.
+    Nothing local was lost or reassigned: the guest workspace is as it was,
+    and signing in (then choosing to add the device's records) completes it.
+    """
+
+    def __init__(self, message: str, *, stage: str, cause: BaseException | None = None) -> None:
+        super().__init__(message)
+        #: "sign_in" (the account exists; the sign-in after it failed) or "adoption" (signed in; nothing adopted).
+        self.stage = stage
+        self.cause = cause
+
+
+@dataclass(frozen=True)
+class AccountCreation:
+    """What create_account() did."""
+
+    account: Account
+    profile: dict
+    #: Guest records that became the account's, per entity type (empty: the device had none).
+    adopted: dict[str, int]
+
+    @property
+    def adopted_total(self) -> int:
+        return sum(self.adopted.values())
 
 
 @dataclass(frozen=True)
@@ -156,6 +194,7 @@ class SyncService:
         *,
         clock: Callable[[], datetime] = _utcnow,
         interval: float = 60.0,
+        pending_poll: float = 5.0,
         backoff_base: float = 5.0,
         backoff_max: float = 600.0,
         push_batch_size: int = 100,
@@ -165,6 +204,9 @@ class SyncService:
         self._connection = connection
         self._transport = transport
         self._interval = interval
+        self._pending_poll = pending_poll
+        #: The pending count seen when the last sync ended (None: none ended yet): a different count is new work.
+        self._pending_seen: int | None = None
         self._backoff_base = backoff_base
         self._backoff_max = backoff_max
         self._push_batch_size = push_batch_size
@@ -282,7 +324,9 @@ class SyncService:
             if transport is not self._transport:
                 raise RuntimeError("The backend was changed while signing in; sign in again.")
             account = store.upsert_account(transport.base_url, result.user_id, result.email)
-            store.set_active(account.account_key if account.associated_at else None)
+            # Active from now until an explicit sign-out: the account's workspace stays in use offline and after
+            # a restart (a lost connection or an ended session is not a sign-out). No existing record is claimed.
+            store.set_active(account.account_key)
             self._token, self._account_key = result.token, account.account_key
             self.last_report = SyncReport("inert")
         return store.account(account.account_key)
@@ -314,6 +358,45 @@ class SyncService:
                  display_name: str | None = None) -> dict:
         transport = self._require_transport()
         return self._reaching(lambda: transport.register(email, password, username, display_name))
+
+    def create_account(self, email: str, password: str, *, username: str | None = None,
+                       display_name: str | None = None) -> AccountCreation:
+        """
+        Register a new account and make this device's guest workspace its
+        own: register, sign in, then adopt every ownerless record for the
+        account in ONE local transaction (the same ids, relationships,
+        schedules, preferences and history; each record is queued for upload
+        by the change capture in that transaction). The next sync uploads
+        them; it is idempotent, so a retry after a lost answer never creates
+        a duplicate.
+
+        Failure never loses or half-assigns anything:
+            - registration refused or unreachable: the error is raised as it
+              is; nothing local changed and nobody is signed in;
+            - the account was created but signing in failed, or the records
+              could not be adopted: AccountCreationError. The guest
+              workspace is exactly as before (still guest, still visible),
+              and nobody is left signed in to an empty account.
+        """
+        profile = self.register(email, password, username=username, display_name=display_name)
+        try:
+            account = self.sign_in(email, password)
+        except (TransportError, AuthenticationError, ProtocolError, RuntimeError) as error:
+            raise AccountCreationError(
+                "The account was created, but signing in to it did not succeed. Everything on this device is "
+                "unchanged; sign in to finish.", stage="sign_in", cause=error) from error
+        try:
+            with self._sync_lock:
+                preview = self._engine.association_preview(account)
+                adopted = self._engine.associate_local_data(account, confirmation=preview.token)
+        except Exception as error:  # noqa: BLE001 - whatever stopped it, the guest workspace must stay in use
+            self.sign_out()
+            raise AccountCreationError(
+                "The account was created, but the records on this device could not be added to it. They are "
+                "unchanged; sign in and add them from the Account page.", stage="adoption", cause=error) from error
+        self.wake()
+        return AccountCreation(account=self._engine.store.account(account.account_key), profile=profile,
+                               adopted={kind: count for kind, count in adopted.items() if count})
 
     def request_password_recovery(self, identifier: str) -> dict:
         """Ask the backend to send a recovery link (no session needed; the answer never says if the account exists)."""
@@ -435,9 +518,10 @@ class SyncService:
                 manual = MANUAL_PLACEMENTS_FEATURE in features
                 modes = SCHEDULING_MODES_FEATURE in features
                 types = TASK_TYPES_FEATURE in features
+                details = PROJECT_DETAILS_FEATURE in features
                 for _ in range(MAX_PUSH_ROUNDS):
                     self._engine.prepare(account, recurrence=recurrence, manual_placements=manual,
-                                         scheduling_modes=modes, task_types=types)
+                                         scheduling_modes=modes, task_types=types, project_details=details)
                     batch = self._engine.next_batch(account, self._push_batch_size)
                     if not batch:
                         break
@@ -564,8 +648,21 @@ class SyncService:
             workspace_account=durable,
         )
 
+    def _pending_now(self) -> int | None:
+        """The signed-in account's pending records right now (a local count; None: nobody is signed in)."""
+        with self._state_lock:
+            token, key = self._token, self._account_key
+        if self._transport is None or token is None or key is None:
+            return None
+        account = self._engine.store.account(key)
+        return self._engine.store.pending_count(account.account_key, account.user_id) if account else None
+
     def _finish(self, report: SyncReport) -> SyncReport:
         self.last_report = report
+        try:
+            self._pending_seen = self._pending_now()
+        except Exception:  # noqa: BLE001 - only a hint for the idle loop
+            self._pending_seen = None
         if report.status not in ("ok", "inert"):
             logger.info("Synchronization did not complete: %s", report.status)
         return report
@@ -597,8 +694,29 @@ class SyncService:
             except Exception:  # noqa: BLE001 - the loop must survive; details are logged, not raised into Tk
                 logger.exception("Unexpected synchronization failure")
                 self.consecutive_failures += 1
-            self._wake.wait(self.next_delay())
-            self._wake.clear()
+            self._idle(self.next_delay())
+
+    def _idle(self, delay: float) -> None:
+        """
+        Wait for the next run: `delay` seconds, a wake(), or -- only while the
+        last sync succeeded -- new pending work (the durable count differs
+        from what that sync left). Held or conflicting records that every
+        sync leaves pending therefore never cause a run of their own.
+        """
+        remaining = delay
+        while remaining > 0 and not self._stop.is_set():
+            step = min(remaining, self._pending_poll) if self._pending_poll > 0 else remaining
+            if self._wake.wait(step):
+                break
+            remaining -= step
+            if self.consecutive_failures == 0 and remaining > 0:
+                try:
+                    pending = self._pending_now()
+                except Exception:  # noqa: BLE001 - e.g. the database is closing; the timer still applies
+                    pending = None
+                if pending is not None and pending != self._pending_seen:
+                    break
+        self._wake.clear()
 
     def stop(self, timeout: float = 10.0) -> bool:
         """

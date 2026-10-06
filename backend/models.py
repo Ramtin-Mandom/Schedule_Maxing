@@ -166,10 +166,45 @@ def _record_checks(table: str) -> tuple:
 class _ProjectContent:
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: The planned span and completion (app.planning.models.Project); its milestones are ordered child rows
+    #: (milestone_rows).
+    start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    estimated_end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    #: The defaults of the project's new tasks (app.planning.models.ProjectTaskDefaults); NULL = not configured.
+    default_duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    default_priority: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    default_points: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 def _project_checks(table: str) -> tuple:
-    return (CheckConstraint("length(name) > 0", name=f"ck_{table}_name"),)
+    return (
+        CheckConstraint("length(name) > 0", name=f"ck_{table}_name"),
+        CheckConstraint(
+            "(default_duration_minutes IS NULL OR default_duration_minutes BETWEEN 1 AND 1440)"
+            " AND (default_priority IS NULL OR default_priority BETWEEN 1 AND 10)"
+            " AND (default_points IS NULL OR default_points BETWEEN 0 AND 1000)",
+            name=f"ck_{table}_task_defaults"),
+    )
+
+
+class _MilestoneContent:
+    """One milestone of a project (app.planning.models.ProjectMilestone), in the order it was added."""
+
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    milestone_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    number: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(String(4000), nullable=False)
+    score: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+def _milestone_checks(table: str) -> tuple:
+    return (
+        _position_check(table),
+        CheckConstraint("length(title) > 0", name=f"ck_{table}_title"),
+        CheckConstraint("score BETWEEN 1 AND 10", name=f"ck_{table}_score"),
+    )
 
 
 class _TaskTypeContent:
@@ -478,7 +513,22 @@ def _execution_checks(table: str) -> tuple:
 class Project(_Record, _ProjectContent, Base):
     __tablename__ = "projects"
 
+    milestone_rows: Mapped[list[ProjectMilestone]] = relationship(
+        order_by="ProjectMilestone.position", cascade="all, delete-orphan", lazy="selectin")
+
     __table_args__ = (*_record_checks("projects"), *_project_checks("projects"))
+
+
+class ProjectMilestone(_MilestoneContent, Base):
+    __tablename__ = "project_milestones"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    project_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+
+    __table_args__ = (
+        _child_of("project_milestones", "projects", ("project_id",), ("id",)),
+        *_milestone_checks("project_milestones"),
+    )
 
 
 class TaskType(_Record, _TaskTypeContent, Base):
@@ -841,8 +891,24 @@ class _RevisionKey:
 
 class ProjectRevision(_RevisionKey, _ProjectContent, RecordRevision):
     __tablename__ = "project_revisions"
+
+    milestone_rows: Mapped[list[ProjectRevisionMilestone]] = relationship(
+        order_by="ProjectRevisionMilestone.position", cascade="all, delete-orphan", lazy="selectin")
+
     __table_args__ = (_revision_of("project_revisions"), *_project_checks("project_revisions"))
     __mapper_args__ = {"polymorphic_identity": "project", "polymorphic_load": "selectin"}
+
+
+class ProjectRevisionMilestone(_MilestoneContent, Base):
+    __tablename__ = "project_revision_milestones"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    revision_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+
+    __table_args__ = (
+        _child_of("project_revision_milestones", "project_revisions", ("revision_id",), ("id",)),
+        *_milestone_checks("project_revision_milestones"),
+    )
 
 
 class TaskTypeRevision(_RevisionKey, _TaskTypeContent, RecordRevision):
