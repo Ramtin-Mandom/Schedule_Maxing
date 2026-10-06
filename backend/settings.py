@@ -75,6 +75,8 @@ class BackendSettings:
     jwt_issuer: str = "schedule-maxing"
     jwt_audience: str = "schedule-maxing-api"
     access_token_ttl_minutes: int = 60
+    refresh_token_expire_days: int = 30
+    environment: str = "development"
     max_page_size: int = 500
     default_page_size: int = 100
     browser_session_ttl_minutes: int = 720
@@ -115,14 +117,24 @@ class BackendSettings:
             problems.append(f"JWT_SECRET is required and must be at least {MIN_SECRET_LENGTH} characters")
         if not 1 <= self.access_token_ttl_minutes <= 1440:
             problems.append("ACCESS_TOKEN_TTL_MINUTES must be between 1 and 1440")
+        if not 1 <= self.refresh_token_expire_days <= 365:
+            problems.append("REFRESH_TOKEN_EXPIRE_DAYS must be between 1 and 365")
+        if self.environment not in ("development", "test", "production"):
+            problems.append("ENVIRONMENT must be development, test or production")
+        if self.environment == "production":
+            if not normalize_database_url(self.database_url).startswith("postgresql"):
+                problems.append("DATABASE_URL must use PostgreSQL in production")
+            if not self.allowed_hosts or any("*" in host for host in self.allowed_hosts):
+                problems.append("ALLOWED_HOSTS must list explicit production hosts")
+            if not self.browser_cookie_secure:
+                problems.append("BROWSER_COOKIE_SECURE must be true in production")
         if not 5 <= self.browser_session_ttl_minutes <= 43200:
             problems.append("BROWSER_SESSION_TTL_MINUTES must be between 5 and 43200")
-        if any(not origin.startswith(("http://", "https://")) or origin.endswith("/") for origin in self.allowed_origins):
+        if any(not _origin_ok(origin) for origin in self.allowed_origins):
             problems.append("ALLOWED_ORIGINS must list origins like https://app.example.com (no path or trailing slash)")
         if not 1 <= self.default_page_size <= self.max_page_size:
             problems.append("API_MAX_PAGE_SIZE must be at least the default page size (100)")
-        if any(not origin.startswith(("http://", "https://")) or origin.endswith("/") or origin == "*"
-               for origin in self.cors_origins):
+        if any(not _origin_ok(origin) for origin in self.cors_origins):
             problems.append("CORS_ORIGINS must list exact origins like https://app.example.com (never *)")
         for proxy in self.trusted_proxies:
             try:
@@ -134,6 +146,12 @@ class BackendSettings:
             problems.append("MAX_REQUEST_BYTES must be between 1024 and 268435456")
         if not 0 < self.generation_time_limit_seconds <= 600:
             problems.append("GENERATION_TIME_LIMIT_SECONDS must be between 0 and 600")
+        for name, value in (("DB_CONNECT_TIMEOUT_SECONDS", self.db_connect_timeout_seconds),
+                            ("DB_POOL_TIMEOUT_SECONDS", self.db_pool_timeout_seconds)):
+            if not 0 < value <= 120:
+                problems.append(f"{name} must be between 1 and 120")
+        if not 0 < self.db_statement_timeout_ms <= 600000:
+            problems.append("DB_STATEMENT_TIMEOUT_MS must be between 1 and 600000")
         if not 5 <= self.recovery_token_ttl_minutes <= 1440:
             problems.append("RECOVERY_TOKEN_TTL_MINUTES must be between 5 and 1440")
         if not 0 < self.delivery_timeout_seconds <= 120:
@@ -143,6 +161,17 @@ class BackendSettings:
                             "or fragment")
         if problems:
             raise BackendConfigError("Invalid backend configuration: " + "; ".join(problems) + ".")
+
+
+def _origin_ok(origin: str) -> bool:
+    try:
+        parts = urlsplit(origin)
+        _ = parts.port  # reject malformed ports
+        return (parts.scheme in ("http", "https") and bool(parts.hostname) and not parts.path
+                and not parts.query and not parts.fragment and "@" not in parts.netloc
+                and "*" not in parts.netloc and not any(character.isspace() for character in origin))
+    except ValueError:
+        return False
 
 
 def _public_url_ok(url: str) -> bool:
@@ -194,6 +223,8 @@ def load_settings(environ: Mapping[str, str] | None = None) -> BackendSettings:
         jwt_issuer=environ.get("JWT_ISSUER", "").strip() or "schedule-maxing",
         jwt_audience=environ.get("JWT_AUDIENCE", "").strip() or "schedule-maxing-api",
         access_token_ttl_minutes=integer("ACCESS_TOKEN_TTL_MINUTES", 60),
+        refresh_token_expire_days=integer("REFRESH_TOKEN_EXPIRE_DAYS", 30),
+        environment=environ.get("ENVIRONMENT", "development").strip(),
         max_page_size=integer("API_MAX_PAGE_SIZE", 500),
         browser_session_ttl_minutes=integer("BROWSER_SESSION_TTL_MINUTES", 720),
         browser_cookie_secure=environ.get("BROWSER_COOKIE_SECURE", "true").strip().lower() not in ("false", "0", "no"),

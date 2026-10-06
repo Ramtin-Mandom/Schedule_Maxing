@@ -1,5 +1,10 @@
 # Schedule Maxing backend
 
+For the current local setup, native-client refresh/logout contract and
+administrator inspection utility, see [backend-m8.md](backend-m8.md).
+`backend.main:app` is the conventional ASGI entry point; the injectable
+`backend.app:create_app` factory remains supported.
+
 `backend/` holds the server (Milestone 3). It is a FastAPI application with
 PostgreSQL persistence. It stores user-scoped, versioned copies of the
 desktop's records, as described in [sync-contract.md](sync-contract.md).
@@ -103,8 +108,11 @@ framework-free as well; the FastAPI handlers that render it are in
   database's unique constraints enforce uniqueness. A duplicate, including
   one from two concurrent registrations, gets `409 account_exists`.
 - `POST /auth/login` takes `{email | username, password}` and returns
-  `{access_token, token_type, expires_in, expires_at}`. Bad credentials get
+  `{access_token, token_type, expires_in, expires_at, refresh_token, refresh_expires_at}`. Bad credentials get
   one generic `401`.
+- `POST /auth/refresh` rotates `{refresh_token}`; replay revokes that native
+  session. `POST /auth/logout` accepts the same body and idempotently revokes
+  the session and its access tokens. `GET /auth/me` aliases `GET /me`.
 - `GET /me` returns the profile. `PATCH /me` takes
   `{base_version, display_name}`.
 

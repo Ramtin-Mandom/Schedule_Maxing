@@ -68,6 +68,24 @@ class RequestTooLarge(Exception):  # kept for callers that import it
     pass
 
 
+class PrivateResponses:
+    """Credentials and user records must not be persisted in shared/browser caches."""
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        async def private_send(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = [(key, value) for key, value in message.get("headers", [])
+                           if key.lower() not in (b"cache-control", b"pragma")]
+                message = {**message, "headers": headers + [(b"cache-control", b"no-store"),
+                                                            (b"pragma", b"no-cache")]}
+            await send(message)
+
+        await self.app(scope, receive, private_send if scope["type"] == "http" else send)
+
+
 class BodySizeLimit:
     """Refuses request bodies larger than `max_bytes` (413) before the application reads them."""
 
