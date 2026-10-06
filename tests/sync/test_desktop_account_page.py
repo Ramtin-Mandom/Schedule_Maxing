@@ -101,11 +101,13 @@ def test_connect_register_sign_in_associate_sync_and_sign_out(tmp_path: Path, di
         page = app.pages["account"]
         assert page.headline.cget("text").startswith("Offline")
         assert page.submit_button.cget("state") == "disabled"  # nothing to sign in to yet
-        assert "no backend configured" in app.shell.status_bar.label.cget("text")
+        assert "no server configured" in app.shell.status_bar.label.cget("text")
+        assert not hasattr(page, "backend_field")
 
-        page.backend_field.variable.set("http://backend.test")
-        page.save_backend_button.invoke()
-        pump(app, lambda: "backend" not in page.busy)
+        assert app.account_controller.configure_backend("http://backend.test").ok  # the page has no address field
+        page._on_workspace_changed()
+        page.refresh()
+        pump(app, lambda: "Guest mode" in app.shell.status_bar.label.cget("text"))
         assert page.view.state == "signed_out" and "Guest mode" in app.shell.status_bar.label.cget("text")
 
         page.set_mode("register")

@@ -13,8 +13,20 @@ and ordinary local use never needs a network, a login, or backend settings.
 
 Credentials: sign_in(email, password) exchanges the password for an access
 token once; the token is held in memory only and dropped by sign_out() or
-when the backend answers 401 (status "auth_required"). Passwords and tokens
-are never stored or logged.
+when the backend answers 401 and the session cannot be renewed (status
+"auth_required"). Passwords are never stored or logged.
+
+Session renewal: a login also returns a single-use refresh credential. It is
+held in memory, so an expired access token is renewed once without asking
+for the password. With sign_in(..., keep=True) -- "Keep me signed in" -- and
+a vault (app/sync/credentials.py: the operating system's credential store)
+the current refresh credential is also kept there, replaced on every
+renewal, and restore_session() signs the device's active account in again
+after a restart (the background loop does it on its first run, and retries
+while offline). It stays until sign_out(), which removes it and revokes the
+session on the server, or until the server ends the session (password
+reset, expiry). Renewals are serialized: a refresh credential is never sent
+twice.
 
 Accounts: each (backend URL, server user) is a separate sync_accounts row
 with its own cursor, shadows, outbox operations and conflicts. Signing in
@@ -88,6 +100,7 @@ from datetime import datetime, timezone
 from app.planning.scope import OwnerScope
 from app.sync.engine import AssociationPreview, PushOutcome, SyncEngine
 from app.sync.store import BACKEND_URL_SETTING, Account, Conflict
+from app.sync.credentials import CredentialVault
 from app.sync.transport import AuthenticationError, ProtocolError, SyncTransport, TransportError
 
 logger = logging.getLogger(__name__)
@@ -199,6 +212,7 @@ class SyncService:
         backoff_max: float = 600.0,
         push_batch_size: int = 100,
         pull_page_size: int = 200,
+        vault: CredentialVault | None = None,
     ) -> None:
         self._engine = SyncEngine(connection, clock)
         self._connection = connection
@@ -213,6 +227,15 @@ class SyncService:
         self._pull_page_size = pull_page_size
         self._token: str | None = None
         self._account_key: str | None = None
+        #: The session's current refresh credential (memory; also in the vault while `_keep`).
+        self._refresh_token: str | None = None
+        #: The access token the last renewal replaced: a second caller holding it gets the new one, not a refresh.
+        self._replaced_token: str | None = None
+        self._vault = vault
+        self._keep = False
+        #: Whether the vault may still hold a session to restore (asked once; again only after a network failure).
+        self._restorable = vault is not None
+        self._renew_lock = threading.Lock()
         self._sync_lock = threading.Lock()
         self._state_lock = threading.RLock()
         self.consecutive_failures = 0
@@ -300,7 +323,7 @@ class SyncService:
     def set_transport(self, transport: SyncTransport | None) -> None:
         """Switch backends: the current session ends first (after any running sync); nothing local changes."""
         with self._sync_lock, self._state_lock:
-            self._token, self._account_key = None, None
+            self._end_session()
             self._engine.store.set_active(None)
             self._transport = transport
             self.backend_reachable, self.backend_checked_at = None, None
@@ -314,7 +337,13 @@ class SyncService:
     def remember_backend_url(self, url: str | None) -> None:
         self._engine.store.set_setting(BACKEND_URL_SETTING, url)
 
-    def sign_in(self, email: str, password: str) -> Account:
+    @property
+    def can_keep_signed_in(self) -> bool:
+        """Whether this computer has a credential store for "Keep me signed in"."""
+        return self._vault is not None
+
+    def sign_in(self, email: str, password: str, *, keep: bool = False) -> Account:
+        """keep: also keep the session in the system credential store, so a restart signs in again by itself."""
         transport = self._transport
         if transport is None:
             raise RuntimeError("No backend is configured (set SCHEDULE_MAXING_BACKEND_URL).")
@@ -328,13 +357,107 @@ class SyncService:
             # a restart (a lost connection or an ended session is not a sign-out). No existing record is claimed.
             store.set_active(account.account_key)
             self._token, self._account_key = result.token, account.account_key
+            self._refresh_token = getattr(result, "refresh_token", None)
+            self._replaced_token, self._keep, self._restorable = None, False, False
+            if self._vault is not None:
+                if keep and self._refresh_token:
+                    self._keep = self._vault.save(account.account_key, self._refresh_token)
+                else:
+                    self._vault.delete(account.account_key)  # an earlier kept session of this account ends here
             self.last_report = SyncReport("inert")
         return store.account(account.account_key)
 
     def sign_out(self) -> None:
+        """Forget the session here (and the kept one), then revoke it on the server when it can be reached."""
         with self._sync_lock, self._state_lock:
-            self._token, self._account_key = None, None
+            transport, refresh = self._transport, self._refresh_token
+            active = self._engine.store.active_account()
+            if self._vault is not None and active is not None:
+                refresh = refresh or self._vault.load(active.account_key)  # kept, but not restored yet (offline)
+                self._vault.delete(active.account_key)
+            self._end_session()
             self._engine.store.set_active(None)
+        revoke = getattr(transport, "logout", None)
+        if refresh and revoke is not None:
+            try:
+                revoke(refresh)
+            except (TransportError, AuthenticationError, ProtocolError):
+                pass  # unreachable or already ended: the credential is gone from this device either way
+
+    def _end_session(self) -> None:
+        """Drop the in-memory session (callers hold the state lock)."""
+        self._token, self._account_key = None, None
+        self._refresh_token, self._replaced_token, self._keep = None, None, False
+        self._restorable = False
+
+    def restore_session(self) -> bool:
+        """
+        Sign the device's active account in again from its kept session
+        ("Keep me signed in"), without a password. True when it did. Nothing
+        to restore, or a session the server ended, is False (and the kept
+        credential is removed); TransportError means "try again later" -- the
+        kept credential stays.
+        """
+        with self._renew_lock:
+            with self._state_lock:
+                transport = self._transport
+                if self._vault is None or not self._restorable or transport is None or self._token is not None:
+                    return False
+            renew = getattr(transport, "refresh", None)
+            account = self._engine.store.active_account()
+            secret = None
+            if renew is not None and account is not None and account.backend_url == transport.base_url:
+                secret = self._vault.load(account.account_key)
+            if secret is None:
+                self._restorable = False
+                return False
+            try:
+                pair = self._reaching(lambda: renew(secret))
+            except (AuthenticationError, ProtocolError):
+                self._vault.delete(account.account_key)
+                self._restorable = False
+                return False
+            self._vault.save(account.account_key, pair.refresh_token)  # at once: the old one is spent
+            self._restorable = False
+            with self._state_lock:
+                current = self._engine.store.active_account()
+                if (self._transport is not transport or self._token is not None or current is None
+                        or current.account_key != account.account_key):
+                    return False  # signed out or in meanwhile: that decision stands
+                self._token, self._account_key = pair.token, account.account_key
+                self._refresh_token, self._replaced_token, self._keep = pair.refresh_token, None, True
+            return True
+
+    def _renew(self, token: str) -> str | None:
+        """
+        A new access token for the session whose `token` the server refused,
+        from its refresh credential; None when the session cannot be renewed
+        (the caller then drops the token). TransportError: nothing changed.
+        """
+        with self._renew_lock:
+            with self._state_lock:
+                if self._token != token:  # another thread renewed it meanwhile, or the session changed
+                    return self._token if self._replaced_token == token else None
+                transport, refresh, key, keep = self._transport, self._refresh_token, self._account_key, self._keep
+            renew = getattr(transport, "refresh", None)
+            if refresh is None or renew is None or key is None:
+                return None
+            try:
+                pair = self._reaching(lambda: renew(refresh))
+            except (AuthenticationError, ProtocolError):
+                with self._state_lock:
+                    if self._token == token:
+                        self._refresh_token = None
+                        if keep and self._vault is not None:
+                            self._vault.delete(key)
+                return None
+            if keep and self._vault is not None:
+                self._vault.save(key, pair.refresh_token)  # at once: the old one is spent
+            with self._state_lock:
+                if self._token != token:
+                    return None
+                self._token, self._refresh_token, self._replaced_token = pair.token, pair.refresh_token, token
+            return pair.token
 
     def associate_local_data(self, confirmation: str | None = None) -> dict[str, int]:
         """
@@ -360,7 +483,7 @@ class SyncService:
         return self._reaching(lambda: transport.register(email, password, username, display_name))
 
     def create_account(self, email: str, password: str, *, username: str | None = None,
-                       display_name: str | None = None) -> AccountCreation:
+                       display_name: str | None = None, keep: bool = False) -> AccountCreation:
         """
         Register a new account and make this device's guest workspace its
         own: register, sign in, then adopt every ownerless record for the
@@ -380,7 +503,7 @@ class SyncService:
         """
         profile = self.register(email, password, username=username, display_name=display_name)
         try:
-            account = self.sign_in(email, password)
+            account = self.sign_in(email, password, keep=keep)
         except (TransportError, AuthenticationError, ProtocolError, RuntimeError) as error:
             raise AccountCreationError(
                 "The account was created, but signing in to it did not succeed. Everything on this device is "
@@ -414,11 +537,11 @@ class SyncService:
 
     def profile(self) -> dict:
         transport, token = self._require_session()
-        return self._authorized(token, lambda: transport.profile(token))
+        return self._authorized(token, transport.profile)
 
     def update_profile(self, base_version: int, display_name: str | None) -> dict:
         transport, token = self._require_session()
-        return self._authorized(token, lambda: transport.update_profile(token, base_version, display_name))
+        return self._authorized(token, lambda fresh: transport.update_profile(fresh, base_version, display_name))
 
     def check_connectivity(self) -> bool:
         """Probe the backend's liveness endpoint; records and returns whether it answered."""
@@ -458,10 +581,18 @@ class SyncService:
         self.backend_reachable, self.backend_checked_at = reachable, self._clock().isoformat()
 
     def _authorized(self, token: str, call):
+        """Run call(token); a refused token is renewed once from the session's refresh credential."""
         try:
-            return self._reaching(call)
+            return self._reaching(lambda: call(token))
         except AuthenticationError:
-            self._drop_token(token)
+            renewed = self._renew(token)
+            if renewed is None:
+                self._drop_token(token)
+                raise
+        try:
+            return self._reaching(lambda: call(renewed))
+        except AuthenticationError:
+            self._drop_token(renewed)
             raise
 
     def _drop_token(self, token: str) -> None:
@@ -503,15 +634,24 @@ class SyncService:
     # Synchronization
     # ------------------------------------------------------------------
 
-    def sync_now(self) -> SyncReport:
+    def sync_now(self, *, _renewed: bool = False) -> SyncReport:
         with self._state_lock:
             token, key = self._token, self._account_key
+        if token is None and self._restorable:
+            try:
+                self.restore_session()  # "Keep me signed in": the first run after a start
+            except TransportError as error:
+                self.consecutive_failures += 1
+                return self._finish(SyncReport("offline", message=str(error)))
+            with self._state_lock:
+                token, key = self._token, self._account_key
         if self._transport is None or token is None or key is None:
             return self._finish(SyncReport("inert", message="No backend configured or no account signed in."))
         with self._sync_lock:
             account = self._engine.store.account(key)
             pushed = pulled = conflicts = 0
             batch: list = []
+            renewed = False
             try:
                 features = self._features(token)
                 recurrence = RECURRENCE_FEATURE in features
@@ -544,22 +684,30 @@ class SyncService:
                 self._reachable(False)
                 return self._finish(SyncReport("offline", pushed, pulled, conflicts, str(error)))
             except AuthenticationError as error:
-                self._drop_token(token)
-                self._reachable(True)
-                return self._finish(SyncReport("auth_required", pushed, pulled, conflicts, str(error)))
+                try:
+                    renewed = not _renewed and self._renew(token) is not None
+                except TransportError as offline:
+                    self.consecutive_failures += 1
+                    return self._finish(SyncReport("offline", pushed, pulled, conflicts, str(offline)))
+                if not renewed:
+                    self._drop_token(token)
+                    self._reachable(True)
+                    return self._finish(SyncReport("auth_required", pushed, pulled, conflicts, str(error)))
             except ProtocolError as error:
                 if batch:
                     self._engine.store.block_ops([op.op_id for op in batch], str(error))
                 self.consecutive_failures += 1
                 self._reachable(True)
                 return self._finish(SyncReport("error", pushed, pulled, conflicts, str(error)))
-            self.consecutive_failures = 0
-            self._reachable(True)
-            self._engine.store.set_last_synced(key, self._clock().isoformat())
-            held = self._engine.held
-            message = (f"{held} record(s) wait here: the server does not support them yet (recurring series, "
-                       "the newer scheduling modes or task types; update the server).") if held else ""
-            return self._finish(SyncReport("ok", pushed, pulled, conflicts, message, held=held))
+            if not renewed:
+                self.consecutive_failures = 0
+                self._reachable(True)
+                self._engine.store.set_last_synced(key, self._clock().isoformat())
+                held = self._engine.held
+                message = (f"{held} record(s) wait here: the server does not support them yet (recurring series, "
+                           "the newer scheduling modes or task types; update the server).") if held else ""
+                return self._finish(SyncReport("ok", pushed, pulled, conflicts, message, held=held))
+        return self.sync_now(_renewed=True)  # the session was renewed: once more with the new token
 
     def _push(self, token: str, account, batch: list):
         """
@@ -623,7 +771,7 @@ class SyncService:
         if transport is None or token is None or key != account.account_key:
             raise RuntimeError("Sign in to your account first: its task data is also stored on the server.")
         with self._sync_lock:
-            result = self._authorized(token, lambda: transport.reset_task_data(token))
+            result = self._authorized(token, transport.reset_task_data)
             return wipe_task_data(self._connection, OwnerScope.account(uuid.UUID(account.user_id)),
                                   account_key=account.account_key, cursor=int(result["cursor"]))
 

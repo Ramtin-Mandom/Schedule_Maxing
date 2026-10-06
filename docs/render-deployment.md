@@ -1,5 +1,12 @@
 # Deploying the backend to Render (manual handoff)
 
+Current native authentication and setup are documented in
+[backend-m8.md](backend-m8.md). The conventional start target
+`backend.main:app` and the factory target below use the same application.
+Set `ENVIRONMENT=production`, an explicit `ALLOWED_HOSTS` list, exact web
+origins, `ACCESS_TOKEN_TTL_MINUTES=15` and `REFRESH_TOKEN_EXPIRE_DAYS=30`.
+Migration 0015 adds rotating native sessions without changing existing data.
+
 > This guide deploys the **HTTP API** as a Render web service. To connect the desktop app
 > directly to a Render Postgres database instead (no web service or JWT secret), see
 > [render-direct-desktop.md](render-direct-desktop.md).

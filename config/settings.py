@@ -170,11 +170,24 @@ EXECUTION_DB_FILENAME = "executions.db"
 # Lives alongside the execution database under the same DATA_DIR.
 ML_MODEL_FILENAME = "ml_duration_model.joblib"
 ML_MODEL_META_FILENAME = "ml_duration_model.meta.json"
-# Optional synchronization backend (app/sync, docs/sync-protocol.md). Unset
-# (the default) keeps the desktop app fully offline: sync is inert and no
-# network access, account, or backend setting is needed. Credentials are
-# never configured here -- they are entered at sign-in and kept in memory.
-BACKEND_URL = os.environ.get("SCHEDULE_MAXING_BACKEND_URL", "").strip() or None
+# The synchronization backend (app/sync, docs/sync-protocol.md): the Schedule
+# Maxing API. The app still works fully offline -- nothing is sent until an
+# account signs in on the Account page. SCHEDULE_MAXING_BACKEND_URL names
+# another server (e.g. http://127.0.0.1:8000 while developing), or "off" for
+# no backend at all. The address is public, not a credential; credentials
+# are entered at sign-in and never configured here.
+DEFAULT_BACKEND_URL = "https://schedule-maxing.onrender.com"
+
+
+def resolve_backend_url(value: str | None) -> str | None:
+    """Unset: the default API. "off" (or none/false/0): no backend. Anything else: that address."""
+    if value is None or not value.strip():
+        return DEFAULT_BACKEND_URL
+    value = value.strip()
+    return None if value.lower() in ("off", "none", "false", "0") else value
+
+
+BACKEND_URL = resolve_backend_url(os.environ.get("SCHEDULE_MAXING_BACKEND_URL"))
 
 # Where the desktop app stores its records (docs/direct-postgres.md):
 #   "local"    -- the SQLite database above; works offline (the default)

@@ -399,7 +399,7 @@ class AccountController:
         signed_in_email = status.account.email if status.account is not None and status.signed_in else None
         if not status.configured:
             state = "unconfigured"
-            headline = "Offline — guest mode, no backend configured"
+            headline = "Offline — guest mode, no server configured"
             detail = ("You are using the app without an account: everything is saved on this device. Enter a "
                       "backend address to create an account or sign in and synchronize.")
         elif status.signed_in:
@@ -479,8 +479,8 @@ class AccountController:
 
         return self._call(op)
 
-    def create_account(self, email: str, password: str, *, display_name: str | None = None
-                       ) -> ControllerResult[RegistrationResult]:
+    def create_account(self, email: str, password: str, *, display_name: str | None = None,
+                       keep: bool = False) -> ControllerResult[RegistrationResult]:
         """
         Create an account and keep working in the same workspace: the new
         account is signed in to and this device's guest records become its
@@ -493,7 +493,8 @@ class AccountController:
             if errors:
                 raise InvalidInput(errors)
             created = self._sync.create_account(email.strip(), password,
-                                                display_name=(display_name or "").strip() or None)
+                                                display_name=(display_name or "").strip() or None,
+                                                **({"keep": True} if keep else {}))
             return RegistrationResult(email=created.account.email or email.strip(), adopted=created.adopted_total)
 
         return self._call(op)
@@ -513,14 +514,23 @@ class AccountController:
 
         return self._call(op)
 
-    def sign_in(self, email: str, password: str) -> ControllerResult[SignInResult]:
-        """Sign in. Never claims or uploads this device's ownerless records (see associate)."""
+    @property
+    def can_keep_signed_in(self) -> bool:
+        """Whether "Keep me signed in" can be offered (a system credential store exists)."""
+        return bool(getattr(self._sync, "can_keep_signed_in", False))
+
+    def sign_in(self, email: str, password: str, *, keep: bool = False) -> ControllerResult[SignInResult]:
+        """
+        Sign in. Never claims or uploads this device's ownerless records (see associate).
+        keep: stay signed in across restarts until sign-out (the session, never the password, is kept
+        in the system credential store).
+        """
 
         def op() -> SignInResult:
             errors = validate_credentials(email, password)
             if errors:
                 raise InvalidInput(errors)
-            account = self._sync.sign_in(email.strip(), password)
+            account = self._sync.sign_in(email.strip(), password, **({"keep": True} if keep else {}))
             unassociated = self._sync.association_preview().total
             self._sync.wake()  # sync the account's own records; ownerless ones stay until associated
             return SignInResult(email=account.email or email.strip(), unassociated=unassociated,
@@ -578,7 +588,7 @@ class AccountController:
         return result
 
     def sign_out(self) -> ControllerResult[ConnectionView]:
-        """Forget the session on this device (the backend has no revocation; the token expires there)."""
+        """Forget the session on this device (and a kept one) and end it on the backend when reachable."""
 
         def op() -> ConnectionView:
             self._sync.sign_out()

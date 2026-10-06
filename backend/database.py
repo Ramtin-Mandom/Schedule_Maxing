@@ -13,12 +13,15 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import datetime, timezone
+import ipaddress
 
 from sqlalchemy import JSON, URL, DateTime, Engine, create_engine, event, make_url
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.types import TypeDecorator
+
+from backend.settings import BackendConfigError, normalize_database_url
 
 #: JSON documents: JSONB on PostgreSQL, JSON text elsewhere.
 JSONDocument = JSON().with_variant(JSONB(), "postgresql")
@@ -56,7 +59,25 @@ def create_backend_engine(url: str | URL, **kwargs) -> Engine:
     in-memory database uses one shared connection so every session sees the
     same data.
     """
-    if make_url(url).get_backend_name() == "sqlite":
+    kwargs.setdefault("hide_parameters", True)
+    parsed = make_url(normalize_database_url(url) if isinstance(url, str) else url)
+    if parsed.get_backend_name() == "postgresql":
+        host = parsed.host or parsed.query.get("host", "")
+        # An omitted host may be supplied by libpq's PGHOST environment;
+        # require TLS unless the URL explicitly names a local destination.
+        local = str(host).lower() == "localhost" or str(host).startswith("/")
+        try:
+            local = local or ipaddress.ip_address(str(host).strip("[]")).is_loopback
+        except ValueError:
+            pass
+        if not local:
+            sslmode = parsed.query.get("sslmode")
+            if sslmode is not None and sslmode not in ("require", "verify-ca", "verify-full"):
+                raise BackendConfigError("DATABASE_URL must require TLS for remote PostgreSQL.")
+            if sslmode is None:
+                parsed = parsed.update_query_dict({"sslmode": "require"})
+    url = parsed
+    if parsed.get_backend_name() == "sqlite":
         url = str(url)
         options = {"connect_args": {"check_same_thread": False}}
         if ":memory:" in url or url in ("sqlite://", "sqlite+pysqlite://"):

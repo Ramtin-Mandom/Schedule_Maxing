@@ -86,6 +86,36 @@ def _column_types(connection, table: str) -> dict[str, str]:
     ), {"table": table}).all())
 
 
+def test_concurrent_refresh_has_one_winner_and_replay_revokes_it(pg_engine):
+    """Two workers cannot turn one credential into two live descendants."""
+    from concurrent.futures import ThreadPoolExecutor
+    from tests.backend.conftest import PASSWORD
+
+    settings = BackendSettings(database_url="sqlite://", jwt_secret=TEST_SECRET)
+    app = create_app(settings, engine=pg_engine)
+    with TestClient(app) as client:
+        register(client, "refresh-race@example.com")
+        pair = client.post("/auth/login", json={"email": "refresh-race@example.com", "password": PASSWORD}).json()
+    barrier = threading.Barrier(2)
+
+    def rotate():
+        with TestClient(app) as client:
+            barrier.wait(timeout=10)
+            response = client.post("/auth/refresh", json={"refresh_token": pair["refresh_token"]})
+            return response.status_code, response.json()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(lambda _: rotate(), range(2)))
+    assert sorted(status for status, _ in outcomes) == [200, 401]
+    winner = next(body for status, body in outcomes if status == 200)
+    with TestClient(app) as client:
+        assert client.get("/auth/me", headers={"Authorization": "Bearer " + winner["access_token"]}).status_code == 401
+        assert client.post("/auth/refresh", json={"refresh_token": winner["refresh_token"]}).status_code == 401
+    with session_factory(pg_engine)() as session:
+        assert session.scalar(select(func.count()).select_from(models.RefreshCredential)) == 2
+        assert session.scalar(select(models.NativeSession.revoked_at)) is not None
+
+
 def test_migrations_match_the_models_on_postgresql(pg_engine) -> None:
     with pg_engine.connect() as connection:
         assert current_revision(connection) == head_revision()

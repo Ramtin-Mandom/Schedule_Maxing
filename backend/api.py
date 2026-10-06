@@ -31,6 +31,8 @@ from sqlalchemy.orm import Session
 
 from backend import browser_sessions, models, snapshots
 from backend.accounts import AccountExistsError, AccountIdentity, AccountService, InvalidCredentialsError
+from backend.auth_schemas import RefreshIn, TokenPairOut
+from backend.native_sessions import NativeSessionService, require_live_session
 from backend.database import session_scope
 from backend.errors import ApiError, not_found, unauthenticated, version_conflict
 from backend.executions import ACTIONS, EXECUTIONS, ActionIn, ExecutionCreate, ExecutionOut, FeedbackIn
@@ -44,9 +46,8 @@ from backend.security import (
     MAX_PASSWORD_LENGTH,
     MIN_PASSWORD_LENGTH,
     TokenError,
-    issue_access_token,
     normalize_identifier,
-    verify_access_token_claims,
+    verify_access_identity,
 )
 from backend.protection import client_address
 from backend.rate_limit import identifier_subject
@@ -99,13 +100,15 @@ def current_user_id(
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise unauthenticated()
     try:
-        user_id, epoch = verify_access_token_claims(credentials.credentials, request.app.state.settings,
-                                                    request.app.state.clock())
+        user_id, epoch, family_id = verify_access_identity(credentials.credentials, request.app.state.settings,
+                                                          request.app.state.clock())
     except TokenError:
         raise unauthenticated("The access token is invalid or has expired.") from None
     # Checked against the stored account on every request: a password reset (a new epoch) ends every older token.
     if credential_epoch(session, user_id) != epoch:
         raise unauthenticated("The access token is invalid or has expired.")
+    if family_id is not None:
+        require_live_session(session, family_id, user_id, epoch, request.app.state.clock())
     return user_id
 
 
@@ -174,13 +177,6 @@ class LoginIn(BaseModel):
         return self
 
 
-class TokenOut(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    expires_in: int
-    expires_at: datetime
-
-
 class UserOut(BaseModel):
     id: uuid.UUID
     email: str
@@ -225,7 +221,7 @@ def _check_credentials(payload: LoginIn, session: Session, request: Request) -> 
         raise unauthenticated(str(error)) from None
 
 
-@auth.post("/auth/login", response_model=TokenOut, summary="Exchange credentials for an access token.")
+@auth.post("/auth/login", response_model=TokenPairOut, summary="Create a native session and rotating token pair.")
 def login(
     payload: LoginIn,
     request: Request,
@@ -233,8 +229,24 @@ def login(
     now: datetime = Depends(server_now),
 ) -> dict:
     user = _check_credentials(payload, session, request)
-    issued = issue_access_token(user.id, request.app.state.settings, now, user.credential_epoch)
-    return {"access_token": issued.token, "expires_in": issued.expires_in, "expires_at": issued.expires_at}
+    return NativeSessionService(session, request.app.state.settings, now).start(user.id, user.credential_epoch)
+
+
+@auth.post("/auth/refresh", response_model=TokenPairOut,
+           summary="Rotate a single-use refresh credential; replay ends its session.")
+def refresh_native(payload: RefreshIn, request: Request, session: Session = Depends(get_session),
+                   now: datetime = Depends(server_now)) -> dict:
+    throttle(request, "refresh_ip")
+    return NativeSessionService(session, request.app.state.settings, now).refresh(payload.refresh_token.get_secret_value())
+
+
+@auth.post("/auth/logout", status_code=204, response_class=Response,
+           summary="Revoke the refresh credential's session and its access tokens (idempotent).")
+def logout_native(payload: RefreshIn, request: Request, session: Session = Depends(get_session),
+                  now: datetime = Depends(server_now)) -> Response:
+    throttle(request, "logout_ip")
+    NativeSessionService(session, request.app.state.settings, now).logout(payload.refresh_token.get_secret_value())
+    return Response(status_code=204)
 
 
 class BrowserSessionOut(BaseModel):
@@ -293,6 +305,7 @@ def browser_logout(request: Request, session: Session = Depends(get_session), no
 
 
 @auth.get("/me", response_model=UserOut, summary="The authenticated account.")
+@auth.get("/auth/me", response_model=UserOut, summary="The authenticated account (native authentication API).")
 def me(user_id: uuid.UUID = Depends(current_user_id), session: Session = Depends(get_session)) -> dict:
     return _user_out(session.get(models.User, user_id))
 

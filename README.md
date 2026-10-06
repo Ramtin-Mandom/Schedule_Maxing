@@ -1,5 +1,11 @@
 # Schedule Maxing
 
+The backend API lives in this repository's `backend/` directory. See
+[backend setup and security](docs/backend-m8.md) for local FastAPI startup,
+rotating access/refresh credentials, administrator inspection, tests and the
+manual Render deployment handoff. Distributed clients use the API and never
+receive PostgreSQL credentials.
+
 The native desktop UI includes Day, Week, Month and Project Schedule, plus an in-app **How to Use** guide (before About).
 See [Projects](docs/desktop-projects-allocation.md) for project assignment and display filters.
 The optional web/server adapters remain independently launched components; desktop
