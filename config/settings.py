@@ -5,6 +5,8 @@ import sys
 from collections.abc import Mapping
 from pathlib import Path
 
+from app import runtime
+
 # -------------------------
 # Time Model
 # -------------------------
@@ -143,6 +145,9 @@ DATA_DIR, DATA_DIR_OVERRIDDEN = resolve_data_dir()
 # existing repository-local executions.db is carried over (copied, never
 # moved, merged, or deleted).
 LEGACY_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+# The packaged application has no checkout to adopt from: its install
+# directory is never probed for data (app/runtime.py).
+LEGACY_ADOPTION_ENABLED = not runtime.is_frozen()
 
 # IANA timezone the desktop app plans in: a legacy "minutes from midnight"
 # form value on a page date is a wall-clock time in this zone, and "today"
@@ -188,6 +193,26 @@ def resolve_backend_url(value: str | None) -> str | None:
 
 
 BACKEND_URL = resolve_backend_url(os.environ.get("SCHEDULE_MAXING_BACKEND_URL"))
+
+# Updates (app/update, docs/windows-distribution.md): the GitHub repository whose published
+# Releases are the application's update channel. Only its latest stable release is ever
+# offered. SCHEDULE_MAXING_UPDATE_REPOSITORY names another one ("owner/name", e.g. a fork);
+# SCHEDULE_MAXING_UPDATE_CHECK=off turns update checks off entirely. Public addresses, not
+# credentials: no token is ever used or stored.
+DEFAULT_UPDATE_REPOSITORY = "Ramtin-Mandom/Schedule_Maxing"
+UPDATE_REPOSITORY_ENV_VAR = "SCHEDULE_MAXING_UPDATE_REPOSITORY"
+UPDATE_CHECK_ENV_VAR = "SCHEDULE_MAXING_UPDATE_CHECK"
+
+
+def resolve_update_repository(environ: Mapping[str, str] | None = None) -> str | None:
+    """The update repository, or None when update checks are off."""
+    environ = os.environ if environ is None else environ
+    if (environ.get(UPDATE_CHECK_ENV_VAR) or "").strip().lower() in ("off", "none", "false", "0"):
+        return None
+    return (environ.get(UPDATE_REPOSITORY_ENV_VAR) or "").strip() or DEFAULT_UPDATE_REPOSITORY
+
+
+UPDATE_REPOSITORY = resolve_update_repository()
 
 # Where the desktop app stores its records (docs/direct-postgres.md):
 #   "local"    -- the SQLite database above; works offline (the default)

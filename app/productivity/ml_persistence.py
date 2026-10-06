@@ -87,7 +87,7 @@ def load_model_artifact(data_dir: Path | str | None = None) -> tuple[Pipeline, M
     Never raises. See the module docstring for the default-location
     migration and read fallback.
     """
-    if data_dir is not None or settings.DATA_DIR_OVERRIDDEN:
+    if data_dir is not None or settings.DATA_DIR_OVERRIDDEN or not settings.LEGACY_ADOPTION_ENABLED:
         return _load_from(Path(data_dir or settings.DATA_DIR))
 
     try:

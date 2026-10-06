@@ -216,3 +216,15 @@ def test_env_override_or_explicit_path_never_adopts(tmp_path: Path, monkeypatch)
         assert fresh.execute("SELECT COUNT(*) FROM executions").fetchone()[0] == 0
     finally:
         fresh.close()
+
+
+def test_packaged_app_never_adopts_from_its_install_directory(tmp_path: Path, monkeypatch) -> None:
+    legacy, target = _configure_locations(monkeypatch, tmp_path, overridden=False)
+    monkeypatch.setattr(settings, "LEGACY_ADOPTION_ENABLED", False)
+
+    connection = get_connection()
+    try:
+        assert connection.execute("SELECT COUNT(*) FROM executions").fetchone()[0] == 0
+    finally:
+        connection.close()
+    assert target.exists() and legacy.exists()
