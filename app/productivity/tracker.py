@@ -1271,6 +1271,13 @@ def merge_completions(items: Iterable[CompletionItem]) -> tuple[list[CompletionI
         if item.occurrence_key in latest:
             dropped += 1
         latest[item.occurrence_key] = item
+    # A task completed on a time slot is that completion: a completion of the same task recorded without a
+    # placement (from its project) is the same work, never a second one.
+    scheduled_tasks = {item.task_id for item in latest.values() if item.placement_id is not None and item.task_id}
+    direct = [key for key, item in latest.items() if item.placement_id is None and item.task_id in scheduled_tasks]
+    for key in direct:
+        del latest[key]
+    dropped += len(direct)
     return sorted(latest.values(), key=lambda item: (item.completed_at, item.execution_id)), dropped
 
 

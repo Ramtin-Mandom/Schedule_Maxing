@@ -316,6 +316,14 @@ class ScheduleOptimizerApp(ctk.CTk):
     def productivity_controller(self) -> ProductivityController | None:
         return self.services.productivity_controller if self.services is not None else None
 
+    def open_project_performance(self, project_id) -> None:
+        """Performance -> Project with `project_id` selected (the Projects page's "View performance")."""
+        self.show_page("productivity")
+        page = self.pages.get("productivity")
+        content = getattr(page, "content", page)
+        if hasattr(content, "show_project"):
+            content.show_project(project_id)
+
     def show_page(self, page_name: str) -> None:
         if self.shell is not None:
             self.shell.show_page(page_name)
@@ -630,8 +638,10 @@ class ScheduleOptimizerApp(ctk.CTk):
         add("productivity", ScrollPage(
             shell.host, lambda parent: ProductivityPage(parent, services.productivity_controller)))
         add("projects", ProjectsPage(
-            shell.host, ProjectsController(services.planning_controller, timezone=services.timezone),
-            on_open_day=lambda day: self.open_day(day, return_to="projects")))
+            shell.host, ProjectsController(services.planning_controller, timezone=services.timezone,
+                                           executions=services.execution_controller),
+            on_open_day=lambda day: self.open_day(day, return_to="projects"), task_defaults=self.task_defaults,
+            on_open_performance=self.open_project_performance))
         add("settings", SettingsPage(
             shell.host, self.ui_settings, on_appearance=self.set_appearance, on_scale=self.set_ui_scale,
             controller=SettingsController(services.planning_controller, today=self.today), background_io=True,

@@ -54,6 +54,8 @@ from app.productivity.segments import (
     global_stats,
 )
 from app.productivity.stats import ProductivityThresholds, SegmentStats
+from app.planning.time import local_date_of
+from app.productivity.project_stats import ProjectPointsReport, build_project_points
 from app.productivity.tracker import TrackerFilters, TrackerReport, build_tracker_report, read_tracker_data
 from app.productivity.trends import RecentTrend, compute_recent_trend
 
@@ -194,6 +196,37 @@ class ProductivityService:
         data = read_tracker_data(self._history, timezone_name=tz, as_of=cutoff, thresholds=self._thresholds)
         return build_tracker_report(data, timezone_name=tz, as_of=cutoff, range_days=range_days, filters=filters,
                                     thresholds=self._thresholds)
+
+    def projects(self) -> list:
+        """The workspace's live projects (app.planning.models.Project), by name -- the Project section's choices."""
+        if self._history is None:
+            raise ValueError("this productivity service has no schedule history source.")
+        return sorted(self._history.list_projects(), key=lambda project: (project.name.lower(), str(project.id)))
+
+    def build_project_points(
+        self,
+        project_id,
+        *,
+        range_days: int | None = None,
+        timezone_name: str | None = None,
+        as_of: datetime | None = None,
+    ) -> ProjectPointsReport:
+        """
+        The points one project collected (app/productivity/project_stats.py)
+        in the last `range_days` local dates (None: all time), from the same
+        completion records as the tracker report. Tasks deleted since still
+        count: what was completed stays collected. Read-only.
+        """
+        if self._history is None:
+            raise ValueError("this productivity service has no schedule history source.")
+        tz = timezone_name or self._timezone
+        if tz is None:
+            raise ValueError("a reporting timezone is required (the host timezone is never assumed).")
+        cutoff = as_of or self._clock()
+        data = read_tracker_data(self._history, timezone_name=tz, as_of=cutoff, thresholds=self._thresholds)
+        task_ids = [task.id for task in self._history.list_tasks(include_deleted=True) if task.project_id == project_id]
+        completions = [item for item in data.completions if item.completed_at <= cutoff]
+        return build_project_points(completions, task_ids, today=local_date_of(cutoff, tz), range_days=range_days)
 
     def generate_report(
         self,

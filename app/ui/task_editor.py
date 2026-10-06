@@ -71,8 +71,8 @@ from app.ui.components import (
     font,
     make_keyboard_accessible,
 )
-from app.planning.models import DEFAULT_TASK_POINTS, MAX_TASK_POINTS
-from app.ui.task_defaults import TaskDefaultsStore
+from app.planning.models import DEFAULT_TASK_POINTS, MAX_TASK_POINTS, ProjectTaskDefaults
+from app.ui.task_defaults import TaskDefaultsStore, resolve_task_default
 from app.ui.task_form_model import (
     CATEGORIES,
     PRIORITIES,
@@ -167,9 +167,12 @@ class DurationField(_SteppedField):
 
 
 class DateField(_SteppedField):
-    def __init__(self, parent, label: str = "Date", *, optional: bool = False) -> None:
+    #: The expected format, for a hint under the field (the Projects page shows it).
+    FORMAT_HINT = "Format: YYYY-MM-DD, e.g. 2026-09-23."
+
+    def __init__(self, parent, label: str = "Date", *, optional: bool = False, hint: str | None = None) -> None:
         super().__init__(parent, label, placeholder="YYYY-MM-DD",
-                         hint="Empty: any date." if optional else "", big_step=7)
+                         hint=hint if hint is not None else "Empty: any date." if optional else "", big_step=7)
 
     def value(self):
         return parse_date(self.get())
@@ -333,8 +336,13 @@ class TaskEditor(Card):
     REPEAT_FIELDS = ("repeat", "repeat_interval", "repeat_day_of_month", "repeat_until", "repeat_count", "repeat_end")
 
     def __init__(self, parent, *, on_submit: Callable[[TaskDraft], None], on_cancel: Callable[[], None],
-                 task_defaults: TaskDefaultsStore | None = None) -> None:
+                 task_defaults: TaskDefaultsStore | None = None, date_selector: bool = False) -> None:
         super().__init__(parent)
+        #: The Projects page's form: a date to choose where the project choice is (the page supplies the
+        #: project), and flexible tasks only -- a fixed block belongs to no project.
+        self.date_selector = date_selector
+        #: The open project's configured task defaults (the Projects page sets it): they outrank the category's.
+        self.project_defaults: ProjectTaskDefaults | None = None
         #: The default values and added categories (Settings); in memory only when the page gave none.
         self.task_defaults = task_defaults or TaskDefaultsStore()
         #: "Pinned to its date" of the loaded draft (an edited record): not shown, kept as stored.
@@ -369,6 +377,9 @@ class TaskEditor(Card):
         self.name_field.entry.bind("<Return>", lambda _e: (self.submit(), "break")[1], add="+")
         self.category_select = LabeledSelect(body, "Category", [NO_CATEGORY, *CATEGORIES])
         self.project_select = LabeledSelect(body, "Project", [NO_PROJECT])
+        self.date_field = DateField(body, "Date", hint=DateField.FORMAT_HINT)
+        if date_selector:
+            switch.grid_remove()
         self.name_field.grid(row=0, column=0, columnspan=2, sticky="ew", pady=4)
 
         # Flexible task fields
@@ -496,7 +507,8 @@ class TaskEditor(Card):
 
     @property
     def fields(self) -> dict[str, LabeledEntry | ClockInput]:
-        return {"name": self.name_field, "duration": self.duration_field, "points": self.points_field,
+        return {**({"date": self.date_field} if self.date_selector else {}),
+                "name": self.name_field, "duration": self.duration_field, "points": self.points_field,
                 "window_start": self.window_start, "window_end": self.window_end,
                 "deadline_date": self.deadline_date, "deadline_time": self.deadline_time,
                 "start": self.start_field, "end": self.end_field, "repeat_interval": self.repeat_interval,
@@ -518,7 +530,8 @@ class TaskEditor(Card):
             self.task_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
             self.name_field.label.configure(text="Name")
             self.category_select.grid(row=1, column=0, columnspan=1, sticky="new", padx=(0, 6), pady=4)
-            self.project_select.grid(row=1, column=1, sticky="new", padx=(6, 0), pady=4)
+            (self.date_field if self.date_selector else self.project_select).grid(
+                row=1, column=1, sticky="new", padx=(6, 0), pady=4)
         else:
             self.task_frame.grid_remove()
             self.block_frame.grid(row=3, column=0, columnspan=2, sticky="ew")
@@ -531,6 +544,8 @@ class TaskEditor(Card):
     def set_date(self, day: date | str | None) -> None:
         """The date a new task/block gets (the page's selected date); an edited record's own date while editing."""
         self.date_text = day.isoformat() if isinstance(day, date) else (day or "").strip()
+        if self.date_selector:
+            self.date_field.variable.set(self.date_text)
 
     def toggle_more(self) -> None:
         self.more_open = not self.more_open
@@ -547,7 +562,8 @@ class TaskEditor(Card):
 
     def use_defaults(self) -> None:
         """Fill the chosen category's default values (the general ones without a category); a typed name stays."""
-        default = self.task_defaults.value.for_category(self._category())
+        default = resolve_task_default(self.task_defaults.value.for_category(self._category()),
+                                       self.project_defaults)
         if not self.name_field.get().strip():
             self.name_field.variable.set(default.name)
         if self.kind == "task":
@@ -600,7 +616,7 @@ class TaskEditor(Card):
             task_type_id=self._type_ids.get(type_label),
             new_type_label=self.new_type_field.get().strip() if type_label == NEW_TYPE else "",
             kind=self.kind, name=self.name_field.get(), category=self._category() or UNSET_CATEGORY,
-            date=self.date_text,
+            date=self.date_field.get().strip() if self.date_selector else self.date_text,
             duration=self.duration_field.get(), priority=self.priority_select.get(), points=self.points_field.get(),
             required=self.required_var.get(),
             pin_to_date=self._pin_to_date, window_start=self.window_start.get(), window_end=self.window_end.get(),
@@ -673,6 +689,16 @@ class TaskEditor(Card):
         has_more = any((draft.window_start, draft.deadline_date, draft.dependency_ids, draft.repeat))
         if has_more != self.more_open and draft.kind == "task":
             self.toggle_more()
+        if not editing and self.project_defaults is not None:
+            # A new task of a project starts from what the project explicitly configured (nothing else is filled:
+            # an unset value leaves the form as every other new task's, and typing over any of them wins).
+            configured = self.project_defaults
+            if configured.duration_minutes is not None and not draft.duration.strip():
+                self.duration_field.show(configured.duration_minutes)
+            if configured.priority is not None:
+                self.priority_select.variable.set(str(configured.priority))
+            if configured.points is not None:
+                self.points_field.variable.set(str(configured.points))
         if editing:
             self.cancel_edit_button.grid(row=6, column=0, sticky="ew", padx=theme.SPACE_L, pady=(0, 8))
         else:

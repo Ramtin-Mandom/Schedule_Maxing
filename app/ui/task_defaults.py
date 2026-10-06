@@ -23,7 +23,7 @@ import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from app.planning.models import MAX_TASK_POINTS
+from app.planning.models import MAX_TASK_POINTS, ProjectTaskDefaults
 from app.ui.task_form_model import CATEGORIES, PRIORITIES, parse_points
 from app.ui.time_fields import FieldError, parse_duration
 
@@ -40,6 +40,36 @@ class TaskDefault:
     duration: int = 60
     priority: int = 5
     points: int = 20
+
+
+def resolve_task_default(category_default: TaskDefault, project: ProjectTaskDefaults | None) -> TaskDefault:
+    """
+    The defaults of a new task of a project: each value the project
+    explicitly configured, else the category's (which is the application's
+    own where the category was never changed). An unset project value never
+    replaces anything.
+    """
+    if project is None:
+        return category_default
+    return replace(
+        category_default,
+        duration=project.duration_minutes if project.duration_minutes is not None else category_default.duration,
+        priority=project.priority if project.priority is not None else category_default.priority,
+        points=project.points if project.points is not None else category_default.points,
+    )
+
+
+def parse_project_defaults(duration: str, priority: str, points: str) -> ProjectTaskDefaults:
+    """A project's task defaults as typed (each empty: not set); ValueError says what is wrong."""
+    try:
+        minutes = parse_duration(duration) if (duration or "").strip() else None
+        value = parse_points(points) if (points or "").strip() else None
+    except FieldError as error:
+        raise ValueError(str(error)) from None
+    chosen = (priority or "").strip()
+    if chosen and chosen not in PRIORITIES:
+        raise ValueError("Choose a default priority from 1 (low) to 10 (high), or leave it empty.")
+    return ProjectTaskDefaults(duration_minutes=minutes, priority=int(chosen) if chosen else None, points=value)
 
 
 def parse_default(name: str, duration: str, priority: str, points: str) -> TaskDefault:

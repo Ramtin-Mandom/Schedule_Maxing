@@ -1,12 +1,53 @@
-# Accounts, association and synchronization in the desktop app (Milestone 4, Prompt 2)
+# Accounts and local-first synchronization in the desktop app
 
-The desktop app works without an account and without internet. Connecting to
-a backend is optional. The app then signs you in and keeps your account's
-records synchronized through the existing sync client (`app/sync`,
-[sync-protocol.md](sync-protocol.md)).
+The desktop app is local-first. Every page reads from and saves to the SQLite
+database on this computer, with or without an account and with or without a
+connection. An account adds synchronization through the authenticated backend
+API (`app/sync`, [sync-protocol.md](sync-protocol.md)); the backend is the
+only program that talks to PostgreSQL, and the desktop never holds a database
+password in this (default) mode.
 
-The desktop never runs, and never needs, the local web service. In the
-default (local) storage mode it never holds a database password.
+- **Guest mode** (no account): your work is saved on this device and survives
+  restarts. It belongs to nobody yet -- it is waiting for an account, not a
+  permanent "local owner".
+- **Create an account** inside the app: the workspace you were using stays
+  exactly where it is, becomes the new account's, and is uploaded.
+- **Signed in:** each save is one local transaction that also records the
+  change for upload, so a change is never reported saved without being queued.
+  Pending changes are sent automatically and the server's changes are fetched;
+  offline, you simply keep working and it catches up later.
+
+## Set up the API-backed workflow
+
+1. **Run the backend** (once, on a server or on this computer). It needs
+   `DATABASE_URL` (its PostgreSQL database) and `JWT_SECRET` (at least 32
+   characters); see [backend.md](backend.md) and `.env.example`:
+
+   ```bash
+   python -m backend.migrate upgrade
+   ```
+
+   ```bash
+   uvicorn --factory backend.app:create_app --host 127.0.0.1 --port 8000
+   ```
+
+   [render-deployment.md](render-deployment.md) describes a hosted backend.
+   End users never receive `DATABASE_URL`; they only need the backend's address.
+2. **Run the desktop** as usual:
+
+   ```bash
+   python -m app.app
+   ```
+
+3. **Point it at the backend:** Account page -> Backend address (for example
+   `http://127.0.0.1:8000`, or your `https://...` address) -> **Save address**.
+   Setting `SCHEDULE_MAXING_BACKEND_URL` before starting does the same and
+   overrides the saved address. **Check connection** only asks the backend
+   whether it answers; it never reads, writes or uploads a record.
+4. **Create an account** (or sign in) on the same page. From then on nothing
+   else is needed: saving is local, and uploading and downloading are automatic.
+
+The desktop never runs, and never needs, the local web service.
 
 **Direct PostgreSQL storage** (`python -m app.app --storage postgres --env-file
 .env`, [direct-postgres.md](direct-postgres.md)) uses the same Account page
@@ -33,25 +74,56 @@ PostgreSQL is the only copy, so there is nothing to associate or synchronize.
   records.
 - Switching to another backend also ends the current session first.
 
-**Create an account / Sign in**
+**Create an account**
 
-- The fields are checked before anything is sent: a valid email, and a
-  password of 8 to 1024 characters for a new account (the server enforces the
-  same rules).
+- The fields are checked before anything is sent: a valid email and a password
+  of 8 to 1024 characters (the server enforces the same rules).
+- Creating the account also signs you in and **adopts the guest workspace**:
+  every record on this device without an account becomes the new account's, in
+  one local transaction (`SyncService.create_account`). Ids, relationships
+  (projects, dependencies, series), schedules, preferences and execution
+  history are unchanged; each record is queued for upload in that same
+  transaction, and the next automatic sync sends them.
+- Nothing is cleared, replaced or hidden: the pages show the same work, now
+  under the account.
+- If it fails, nothing is lost or half-assigned:
+  - the registration is refused or the backend is unreachable: nothing changed;
+  - the account was created but the sign-in did not complete, or the records
+    could not be adopted: they are all still guest records, still visible, and
+    nobody is signed in. Sign in and choose to add them (below) to finish.
+
+**Sign in (an existing account)**
+
+- Signing in never changes work done without an account. If this device has
+  guest records, the app asks -- in plain words -- what to do with them:
+  - **Keep them separate** (preselected): nothing changes. They stay on this
+    device outside the account, you see them again whenever you sign out, and
+    you can still add them later from "Records on this device without an
+    account".
+  - **Add them to this account**: exactly those records become the account's
+    (same ids and history) and are uploaded. Nothing already in the account is
+    overwritten; a record that cannot be added as it is (for example a
+    preference for a date the account already has one for) blocks the merge and
+    is named, with nothing changed.
 - Errors appear next to each field and in words ("The email or password is
-  incorrect.", "The backend could not be reached …").
+  incorrect.", "The backend could not be reached ...").
 - The submit button is disabled while a request runs, so a double click sends
   only once.
 - Passwords are never stored. The field is cleared after every attempt, and
   the session token lives only in the app's memory.
 - Bearer tokens expire after 60 minutes by default (server setting
-  `ACCESS_TOKEN_TTL_MINUTES`). Sign in again when the session expires or after
-  restarting; the active account's data remains available offline.
+  `ACCESS_TOKEN_TTL_MINUTES`). When the session ends -- or after a restart --
+  the app says so and asks you to sign in again; meanwhile you keep working in
+  the account's records, and everything you change is kept and sent afterwards.
 
 **Sign out**
 
-- Signing out forgets the session on this device. Your records stay on the
-  device.
+- Signing out is the only thing that leaves an account. It hides that
+  account's records on this device and opens the guest workspace (separate,
+  and empty unless you kept guest records there).
+- Changes that were not sent yet are kept safely with the account and are sent
+  the next time you sign in to it. They are never uploaded into another
+  account.
 - Desktop bearer tokens have no revocation endpoint, so the token simply expires there. The
   app does not claim otherwise.
 
@@ -63,19 +135,21 @@ The desktop works on one owner's records at a time. The rule is
 
 - **Signed in:** that account's records.
 - **Not signed in, but an account is active on this device:** that account's
-  records. An account stays active after association, even across a restart,
-  until you sign out. You keep working offline, and changes are sent after you
-  sign in again.
-- **Otherwise:** the records on this device without an account (the ownerless
-  workspace).
+  records. An account becomes active when you sign in (or create it) and stays
+  active -- offline, after the session ends, across restarts -- until you sign
+  out. Losing the connection is never a sign-out: records keep their owner and
+  changes are sent after you sign in again.
+- **Otherwise:** guest mode, the records on this device without an account.
+
+While an account is active, every new record is that account's.
 
 Signing in, signing out, associating and switching backends all rebuild the
 schedule and productivity pages for the new workspace. Each page keeps its
 date. A result from work started for the previous workspace is dropped, so it
 never appears in, or changes, the new one.
 
-Records you create while signed in belong to your account. Signing in **never**
-uploads or claims the older ownerless records.
+Signing in to an existing account **never** uploads or claims guest records
+by itself; creating a new account adopts them, as described above.
 
 ## Associating the records on this device
 
@@ -94,24 +168,40 @@ claimed.
 
 ## Synchronization status and Sync now
 
-The status bar above every page says, in words:
+The status bar above every page, and the Synchronization card on the Account
+page, say in words:
 
-- whether a backend is configured, whether you are signed out or signed in,
-  whether the session has ended, and whether the backend is unreachable;
-- how many changes are waiting to be sent;
+- the mode: guest, signed in as an account, or an account whose session ended;
+- whether the backend is online, unreachable or not checked yet;
+- how many changes are waiting to be sent, and whether a sync is running;
 - how many conflicts are open;
-- when the last successful sync happened.
+- when the last successful sync happened, and the last problem if there is one.
 
 These numbers come from the durable sync store and outbox, not from a counter
 in the window. They are therefore correct after a restart, before you sign in
 again. The status bar refreshes every few seconds. When a sync brings changes
 from the server, the visible page re-reads them.
 
+**Automatic sync.** While you are signed in, a background loop
+(`SyncService.start`) pushes the outbox and pulls the server's changes:
+
+- every minute when nothing is happening (one small request pair);
+- within a few seconds of a local change: the loop looks at the durable count
+  of pending records every 5 seconds -- a local query, never a request -- and
+  runs when it differs from what the last sync left;
+- after a failure, only by bounded exponential backoff (5 s doubling up to 10
+  minutes), so an unreachable backend is not hammered. Your changes stay
+  queued, also across a restart, and are sent when it answers again.
+
+Only changed records are transferred, each as an idempotent operation with the
+version it was based on; deletions travel as tombstones, in dependency order.
+A resent operation is recognized by the server, so a lost answer never creates
+a duplicate, and a pull never overwrites a record you changed and have not
+sent (that becomes a conflict instead).
+
 **Sync now** (in the status bar or on the Account page) runs the same
-`SyncService.sync_now()` as the background loop. If a sync is already
-running, it waits for it; two syncs never overlap. Failures keep your changes
-queued, and the next sync retries them with bounded backoff. The server
-recognizes a resent change, so a lost answer never creates a duplicate.
+`SyncService.sync_now()` immediately -- a manual retry, never a requirement.
+If a sync is already running, it waits for it; two syncs never overlap.
 
 ## Conflicts
 
@@ -160,5 +250,18 @@ Tests:
   - lost-response retry and session expiry;
   - two devices, deletion, and the allowed conflict decisions;
   - backend and account isolation.
+- `tests/sync/test_local_first_accounts.py` covers the local-first workflow:
+  - guest work across a restart, and a new account adopting and uploading it
+    (same ids, schedule included; a second client sees it; no duplicates);
+  - a refused registration, a sign-in lost after the account was created, and
+    an adoption interrupted mid-transaction: the guest workspace is unchanged;
+  - an existing account with guest data: kept separate by default, merged only
+    when chosen;
+  - offline edits across a restart, a lost answer, and upload exactly once;
+  - sign-out hiding an account, its pending changes kept, and nothing uploaded
+    into another account;
+  - a connection check changing no record, and the idle loop noticing new
+    pending work without a request.
 - `tests/sync/test_desktop_account_page.py` covers the same flows as real
-  widgets, plus closing during a network call.
+  widgets (creating an account, the guest-data choice), plus closing during a
+  network call.

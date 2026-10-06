@@ -1322,6 +1322,25 @@ class PlanningService:
         """Live placements of the given tasks on any date, grouped by task (in this service's scope)."""
         return self._repository.active_placements_for_tasks(task_ids)
 
+    def unschedule_tasks(self, task_ids: Iterable[uuid.UUID]) -> int:
+        """
+        Remove every live placement of the given tasks (any date), so they are
+        waiting to be scheduled again; returns how many were removed. As in a
+        regeneration that drops a placement, a never-started attempt is
+        withdrawn with it and started or finished history is never touched.
+        """
+        with self._repository.transaction():
+            removed = {placement.id for placements in self._repository.active_placements_for_tasks(task_ids).values()
+                       for placement in placements}
+            if not removed:
+                return 0
+            now = self._clock()
+            self._repository.soft_delete_placements(removed, deleted_at=now,
+                                                    removal_reason=PlacementRemovalReason.DELETED)
+            for placement_id in sorted(removed, key=str):
+                self._repository.cancel_unstarted_execution(placement_id, at=now, reason=CancelReason.SUPERSEDED)
+            return len(removed)
+
     def placement_execution_statuses(self, placement_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, str]:
         """{placement id: execution status} for the placements that execution history references."""
         return self._repository.placement_execution_statuses(placement_ids)

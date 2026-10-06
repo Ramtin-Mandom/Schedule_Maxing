@@ -116,6 +116,12 @@ existing placements keep NULL snapshots (unknown, never back-filled).
 Version 13: task types become synchronizable -- change capture for
 task_types, and every existing type marked for upload. See _V13_STATEMENTS.
 
+Version 14: a project's planned dates, completion and milestones (the
+milestones as one validated JSON document owned by its project). See
+_V14_STATEMENTS.
+
+Version 15: the defaults a project gives its new tasks. See _V15_STATEMENTS.
+
 Execution <-> planning links (the legacy compatibility strategy):
     executions.task_id / scheduled_task_id are *historical identity*: they
     record which task/placement an execution was created for, alongside the
@@ -1127,6 +1133,24 @@ _V13_STATEMENTS: tuple[str, ...] = (
 )
 
 
+# Version 14: a project's planned dates, completion and milestones (app.planning.models.Project). Additive:
+# existing projects get no dates, are ongoing and have no milestones. The milestones are one pydantic-validated
+# JSON document (an ordered list owned by its project, always read and written whole with it).
+_V14_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE projects ADD COLUMN start_date TEXT",
+    "ALTER TABLE projects ADD COLUMN estimated_end_date TEXT",
+    "ALTER TABLE projects ADD COLUMN completed_at TEXT",
+    "ALTER TABLE projects ADD COLUMN milestones TEXT NOT NULL DEFAULT '[]'",
+)
+
+
+# Version 15: the defaults a project gives its new tasks (app.planning.models.ProjectTaskDefaults), one small
+# validated JSON document; NULL (every existing project) = none configured.
+_V15_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE projects ADD COLUMN task_defaults TEXT",
+)
+
+
 def legacy_task_type_roots(tasks: dict[str, tuple[str | None, str | None, str | None]]) -> dict[str, str]:
     """
     {task id: id of the task its type is derived from} for tasks stored before
@@ -1266,6 +1290,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     (11, _V11_STATEMENTS),
     (12, _migrate_v11_to_v12),
     (13, _V13_STATEMENTS),
+    (14, _V14_STATEMENTS),
+    (15, _V15_STATEMENTS),
 )
 
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1][0]

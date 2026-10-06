@@ -172,18 +172,20 @@ def test_association_is_explicit_previewed_revalidated_and_keeps_ids(make_deskto
         == before
 
     desktop.add("Created signed in")  # the account's own new work, not the old ownerless record
-    ownerless_again = desktop.services.planning_service.create_task(
-        Task(name="Added after the preview", category="study", estimated_duration_minutes=15, priority=3))
+    # The guest record changes after the preview (anything created now would be the active account's own).
+    guest = desktop.services.planning_service.get_task(offline.id)
+    desktop.services.planning_service.update_task(guest.model_copy(update={"priority": 9}),
+                                                  expected_version=guest.version)
     stale = desktop.account.associate(preview.token)
     assert not stale.ok and "changed since this preview" in stale.error
-    assert desktop.owners()["Offline work"] is None and desktop.owners()[ownerless_again.name] is None
+    assert desktop.owners()["Offline work"] is None
 
     fresh = desktop.ok(desktop.account.association_preview())
-    assert fresh.counts["task"] == 2
+    assert fresh.counts["task"] == 1 and fresh.token != preview.token
     counts = desktop.ok(desktop.account.associate(fresh.token))
-    assert counts["task"] == 2
+    assert counts["task"] == 1
     desktop.services.switch_workspace()
-    assert desktop.names() == {"Offline work", "Created signed in", "Added after the preview"}
+    assert desktop.names() == {"Offline work", "Created signed in"}
     assert desktop.ok(desktop.services.planning_controller.get_task(offline.id)).id == offline.id  # same id
 
     report = desktop.ok(desktop.account.sync_now())

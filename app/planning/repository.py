@@ -104,7 +104,8 @@ _IN_CHUNK = 500
 
 _LIVE = "deleted_at IS NULL"
 
-_PROJECT_COLUMNS = ("id", "user_id", "name", "description", "created_at", "updated_at", "version", "deleted_at")
+_PROJECT_COLUMNS = ("id", "user_id", "name", "description", "created_at", "updated_at", "version", "deleted_at",
+                    "start_date", "estimated_end_date", "completed_at", "milestones", "task_defaults")
 
 _TASK_TYPE_COLUMNS = ("id", "user_id", "label", "created_at", "updated_at", "version", "deleted_at")
 
@@ -1182,11 +1183,15 @@ def _project_to_row(project: Project) -> tuple:
     return (
         str(project.id), _str_or_none(project.user_id), project.name, project.description,
         project.created_at.isoformat(), project.updated_at.isoformat(), project.version, _iso(project.deleted_at),
+        _iso(project.start_date), _iso(project.estimated_end_date), _iso(project.completed_at),
+        json.dumps([milestone.model_dump(mode="json") for milestone in project.milestones]),
+        json.dumps(project.task_defaults.model_dump()) if project.task_defaults.configured else None,
     )
 
 
 def _row_to_project(row: sqlite3.Row) -> Project:
-    return Project.model_validate(dict(row))
+    return Project.model_validate({**dict(row), "milestones": json.loads(row["milestones"] or "[]"),
+                                   "task_defaults": json.loads(row["task_defaults"] or "{}")})
 
 
 def _task_type_to_row(task_type: TaskType) -> tuple:
