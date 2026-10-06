@@ -313,7 +313,7 @@ class SyncEngine:
         return self.store.has_ops(key, entity_type, wire_id) or self.store.open_conflict(key, entity_type, wire_id) is not None
 
     def prepare(self, account: Account, *, recurrence: bool = True, manual_placements: bool = True,
-                scheduling_modes: bool = True, task_types: bool = True) -> int:
+                scheduling_modes: bool = True, task_types: bool = True, project_details: bool = True) -> int:
         """
         Materialize operations for the account's dirty records (see the module
         docstring). Returns how many. recurrence=False (a server without the
@@ -326,15 +326,20 @@ class SyncEngine:
         without "task_types") holds task-type records back and leaves a task's
         type and a placement's planning snapshot out of the payloads: they stay
         recorded here and are uploaded once the server supports them
-        (_requeue_history_fields).
+        (_requeue_history_fields). project_details=False (a server without
+        "project_details") likewise leaves a project's dates, completion and
+        milestones out of its payload (_requeue_project_details).
         """
         key = account.account_key
         self.held = 0
         self.records.manual_placements = manual_placements
         self.records.task_types = task_types
+        self.records.project_details = project_details
         with self.store.transaction():
             if task_types:
                 self._requeue_history_fields(account)
+            if project_details:
+                self._requeue_project_details(account)
             upserts: list[tuple[LocalRecord, object]] = []
             reschedules: list[tuple[LocalRecord, object, int]] = []
             histories: list[LocalRecord] = []
@@ -743,6 +748,24 @@ class SyncEngine:
                 continue
             if any(local.payload.get(name) is not None and remote.get(name) is None for name in names):
                 self.store.ensure_dirty(row["entity_type"], row["entity_id"])
+        self.store.set_setting(flag, self._clock().isoformat())
+
+    def _requeue_project_details(self, account: Account) -> None:
+        """
+        Once per account, when its server first supports "project_details": mark
+        the projects whose acknowledged server copy has no details, so the
+        dates, completion and milestones recorded here are uploaded.
+        """
+        flag = f"project_details_requeued:{account.account_key}"
+        if self.store.setting(flag) is not None:
+            return
+        rows = self._connection.execute(
+            "SELECT entity_id, record FROM sync_shadows WHERE account_key = ? AND deleted = 0 "
+            "AND entity_type = 'project'", (account.account_key,),
+        ).fetchall()
+        for row in rows:
+            if "milestones" not in json.loads(row["record"]):
+                self.store.ensure_dirty("project", row["entity_id"])
         self.store.set_setting(flag, self._clock().isoformat())
 
     @staticmethod

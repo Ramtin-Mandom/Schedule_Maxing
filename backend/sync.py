@@ -125,8 +125,9 @@ MAX_PUSH_OPERATIONS = 200
 SYNC_PROTOCOL_VERSION = 2
 #: "task_types": task-type records synchronize, tasks carry task_type_id and placements their planning snapshot
 #: (docs/productivity-redesign-plan.md). A client holds its type records back from a server without it.
+#: "project_details": a project carries its planned dates, completion and milestones.
 SYNC_FEATURES = ("placement_reschedule", "recurrence_occurrences", "manual_placements", "scheduling_modes",
-                 "task_types")
+                 "task_types", "project_details")
 
 SPECS = {spec.entity_type: spec
          for spec in (PROJECTS, TASK_TYPES, TASKS, FIXED_BLOCKS, PLACEMENTS, PREFERENCES, GENERATIONS)}

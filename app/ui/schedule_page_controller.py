@@ -60,21 +60,23 @@ from __future__ import annotations
 
 import copy
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import date as date_
 from datetime import timedelta
 from enum import Enum
 from typing import Literal
 
+from app.execution.models import TaskExecution
 from app.planning.application import BatchApplyResult, RangeScope, task_planned_date
 from app.planning.csv_export import PlanningExportResult
 from app.planning.csv_import import ImportMode
 from app.planning.compat import legacy_day_to_date, legacy_minutes_to_utc
-from app.planning.models import FixedBlock, LocalTimeWindow, ScheduledTask, Task
+from app.planning.models import FixedBlock, LocalTimeWindow, ScheduledTask, Task, task_display_name
 from app.planning.series import EditScope
 from app.planning.fixed_block_rules import FixedBlockRuleViolation
 from app.planning.service import DayResultStatus
-from app.planning.time import local_minutes, validate_timezone
+from app.planning.time import local_date_of, local_day_start_utc, local_minutes, validate_timezone
 from app.ui.background import ControllerResult
 from app.ui.planning_controller import PlanningController
 from app.ui.task_form_model import (
@@ -159,6 +161,18 @@ class ExecutablePlacement:
     task: Task
     placement: ScheduledTask
     label: str
+    #: The task's name as schedule views show it (with its project's abbreviation); "" = the task's own name.
+    display_name: str = ""
+
+
+@dataclass(frozen=True)
+class DirectCompletion:
+    """A task completed without a time slot (from its project), shown on the date it was completed."""
+
+    execution: TaskExecution
+    #: The task as it is now (a removed task's completion is not listed).
+    task: Task
+    display_name: str
 
 
 @dataclass(frozen=True)
@@ -216,6 +230,41 @@ def format_window(start_minute: int, end_minute: int) -> str:
 
 def day_label(day: date_) -> str:
     return f"{day:%a %b} {day.day}"
+
+
+def display_namer(planning: PlanningController, tasks, unwrap) -> Callable[[Task], str]:
+    """
+    task -> its name as schedule views show it: "name (abc)" for a task of a
+    live project (models.task_display_name), else its own name. Built from the
+    projects as they are named now, so a rename shows at the next redraw; the
+    stored task name is never changed. `unwrap` turns a failed read into the
+    caller's own failure.
+    """
+    names: dict[uuid.UUID, str] = {}
+    if any(task.project_id is not None for task in tasks):
+        names = {project.id: project.name for project in unwrap(planning.list_projects())}
+    return lambda task: task_display_name(task.name, names.get(task.project_id))
+
+
+def read_direct_completions(planning: PlanningController, day: date_, timezone_name: str, unwrap
+                            ) -> list[DirectCompletion]:
+    """
+    The work completed on the local date `day` without a placement, oldest
+    first: one windowed read of the completion history (the record the
+    analytics use), never a scan of every execution. Only tasks that still
+    exist are listed: a removed task leaves the Day page like a removed
+    scheduled one does (its completion stays in the history and statistics).
+    """
+    start = local_day_start_utc(day, timezone_name)
+    history = unwrap(planning.completion_history(start, local_day_start_utc(day + timedelta(days=1), timezone_name)))
+    found = [execution for execution in history.executions
+             if execution.scheduled_task_id is None and execution.task_id is not None
+             and local_date_of(execution.actual_final_end_at, timezone_name) == day]
+    tasks = {task_id: task for task_id, task in history.tasks.items() if task.deleted_at is None}
+    found = [execution for execution in found if execution.task_id in tasks]
+    shown = display_namer(planning, tasks.values(), unwrap)
+    return [DirectCompletion(execution, tasks[execution.task_id], shown(tasks[execution.task_id]))
+            for execution in sorted(found, key=lambda item: (item.actual_final_end_at, item.id))]
 
 
 def default_anchor(mode_name: str, today: date_) -> date_:
@@ -773,13 +822,15 @@ class SchedulePageController:
                 canvas.append(CanvasItem(self._day_index(day), block.label, block.category, start_minute, end_minute,
                                          "fixed"))
 
+        series_rows = self._series_rows(start, end)
+        shown = display_namer(self._planning, [*tasks.values(), *series_rows], self._unwrap)
         placed_task_ids = {p.task_id for p in placements}
         for placement in placements:
             task = tasks[placement.task_id]
             day = placement.planned_date
             status = day_status.get(day)
             canvas.append(CanvasItem(
-                self._day_index(day), task.name, task.category,
+                self._day_index(day), shown(task), task.category,
                 local_minutes(placement.planned_start, day, placement.timezone),
                 local_minutes(placement.planned_end, day, placement.timezone) or MINUTES_PER_DAY,
                 "optimized" if status == DayResultStatus.GENERATED else "stale",
@@ -798,24 +849,24 @@ class SchedulePageController:
             rows.append((((planned or date_.max), sort_start, 1, str(task.id)), TaskRow(
                 ref=RowRef("task", task.id, task.version), date=planned,
                 day_label=day_label(planned) if planned is not None else "any",
-                name=task.name, type_label=type_label, time_text=window_text,
+                name=shown(task), type_label=type_label, time_text=window_text,
             )))
             if task.id not in placed_task_ids and planned is not None and self._in_range(planned) and window:
                 canvas.append(CanvasItem(
-                    self._day_index(planned), f"{task.name}  · pref", task.category,
+                    self._day_index(planned), f"{shown(task)}  · pref", task.category,
                     window.start_minute, window.end_minute, "preview",
                 ))
-        for series in self._series_rows(start, end):
+        for series in series_rows:
             rule = series.recurrence
             first = rule.start_date if rule.configured else None
             rows.append((((first or date_.max), 0, 2, str(series.id)), TaskRow(
                 ref=RowRef("task", series.id, series.version), date=first,
                 day_label=day_label(first) if first is not None else "any",
-                name=series.name, type_label="repeats" if rule.configured else "needs setup",
+                name=shown(series), type_label="repeats" if rule.configured else "needs setup",
                 time_text=describe_rule(rule) if rule.configured else "choose how it repeats",
             )))
 
-        executables = self._executables(placements, tasks)
+        executables = self._executables(placements, tasks, shown)
 
         return PageSnapshot(
             start_date=start,
@@ -842,7 +893,8 @@ class SchedulePageController:
                 found.append(series)
         return found
 
-    def _executables(self, placements: list[ScheduledTask], tasks: dict[uuid.UUID, Task]) -> list[ExecutablePlacement]:
+    def _executables(self, placements: list[ScheduledTask], tasks: dict[uuid.UUID, Task],
+                     shown: Callable[[Task], str] = lambda task: task.name) -> list[ExecutablePlacement]:
         executables: list[ExecutablePlacement] = []
         seen: dict[str, int] = {}
         for placement in placements:
@@ -852,11 +904,12 @@ class SchedulePageController:
                 local_minutes(placement.planned_start, day, placement.timezone),
                 local_minutes(placement.planned_end, day, placement.timezone) or MINUTES_PER_DAY,
             )
-            label = f"{day_label(day)} {window}  {task.name}"
+            label = f"{day_label(day)} {window}  {shown(task)}"
             seen[label] = seen.get(label, 0) + 1
             if seen[label] > 1:
                 label = f"{label} (#{seen[label]})"
-            executables.append(ExecutablePlacement(task=task, placement=placement, label=label))
+            executables.append(ExecutablePlacement(task=task, placement=placement, label=label,
+                                                   display_name=shown(task)))
         return executables
 
     @staticmethod

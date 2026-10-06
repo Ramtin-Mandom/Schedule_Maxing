@@ -29,7 +29,7 @@ from app.planning.application import RangeScope
 from app.planning.models import ScheduledTask, Task
 from app.productivity.day_summary import DaySummary, summarize_range
 from app.ui.background import ControllerResult
-from app.ui.schedule_page_controller import ExecutablePlacement
+from app.ui.schedule_page_controller import ExecutablePlacement, display_namer, read_direct_completions
 from app.ui.task_status import StatusBoard, build_board
 
 
@@ -62,9 +62,11 @@ def _unwrap(result: ControllerResult):
 class DayOutcomeController:
     """Reads date aggregates and applies the bulk actions through the planning and execution controllers."""
 
-    def __init__(self, planning, executions) -> None:
+    def __init__(self, planning, executions, *, timezone: str | None = None) -> None:
         self._planning = planning
         self._executions = executions
+        #: The reporting time zone (None: tasks completed without a time slot are not listed here).
+        self._timezone = timezone
 
     # ------------------------------------------------------------------ reads
 
@@ -80,6 +82,9 @@ class DayOutcomeController:
             _unwrap(self._executions.executions_for_placements([p.id for p in placements])) if placements else {})
         return placements, tasks, executions
 
+    def _shown(self, tasks):
+        return display_namer(self._planning, tasks.values(), _unwrap)
+
     def summaries(self, start: date_, end: date_) -> ControllerResult[dict[date_, DaySummary]]:
         """Every date's aggregates in [start, end], from one range load and one execution query."""
         try:
@@ -93,16 +98,24 @@ class DayOutcomeController:
         """One date: its aggregates and its scheduled tasks with their columns."""
         try:
             placements, tasks, executions = self._load(day, day)
+            shown = self._shown(tasks)
+            direct = self._direct(day)
         except _Failure as failure:
             return failure.result
-        return ControllerResult.success(self._detail(day, placements, tasks, executions))
+        return ControllerResult.success(self._detail(day, placements, tasks, executions, shown, direct))
+
+    def _direct(self, day: date_):
+        if self._timezone is None:
+            return []
+        return read_direct_completions(self._planning, day, self._timezone, _unwrap)
 
     @staticmethod
-    def _detail(day, placements, tasks, executions) -> DayDetail:
+    def _detail(day, placements, tasks, executions, shown=lambda task: task.name, direct=()) -> DayDetail:
         summary = summarize_range([day], placements, tasks, executions)[day]
-        items = [ExecutablePlacement(task=tasks[p.task_id], placement=p, label=tasks[p.task_id].name)
+        items = [ExecutablePlacement(task=tasks[p.task_id], placement=p, label=shown(tasks[p.task_id]),
+                                     display_name=shown(tasks[p.task_id]))
                  for p in placements if p.task_id in tasks]
-        return DayDetail(day=day, summary=summary, board=build_board(day, items, executions))
+        return DayDetail(day=day, summary=summary, board=build_board(day, items, executions, direct))
 
     # ------------------------------------------------------------------ bulk actions
 
@@ -117,6 +130,9 @@ class DayOutcomeController:
             items = [(tasks[p.task_id], p) for p in placements if p.task_id in tasks]
             result = _unwrap(self._executions.set_outcomes(items, TaskOutcome(outcome)))
             placements, tasks, executions = self._load(day, day)
+            shown = self._shown(tasks)
+            direct = self._direct(day)
         except _Failure as failure:
             return ControllerResult.failure(failure.result.error, failure.result.cause)
-        return ControllerResult.success(DayOutcomeRun(self._detail(day, placements, tasks, executions), result))
+        return ControllerResult.success(
+            DayOutcomeRun(self._detail(day, placements, tasks, executions, shown, direct), result))

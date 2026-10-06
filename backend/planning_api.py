@@ -83,7 +83,7 @@ from app.planning.errors import (
     VersionConflictError,
 )
 from app.planning.fixed_block_rules import FixedBlockRuleViolation
-from app.planning.models import FixedBlock, Project, ScheduledTask, Task
+from app.planning.models import PROJECT_DETAIL_FIELDS, FixedBlock, Project, ScheduledTask, Task
 from app.planning.preferences import (
     ENGINE_DESCRIPTIONS,
     DayPreferences,
@@ -515,7 +515,8 @@ def task_out(task: Task) -> TaskOut:
 
 
 def project_out(project: Project) -> ProjectOut:
-    return ProjectOut.model_validate({"name": project.name, "description": project.description, **_meta(project)})
+    return ProjectOut.model_validate({
+        **project.model_dump(mode="json", include={"name", "description", *PROJECT_DETAIL_FIELDS}), **_meta(project)})
 
 
 def block_out(block: FixedBlock) -> FixedBlockOut:

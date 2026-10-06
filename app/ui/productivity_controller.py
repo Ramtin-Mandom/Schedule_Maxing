@@ -136,6 +136,14 @@ class ProductivityController:
         """The tracker report (awards, averages, per-type and time views) as of now; read-only."""
         return self._call(lambda: self._service.build_tracker_report(range_days=range_days, filters=filters))
 
+    def projects(self) -> ControllerResult[list]:
+        """The workspace's live projects, by name (the Project section's choices)."""
+        return self._call(self._service.projects)
+
+    def build_project_points(self, project_id, range_days: int | None = None):
+        """One project's collected points in the date range (app/productivity/project_stats.py); read-only."""
+        return self._call(lambda: self._service.build_project_points(project_id, range_days=range_days))
+
     def used_tags(self) -> list[str]:
         """Every tag on the workspace's tasks, scheduled or not (empty when they cannot be read)."""
         if self._task_tags is None:

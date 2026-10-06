@@ -43,7 +43,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from app.sync.engine import AssociationError, AssociationPreview, ConflictResolutionError
-from app.sync.service import SyncReport, SyncService, SyncStatus
+from app.sync.service import AccountCreationError, SyncReport, SyncService, SyncStatus
 from app.sync.store import Conflict
 from app.sync.transport import AuthenticationError, HttpTransport, ProtocolError, SyncTransport, TransportError
 from app.ui.background import ControllerResult
@@ -158,6 +158,8 @@ def friendly_error(error: BaseException, *, signing_in: bool = False) -> str:
         if error.code == "account_exists":
             return "An account with this email already exists. Sign in instead."
         return f"The backend refused the request: {message}"
+    if isinstance(error, AccountCreationError):
+        return str(error) + (f" ({friendly_error(error.cause)})" if error.cause is not None else "")
     if isinstance(error, AssociationError):
         if error.code == "preview_changed":
             return "Your local records changed since this preview. Review the updated preview, then confirm again."
@@ -226,6 +228,15 @@ class SignInResult:
     #: Ownerless records on this device the association step could claim (signing in claims none).
     unassociated: int
     associated_before: bool
+
+
+@dataclass(frozen=True)
+class RegistrationResult:
+    """A new account that was created, signed in to, and given this device's guest workspace."""
+
+    email: str
+    #: Records of this device that became the account's (0: there were none).
+    adopted: int
 
 
 @dataclass(frozen=True)
@@ -388,19 +399,23 @@ class AccountController:
         signed_in_email = status.account.email if status.account is not None and status.signed_in else None
         if not status.configured:
             state = "unconfigured"
-            headline = "Offline — no backend configured"
-            detail = "Everything is saved on this device. Enter a backend address to sign in and synchronize."
+            headline = "Offline — guest mode, no backend configured"
+            detail = ("You are using the app without an account: everything is saved on this device. Enter a "
+                      "backend address to create an account or sign in and synchronize.")
         elif status.signed_in:
             state = "signed_in"
             if status.in_progress:
                 headline = "Synchronizing..."
             elif status.backend_reachable is False:
-                headline = "Signed in — backend unreachable"
+                headline = f"Signed in — offline (backend unreachable), {status.pending or 0} change(s) waiting"
             elif status.last_report.status == "error":
                 headline = "Signed in — last sync failed"
             else:
                 headline = f"Signed in — {status.pending or 0} change(s) waiting"
             detail = f"Synchronizing {masked_email(signed_in_email)}'s records with {status.backend_url}."
+            if status.backend_reachable is False:
+                detail += (" Your changes are saved on this device and are sent automatically when the backend "
+                           "can be reached again.")
         elif workspace is not None:
             state = "session_ended"
             headline = "Session ended — sign in again to synchronize"
@@ -408,8 +423,9 @@ class AccountController:
                       "and sent after you sign in again.")
         else:
             state = "signed_out"
-            headline = "Signed out — working offline"
-            detail = "Your records on this device are saved locally. Sign in to synchronize an account."
+            headline = "Guest mode — not signed in"
+            detail = ("Your work is saved on this device only. Create an account to keep it in that account and "
+                      "synchronize it, or sign in to an existing one.")
         if state != "unconfigured" and status.backend_reachable is False and state != "signed_in":
             headline += " (backend unreachable)"
         if status.conflicts:
@@ -460,6 +476,40 @@ class AccountController:
             if errors:
                 raise InvalidInput(errors)
             return self._sync.register(email.strip(), password, display_name=(display_name or "").strip() or None)
+
+        return self._call(op)
+
+    def create_account(self, email: str, password: str, *, display_name: str | None = None
+                       ) -> ControllerResult[RegistrationResult]:
+        """
+        Create an account and keep working in the same workspace: the new
+        account is signed in to and this device's guest records become its
+        own (SyncService.create_account), then upload in the background. On
+        any failure the guest workspace is exactly as it was.
+        """
+
+        def op() -> RegistrationResult:
+            errors = validate_credentials(email, password, registering=True, display_name=display_name)
+            if errors:
+                raise InvalidInput(errors)
+            created = self._sync.create_account(email.strip(), password,
+                                                display_name=(display_name or "").strip() or None)
+            return RegistrationResult(email=created.account.email or email.strip(), adopted=created.adopted_total)
+
+        return self._call(op)
+
+    def merge_guest_data(self) -> ControllerResult[int]:
+        """
+        Add this device's guest records to the signed-in account (the choice
+        offered after signing in to an existing account): exactly the records
+        there are now, in one transaction, or nothing. Returns how many.
+        """
+
+        def op() -> int:
+            preview = self._sync.association_preview()
+            counts = self._sync.associate_local_data(preview.token)
+            self._sync.wake()
+            return sum(counts.values())
 
         return self._call(op)
 

@@ -211,6 +211,34 @@ class PlanningController:
 
         return self._call(op)
 
+    def move_task_unscheduled(self, task: Task, *, expected_version: int) -> ControllerResult[Task]:
+        """
+        Save `task` (the stored task with its new date) and remove every saved
+        placement of it, in one transaction: it is waiting on its new date,
+        with no time slot kept. An occurrence is saved on its own ("this
+        occurrence"), as an edit of it in a task form is.
+        """
+
+        def op() -> Task:
+            with self._service.transaction():
+                if task.is_occurrence:
+                    saved = series_ops.edit_occurrence(self._service, task, expected_version=expected_version).occurrence
+                else:
+                    saved = self._service.save_task(task, expected_version=expected_version)
+                self._service.unschedule_tasks([task.id])
+            self._invalidate_generated_results()
+            return saved
+
+        return self._call(op)
+
+    def execution_statuses_for_tasks(self, task_ids: list[uuid.UUID]) -> ControllerResult[dict[uuid.UUID, set[str]]]:
+        """For each task that has any: the statuses of its live executions (e.g. "completed")."""
+        return self._call(lambda: self._service.execution_statuses_for_tasks(task_ids))
+
+    def completion_history(self, start_utc, end_utc):
+        """The completed work whose completion instant lies in [start_utc, end_utc) (app/planning/history.py)."""
+        return self._call(lambda: self._service.completion_history(start_utc, end_utc))
+
     def remove_task(self, task_id: uuid.UUID, *, expected_version: int) -> ControllerResult[None]:
         def op() -> None:
             if self._service.delete_task(task_id, expected_version=expected_version):

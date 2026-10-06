@@ -879,7 +879,7 @@ The backend also serves the web UI's scheduling API -- range snapshots with per-
 
 ### Offline-first synchronization (Milestone 3)
 
-`app/sync/` synchronizes the local SQLite store with the backend. Configure its address on Account or through `SCHEDULE_MAXING_BACKEND_URL`, then sign in to enable sync. Account provides explicit local-data association, Sync now, status and conflict resolution. Access tokens stay in memory and expire after 60 minutes by default (`ACCESS_TOKEN_TTL_MINUTES` on the server); sign in again when required. Local work remains available offline. How it works:
+The desktop is local-first: it works in guest mode without an account, creating an account inside the app adopts that work, and signed-in changes upload automatically (setup and behavior: [docs/desktop-accounts.md](docs/desktop-accounts.md)). `app/sync/` synchronizes the local SQLite store with the backend. Configure its address on Account or through `SCHEDULE_MAXING_BACKEND_URL`, then sign in to enable sync. Account provides explicit local-data association, Sync now, status and conflict resolution. Access tokens stay in memory and expire after 60 minutes by default (`ACCESS_TOKEN_TTL_MINUTES` on the server); sign in again when required. Local work remains available offline. How it works:
 
 - **Change capture.** Every local change is recorded in the same SQLite transaction by database triggers.
 - **Push.** Changes are pushed as idempotent operations (stable op ids, so a lost response is safely retried). Each is based on the last server version this device acknowledged.

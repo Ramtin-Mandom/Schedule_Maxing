@@ -80,6 +80,8 @@ from app.planning.models import (
     OCCURRENCE_TOMBSTONE_STATES,
     LocalTimeWindow,
     OccurrenceState,
+    ProjectMilestone,
+    ProjectTaskDefaults,
     RecurrenceSpec,
 )
 from app.planning.models import PlacementOrigin, PlacementRemovalReason
@@ -141,6 +143,22 @@ def _first_message(error: ValueError) -> str:
 class ProjectFields(Strict):
     name: str = Field(min_length=1, max_length=200)
     description: str | None = None
+    #: The details (app.planning.models.Project). A client that predates them leaves them out, and an update
+    #: that leaves one out keeps the stored value (_project_assign).
+    start_date: date_ | None = None
+    estimated_end_date: date_ | None = None
+    completed_at: AwareDatetime | None = None
+    milestones: list[ProjectMilestone] = Field(default_factory=list, max_length=500)
+    task_defaults: ProjectTaskDefaults = Field(default_factory=ProjectTaskDefaults)
+
+    @model_validator(mode="after")
+    def _details_valid(self):
+        if (self.start_date is not None and self.estimated_end_date is not None
+                and self.estimated_end_date < self.start_date):
+            raise ValueError("estimated_end_date must not be before start_date")
+        if len({milestone.id for milestone in self.milestones}) != len(self.milestones):
+            raise ValueError("duplicate milestone ids")
+        return self
 
 
 class ProjectCreate(ProjectFields):
@@ -420,11 +438,31 @@ def _fields(payload: BaseModel, schema: type[BaseModel]) -> dict:
 
 
 def _project_content(_session, _user_id, row) -> dict:
-    return {"name": row.name, "description": row.description}
+    return {"name": row.name, "description": row.description, "start_date": row.start_date,
+            "estimated_end_date": row.estimated_end_date, "completed_at": row.completed_at,
+            "milestones": [{"id": item.milestone_id, "number": item.number, "title": item.title,
+                            "description": item.description, "score": item.score} for item in row.milestone_rows],
+            "task_defaults": {"duration_minutes": row.default_duration_minutes, "priority": row.default_priority,
+                              "points": row.default_points}}
 
 
 def _project_assign(_session, _user_id, row, payload) -> None:
     row.name, row.description = payload.name, payload.description
+    # Only the details the client sent: one that predates them (it sends none) never erases the stored ones.
+    sent = payload.model_fields_set
+    for name in ("start_date", "estimated_end_date", "completed_at"):
+        if name in sent:
+            setattr(row, name, getattr(payload, name))
+    if "task_defaults" in sent:
+        defaults = payload.task_defaults
+        row.default_duration_minutes, row.default_priority, row.default_points = (
+            defaults.duration_minutes, defaults.priority, defaults.points)
+    if "milestones" in sent:
+        child = inspect(type(row)).relationships["milestone_rows"].mapper.class_
+        row.milestone_rows = [
+            child(position=position, milestone_id=milestone.id, number=milestone.number, title=milestone.title,
+                  description=milestone.description, score=milestone.score)
+            for position, milestone in enumerate(payload.milestones)]
 
 
 def _project_before_delete(mutator, row) -> None:
