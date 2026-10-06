@@ -539,6 +539,10 @@ From the project root:
 python -m app.app
 ```
 
+`python -m app.desktop` starts the same window the way the installed Windows application does (a log file under the
+data folder, error dialogs instead of console output, local storage only, a background update check). Building the
+installer, releasing and updating are described in [docs/windows-distribution.md](docs/windows-distribution.md).
+
 This opens the schedule optimizer, loads everything saved in the application database, and shows the Day page for today. Every change is saved immediately. **Make Schedule** saves the generated schedule. The **Execute** tab lists the saved schedule's flexible tasks for Start/Pause/Resume/Complete/Skip. The **Productivity** page shows the analytics (see [Task Execution Tracking & Productivity Insights](#task-execution-tracking--productivity-insights-local-only) below).
 
 The left sidebar starts collapsed; open it with the ☰ button (keyboard: Tab, then Enter) or **Ctrl+B**, and jump between pages with **Ctrl+1…9**. The layout adapts to the window width (three columns, schedule plus a side panel, or one panel at a time), and **Settings** switches between light and dark and changes the interface size; both are remembered in `ui_settings.json` beside the database. Details: [docs/desktop-layout.md](docs/desktop-layout.md).
@@ -1067,3 +1071,7 @@ The project has these parts:
 - **Also:** reward-based optimization, PERT-style dependency handling (name- and id-based), personal productivity analytics, and an evidence-gated experimental ML duration predictor.
 
 Automated coverage includes native desktop workflows (`python -m pytest`, which needs no external server, Docker, or PostgreSQL; native widget tests require a display). Real PostgreSQL verification is optional and explicit: see [docs/backend.md](docs/backend.md#tests). Remaining roadmap items include project archiving. See [Milestone 4 verification](docs/milestone-4-completion.md) for recorded checks and limitations.
+
+## License
+
+Schedule Maxing is released under the [MIT License](LICENSE).

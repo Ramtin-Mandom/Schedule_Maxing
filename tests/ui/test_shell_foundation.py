@@ -115,7 +115,11 @@ def test_ui_settings_default_round_trip_and_live_beside_the_database(tmp_path: P
     assert store.load() == UISettings()  # no file: light, 100%
     assert store.save(UISettings().with_appearance("dark").with_scale(1.15))
     assert store.load() == UISettings(appearance="dark", ui_scale=1.15)
-    assert json.loads(store.path.read_text(encoding="utf-8")) == {"appearance": "dark", "ui_scale": 1.15, "language": "en"}
+    assert json.loads(store.path.read_text(encoding="utf-8")) == {
+        "appearance": "dark", "ui_scale": 1.15, "language": "en",
+        # the update preferences (app/ui/update_controller.py), at their defaults
+        "check_for_updates": True, "skipped_version": None, "last_update_check": None,
+    }
     assert not store.path.with_name("ui_settings.json.tmp").exists()  # written atomically
 
 

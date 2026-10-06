@@ -108,3 +108,14 @@ def test_default_load_adopts_the_legacy_artifact_and_falls_back_to_it(tmp_path: 
 
 def _raise():
     raise PermissionError("read-only data folder (injected)")
+
+
+def test_packaged_app_reads_only_the_user_data_folder(tmp_path: Path, monkeypatch) -> None:
+    write_pair(Path(settings.LEGACY_DATA_DIR))
+    monkeypatch.setattr(settings, "LEGACY_ADOPTION_ENABLED", False)
+    loaded: list[Path] = []
+    monkeypatch.setattr(ml_persistence, "_load_from", lambda directory: loaded.append(Path(directory)))
+
+    ml_persistence.load_model_artifact()
+    assert loaded == [Path(settings.DATA_DIR)]
+    assert contents(Path(settings.DATA_DIR)) == {}

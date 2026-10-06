@@ -1,0 +1,6 @@
+# Building the Windows application (docs/windows-distribution.md):
+#     packaging\windows\build_windows.ps1
+# The desktop runtime only -- no web server, backend or database driver is
+# installed, so none can end up in the package -- plus the packager itself.
+-r requirements-desktop.txt
+pyinstaller>=6.6

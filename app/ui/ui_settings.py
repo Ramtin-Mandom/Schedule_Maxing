@@ -35,6 +35,11 @@ class UISettings:
     appearance: str = "light"
     ui_scale: float = 1.0
     language: str = "en"
+    #: Updates (app/ui/update_controller.py): look for a new version automatically; a version the user chose
+    #: to skip; and when the last automatic check ran (ISO 8601, UTC), so it runs at most once a day.
+    check_for_updates: bool = True
+    skipped_version: str | None = None
+    last_update_check: str | None = None
 
     def with_appearance(self, appearance: str) -> "UISettings":
         if appearance not in APPEARANCES:
@@ -73,6 +78,10 @@ class UISettingsStore:
             appearance=appearance if appearance in APPEARANCES else defaults.appearance,
             ui_scale=float(scale) if isinstance(scale, (int, float)) and float(scale) in SCALES else defaults.ui_scale,
             language=data.get("language") if data.get("language") in LANGUAGES else defaults.language,
+            check_for_updates=data["check_for_updates"] if isinstance(data.get("check_for_updates"), bool)
+            else defaults.check_for_updates,
+            skipped_version=data.get("skipped_version") if isinstance(data.get("skipped_version"), str) else None,
+            last_update_check=data.get("last_update_check") if isinstance(data.get("last_update_check"), str) else None,
         )
 
     def save(self, settings: UISettings) -> bool:

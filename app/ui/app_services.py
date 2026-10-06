@@ -55,7 +55,17 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.execution.db import get_connection, resolve_db_path, transaction_state_for
+from app.execution.backup import backups_dir_for
+from app.execution.db import (
+    BackupError,
+    IntegrityCheckError,
+    MigrationError,
+    NewerSchemaError,
+    get_connection,
+    resolve_db_path,
+    transaction_state_for,
+)
+from app.logging_setup import log_path
 from app.execution.instance_lock import DatabaseInUseError, InstanceLock, acquire_instance_lock
 from app.execution.repository import ExecutionRepository
 from app.execution.service import ExecutionService
@@ -304,6 +314,39 @@ def describe_startup_failure(error: BaseException, db_path: str | Path | None = 
             "The schedule database is already open in another Schedule Maxing process, so this window cannot "
             f"use it.\n\n{error}\n\nClose the other window or stop the local web service (Ctrl+C), then start "
             "the desktop app again."
+        )
+    if isinstance(error, NewerSchemaError):
+        return (
+            "Your schedule data was saved by a newer version of Schedule Maxing than the one installed, so this "
+            "version cannot open it. Nothing was changed.\n\n"
+            f"Database: {location}\n\n"
+            "Install the latest version of Schedule Maxing, then start it again."
+        )
+    if isinstance(error, BackupError):
+        return (
+            "Your schedule data needs to be updated for this version, but a safety copy could not be made first, "
+            "so nothing was changed.\n\n"
+            f"Database: {location}\n"
+            f"Backup folder: {backups_dir_for(location)}\n"
+            f"Error: {error}\n\n"
+            "Check that the disk has free space and the folder is writable, then start the app again."
+        )
+    if isinstance(error, (MigrationError, IntegrityCheckError)):
+        return (
+            "Your schedule data could not be updated for this version. The update was undone, so the database is "
+            "as it was before, and a safety copy was saved first.\n\n"
+            f"Database: {location}\n"
+            f"Safety copies: {backups_dir_for(location)}\n"
+            f"Error: {type(error).__name__}: {error}\n\n"
+            f"Details are in the log: {log_path()}"
+        )
+    if isinstance(error, sqlite3.DatabaseError) and not isinstance(error, sqlite3.OperationalError):
+        return (
+            "The schedule database file could not be read; it may be damaged. Nothing was changed.\n\n"
+            f"Database: {location}\n"
+            f"Error: {type(error).__name__}: {error}\n\n"
+            f"Safety copies made before earlier updates, if any, are in: {backups_dir_for(location)}\n"
+            f"Details are in the log: {log_path()}"
         )
     return (
         "The schedule database could not be opened, so the scheduler is not available in this "

@@ -64,3 +64,8 @@ exports/
 *-wal
 *-shm
 .venv-api/
+
+# Windows packaging (docs/windows-distribution.md): build environment and outputs
+.venv-build/
+/build/
+/dist/
