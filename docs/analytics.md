@@ -229,8 +229,21 @@ timezone or a future/naive cutoff; `401` without credentials.
 ## 5. The tracker (awards, averages, task types and time views)
 
 `ProductivityService.build_tracker_report(range_days=None, filters=None)`
-(`app/productivity/tracker.py`) feeds the desktop Productivity page's three
-sections: General, Task-based and Time-based. It is read-only and recomputed
+(`app/productivity/tracker.py`) feeds the desktop Productivity page's
+General section and the two parts of its Specific section, Task-based and
+Time-based (each part keeps its own filters and report). The third section,
+Project, lists the workspace's projects; selecting one -- or "View
+performance" on the Projects page, which opens the same view with the project
+selected -- shows `ProductivityService.build_project_points(project_id,
+range_days=None)` (`app/productivity/project_stats.py`): the total points the
+project's tasks collected, the points by day, and the average per day. The
+date range is the tracker's (the last N local dates ending today; all time
+starts on the project's first completion), and the average divides the total
+by every calendar day of that period, which the page states with the figure.
+It is built from the tracker's completion records, so a task completed from
+its project without a time slot counts like any other, a task is never
+counted twice, and a project with no completions shows zero points and no
+average. Everything is read-only and recomputed
 from the stored records every time. There is no stored counter and no award
 ledger, so a reopened or deleted completion stops counting and a
 re-completion counts once.

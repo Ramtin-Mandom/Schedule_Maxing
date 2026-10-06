@@ -333,13 +333,13 @@ def test_duplicate_names_references_by_id_and_edits_that_keep_everything(service
     ok(controller.save_draft(valid_draft(name="Review", dependency_ids=(first,), project_id=project.id)))
     review = next(t for t in ok(services.planning_controller.list_tasks()) if t.name == "Review")
     assert review.dependency_ids == [first] and review.project_id == project.id
-    assert all(choice.id != review.id for choice in ok(controller.editor_options(rows(controller)["Review"])).dependencies)
+    assert all(choice.id != review.id for choice in ok(controller.editor_options(rows(controller)["Review (The)"])).dependencies)
 
     # A recurring template with more fields than the form shows keeps all of them through an edit.
     services.planning_controller._service.update_task(
         review.model_copy(update={"recurrence": RecurrenceSpec(frequency=RecurrenceFrequency.DAILY),
                                   "tags": ["x", "y", "z"]}), expected_version=review.version)
-    ref = rows(controller)["Review"]
+    ref = rows(controller)["Review (The)"]
     draft = ok(controller.draft_for(ref))
     ok(controller.save_draft(TaskDraft(**{**draft.__dict__, "duration": "1 h 13 min"}), editing=ref))
     saved = ok(services.planning_controller.get_task(review.id))

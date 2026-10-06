@@ -199,23 +199,108 @@ class LocalTimeWindow(BaseModel):
 # -----------------------------------------------------------------------------
 
 
+#: Task.points: the default of a new task, and the largest value accepted.
+DEFAULT_TASK_POINTS = 1
+MAX_TASK_POINTS = 1000
+
+#: ProjectMilestone.score: the score of a new milestone, and the accepted range.
+MIN_MILESTONE_SCORE = 1
+MAX_MILESTONE_SCORE = 10
+#: The largest (and, negated, smallest) milestone number accepted.
+MAX_MILESTONE_NUMBER = 1_000_000
+
+
+class ProjectMilestone(BaseModel):
+    """One milestone of a project: stored with it (Project.milestones), ordered by `number`."""
+
+    id: uuid.UUID = Field(default_factory=_new_id)
+    #: The user's ordering number; several milestones may share one (they keep the order they were added in).
+    number: int = Field(ge=-MAX_MILESTONE_NUMBER, le=MAX_MILESTONE_NUMBER)
+    title: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=4000)
+    score: int = Field(default=MIN_MILESTONE_SCORE, ge=MIN_MILESTONE_SCORE, le=MAX_MILESTONE_SCORE)
+
+
+class ProjectTaskDefaults(BaseModel):
+    """
+    What a project fills in for a new task of its own. Each value is either
+    explicitly configured or None (not set): an unset one never stands in for
+    a category's or the application's default.
+    """
+
+    duration_minutes: int | None = Field(default=None, ge=1, le=1440)
+    priority: int | None = Field(default=None, ge=1, le=10)
+    points: int | None = Field(default=None, ge=0, le=MAX_TASK_POINTS)
+
+    @property
+    def configured(self) -> bool:
+        return any(value is not None for value in (self.duration_minutes, self.priority, self.points))
+
+
 class Project(BaseModel):
-    """Persisted with its tasks (PlanningService); no project-management service or UI."""
+    """Persisted with its tasks (PlanningService), its planned dates, completion and milestones."""
 
     id: uuid.UUID = Field(default_factory=_new_id)
     user_id: uuid.UUID | None = None
     name: str = Field(min_length=1)
     description: str | None = None
+    #: The planned span (both optional; a record stored before they existed has neither).
+    start_date: date_ | None = None
+    estimated_end_date: date_ | None = None
+    #: When the project was marked complete (None: ongoing).
+    completed_at: datetime | None = None
+    #: In the order they were added; shown by number (ordered_milestones).
+    milestones: list[ProjectMilestone] = Field(default_factory=list)
+    #: The defaults of this project's new tasks (a new project configures none).
+    task_defaults: ProjectTaskDefaults = Field(default_factory=ProjectTaskDefaults)
 
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
     version: int = Field(default=1, gt=0)
     deleted_at: datetime | None = None
 
-    @field_validator("created_at", "updated_at", "deleted_at")
+    @field_validator("created_at", "updated_at", "deleted_at", "completed_at")
     @classmethod
     def _timestamps_aware(cls, value: datetime | None) -> datetime | None:
         return _utc_timestamp(value)
+
+    @model_validator(mode="after")
+    def _validate_details(self) -> "Project":
+        if (self.start_date is not None and self.estimated_end_date is not None
+                and self.estimated_end_date < self.start_date):
+            raise ValueError("estimated_end_date must not be before start_date")
+        ids = [milestone.id for milestone in self.milestones]
+        if len(set(ids)) != len(ids):
+            raise ValueError("duplicate milestone ids")
+        return self
+
+    @property
+    def is_completed(self) -> bool:
+        return self.completed_at is not None
+
+    @property
+    def ordered_milestones(self) -> list[ProjectMilestone]:
+        """Ascending by number; equal numbers keep the order they were added in (a stable sort)."""
+        return sorted(self.milestones, key=lambda milestone: milestone.number)
+
+
+#: The Project fields beyond name and description (storage and synchronization carry them together).
+PROJECT_DETAIL_FIELDS = ("start_date", "estimated_end_date", "completed_at", "milestones", "task_defaults")
+
+
+def project_abbreviation(project_name: str | None) -> str:
+    """The first three characters of the trimmed name (all of a shorter one), capitalization kept."""
+    return (project_name or "").strip()[:3]
+
+
+def task_display_name(task_name: str, project_name: str | None) -> str:
+    """
+    A task's name as schedule views show it: with its project's abbreviation
+    in parentheses ("Read ch. 3 (mat)"). Display text only -- the stored name
+    is never changed -- and a name without a project is returned as it is.
+    """
+    abbreviation = project_abbreviation(project_name)
+    return f"{task_name} ({abbreviation})" if abbreviation else task_name
 
 
 # -----------------------------------------------------------------------------
@@ -264,11 +349,6 @@ class TaskType(BaseModel):
 # -----------------------------------------------------------------------------
 # Task
 # -----------------------------------------------------------------------------
-
-
-#: Task.points: the default of a new task, and the largest value accepted.
-DEFAULT_TASK_POINTS = 1
-MAX_TASK_POINTS = 1000
 
 
 class Task(BaseModel):

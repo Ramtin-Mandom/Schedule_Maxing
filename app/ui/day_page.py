@@ -656,6 +656,7 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
             return
         self._board_token += 1
         token, day, executables = self._board_token, snapshot.day, list(snapshot.executables)
+        direct = list(snapshot.direct_completions)
 
         def done(result) -> None:
             if token != self._board_token:
@@ -666,7 +667,7 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
                 self.status_board.notice.show("error", result.error or "The task statuses could not be read.")
 
         controller = self.status_controller
-        self._io(lambda: controller.board(day, executables), done, blocking=False, newest="board")
+        self._io(lambda: controller.board(day, executables, direct), done, blocking=False, newest="board")
 
     def move_task(self, card, target) -> None:
         """Persist one card's move to another column, then redraw the board from what was saved."""
@@ -680,7 +681,9 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
                 self.status_board.notice.hide()
             else:
                 self.status_board.notice.show("error", result.error or "The status was not changed.")
-            if self.snapshot is not None:
+            if card.direct:
+                self.reload()  # its completion is part of the date's snapshot, not of a placement
+            elif self.snapshot is not None:
                 self._refresh_status_board(self.snapshot)
 
         controller = self.status_controller

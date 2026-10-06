@@ -6,12 +6,17 @@ of exactly three sections; each shows its figures as labelled boxes:
 
     General      the awards and the headline facts of the whole recorded
                  history (no filters)
-    Task-based   filtered by period, category, tag and task type: the
-                 selected type's boxes, and one box per type
-    Time-based   filtered by date range, weekday and planned start: the
-                 totals, weekdays, weeks, months, one day, and the charts
+    Specific     two parts, each with its own filters and report:
+                 Task-based  period, category, tag and task type: the
+                             selected type's boxes, and one box per type
+                 Time-based  date range, weekday and planned start: the
+                             totals, weekdays, weeks, months, one day, charts
+    Project      the workspace's projects; selecting one shows the points it
+                 collected in the chosen date range (total, per day, and the
+                 average per day with its period) -- show_project(id) opens it
+                 with a project already selected (the Projects page's link)
 
-Each section has its own filters and its own report, so a filter of one
+Each part has its own filters and its own report, so a filter of one
 never changes another. The category filter offers the task form's categories
 and the tag filter every tag used so far (on a task or in the history).
 
@@ -49,7 +54,11 @@ _ANY = "(any)"
 _TIME_BUCKETS = [bucket.value for bucket in TimeBucket]
 _CHART_GROUPS = {"By category": "category", "By task type": "type"}
 _SECTION_LABELS = {name: name for name in tracker_view.SECTIONS}
-_GENERAL, _TASKS, _TIME = tracker_view.SECTIONS
+_GENERAL, _TASKS, _TIME = tracker_view.REPORTS
+_SPECIFIC, _PROJECT = tracker_view.SECTIONS[1:]
+#: What each section reads: tracker reports (by key), and the Project section's own report.
+_SECTION_PARTS = {_GENERAL: (_GENERAL,), _SPECIFIC: (_TASKS, _TIME), _PROJECT: (_PROJECT,)}
+_NO_PROJECT_TITLE = "Select a project"
 _TYPE_PAGE_SIZE = 8
 _PAGE_WIDTH = 880
 
@@ -116,9 +125,13 @@ class ProductivityPage(ctk.CTkFrame):
         super().__init__(parent, fg_color=theme.APP_BG)
         self._controller = productivity_controller
         #: Each section's own report, built for that section's filters.
-        self.reports: dict[str, TrackerReport | None] = dict.fromkeys(tracker_view.SECTIONS)
-        #: The newest request of each section; an answer carrying an older number is dropped.
-        self._requests = dict.fromkeys(tracker_view.SECTIONS, 0)
+        self.reports: dict[str, TrackerReport | None] = dict.fromkeys(tracker_view.REPORTS)
+        #: The newest request of each part; an answer carrying an older number is dropped.
+        self._requests = dict.fromkeys((*tracker_view.REPORTS, _PROJECT), 0)
+        #: The Project section: the workspace's projects, the selected one and its report.
+        self.projects: list = []
+        self.project_id = None
+        self.project_report = None
         #: Sections whose report must be read again before it is shown.
         self._stale: set[str] = set()
         self.section = _GENERAL
@@ -143,10 +156,19 @@ class ProductivityPage(ctk.CTkFrame):
         self.section_host = ctk.CTkFrame(self, fg_color="transparent")
         self.section_host.grid(row=2, column=0, sticky="ew", padx=15)
         self.section_host.columnconfigure(0, weight=1)
+        specific = ctk.CTkFrame(self.section_host, fg_color="transparent")
+        specific.columnconfigure(0, weight=1)
+        #: The two parts of Specific, each with its own filters (kept by their report's name).
+        self.part_frames = {_TASKS: self._build_task_based(specific), _TIME: self._build_time_based(specific)}
+        for row, (name, frame) in enumerate(self.part_frames.items()):
+            ctk.CTkLabel(specific, text=name, font=ctk.CTkFont(size=20, weight="bold"),
+                         text_color=theme.TEXT_PRIMARY, anchor="w").grid(row=2 * row, column=0, sticky="w", padx=5,
+                                                                         pady=(0 if row == 0 else 10, 8))
+            frame.grid(row=2 * row + 1, column=0, sticky="ew")
         self.section_frames = {
             _GENERAL: self._build_general(self.section_host),
-            _TASKS: self._build_task_based(self.section_host),
-            _TIME: self._build_time_based(self.section_host),
+            _SPECIFIC: specific,
+            _PROJECT: self._build_project(self.section_host),
         }
 
     def _card(self, parent: tk.Widget, title: str | None = None) -> ctk.CTkFrame:
@@ -212,8 +234,9 @@ class ProductivityPage(ctk.CTkFrame):
             else:
                 frame.grid_remove()
         self._mark(self.section_buttons, name, _SECTION_LABELS)
-        if name in self._stale:
-            self._load(name)
+        for part in _SECTION_PARTS[name]:
+            if part in self._stale:
+                self._load(part)
 
     # -- General ------------------------------------------------------------------
 
@@ -307,6 +330,107 @@ class ProductivityPage(ctk.CTkFrame):
         self.completion_rate_chart.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         return frame
 
+    # -- Project ------------------------------------------------------------------
+
+    def _build_project(self, parent: tk.Widget) -> ctk.CTkFrame:
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        frame.columnconfigure(0, weight=1)
+        self.project_days_var = tk.StringVar(value="All time")
+        card = self._card(frame)
+        card.grid(row=0, column=0, sticky="ew", padx=5, pady=(0, 14))
+        card.columnconfigure((0, 1, 2), weight=1, uniform="filter")
+        self._filter_menu(card, 0, "Date range", self.project_days_var, list(_DAY_OPTIONS),
+                          lambda: self._load(_PROJECT))
+
+        ctk.CTkLabel(frame, text="Projects", font=ctk.CTkFont(size=16, weight="bold"),
+                     text_color=theme.TEXT_PRIMARY, anchor="w").grid(row=1, column=0, sticky="w", padx=5, pady=(0, 4))
+        self.project_list = ctk.CTkFrame(frame, fg_color="transparent")
+        self.project_list.grid(row=2, column=0, sticky="ew", pady=(0, 14))
+        self.project_list.columnconfigure((0, 1, 2, 3), weight=1, uniform="project")
+        self.project_buttons: dict = {}
+        self.project_empty_label = ctk.CTkLabel(
+            self.project_list, text="No projects yet. Create one on the Project Schedule page.",
+            text_color=theme.TEXT_MUTED, anchor="w")
+
+        self.project_tiles = _TileGrid(frame, _NO_PROJECT_TITLE, 3,
+                                       empty="Select a project above to see the points it collected.")
+        self.project_tiles.grid(row=3, column=0, sticky="ew", pady=(0, 14))
+        self.project_day_tiles = _TileGrid(frame, "Points collected by day", 4,
+                                           empty="No tasks of this project were completed in this date range.")
+        self.project_day_tiles.grid(row=4, column=0, sticky="ew", pady=(0, 14))
+        return frame
+
+    def select_project(self, project_id) -> None:
+        """Show one project's statistics (read for the section's date range)."""
+        self.project_id = project_id
+        self._load(_PROJECT)
+
+    def show_project(self, project_id) -> None:
+        """Open the Project section with `project_id` selected (the Projects page's "View performance")."""
+        self.project_id = project_id
+        self._stale.add(_PROJECT)
+        self.show_section(_PROJECT)
+
+    def _load_project(self) -> None:
+        self._requests[_PROJECT] += 1
+        number, project_id = self._requests[_PROJECT], self.project_id
+        range_days = _DAY_OPTIONS.get(self.project_days_var.get())
+
+        def work():
+            projects = self._controller.projects()
+            known = projects.ok and any(project.id == project_id for project in projects.value)
+            return projects, (self._controller.build_project_points(project_id, range_days) if known else None)
+
+        def done(loaded) -> None:
+            if number == self._requests[_PROJECT]:
+                self._on_project_loaded(*loaded)
+
+        run_in_background(self, work, done)
+
+    def _on_project_loaded(self, projects: ControllerResult, report: ControllerResult | None) -> None:
+        failed = projects if not projects.ok else report if report is not None and not report.ok else None
+        if failed is not None:
+            if isinstance(failed.cause, NotSignedInError):
+                return
+            self.status_label.configure(text=f"Productivity data is unavailable: {failed.error}")
+            self.status_label.grid(row=1, column=0, sticky="w", padx=20, pady=(0, 8))
+            return
+        self.status_label.grid_remove()
+        self.projects = list(projects.value)
+        if report is None:
+            self.project_id = None  # nothing selected yet, or the selected project no longer exists
+        self.project_report = report.value if report is not None else None
+        self._render_project()
+
+    def _render_project(self) -> None:
+        for button in self.project_buttons.values():
+            button.destroy()
+        self.project_buttons = {}
+        labels = {}
+        for index, project in enumerate(self.projects):
+            labels[project.id] = project.name
+            button = AppButton(self.project_list, project.name, lambda project_id=project.id:
+                               self.select_project(project_id), variant="secondary", height=34)
+            button.grid(row=index // 4, column=index % 4, sticky="ew", padx=5, pady=4)
+            self.project_buttons[project.id] = button
+        if self.projects:
+            self.project_empty_label.grid_remove()
+        else:
+            self.project_empty_label.grid(row=0, column=0, columnspan=4, sticky="w", padx=5, pady=5)
+        self._mark(self.project_buttons, self.project_id, labels)
+        report = self.project_report
+        if report is None:
+            self.project_tiles.set_title(_NO_PROJECT_TITLE)
+            self.project_tiles.show([])
+            self.project_day_tiles.show([])
+            self.project_day_tiles.empty_label.configure(text="")
+            return
+        self.project_tiles.set_title(f"{labels[self.project_id]} · {tracker_view.project_period_text(report)}")
+        self.project_tiles.show(tracker_view.project_stats(report))
+        self.project_day_tiles.empty_label.configure(
+            text="No tasks of this project were completed in this date range.")
+        self.project_day_tiles.show(tracker_view.project_day_stats(report))
+
     # ------------------------------------------------------------------
     # Refresh
     # ------------------------------------------------------------------
@@ -323,8 +447,9 @@ class ProductivityPage(ctk.CTkFrame):
 
     def refresh(self) -> None:
         """Reload the shown section now, and each other section when it is next shown."""
-        self._stale = set(tracker_view.SECTIONS)
-        self._load(self.section)
+        self._stale = {*tracker_view.REPORTS, _PROJECT}
+        for part in _SECTION_PARTS[self.section]:
+            self._load(part)
 
     def _choice(self, variable: tk.StringVar) -> str | None:
         return None if variable.get() == _ANY else variable.get()
@@ -341,6 +466,9 @@ class ProductivityPage(ctk.CTkFrame):
     def _load(self, section: str) -> None:
         """Read one section's report off the Tk thread; deliver it only while it is still that section's newest."""
         self._stale.discard(section)
+        if section == _PROJECT:
+            self._load_project()
+            return
         range_days, filters = self._selection(section)
         self._requests[section] += 1
         number = self._requests[section]

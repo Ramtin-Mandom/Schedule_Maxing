@@ -179,6 +179,35 @@ def test_task_references_must_be_live_records_of_the_caller(client, alice) -> No
     assert self_dependency.status_code == 422
 
 
+def test_a_project_keeps_its_dates_completion_and_milestones(client, alice) -> None:
+    milestones = [{"id": str(uuid.uuid4()), "number": 2, "title": "Draft", "description": "Reviewed", "score": 8},
+                  {"id": str(uuid.uuid4()), "number": 1, "title": "Outline", "description": "", "score": 1}]
+    project = create(client, alice, "projects", {
+        "name": "Thesis", "start_date": "2026-09-01", "estimated_end_date": "2026-12-15", "milestones": milestones})
+    assert (project["start_date"], project["estimated_end_date"], project["completed_at"]) == (
+        "2026-09-01", "2026-12-15", None)
+    assert project["milestones"] == milestones  # in the order sent (clients order them by number for display)
+    assert create(client, alice, "projects", {"name": "Plain"})["milestones"] == []  # all of it is optional
+
+    # A client that predates the details sends only name and description: nothing stored is erased.
+    renamed = client.put(f"/projects/{project['id']}", headers=alice,
+                         json={"name": "Thesis II", "description": None, "base_version": 1}).json()
+    assert renamed["version"] == 2 and renamed["milestones"] == milestones and renamed["start_date"] == "2026-09-01"
+
+    rescored = [{**milestones[0], "score": 10}]
+    updated = client.put(f"/projects/{project['id']}", headers=alice, json={
+        **editable(renamed), "milestones": rescored, "completed_at": "2026-10-01T12:00:00+00:00"}).json()
+    assert updated["milestones"] == rescored and updated["completed_at"] is not None
+    assert client.get(f"/projects/{project['id']}", headers=alice).json()["milestones"] == rescored
+
+    for bad in ({"milestones": [{**milestones[0], "score": 11}]}, {"milestones": [{**milestones[0], "number": 1.5}]},
+                {"milestones": [{**milestones[0], "title": ""}]}, {"milestones": [milestones[0], milestones[0]]},
+                {"start_date": "2026-10-02", "estimated_end_date": "2026-10-01"}):
+        refused = client.put(f"/projects/{project['id']}", headers=alice, json={**editable(updated), **bad})
+        assert refused.status_code == 422, bad
+    assert client.get(f"/projects/{project['id']}", headers=alice).json() == updated
+
+
 def test_deletion_policies_protect_relationships(client, alice) -> None:
     project = create(client, alice, "projects", {"name": "P"})
     dependency = create(client, alice, "tasks", task_payload(name="Dep", project_id=project["id"]))

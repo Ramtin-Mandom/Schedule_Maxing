@@ -75,6 +75,56 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
         "Day Window, details, task form and Selected day panel (with All Tasks Complete and No Tasks Complete) "
         "follow it, and Open Day schedules it. Past days are coloured the same way as on the Week page.",
     )),
+    GuideSection("projects", "Projects", (
+        "Project Schedule groups tasks that belong together, such as a course or a piece of work. The page opens "
+        "on the overview: a form to create a project, then your projects in two lists.",
+        (
+            "New project: a name, and optionally a description, a start date and an estimated end date. Dates are "
+            "typed as YYYY-MM-DD (for example 2026-09-23); the format is shown under each date field. Choose "
+            "Create Project.",
+            "Ongoing projects and Completed projects: click a bar to collapse or expand that list; each works on "
+            "its own.",
+            "Double-click a project (or choose Open) to open it. All projects takes you back to the overview.",
+            "Inside a project: Mark complete moves it to Completed projects (Reopen project brings it back), "
+            "Edit... changes its name, description, dates and task defaults, and Delete empty project removes a "
+            "project that has no tasks left. Tasks are never deleted with a project.",
+            "View performance opens the Productivity page on this project's statistics (see Productivity).",
+        ),
+        "On the Day, Week and Month pages a task of a project shows the first three letters of the project's name "
+        "after its own, like Homework (mat) for a project named math. It is only shown that way: the task's name "
+        "is not changed, and renaming the project changes the letters everywhere.",
+    )),
+    GuideSection("project_tasks", "Project tasks and milestones", (
+        "An open project has three parts side by side: Add Task, Project Tasks and Milestones. The two lists "
+        "scroll on their own when they get long.",
+        (
+            "Add Task is the same form as on the Day page, with a Date where the Day page has the project choice: "
+            "the task joins this project on the date you type. It is added without a time -- open that day and "
+            "Make Schedule to give it one.",
+            "Project Tasks lists every task of the project, including ones you assigned to it from the Day, Week "
+            "or Month form, with its date, its scheduled time (or Not scheduled) and whether it is completed.",
+            "Done: tick it to complete a task right there, even one that has not been scheduled. This works for "
+            "project tasks only; any other task is completed on its scheduled slot on the Day page. A completed "
+            "task turns green, appears in the Completed column of the Day page for the day you completed it, and "
+            "its points count in Productivity -- once, even if it is also scheduled. Untick Done to undo it.",
+            "Click a task that is not completed to choose a day for it: the same task moves to that day without a "
+            "time, and any time it was scheduled at is removed. Cancel changes nothing.",
+            "× on the left of a task removes it after a confirmation, from the project and from the Day, Week and "
+            "Month pages; points it already earned stay in your statistics.",
+            "Task defaults (in Edit...): a default duration, priority and points for this project's new tasks. "
+            "Leave one empty to use the category's default. What you type in the form always wins, then the "
+            "project's defaults, then the category's, then the app's. Changing them only affects tasks you add "
+            "afterwards, and every new project starts with none set.",
+        ),
+        "Milestones are the project's checkpoints.",
+        (
+            "Add Milestone asks for a number (a whole number; milestones are listed in that order), a title and a "
+            "description.",
+            "Score: choose 1 to 10 on the right of a milestone; a new one starts at 1. The whole milestone is "
+            "coloured by its score: 1-3 neutral, 4-7 light green, 8-9 green, 10 dark green.",
+            "× on the left of a milestone removes it after a confirmation.",
+        ),
+    )),
     GuideSection("adding_tasks", "Adding tasks", (
         "The Add a task form is the same on Day, Week and Month. It has no date field: a new task always belongs "
         "to the date the page has selected. On the Day page that is the date shown (today unless you opened "
@@ -85,7 +135,7 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
             "it by 10. It is saved for your productivity statistics and never changes where the scheduler puts the "
             "task.",
             "Category and Project sit side by side. Without a category the task is saved as other. Project starts "
-            "at None and lists your projects.",
+            "at None and lists your projects; a task with a project also appears in that project's task list.",
             "Times are entered as [hour] : [minute] [AM/PM]. Type the hour (1-12) and minute (00-59); click the "
             "AM/PM button, or type a or p, to switch. An end time of 12:00 AM means midnight at the end of the day.",
             "Required: the task must be scheduled; if it cannot be, the schedule is not saved and you are told why.",
@@ -173,8 +223,28 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
             "Make Schedule again never moves a task between these columns: completed and uncompleted tasks keep "
             "their place and status, and only newly scheduled tasks appear in Tasks.",
             "Two tasks with the same name, or the days of a repeating task, each keep their own status.",
-            "Completed and uncompleted work, with planned versus actual times, appears on the Productivity page "
-            "(Schedule follow-through and History).",
+            "A project task completed with Done in its project, without ever being scheduled, appears in "
+            "Completed on the day you completed it. Its × brings it back to not completed.",
+            "Completed and uncompleted work, with your points and planned versus actual times, appears on the "
+            "Productivity page.",
+        ),
+    )),
+    GuideSection("productivity", "Productivity", (
+        "The Productivity page shows how your plans went. The bar at the top chooses one of three sections, and "
+        "everything is recalculated from your saved records each time you open it.",
+        (
+            "General: your records (such as your highest-point day and best week) and your stats at a glance. It "
+            "has no filters.",
+            "Specific: two parts, each with its own filters. Task-based is filtered by period, category, tag and "
+            "task type and shows each task type's completion. Time-based is filtered by date range, day of week "
+            "and time of day and shows totals, weekdays, recent weeks and months, a single day and two charts.",
+            "Project: your projects. Select one to see the points it collected: the total, the points for each "
+            "day something was completed, and the average per day. Date range chooses All time or the last 7, 30 "
+            "or 90 days.",
+            "The average is the total divided by every calendar day of the period, including days when nothing "
+            "was completed; the box says which period and how many days. All time starts on the day of the "
+            "project's first completed task. A project with nothing completed shows 0 points and no average.",
+            "View performance inside a project opens this Project section with that project already selected.",
         ),
     )),
     GuideSection("day_window", "Changing the day start and end", (
@@ -200,11 +270,26 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
         ),
     )),
     GuideSection("synchronization", "Synchronization", (
-        "Your data is saved on this computer first, so the app works offline. Sign in on the Account page to "
-        "sync with the Schedule Maxing server: changes you make wait safely until they are sent, the status "
-        "bar at the top shows what is waiting, and Sync now sends them at once. Changes from your other devices "
-        "come back the same way, including each date's day window. If the same record changed in two places, "
-        "the Account page shows the conflict and lets you choose.",
+        "Your data is saved on this computer first, so the app works without an account and without internet. "
+        "That is guest mode: everything stays on this device, and is still there after a restart.",
+        (
+            "Create an account on the Account page (after entering the backend address) to keep your work in it: "
+            "everything already on this device becomes that account's and is uploaded. Nothing is cleared or "
+            "replaced.",
+            "Signing in to an account you already have never changes work done without an account. The app asks "
+            "whether to add it to the account or keep it separate; keeping it separate changes nothing.",
+            "While you are signed in, saving is still local and instant. Changes are sent automatically within "
+            "seconds, and changes from your other devices come back the same way, including each date's day "
+            "window. You never need to press anything to save or upload.",
+            "Offline, or after your session ends, you keep working in your account's records. Changes wait "
+            "safely, even across a restart, and are sent once the backend is reachable and you are signed in.",
+            "The status bar at the top shows guest mode or your account, online or offline, what is waiting and "
+            "the last sync. Sync now retries at once; Check connection only checks the connection.",
+            "Sign out hides that account's records on this device and returns to guest mode. Unsent changes are "
+            "kept and sent when you sign in to it again; another account never receives them.",
+            "If the same record changed in two places, the Account page shows the conflict and lets you choose. "
+            "Nothing is overwritten silently.",
+        ),
         "With direct PostgreSQL storage everything is saved straight to the database, so there is nothing to "
         "sync.",
     )),
@@ -213,8 +298,8 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
         "their scheduled entries and their own preferences (including a custom day window). You always see "
         "exactly what would be deleted and confirm first.",
         (
-            "Kept: tasks with no date, tasks planned on other dates, projects, your default preferences and all "
-            "execution history.",
+            "Kept: tasks with no date, tasks planned on other dates, projects (with their milestones and task "
+            "defaults), your default preferences and all execution history.",
             "Repeating tasks are kept; only their entries on the reset dates go.",
             "A reset is refused, with nothing deleted, while tasks outside the dates depend on tasks inside them.",
         ),

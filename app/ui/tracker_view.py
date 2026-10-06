@@ -2,7 +2,8 @@
 app/ui/tracker_view.py
 
 Tk-free wording of the tracker report (app/productivity/tracker.py) for the
-Productivity page's three sections -- General, Task-based and Time-based.
+Productivity page's three sections -- General, Specific (the task-based and
+the time-based figures) and Project (app/productivity/project_stats.py).
 Every figure becomes one Stat: a short label, the value shown large and a
 short caption (a rate's caption carries its numerator and denominator).
 Nothing is calculated here, and an unavailable figure is shown as "--" with
@@ -14,10 +15,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
+from app.productivity.project_stats import ProjectPointsReport
 from app.productivity.schedule_cohort import Rate
 from app.productivity.tracker import ActivityTotals, PeriodView, RankedGroup, StatusCounts, TrackerReport, TypeView
 
-SECTIONS = ("General", "Task-based", "Time-based")
+SECTIONS = ("General", "Specific", "Project")
+#: The tracker reports the page reads, each for its own filters; Specific shows the last two.
+REPORTS = ("General", "Task-based", "Time-based")
 #: (label, TypeView.periods key) of the four per-type periods.
 TYPE_PERIODS = (("Today", "today"), ("This week", "week"), ("This month", "month"), ("All time", "all_time"))
 AWARD_KINDS = ("highest_point_day", "best_week", "most_completed_type", "longest_green_streak",
@@ -264,3 +268,46 @@ def planned_vs_actual_rows(report: TrackerReport, by: str = "category") -> list[
     groups = report.time.planned_vs_actual_by_type if by == "type" else report.time.planned_vs_actual_by_category
     return [(group.label, group.durations.median_estimated_minutes, group.durations.median_actual_minutes)
             for group in groups if group.durations.pairs]
+
+
+# -----------------------------------------------------------------------------
+# Project
+# -----------------------------------------------------------------------------
+
+
+def _day_text(day: date) -> str:
+    return f"{day:%a %b} {day.day}, {day.year}"
+
+
+def project_period_text(report: ProjectPointsReport) -> str:
+    """The averaging period in words, e.g. "Sep 1 - Oct 5, 2026 (35 days)"."""
+    if report.period_start is None:
+        return "No completed tasks yet"
+    days = "1 day" if report.days_in_period == 1 else f"{report.days_in_period} days"
+    return f"{_day_text(report.period_start)} – {_day_text(report.period_end)} ({days})"
+
+
+def project_stats(report: ProjectPointsReport) -> list[Stat]:
+    """Total points, the average per day (with its period and denominator) and the completed-task count."""
+    scope = f"the last {report.range_days} days" if report.range_days else "all time, from its first completion"
+    unknown = (f" {report.unknown_points_count} completion(s) without recorded points count as 0."
+               if report.unknown_points_count else "")
+    if report.average_points_per_day is None:
+        average = Stat("Average points per day", NO_VALUE, "Nothing completed yet, so there is no period to average.")
+    else:
+        average = Stat("Average points per day", f"{report.average_points_per_day:g}",
+                       f"{report.total_points} points ÷ {report.days_in_period} calendar day(s): "
+                       f"{project_period_text(report)}. Days without a completion count.")
+    return [
+        Stat("Total points collected", str(report.total_points), f"Completed tasks of this project, {scope}.{unknown}"),
+        average,
+        Stat("Tasks completed", str(report.completed_count),
+             "Each task once, on the day it was completed -- scheduled or completed from the project."),
+    ]
+
+
+def project_day_stats(report: ProjectPointsReport, *, limit: int = 28) -> list[Stat]:
+    """Points collected per day, newest first (at most `limit` days; only days with a completion)."""
+    return [Stat(_day_text(day.date), str(day.points),
+                 f"{day.completed_count} task{'s' if day.completed_count != 1 else ''} completed")
+            for day in reversed(report.by_day[-limit:])]

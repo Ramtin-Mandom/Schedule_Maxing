@@ -60,6 +60,7 @@ from app.planning.history import (
 from app.execution.models import CancelReason, ExecutionStatus
 from app.planning.models import (
     PLACEMENT_SNAPSHOT_FIELDS,
+    PROJECT_DETAIL_FIELDS,
     FixedBlock,
     OccurrenceState,
     PlacementRemovalReason,
@@ -230,11 +231,10 @@ class ServerPlanningRepository:
     # ------------------------------------------------------------------
 
     def insert_project(self, project: Project) -> None:
-        self._insert(PROJECTS, project, _payload(ProjectCreate, {"name": project.name, "description": project.description}))
+        self._insert(PROJECTS, project, _payload(ProjectCreate, _project_data(project)))
 
     def update_project(self, project: Project, *, expected_version: int) -> bool:
-        payload = _payload(ProjectCreate, {"name": project.name, "description": project.description})
-        return self._update(PROJECTS, project, payload, expected_version)
+        return self._update(PROJECTS, project, _payload(ProjectCreate, _project_data(project)), expected_version)
 
     def soft_delete_project(self, project_id, *, deleted_at, expected_version) -> bool:
         return self._soft_delete(PROJECTS, project_id, expected_version)
@@ -637,7 +637,14 @@ def _audit(row) -> dict:
 
 
 def _project(row) -> Project:
-    return Project(name=row.name, description=row.description, **_audit(row))
+    return Project(name=row.name, description=row.description, start_date=row.start_date,
+                   estimated_end_date=row.estimated_end_date, completed_at=row.completed_at,
+                   **{name: PROJECTS.content(None, None, row)[name] for name in ("milestones", "task_defaults")},
+                   **_audit(row))
+
+
+def _project_data(project: Project) -> dict:
+    return project.model_dump(mode="json", include={"name", "description", *PROJECT_DETAIL_FIELDS})
 
 
 def _task_type(row) -> TaskType:

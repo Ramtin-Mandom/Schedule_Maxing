@@ -34,7 +34,15 @@ from app.execution.errors import ExecutionNotFoundError
 from app.execution.lifecycle import TRANSITIONS, reopen_target
 from app.execution.models import TERMINAL_STATUSES, ExecutionStatus, TaskExecution
 from app.execution.repository import ExecutionRepository
-from app.planning.models import PLACEMENT_SNAPSHOT_FIELDS, FixedBlock, Project, ScheduledTask, Task, TaskType
+from app.planning.models import (
+    PLACEMENT_SNAPSHOT_FIELDS,
+    PROJECT_DETAIL_FIELDS,
+    FixedBlock,
+    Project,
+    ScheduledTask,
+    Task,
+    TaskType,
+)
 from app.planning.preferences import PreferenceOverrides, PreferenceRecord, PreferenceScope
 from app.planning.provenance import GenerationRecord
 from app.planning.repository import PlanningRepository
@@ -120,6 +128,9 @@ class LocalRecords:
         #: Whether the server synchronizes task types and planning snapshots ("task_types"): without it the
         #: fields are left out of payloads (they stay recorded here and are uploaded once the server has it).
         self.task_types = True
+        #: Whether the server stores a project's dates, completion and milestones ("project_details"): without
+        #: it they are left out of payloads and stay recorded here (uploaded once the server has it).
+        self.project_details = True
         self.planning = planning
         self.executions = executions
 
@@ -132,7 +143,8 @@ class LocalRecords:
         model, payload = None, None
         if entity_type == "project":
             model = self.planning.get_project(record_id, include_deleted=True)
-            payload = model and {"name": model.name, "description": model.description}
+            payload = model and _dump(model, ("name", "description", *PROJECT_DETAIL_FIELDS) if self.project_details
+                                      else ("name", "description"))
         elif entity_type == "task_type":
             model = self.planning.get_task_types([record_id], include_deleted=True).get(record_id)
             payload = model and {"label": model.label}
@@ -250,7 +262,13 @@ class LocalRecords:
             self._store_execution(record, owner, local_version)
             return
         if entity_type == "project":
-            model = Project.model_validate({**meta, "name": record["name"], "description": record["description"]})
+            # A record without the details (an older server) never erases what this device recorded.
+            stored = self.planning.get_project(uuid.UUID(str(meta["id"])), include_deleted=True)
+            details = ({name: record[name] for name in PROJECT_DETAIL_FIELDS if record.get(name) is not None}
+                       if "milestones" in record
+                       else stored.model_dump(include=set(PROJECT_DETAIL_FIELDS)) if stored is not None else {})
+            model = Project.model_validate({**meta, "name": record["name"], "description": record["description"],
+                                            **details})
         elif entity_type == "task_type":
             model = TaskType.model_validate({**meta, "label": record["label"]})
         elif entity_type == "task":

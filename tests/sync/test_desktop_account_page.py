@@ -106,7 +106,7 @@ def test_connect_register_sign_in_associate_sync_and_sign_out(tmp_path: Path, di
         page.backend_field.variable.set("http://backend.test")
         page.save_backend_button.invoke()
         pump(app, lambda: "backend" not in page.busy)
-        assert page.view.state == "signed_out" and "Signed out" in app.shell.status_bar.label.cget("text")
+        assert page.view.state == "signed_out" and "Guest mode" in app.shell.status_bar.label.cget("text")
 
         page.set_mode("register")
         page.email_field.variable.set("alice")
@@ -115,37 +115,28 @@ def test_connect_register_sign_in_associate_sync_and_sign_out(tmp_path: Path, di
         pump(app, lambda: "account" not in page.busy)
         assert page.email_field.error and page.password_field.error  # shown next to the fields
         assert page.password_field.get() == ""  # never kept
+        assert "keeps everything you have done on this device" in page.mode_note.cget("text")
+
+        # Creating the account signs in and keeps the same workspace: the guest plan becomes the account's.
+        old_day = app.pages["day"]
         page.email_field.variable.set("alice@example.com")
         page.password_field.variable.set(PASSWORD)
         page.submit_button.invoke()
-        pump(app, lambda: "account" not in page.busy)
-        assert "Account created" in page.account_notice.text and page.mode == "sign_in"
-
-        old_day = app.pages["day"]
-        page.password_field.variable.set(PASSWORD)
-        page.submit_account()
         page.submit_account()  # a double submission sends once
         pump(app, lambda: "account" not in page.busy)
         pump(app, lambda: "preview" not in page.busy and "conflicts" not in page.busy)
         assert backend.logins == 1
+        assert "Account created and signed in" in page.account_notice.text
+        assert "1 record(s) already on this device are now part of this account" in page.account_notice.text
         assert page.signed_in_label.cget("text") == "Signed in as a***@e***"
         pump(app, lambda: "profile" not in page.busy)
         assert "Plan: Normal" in page.profile_label.cget("text")
         assert "alice@example.com" not in page.profile_label.cget("text")
-        assert "nothing on this device was uploaded or claimed" in page.account_notice.text.lower()
-        assert app.services.workspace.scope.user_id is not None
-        assert app.pages["day"] is not old_day and tree_names(app.pages["day"]) == []  # rebuilt: account workspace
-        assert "1 record(s) on this device have no account" in page.association_label.cget("text")
-
-        page.review_association()
-        page.dialog.cancel()
-        assert "Nothing was changed" in page.association_notice.text and owners(app)["Offline plan"] is None
-        page.review_association()
-        page.dialog.primary_button.invoke()
-        pump(app, lambda: "associate" not in page.busy)
-        assert "Associated 1 record(s)" in page.association_notice.text
-        assert owners(app)["Offline plan"] is not None
-        assert tree_names(app.pages["day"]) == ["Offline plan"]
+        assert app.services.workspace.scope.user_id is not None and owners(app)["Offline plan"] is not None
+        assert app.pages["day"] is not old_day and tree_names(app.pages["day"]) == ["Offline plan"]  # still there
+        assert "no records without an account" in page.association_label.cget("text")
+        assert "Mode: signed in as a***@e***" in page.sync_lines.cget("text")
+        assert "Connection: online" in page.sync_lines.cget("text")
 
         app.shell.status_bar.sync_button.invoke()
         pump(app, lambda: "Synchronizing" not in app.shell.status_bar.label.cget("text"))
@@ -158,6 +149,26 @@ def test_connect_register_sign_in_associate_sync_and_sign_out(tmp_path: Path, di
         pump(app, lambda: "account" not in page.busy)
         assert app.services.workspace.scope == OwnerScope.ownerless()
         assert tree_names(app.pages["day"]) == []  # the account's records are not shown signed out
+        assert "guest mode" in page.account_notice.text.lower() and "Mode: guest" in page.sync_lines.cget("text")
+
+        # Guest work done after signing out, then signing in to the existing account: the page asks, in plain
+        # words, whether to add it to the account or keep it separate -- and adds it only when chosen.
+        note = app.services.planning_controller.add_or_update_task(
+            Task(name="Guest note", category="study", estimated_duration_minutes=20, priority=4)).value
+        assert owners(app)["Guest note"] is None
+        assert "asked whether to add it" in page.mode_note.cget("text")
+        page.email_field.variable.set("alice@example.com")
+        page.password_field.variable.set(PASSWORD)
+        page.submit_account()
+        pump(app, lambda: "account" not in page.busy and page.dialog is not None)
+        assert owners(app)["Guest note"] is None  # signing in alone claimed nothing
+        assert page.dialog.choice_var.get() == "separate"  # the safe choice is preselected
+        page.dialog.choice_var.set("merge")
+        page.dialog.primary_button.invoke()
+        pump(app, lambda: "associate" not in page.busy and page.dialog is None)
+        assert "Added 1 record(s) to this account" in page.account_notice.text
+        assert owners(app)["Guest note"] is not None and note.id is not None
+        assert sorted(tree_names(app.pages["day"])) == ["Guest note", "Offline plan"]
         assert dialogs.errors == []
     finally:
         close(app)
