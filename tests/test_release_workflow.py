@@ -33,6 +33,22 @@ def test_publishing_needs_every_earlier_job_to_pass():
     assert set(JOBS["build"]["needs"]) == {"verify", "test"}
     assert "build" in JOBS["publish"]["needs"]
     assert "continue-on-error" not in TEXT
+    # Each later job names the results it requires: a failed or cancelled earlier job never lets it run.
+    assert "needs.verify.result == 'success'" in JOBS["build"]["if"] and "!cancelled()" in JOBS["build"]["if"]
+    assert "needs.test.result == 'success'" in JOBS["build"]["if"]
+    assert "needs.build.result == 'success'" in JOBS["publish"]["if"] and "!cancelled()" in JOBS["publish"]["if"]
+    assert "always()" not in JOBS["build"]["if"] + JOBS["publish"]["if"]
+
+
+def test_the_tests_are_skipped_only_by_the_explicit_off_switch():
+    switch = "vars.SKIP_RELEASE_TESTS"
+    assert JOBS["test"]["if"] == f"{switch} != 'true'"  # unset, empty or any other value: the tests run
+    # A skipped test job is accepted by the build only together with the switch itself.
+    condition = " ".join(JOBS["build"]["if"].split())
+    assert f"(needs.test.result == 'skipped' && {switch} == 'true')" in condition
+    assert condition.count("needs.test.result == 'skipped'") == 1
+    assert "Untested build" in steps_text("build")  # and the run says so
+    assert "workflow_dispatch" in TRIGGERS and TRIGGERS["workflow_dispatch"] is None  # no per-run input can skip them
 
 
 def test_only_the_publishing_job_may_write_and_only_for_tags():
