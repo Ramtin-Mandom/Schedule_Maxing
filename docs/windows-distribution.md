@@ -136,6 +136,12 @@ git push origin v1.2.3
 A **dry run** is the same workflow started by hand (Actions > Release > Run workflow): it builds and tests everything
 and leaves the installer as a workflow artifact, but never publishes.
 
+**Skipping the tests (off switch).** The `test` job can be switched off with a repository variable: Settings >
+Secrets and variables > Actions > **Variables** > New repository variable, name `SKIP_RELEASE_TESTS`, value `true`.
+The run then shows `test` as skipped and a warning "Untested build"; everything else (tag check, packaging tests,
+build, smoke test, installer test) still runs. Any other value, or no variable, means the tests must pass. Delete the
+variable as soon as that release is out: while it exists, every release is published without the test suite.
+
 Repository settings the workflow needs: Actions allowed to create releases (Settings > Actions > General > Workflow
 permissions is enough with the job's own `contents: write`). Optional: a tag protection rule for `v*`.
 

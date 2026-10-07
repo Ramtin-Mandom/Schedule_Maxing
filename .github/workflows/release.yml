@@ -11,6 +11,11 @@ name: Release
 # Any failing job stops everything after it: nothing is published unless all of it passed.
 # A manual run (workflow_dispatch) builds and tests the same way but never publishes; its
 # installer is only a workflow artifact.
+#
+# Off switch for the test job: the repository variable SKIP_RELEASE_TESTS (Settings > Secrets and
+# variables > Actions > Variables). Only the exact value "true" skips it; the build then says so in a
+# warning. Unset or anything else -- the default -- means the tests must pass. Delete the variable
+# after the release that needed it: while it is set, every release is published untested.
 
 on:
   push:
@@ -58,7 +63,8 @@ jobs:
           fi
 
   test:
-    # The complete suite, exactly as CI runs it.
+    # The complete suite, exactly as CI runs it. Skipped only by the SKIP_RELEASE_TESTS variable (see the top).
+    if: vars.SKIP_RELEASE_TESTS != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -86,10 +92,21 @@ jobs:
 
   build:
     needs: [verify, test]
+    # The tests must have passed -- or have been skipped by the off switch, and by nothing else. (A job that
+    # needs a skipped job is itself skipped unless its condition says otherwise, hence the explicit results.)
+    if: >-
+      ${{ !cancelled() && needs.verify.result == 'success' &&
+      (needs.test.result == 'success' ||
+      (needs.test.result == 'skipped' && vars.SKIP_RELEASE_TESTS == 'true')) }}
     runs-on: windows-latest
     env:
       VERSION: ${{ needs.verify.outputs.version }}
     steps:
+      - name: Tests were skipped
+        if: needs.test.result == 'skipped'
+        shell: pwsh
+        run: Write-Host "::warning title=Untested build::SKIP_RELEASE_TESTS is set, so the test suite did not run for this build. Delete the variable after this release."
+
       - uses: actions/checkout@v4
 
       - name: Set up Python
@@ -156,7 +173,11 @@ jobs:
   publish:
     # Tag pushes only. A stable release: not a draft, not a pre-release -- the updater offers it to everyone.
     needs: [verify, build]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    # Explicit results for the same reason as in build: with the test job skipped, the default condition
+    # would skip this job too.
+    if: >-
+      ${{ !cancelled() && needs.verify.result == 'success' && needs.build.result == 'success' &&
+      github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
