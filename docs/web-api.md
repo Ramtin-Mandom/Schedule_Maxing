@@ -336,4 +336,8 @@ no knowledge of its pending changes.
   first by every generation and allocation preview); scoped series changes use
   `POST /planning/occurrences/{id}/edit|delete` and
   `POST /planning/series/{id}/edit|delete` ([recurrence.md](recurrence.md)).
-- No password recovery, token refresh, billing or rate limiting.
+- Browser sessions expire and require a fresh sign-in; native clients have
+  rotating refresh credentials (`/auth/refresh`). Password recovery requires
+  SMTP, and authentication endpoints enforce rate limits. See
+  [authentication](backend-m8.md#authentication-contract) and
+  [password recovery](backend.md#password-recovery). Billing is not implemented.

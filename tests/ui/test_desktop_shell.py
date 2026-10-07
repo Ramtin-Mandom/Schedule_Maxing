@@ -134,7 +134,7 @@ def test_the_app_opens_on_day_with_a_collapsed_keyboard_operable_sidebar(tmp_pat
         app.show_page("settings")
         assert app.pages["settings"].engine_select.values == ["Normal", "ADHD friendly", "Early finish", "Night owl", "Catch-up"]
         assert "reward" not in app.pages  # unsupported legacy weights are not exposed in the native app
-        assert "no backend configured" in app.shell.status_bar.label.cget("text")  # the account status, in words
+        assert app.shell.status_bar.label.cget("text") == "Offline — guest mode, no server configured"
         assert dialogs.errors == []
     finally:
         close_app(app)

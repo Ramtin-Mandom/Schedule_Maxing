@@ -155,6 +155,29 @@ def test_nested_spans_count_once_and_gc_is_recorded_with_its_generation(recorder
     assert installed.report()["slow_events"][-1]["collected"] == 7
 
 
+def test_report_allows_gc_to_add_a_timing_during_summary(recorder, monkeypatch):
+    installed, _root, clock, _state = recorder
+    with diagnostics.span("app.example"):
+        clock.now += .010
+    original = diagnostics._Stat.summary
+    collected = False
+
+    def collect_during_summary(stat):
+        nonlocal collected
+        if not collected:
+            collected = True
+            # A new phase ensures this adds a key even if GC ran before the report.
+            installed.set_phase("report_gc")
+            gc.collect(2)
+        return original(stat)
+
+    monkeypatch.setattr(diagnostics._Stat, "summary", collect_during_summary)
+    report = installed.report()
+    assert collected
+    assert report["phases"]["startup"]["timings"]["app.example"]["n"] == 1
+    assert installed.report()["phases"]["report_gc"]["timings"]["gc.gen2"]["n"] >= 1
+
+
 def test_logs_stay_bounded_and_record_names_never_arguments(recorder):
     installed, root, clock, _state = recorder
 

@@ -1,6 +1,6 @@
 # Backend API: local operation and client security
 
-This implementation belongs to **Schedule_Maxing**, on branch `SMV2-M8`.
+This implementation belongs to **Schedule_Maxing**, in the `backend/` directory.
 No separate database repository is required. The API extends the existing
 server rather than introducing another schema or sync protocol.
 
@@ -134,8 +134,10 @@ and [web-api.md](web-api.md) for complete resource contracts.
 Login accepts `{email, password}` or `{username, password}` and returns
 `access_token`, `token_type`, `expires_in`, `expires_at`, `refresh_token`,
 and `refresh_expires_at`. Existing clients may ignore the additive refresh
-fields and continue signing in when their access token expires. The current
-desktop sync adapter does not yet persist/automatically rotate refresh tokens.
+fields and continue signing in when their access token expires. The desktop sync adapter automatically rotates refresh credentials. With
+**Keep me signed in**, it saves the current refresh credential in the OS
+credential store and restores the session after restart. Access tokens remain
+in memory. See [desktop accounts](desktop-accounts.md).
 
 Send access tokens as `Authorization: Bearer <token>`. Native credentials
 should be held in OS-protected storage (Android Keystore-backed storage,

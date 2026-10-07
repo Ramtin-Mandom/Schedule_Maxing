@@ -1,5 +1,14 @@
 # Schedule Maxing
 
+## Author note
+
+This was a personal project that I started in the summer of 2026 and finished a minimal version within a week; that was only a prototype of what I wanted. After a month or so, I started working on this project again to finish it. My main goal in doing this project was learning the workflow of how to create an application both for desktop and Android. I worked on multiple web applications before and had heard that there are materials that you need to know to finish each project, and honestly, from personal experience, the desktop application was both more fun and harder. You didn't have to worry much about the specs of people running the application, as the programs are fairly simple, unlike web apps where, if you are not willing to pay for an expensive service, you have to be constantly worrying about optimization and removing features. Overall, the process felt more enjoyable for me. My second goal was to hone my skill of using AI agents to build projects. Since my previous projects were fairly small, I didn't have to worry about reaching the limit too much; however, in this project, I was hitting the limit multiple times a day on the $20 subscription. I used ChatGPT/Codex for planning and used Claude for coding and implementation. I made many mistakes in the beginning that were causing the limits to hit early. One important thing that I learned was to not let Claude keep running test suites, and if it wants to run them, use a smaller "development test suite" as they take much less time. Also, I got better with prompting, dividing my prompts into sections to keep my context token minimal, letting Claude know what files to work on or should look into. Overall, I finished this project a little bit messy, but that is okay, and there are some things I'm planning to try in my next project.
+
+The whole idea of the app was some planning application, similar to a calendar, that has some features I always wanted to see in a planning application. First, I wanted the app to focus on the generating engine, but as time went on, I realized most people might not be interested in having their schedules given to them where tasks are not in the order that they were planning to do. If they want to have the generated schedule be exactly the way they want it, they have to spend a lot of time in the settings and yml files, which is not something I or any user wants to do. Therefore, I pivoted towards an app where it records tasks and gives points on performance, and its main usage, I would say, right now is a way for users to see how productive they are. There is still a schedule-generating engine; I even added four more engines that have different scoring methods for different types of people. This was not in my original schedule, but I also added an account system where users can log in and see their information that is stored on that account. The desktop/Android application talks to the web API, and the web API talks to the database both for logging users in and getting their data. Based on my current Render plan, this database cannot support many people, so it was mostly for practice and my own curiosity rather than an actual application to sell. Overall, I feel happy with the final results of the project.
+
+Ramtin Rezaei
+## Introduction
+
 The backend API lives in this repository's `backend/` directory. See
 [backend setup and security](docs/backend-m8.md) for local FastAPI startup,
 rotating access/refresh credentials, administrator inspection, tests and the
@@ -23,7 +32,9 @@ This project is designed around a simple scheduling problem:
 
 > Given a list of fixed tasks and flexible tasks, place the flexible tasks into the available time slots while respecting constraints and maximizing the schedule score.
 
-The optimizer currently uses a **greedy reward-based scheduling algorithm**, frozen as the protected baseline **Greedy Optimizer v1** (Milestone 0). It places fixed tasks first, then repeatedly chooses the best currently valid placement for one flexible task at a time. For each flexible task, the optimizer scans possible start times in 30-minute increments, scores each valid placement, and keeps the highest-scoring option.
+The desktop and CLI use the canonical minute-precise day engine with five scheduling modes: Normal, ADHD friendly, Early Finish, Night Owl and Catch-Up. See [scheduling modes](docs/scheduling-modes.md) for their shared constraints and objectives.
+
+The original **Greedy Optimizer v1** (Milestone 0) remains available as a protected legacy baseline. It places fixed tasks first, then repeatedly chooses the best currently valid placement for one flexible task at a time. For each flexible task, the optimizer scans possible start times in 30-minute increments, scores each valid placement, and keeps the highest-scoring option.
 
 The project also includes a dependency system inspired by PERT-style precedence constraints. If one task depends on another task, the optimizer tries to place the dependent task only after the prerequisite task has finished. In the legacy pipeline, missing dependency names are ignored so that the app remains usable even if the input contains a dependency that is not present in the current task list; the persistence-backed CSV importer used by the desktop app and CLI is stricter and rejects such a file instead (see [Saved data](#saved-data-sqlite-import-export-reset-and-backups-milestone-2)).
 
@@ -50,14 +61,18 @@ Since Milestone 2, the desktop app and the CLI keep all planning data (tasks, fi
 
 ---
 
+## Documentation
+
+See the [documentation index](docs/README.md) for desktop guides, domain contracts, backend operation, Windows distribution and testing, and for historical plans and verification reports.
+
 ## Current Project Structure
 
 ```text
 .
 ├── .github/
 │   └── workflows/
-│       └── ci.yml            # pytest, compileall, ruff; plus a PostgreSQL job for backend/sync
-├── .venv/
+│       ├── ci.yml            # full suite, dependency isolation and PostgreSQL jobs
+│       └── release.yml       # Windows installer verification and releases
 ├── app/
 │   ├── app.py
 │   ├── constraints.py
@@ -74,6 +89,8 @@ Since Milestone 2, the desktop app and the CLI keep all planning data (tasks, fi
 │   ├── sync/                 # offline-first sync client (Milestone 3): transport, engine, SyncService
 │   └── ui/                   # desktop-UI controllers/widgets, incl. the Tk-free PlanningController (Task 6)
 ├── backend/                  # FastAPI + PostgreSQL server (Milestone 3); migrations/ holds Alembic versions
+├── assets/                   # desktop icons and packaged resources
+├── packaging/windows/        # PyInstaller, Inno Setup and installer checks
 ├── benchmarks/                # reproducible performance scripts + recorded results/method docs (not run by CI)
 ├── config/
 │   ├── settings.py
@@ -112,8 +129,9 @@ Since Milestone 2, the desktop app and the CLI keep all planning data (tasks, fi
 ├── .gitignore
 ├── docker-compose.postgres-test.yml  # optional disposable local PostgreSQL for the postgres-marked tests
 ├── README.md
-├── pyproject.toml            # Ruff configuration (py310, line-length 130, E/F) and the `postgres` pytest marker
+├── pyproject.toml            # Ruff configuration and pytest tier markers
 ├── requirements.txt          # development/CI: desktop, tests, and (via -r) the backend
+├── requirements-build.txt    # Windows packaging dependencies
 ├── requirements-desktop.txt  # desktop-only runtime (no web/server packages)
 ├── requirements-database.txt # PostgreSQL packages shared by the backend and the direct desktop mode
 ├── requirements-direct.txt   # optional: desktop + direct PostgreSQL storage (no HTTP/JWT packages)
@@ -128,7 +146,7 @@ Since Milestone 2, the desktop app and the CLI keep all planning data (tasks, fi
 
 ### `app/models.py`
 
-Defines the main data structures used throughout the project. These models represent time windows, tasks, fixed blocks, day schedules, scheduled tasks, unscheduled tasks, and final schedule outputs.
+Defines legacy optimizer data structures. The desktop and CLI use canonical models in `app/planning/models.py`. These models represent time windows, tasks, fixed blocks, day schedules, scheduled tasks, unscheduled tasks, and final schedule outputs.
 
 Important models include:
 
@@ -195,7 +213,7 @@ Math Exam -> Math Review
 
 The PERT module checks for circular dependencies, computes valid dependency order, and validates whether scheduled tasks respect prerequisite timing.
 
-Current behavior:
+Legacy name-based behavior (canonical imports reject missing or ambiguous references):
 
 - Existing dependencies are enforced.
 - Missing dependencies are ignored.
@@ -273,7 +291,7 @@ Every widget callback is a thin call into a Tk-free presenter (`app/ui/schedule_
 
 ### `app/execution/`
 
-The local task-execution domain, used by both the desktop UI and the CLI report tool: `models.py` (execution/session/status models), `db.py` (the application database: per-user location and legacy adoption, ordered transactional migrations — including the v3 planning tables — and the `transaction()`/lock helpers every repository shares), `repository.py` (the only execution module with raw, parameterized SQL), `service.py` (the state machine — start/pause/resume/complete/skip, duplicate prevention, active-duration and start-delay calculations), and `exporters.py` (CSV/JSON export of raw execution history). See [Task Execution Tracking & Productivity Insights](#task-execution-tracking--productivity-insights-local-only) for usage and storage location.
+The local task-execution domain, used by both the desktop UI and the CLI report tool: `models.py` (execution/session/status models), `db.py` (the application database: per-user location and legacy adoption, ordered transactional migrations — including the v3 planning tables — and the `transaction()`/lock helpers every repository shares), `repository.py` (the only execution module with raw, parameterized SQL), `service.py` (the state machine — start/pause/resume/complete/skip, duplicate prevention, active-duration and start-delay calculations), and `exporters.py` (CSV/JSON export of raw execution history). See [Task Execution Tracking & Productivity Insights](#task-execution-tracking--productivity-insights) for usage and storage location.
 
 ---
 
@@ -309,7 +327,7 @@ Stores global project settings, such as:
 - Neighbor generation settings kept for future expansion.
 - The local data directory (`DATA_DIR`: the per-user application-data directory, or `SCHEDULE_MAXING_DATA_DIR`).
 
-Some settings may be older or reserved for future optimizer versions. The current optimizer mainly uses the 30-minute slot structure and reward configuration loaded through `reward.py`.
+Some settings may be older or reserved for future optimizer versions. The legacy optimizer uses 30-minute slots; the canonical engine uses minute-precise candidates and persisted user/date preferences.
 
 ---
 
@@ -412,7 +430,7 @@ Allowed categories: study, work, exercise, errand, food, entertainment, other
 
 ## How the Optimizer Works
 
-The current optimizer is a greedy reward-based scheduler.
+This section describes legacy Greedy Optimizer v1. The desktop and CLI use the canonical day engine and [five scheduling modes](docs/scheduling-modes.md).
 
 First, all fixed tasks are placed into the schedule. These tasks act as blocked time ranges. Then the optimizer looks at all flexible tasks that still need to be scheduled.
 
@@ -436,7 +454,7 @@ Math Review depends on Study Math
 
 This means `Study Math` must finish before `Math Review` can start.
 
-The dependency system follows these rules:
+The legacy name-based dependency system follows these rules; the desktop/CLI importer rejects missing or ambiguous references:
 
 - If a dependency exists in the task list, it is enforced.
 - If a dependency name is missing, it is ignored.
@@ -487,7 +505,7 @@ To run only the desktop app and CLI (no web server, database server, or browser 
 pip install -r requirements-desktop.txt
 ```
 
-The desktop runtime needs `pydantic`, `PyYAML`, `customtkinter`, `pandas`, `scikit-learn`, and `tzdata` (time zones on Windows). See [docs/desktop-web-boundaries.md](docs/desktop-web-boundaries.md) for how the desktop and the optional web components are kept apart.
+The desktop runtime needs `pydantic`, `PyYAML`, `customtkinter`, `pandas`, `scikit-learn`, `joblib`, `keyring` (saved sign-in), and `tzdata` (time zones on Windows). See [docs/desktop-web-boundaries.md](docs/desktop-web-boundaries.md) for how the desktop and the optional web components are kept apart.
 
 ---
 
@@ -543,7 +561,7 @@ python -m app.app
 data folder, error dialogs instead of console output, local storage only, a background update check). Building the
 installer, releasing and updating are described in [docs/windows-distribution.md](docs/windows-distribution.md).
 
-This opens the schedule optimizer, loads everything saved in the application database, and shows the Day page for today. Every change is saved immediately. **Make Schedule** saves the generated schedule. The **Execute** tab lists the saved schedule's flexible tasks for Start/Pause/Resume/Complete/Skip. The **Productivity** page shows the analytics (see [Task Execution Tracking & Productivity Insights](#task-execution-tracking--productivity-insights-local-only) below).
+This opens the schedule optimizer, loads everything saved in the application database, and shows the Day page for today. Every change is saved immediately. **Make Schedule** saves the generated schedule. The Day board records outcomes in **Uncompleted | Tasks | Completed** columns. The **Productivity** page shows the analytics (see [Task Execution Tracking & Productivity Insights](#task-execution-tracking--productivity-insights) below).
 
 The left sidebar starts collapsed; open it with the ☰ button (keyboard: Tab, then Enter) or **Ctrl+B**, and jump between pages with **Ctrl+1…9**. The layout adapts to the window width (three columns, schedule plus a side panel, or one panel at a time), and **Settings** switches between light and dark and changes the interface size; both are remembered in `ui_settings.json` beside the database. Details: [docs/desktop-layout.md](docs/desktop-layout.md).
 
@@ -551,7 +569,7 @@ The **Account** page connects to an optional backend: register, sign in and out,
 
 Tasks and fixed blocks are entered with one reusable form on Day, Week and Month. It has no date field -- a new task gets the page's selected real date (Day: today unless opened for another date; Week/Month: the selected day) -- and every clock time is entered as **[hour] : [minute] [AM/PM]**, exact to the minute. It takes free durations such as `13 min` or `1 h 13 min`, tags added with Enter, and optional preferred windows, deadlines, projects and dependencies. Field meanings and time limitations: [docs/desktop-task-form.md](docs/desktop-task-form.md).
 
-The **Day Schedule** opens on today's date (from the computer's clock and time zone). A **Day Window** bar above the Day, Week and Month schedules sets the selected date's start and end of the usable day: the Settings default, or an override for that date only. The Day page shows a horizontal timeline with every fixed block (in its category's color) and scheduled task at its exact minutes, the free time inside the scheduling window, and the tasks not yet scheduled. The **Engine** choice beside **Make Schedule** picks **Normal** (tasks may start at any minute) or **ADHD friendly** (tasks over 30 minutes start on the quarter hour) for that date only. Make Schedule keeps saved work that still fits, and an unchanged day is not regenerated. **Day Preferences**, **Import/Export CSV** (canonical format v2, previewed first) and a previewed **Reset Day** complete the page. Details: [docs/desktop-day.md](docs/desktop-day.md).
+The **Day Schedule** opens on today's date (from the computer's clock and time zone). A **Day Window** bar above the Day, Week and Month schedules sets the selected date's start and end of the usable day: the Settings default, or an override for that date only. The Day page shows a horizontal timeline with every fixed block (in its category's color) and scheduled task at its exact minutes, the free time inside the scheduling window, and the tasks not yet scheduled. The **Engine** choice beside **Make Schedule** selects one of the [five scheduling modes](docs/scheduling-modes.md) for that date only. Make Schedule keeps saved work that still fits, and an unchanged day is not regenerated. **Day Preferences**, **Import/Export CSV** (canonical format v2, previewed first) and a previewed **Reset Day** complete the page. Details: [docs/desktop-day.md](docs/desktop-day.md).
 
 **Week** and **Month** are real calendar views (Monday-first weeks; true 28/29/30/31-day months with a month choice for the current year). They show fixed blocks and scheduled work at their actual times and unscheduled tasks in entry order, and they mute past days without hiding them. Select a day and **Open Day** to schedule it; **Back** returns to the same week or month. Details: [docs/desktop-calendar.md](docs/desktop-calendar.md).
 
@@ -653,9 +671,9 @@ Display result in UI or export to CSV
 
 ---
 
-## Task Execution Tracking & Productivity Insights (Local Only)
+## Task Execution Tracking & Productivity Insights
 
-Beyond planning a schedule, the app can optionally track what actually happened when you work a task, and turn that history into productivity insights. This is entirely local: no server, no cloud storage, no telemetry, no accounts.
+Beyond planning a schedule, the app can optionally track what actually happened when you work a task, and turn that history into productivity insights. It works locally without an account. Signed-in synchronization sends owned execution records to the configured backend; analytics use the active workspace.
 
 ### Where your data is stored
 
@@ -684,33 +702,19 @@ If you run `python -m app.productivity.predictor_comparison_cli --save-model` an
 
 ### Recording execution (desktop UI)
 
-After running **Make Schedule** on the Day/Week/Month page, open the **Execute** tab (next to Added Tasks/Unscheduled) to:
+The Day page uses an **Uncompleted | Tasks | Completed** board for saved placements. Move a card to record completion or noncompletion, or return it to Tasks to reopen it. Week and Month expose the selected day's outcomes too. The former Execute tab is no longer the desktop workflow. The execution service retains Start/Pause/Resume/Complete/Skip lifecycle operations and session history for its API consumers.
 
-1. Pick a saved, scheduled flexible task from the dropdown (fixed blocks like sleep/meals are not tracked as executions). Its status and sessions are restored from the database; merely selecting it creates nothing.
-2. Use whichever actions are enabled for its current state:
-   - **Start** (scheduled → in progress)
-   - **Pause** (in progress → paused)
-   - **Resume** (paused → in progress)
-   - **Complete** (in progress or paused → completed)
-   - **Skip** (scheduled, in progress, or paused → skipped)
-3. Watch the live **active time** counter — it only counts time while the task is in progress; time spent paused is excluded.
-4. On Complete or Skip, optionally record a focus rating (1–5), energy rating (1–5), interruption count, and a short note. Every field is optional.
-
-Executions are identified by task and placement id, never by name. The first Start or Skip on a placement creates its execution; re-selecting that placement later, including after reopening the app, shows the same execution with its sessions and feedback, never a duplicate. Re-running **Make Schedule** keeps a placement's id when it is unchanged. If it moves, the new placement gets its own execution, and the old execution keeps its history and planned snapshot.
+Project tasks may also be completed directly from Project Schedule without a time slot. These task-only completions count once in history and analytics. See [Day controls](docs/desktop-day.md#uncompleted--tasks--completed), [project tasks](docs/desktop-projects-allocation.md), and [execution contracts](docs/execution-rescheduling.md).
 
 ### The Productivity page
 
-A **Productivity** item appears in the sidebar once the local database is available. It shows, for the selected filters:
+The page has three sections:
 
-- Completed and skipped task counts, completion rate, productive active time, median start delay, and duration-estimate error (mean absolute error between planned and actual duration).
-- **Planned vs. actual duration by category** and **completion rate by time bucket**, as simple bar charts drawn directly with Tkinter (no external plotting library).
-- The **best-supported time bucket per category** — the time of day with the most completed, duration-bearing history for that category.
-- A **recent trend** comparing the last 7 days against your current filter selection.
-- **Insights** — short, data-derived sentences such as "Study tasks completed in the morning have a completion rate of 82% across 17 observations," never hardcoded text and never from an AI model.
+- **General:** awards and headline facts from the recorded history.
+- **Specific:** Task-based and Time-based views, each with independent filters, statistics and charts.
+- **Project:** total points, points by day and average points per calendar day for the selected project and period.
 
-Filters: a time window (all time / last 7 / 30 / 90 days), category, tag, day of week, and time bucket (Night/Morning/Afternoon/Evening — see `app/productivity/buckets.py` for the exact boundaries).
-
-**Every statistic on this page is paired with its evidence** — an observation count and an evidence label (`insufficient` / `low` / `moderate` / `high`). A segment with too little history is shown honestly (e.g. "Not enough history to recommend a time for errand") rather than presented as a confident conclusion.
+Figures are recomputed from saved records; reopening a completion removes its contribution. Missing history is identified explicitly. The [analytics guide](docs/analytics.md#5-the-tracker-awards-averages-task-types-and-time-views) defines the metrics, date bases and historical limitations. Older duration and evidence reports remain available through the productivity services and report CLI.
 
 ### Duration suggestions when adding a task
 
@@ -745,20 +749,19 @@ On a fresh install (no completed execution history yet), this correctly reports 
 
 ### Exporting and resetting your data
 
-On the Productivity page's **Data** section:
+Planning CSV import/export is available on the schedule pages. The productivity report CLI exports aggregate reports; raw execution export helpers remain in `app/execution/exporters.py` and the productivity controller. The current Productivity page has no separate Data/export/history-reset section.
 
-- **Export history (CSV)** / **Export history (JSON)** save your complete raw execution history (including your own notes) to a file you choose.
-- **Reset local history...** permanently deletes all locally stored execution data. This is destructive, requires an explicit confirmation dialog, and is kept in its own section, separate from normal navigation. It does not delete planning data. Conversely, a schedule page's **Reset...** never deletes execution history (see [Saved data](#saved-data-sqlite-import-export-reset-and-backups-milestone-2)).
+**Settings → Reset all task data** removes the active workspace's planning data and execution history after confirmation. Signed-in workspaces require a successful server reset before the local copy is removed; offline failure leaves it intact. See [reset scope and retained settings](docs/desktop-settings.md#reset-all-task-data). A schedule page's scoped reset is a different operation and preserves execution history.
 
 ### Privacy
 
-- All execution and productivity data stays on your device, in the single SQLite file described above.
-- Nothing here is sent to a server, cloud service, or third party.
+- In default local mode, execution data is saved in SQLite and remains available offline.
+- Signed-in synchronization sends owned execution and planning records to the backend. Account creation adopts guest records; existing-account sign-in offers explicit association. Direct PostgreSQL mode stores data on the server. See [accounts](docs/desktop-accounts.md).
 - Application error messages and logs never include your notes or other personal feedback content — only the export you explicitly request does.
 
 ### Screenshots
 
-This README does not embed screenshots of the desktop UI. To add your own: run `python -m app.app`, open the Day page's status board and the Productivity page, and use your OS's screenshot tool (Windows: `Win+Shift+S`; macOS: `Cmd+Shift+4`), then reference the saved image(s) here with standard Markdown image syntax, e.g. `![Productivity page](docs/screenshots/productivity.png)`.
+This README does not embed screenshots of the desktop UI. To add your own: run `python -m app.app`, open the Day page's status board and the Productivity page, and use your OS's screenshot tool (Windows: `Win+Shift+S`; macOS: `Cmd+Shift+4`), then reference the saved image(s) here with standard Markdown image syntax, using a path to an image you have actually saved.
 
 ---
 
@@ -788,12 +791,14 @@ Alongside the original (Milestone 0) name/day-index-based scheduling described a
 
 ### The canonical day engine: precise_greedy and adhd_friendly
 
-`app/optimizer.py`'s `generate_day_schedule(day_schedule, preferences, ...)` is the canonical counterpart to Greedy Optimizer v1, evolved in the same module rather than as a separate stack. Two candidate modes, selected via `DayPreferences.optimizer_mode` (default: `precise_greedy`):
+`app/optimizer.py`'s `generate_day_schedule(day_schedule, preferences, ...)` is the canonical counterpart to Greedy Optimizer v1, evolved in the same module rather than as a separate stack. Five scheduling modes are selected via `DayPreferences.optimizer_mode` (default: `precise_greedy`). The two baseline candidate policies are:
 
 - **`precise_greedy`** — one-minute candidate resolution, no global snapping; a task starts the instant it becomes feasible (e.g. immediately at 10:13).
 - **`adhd_friendly`** — a task longer than 30 minutes starts only on a local wall-clock quarter-hour boundary; a task at or under 30 minutes may start on any valid minute, exactly like `precise_greedy`. Durations are never rounded or split in either mode.
 
 Both modes share the same hard constraints and base scoring, plus a **bounded, ADHD-only short-gap-filling bonus** (`app/reward.py`'s `_short_gap_bonus_score`, gated by `calculate_task_score(..., adhd_mode=True)`): a short task that starts flush against a neighbor/day-boundary where the pre-placement gap was already small enough to be fragmentation-penalized earns a bonus proportional to how close to fully flush it lands, capped per placement (`short_gap_bonus_cap`) and disabled entirely with `short_gap_bonus_weight=0`. It never fires in `precise_greedy` mode.
+
+Early Finish and Night Owl add bounded repacking of the baseline work set; Catch-Up adds evidence-gated history bonuses. All five retain the same hard rules. See [mode objectives](docs/scheduling-modes.md).
 
 **Mandatory scheduling**: fixed blocks are placed first, then every `required` task plus the full transitive closure of its dependencies (an optional prerequisite of a required task is scheduled as essential for that run without mutating its own stored `required` flag), then optional tasks. A successful `DayScheduleOutput` always contains every required task exactly once; otherwise `generate_day_schedule` raises `MandatoryTaskSchedulingError` with one structured `MandatoryTaskFailure` per affected task (a reason code, an explanation, and `proven_infeasible` — `True` only when a coarse capacity/individual-fit bound *proves* no placement could succeed, `False` when this particular greedy run simply failed to find one). This is a greedy engine, not an exact solver, and never overstates a greedy failure as mathematical infeasibility.
 
@@ -837,7 +842,7 @@ An ID-less legacy CSV gets new ids on every import (see below).
 
 ### Planning persistence (Milestone 2)
 
-Schema version 3 (`app/execution/db.py`, same file and migration chain as execution history) stores the canonical planning entities relationally: `projects`, `tasks` with queryable columns (required date, preferred window, deadline plus a normalized UTC twin, recurrence fields, ownership, `created_at`/`updated_at`/`version`) and child tables for tags, preferred dates, dependencies, and recurrence weekdays; `fixed_blocks`; and `scheduled_tasks` placements (only the arbitrary `optimization_metadata` is a small JSON column). Instants keep their original UTC offset for an exact round trip. `app/planning/repository.py` is the only planning module with SQL; `app/planning/application.py`'s `PlanningService` owns the rules (task CRUD, fixed blocks, range loading, scoped placement saving), and `PlanningController` now delegates every authoritative read/write to it — returned models are fresh snapshots, while allocation results and per-day generated/stale state stay in-memory render state. Generating a day saves that date's placements, reusing stored placement ids for unchanged placements so linked execution history survives regeneration and restarts.
+Introduced in schema version 3 and extended by later migrations (`app/execution/db.py`, the same migration chain as execution history), the store keeps the canonical planning entities relationally: `projects`, `tasks` with queryable columns (required date, preferred window, deadline plus a normalized UTC twin, recurrence fields, ownership, `created_at`/`updated_at`/`version`) and child tables for tags, preferred dates, dependencies, and recurrence weekdays; `fixed_blocks`; and `scheduled_tasks` placements (only the arbitrary `optimization_metadata` is a small JSON column). Instants keep their original UTC offset for an exact round trip. Planning repositories own SQL access; `app/planning/application.py`'s `PlanningService` owns the rules (task CRUD, fixed blocks, range loading, scoped placement saving), and `PlanningController` now delegates every authoritative read/write to it — returned models are fresh snapshots, while allocation previews remain transient and saved schedule records persist freshness inputs across restarts. Generating a day saves that date's placements, reusing stored placement ids for unchanged placements so linked execution history survives regeneration and restarts.
 
 - **Migrations** are ordered, contiguous, and each runs in one transaction with its `user_version` bump; a failure rolls that migration back completely and leaves the previous version usable. `PRAGMA foreign_key_check` must pass before each migration commits and `PRAGMA quick_check` after all of them; a database newer than the code is refused. Foreign keys stay enabled on every normal connection.
 - **Transactions**: connections run in autocommit mode and `transaction()` owns every transaction. The outermost call begins/commits; nested calls (a repository method inside a service operation) are savepoints that can never commit early. Each `ExecutionService` mutation (e.g. start = status change + new session + first-start time) is one transaction. A per-connection re-entrant lock, shared by every repository on that connection, is held for a whole transaction, so background-thread work cannot interleave with it.
@@ -889,13 +894,13 @@ The backend also serves the web UI's scheduling API -- range snapshots with per-
 
 ### Offline-first synchronization (Milestone 3)
 
-The desktop is local-first: it works in guest mode without an account, creating an account inside the app adopts that work, and signed-in changes upload automatically (setup and behavior: [docs/desktop-accounts.md](docs/desktop-accounts.md)). `app/sync/` synchronizes the local SQLite store with the backend. Configure its address on Account or through `SCHEDULE_MAXING_BACKEND_URL`, then sign in to enable sync. Account provides explicit local-data association, Sync now, status and conflict resolution. Access tokens stay in memory and expire after 60 minutes by default (`ACCESS_TOKEN_TTL_MINUTES` on the server); sign in again when required. Local work remains available offline. How it works:
+The desktop is local-first: it works in guest mode without an account, creating an account inside the app adopts that work, and signed-in changes upload automatically (setup and behavior: [docs/desktop-accounts.md](docs/desktop-accounts.md)). `app/sync/` synchronizes the local SQLite store with the backend. The built-in backend address is used by default; developers can override it through `SCHEDULE_MAXING_BACKEND_URL` (`off` disables it). Sign in to enable sync. Account provides explicit local-data association, Sync now, status and conflict resolution. Access tokens stay in memory and expire after 60 minutes by default (`ACCESS_TOKEN_TTL_MINUTES`); rotating refresh credentials renew them. **Keep me signed in** stores the refresh credential in the OS credential store for restoration after restart. Local work remains available offline. How it works:
 
 - **Change capture.** Every local change is recorded in the same SQLite transaction by database triggers.
 - **Push.** Changes are pushed as idempotent operations (stable op ids, so a lost response is safely retried). Each is based on the last server version this device acknowledged.
 - **Pull.** Changes are pulled by the server's commit-ordered cursor, one atomic page at a time, with no echo back to the server.
 - **Conflicts.** Conflicts are stored durably and resolved explicitly: accept the remote version or keep the local one. A deleted record is never silently brought back.
-- **Your existing local records** are uploaded only after the explicit association step.
+- **Guest records** are adopted during account creation; existing-account sign-in requires explicit association before uploading them.
 
 Protocol details: [docs/sync-protocol.md](docs/sync-protocol.md).
 
@@ -930,7 +935,7 @@ A repeating task is a recurring series (daily, weekly or monthly, every N, endin
 - **Dependencies.** They are resolved across the whole file: the same day's names first, then the rest of the file if the name is unique. A missing or ambiguous (duplicate-name) reference, a self-reference, a cycle, or overlapping fixed blocks is an error, never guessed or silently dropped. The standalone `app/planning/compat.py` adapter keeps its legacy drop-and-report behavior for its own callers.
 - **Identity.** Legacy rows have no ids, so every import creates new entities; appending the same file twice stores it twice. A stored-planning CSV exported by this app does keep ids. It is recognized by its header and merged by id:
   - a row identical to the saved record is skipped;
-  - a row that differs from the saved record is refused, never overwritten;
+  - a differing row is refused by default; the canonical import preview or CLI `--allow-updates` can apply updates if the imported version matches the saved version;
   - a deleted record is never brought back.
 
   Replace does not apply to such a file.
@@ -938,9 +943,9 @@ A repeating task is a recurring series (daily, weekly or monthly, every N, endin
 - **Replace** first deletes the placements, fixed blocks, and tasks planned on every date from the file's first to its last day, then adds the file. Undated tasks and anything outside that span are kept. Execution history is kept too, including history linked to replaced placements. If a task outside the span depends on one inside it, the whole import is refused.
 - **All or nothing.** Any failure, including during a replace's deletions, rolls back everything.
 
-**Reset** (desktop **Reset...**) has two explicit scopes for the page's dates: *only the saved schedule*, or *schedule, fixed blocks, and tasks planned on these dates*. Both require confirmation, and neither deletes execution history; that has its own reset on the Productivity page. Deleting a task that another task depends on is refused with the dependent's name.
+**Reset** (desktop **Reset...**) has two explicit scopes for the page's dates: *only the saved schedule*, or *schedule, fixed blocks, and tasks planned on these dates*. Both require confirmation, and neither deletes execution history; Settings has a separate **Reset all task data** action that includes history. Deleting a task that another task depends on is refused with the dependent's name.
 
-**Export** reads SQLite and never writes to it. See [Output Format](#output-format) for what each export contains and which ones are lossy. Execution-history exports (Productivity page) are unchanged.
+**Export** reads SQLite and never writes to it. See [Output Format](#output-format) for what each export contains and which ones are lossy. Raw execution exports are available through the execution export helpers; the current Productivity page does not expose export controls.
 
 **Backups and shutdown.** Closing the window waits for background work, such as a running Make Schedule, then closes the database cleanly. To back up, close the app (and any CLI run), then copy `executions.db`. The WAL/journal side files (`-wal`, `-shm`, `-journal`) exist only while the database is in use.
 
@@ -956,9 +961,9 @@ A repeating task is a recurring series (daily, weekly or monthly, every N, endin
 ## Current Limitations
 
 - The optimizer is greedy and does not guarantee the global best schedule.
-- Once a task is placed, the optimizer does not move it again.
+- The legacy engine locks placements during a run. Canonical Early Finish and Night Owl can repack newly scheduled work; manual and history-protected placements remain fixed.
 - Some settings related to simulated annealing are present but not fully used by the current optimizer.
-- Error messages for unscheduled tasks are currently general (`"not enough valid space or unresolved dependency cycle"`) and could become more specific in the future. Actual dependency cycles are instead reported precisely and immediately, as a `ValueError`, before scheduling even starts.
+- Legacy optimizer error messages for unscheduled tasks are general (`"not enough valid space or unresolved dependency cycle"`) and could become more specific in the future. Actual dependency cycles are instead reported precisely and immediately, as a `ValueError`, before scheduling even starts.
 - **(Fixed)** Reward-config file discovery previously did not match the checked-in filename — the checked-in file was `config/task_preferences.yaml` (plural) but default discovery only looked for singular/misspelled variants, so it silently never found it. The checked-in template is now `config/task_preference.yaml` (singular), matching default discovery exactly; see `app/reward.py`'s module docstring for the full precedence (explicit `config_path` > canonical `config/task_preference.yaml` > a recognized legacy filename in `config/` > built-in defaults). `tests/test_reward.py` covers this precedence directly.
 - **The legacy CSV loader keeps its hyphen bug.** `app/data_processor.py` (the legacy Greedy Optimizer v1 input path) still splits a flexible task's `dependencies` field only on `"-"`, so a hyphenated dependency name such as `Pre-Calc Review` is mis-split. `tests/test_data_processor.py` characterizes this as current behavior. The desktop app and CLI no longer use that loader: their importer applies `app/planning/compat.py`'s rules (a whole-name match first, so hyphenated names are preserved).
 - `weight_category_bonus` is loaded from YAML (`weights.category_bonus`) into `RewardSettings` but is not read anywhere in `calculate_task_score` — only the separate `category_weights` per-category multiplier dict actually affects scoring. `tests/test_reward.py` characterizes this as current behavior.
@@ -966,10 +971,10 @@ A repeating task is a recurring series (daily, weekly or monthly, every N, endin
 - Legacy executions (created before Milestone 2, or through `ExecutionService.create_execution`) are still identified by their planned snapshot, and their weekday statistics use when the record was created. Desktop executions are now canonical: identified by task/placement id, with real planned dates.
 - The planning timezone defaults to the computer's own zone. On Windows it is mapped from the registry's zone name with CLDR's table; an unknown name falls back to a whole-hour `Etc/GMT` zone from the current offset (no daylight-saving rules), else `UTC`. Set `SCHEDULE_MAXING_TIMEZONE` to choose one explicitly.
 - A schedule counts as out of date when anything in its date range changes, even a change that would not move any of its placements.
-- The desktop Account page provides sign-in, explicit local-data association, sync status and conflict resolution. Each workspace shows only its owner's records. The access token stays in memory, so sign in again after restarting to resume sync; the active workspace remains available offline. See [desktop accounts](docs/desktop-accounts.md).
+- The desktop Account page provides sign-in, explicit local-data association, sync status and conflict resolution. Each workspace shows only its owner's records. Access tokens stay in memory; optional saved sign-in restores the session after restart through the OS credential store. The active workspace remains available offline. See [desktop accounts](docs/desktop-accounts.md).
 - `keep_local` cannot be used against a record deleted on the server; only `accept_remote` is offered. Recreating such a record under a new id is not automated. Local execution history that the server cannot express as lifecycle actions (sessions that differ from the server's) is reported as a `diverged_history` rejection and must be resolved with `accept_remote`.
-- The backend has no account deletion, password reset, email verification, token refresh, or rate limiting. Tombstones and the change log are never compacted.
-- A local "Reset local history" is synchronized as deletion of the signed-in account's synchronized executions.
+- The backend supports SMTP-based password recovery, rotating native refresh credentials, session revocation and database-backed rate limits. Account deletion and email verification are not provided. Tombstones and the change log are not compacted.
+- History deletion through the service layer synchronizes as deletion of the account's executions; Settings offers the broader Reset all task data operation.
 - Legacy schedule CSVs carry no ids, so they are always imported as new records. Only the stored-planning CSV keeps ids.
 - The ML duration predictor is evidence-gated and, on a typical personal-scale history, is expected to stay disabled (the stock test fixture's 19 completed tasks are well below its default 40/25/10 sample thresholds) — this is by design, not a defect. It is not wired into the desktop UI; use `python -m app.productivity.predictor_comparison_cli` to evaluate and, if it qualifies, persist it.
 - The event-based candidate search's rounding-aware tie-breaking (see "Exact event-based candidate search" above) relies on the real, rounded `calculate_task_score` staying monotonic across an analytically-derived region; this holds exactly for real-number arithmetic and is validated empirically (fuzz-tested and differentially tested against an independent exhaustive reference across tens of thousands of scenarios, with zero mismatches found) rather than machine-checked for every possible floating-point evaluation order at astronomically extreme weight magnitudes.
@@ -981,7 +986,7 @@ The desktop UI now uses the shared services directly, with the optional web API 
 - **Calendars:** a Monday-first Week and a true Month calendar open selected dates on Day and preserve navigation context.
 - **Task form:** minute-precise times/durations, multiple tags, project/dependency choices and fixed-block validation before saving.
 - **Day:** category-colored timeline, backlog, free gaps, current/stale status, explicit incremental generation and confirmed regeneration/reset.
-- **Engines:** Normal and ADHD friendly are beside Make Schedule. Day Preferences override persisted defaults without changing other dates.
+- **Engines:** all five scheduling modes are beside Make Schedule. Day Preferences override persisted defaults without changing other dates.
 - **Projects:** project CRUD and assignments, display filters.
 - **Sync:** native account/association/status/conflict screens; offline work remains available.
 - **Settings:** native controls edit persisted scheduling defaults and the default engine, with date overrides in Day Preferences. The legacy runtime reward screen is no longer exposed. See [desktop Settings](docs/desktop-settings.md).
@@ -993,7 +998,7 @@ backend. [Completion and verification](docs/milestone-4-completion.md) records t
 
 ## Verification
 
-Using the project's `.venv`. During development, the fast suite (about 1,600 tests, about two minutes; real
+Using the project's `.venv`. During development, the fast suite (counts and timing vary as coverage grows; real
 windows, sync/web/direct-mode suites and other slow tests are left out):
 
 ```bash
@@ -1018,9 +1023,21 @@ Also run the CLI end to end after any change to the CSV loading, optimizer, or e
 python -m app.main --demo
 ```
 
-`tests/ui/test_desktop_app.py` drives the real desktop widgets and runs only where a display is available (it is skipped in headless CI); everything else is headless.
+`tests/ui/test_desktop_app.py` drives the real desktop widgets and runs only where a display is available (it is skipped in headless CI); other real-window tests also use the `ui` marker; `-m dev` selects the development suite.
 
-CI (`.github/workflows/ci.yml`) runs the same three checks (via `python -m pytest`, `python -m compileall .`, and `python -m ruff check .`) on every push and pull request. A second job runs the backend and sync suites against a throwaway PostgreSQL service container. The ordinary `pytest` never needs PostgreSQL, Docker, or a network backend: PostgreSQL tests are marked `postgres` and skip unless `TEST_DATABASE_URL` names a disposable database (see [docs/backend.md](docs/backend.md#tests)).
+CI (`.github/workflows/ci.yml`) runs the same three checks (via `python -m pytest`, `python -m compileall .`, and `python -m ruff check .`) on every push and pull request. Additional jobs verify desktop-only dependency isolation, direct-desktop PostgreSQL operation, and backend/sync/direct suites against throwaway PostgreSQL service containers. The ordinary `pytest` never needs PostgreSQL, Docker, or a network backend: PostgreSQL tests are marked `postgres` and skip unless `TEST_DATABASE_URL` names a disposable database (see [docs/backend.md](docs/backend.md#tests)).
+
+### CI/CD
+
+Three GitHub Actions workflows take a change from a commit to its users; [docs/ci-cd.md](docs/ci-cd.md) explains the whole pipeline, its setup and its safeguards.
+
+| Workflow | Starts on | Result |
+| --- | --- | --- |
+| **CI** (`ci.yml`) | every push and pull request | full test suite, compile check and Ruff, plus desktop-only, direct-desktop and PostgreSQL jobs |
+| **Release** (`release.yml`) | a pushed tag `vX.Y.Z` matching `app/version.py` | verify, test, build and test the Windows installer, then publish a GitHub Release that installed copies update to |
+| **Deploy backend** (`deploy-backend.yml`) | CI passing for a push to `main`, or a manual run (also used for rollback) | deploys that exact commit to the Render web service, waits until it is live, then checks `/health` and `/ready` |
+
+Backend deployment is off until an operator sets the repository variable `BACKEND_DEPLOY_ENABLED=true` and fills in the `production` environment (Render API key, service id, public address); no secret is stored in the repository.
 
 ### Benchmarks
 
@@ -1043,7 +1060,6 @@ Possible next steps:
 - Add more detailed unscheduled-task reasons.
 - Add a true simulated annealing optimizer as an alternative to the greedy optimizer.
 - Add schedule comparison metrics.
-- Add export options for weekly and monthly schedules.
 - Add better warnings for ignored missing dependencies.
 - Add drag-and-drop task editing in the UI.
 - Feed productivity-derived duration predictions back into the optimizer as an opt-in input (currently the suggestion is shown but never applied automatically).
@@ -1057,20 +1073,20 @@ Possible next steps:
 
 The project has these parts:
 
-- **Scheduling:** the original Milestone 0 greedy engine (the frozen baseline), and a canonical, UUID-identity-based day engine with `precise_greedy`/`adhd_friendly` modes and week/month task-to-date allocation.
+- **Scheduling:** the original Milestone 0 greedy engine (the frozen baseline), and a canonical, UUID-identity-based day engine with five scheduling modes and week/month task-to-date allocation.
 - **Persistence (Milestone 2):** a local SQLite store for all planning data and execution history, behind a transactional service boundary.
-- **Desktop app (Milestone 4):** reads and writes that store directly, with Day/Week/Month calendars, project management, both engines, default/date preferences, account/sync/conflict controls, CSV import/export, scoped resets, and restart-safe execution tracking.
+- **Desktop app (Milestone 4):** reads and writes that store directly, with Day/Week/Month calendars, project management and milestones, five scheduling modes, default/date preferences, account/sync/conflict controls, CSV import/export, scoped resets, and restart-safe execution tracking.
 - **CLI:** the same persistence-backed pipeline.
 - **Sync-ready local records (Milestone 3):**
   - every local record has an owner, a version, and a deletion marker;
   - a stale edit is refused rather than overwriting newer data;
   - preferences and schedule freshness survive a restart;
   - the stored-planning CSV imports back with the same ids.
-- **Server backend (Milestone 3):** FastAPI + PostgreSQL, with accounts (Argon2, JWT), per-user versioned records, soft deletion, and a commit-ordered change feed. See [docs/backend.md](docs/backend.md). It is not deployed; [docs/render-deployment.md](docs/render-deployment.md) is the manual Render handoff.
-- **Offline-first sync (Milestone 3):** retries are safe, conflicts are stored and resolved explicitly, and your existing local data is uploaded only after the explicit association step. See [docs/sync-protocol.md](docs/sync-protocol.md).
+- **Server backend (Milestone 3):** FastAPI + PostgreSQL, with accounts (Argon2, JWT), per-user versioned records, soft deletion, and a commit-ordered change feed. See [docs/backend.md](docs/backend.md). [docs/render-deployment.md](docs/render-deployment.md) describes manual deployment; service availability is not guaranteed by this checkout.
+- **Offline-first sync (Milestone 3):** retries are safe, conflicts are stored and resolved explicitly, and guest data is adopted during account creation, while existing-account sign-in offers explicit association. See [docs/sync-protocol.md](docs/sync-protocol.md).
 - **Also:** reward-based optimization, PERT-style dependency handling (name- and id-based), personal productivity analytics, and an evidence-gated experimental ML duration predictor.
 
-Automated coverage includes native desktop workflows (`python -m pytest`, which needs no external server, Docker, or PostgreSQL; native widget tests require a display). Real PostgreSQL verification is optional and explicit: see [docs/backend.md](docs/backend.md#tests). Remaining roadmap items include project archiving. See [Milestone 4 verification](docs/milestone-4-completion.md) for recorded checks and limitations.
+Automated coverage includes native desktop workflows (`python -m pytest`, which needs no external server, Docker, or PostgreSQL; native widget tests require a display). Real PostgreSQL verification is optional and explicit: see [docs/backend.md](docs/backend.md#tests). Remaining roadmap items include project archiving. See [testing](docs/testing.md) for verification commands and [Windows distribution](docs/windows-distribution.md) for installer, release and updater checks. Milestone reports record historical checks.
 
 ## License
 

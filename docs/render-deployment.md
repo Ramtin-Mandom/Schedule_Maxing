@@ -11,10 +11,13 @@ Migration 0015 adds rotating native sessions without changing existing data.
 > directly to a Render Postgres database instead (no web service or JWT secret), see
 > [render-direct-desktop.md](render-direct-desktop.md).
 
+> Once the service exists, later deployments can be automated from GitHub Actions
+> (`.github/workflows/deploy-backend.yml`); see [ci-cd.md](ci-cd.md#3-backend-deployment-deploy-backendyml).
+
 This guide prepares a **manual** deployment of the server backend
-(`backend/`, see [backend.md](backend.md)) to Render. Nothing in this
-repository has been deployed, and no Render account, service, or database
-was created or contacted while writing it.
+(`backend/`, see [backend.md](backend.md)) to Render. The original guide was written without creating or contacting a Render
+account, service or database. It does not establish the current deployment
+status; verify the configured service separately.
 
 The details below were checked against Render's public documentation in
 September 2026:
