@@ -125,10 +125,10 @@ PostgreSQL is the only copy, so there is nothing to associate or synchronize.
   only once.
 - Passwords are never stored. The field is cleared after every attempt, and
   the session token lives only in the app's memory.
-- Bearer tokens expire after 60 minutes by default (server setting
-  `ACCESS_TOKEN_TTL_MINUTES`). When the session ends -- or after a restart --
-  the app says so and asks you to sign in again; meanwhile you keep working in
-  the account's records, and everything you change is kept and sent afterwards.
+- Access tokens expire after 60 minutes by default (`ACCESS_TOKEN_TTL_MINUTES`)
+  and are renewed from the rotating refresh credential. **Keep me signed in**
+  restores the session after restart. If renewal is no longer possible, sign
+  in again; offline work remains saved in the account workspace.
 
 **Sign out**
 

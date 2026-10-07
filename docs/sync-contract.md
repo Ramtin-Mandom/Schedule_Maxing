@@ -328,9 +328,8 @@ association and conflict resolution to the web UI (`app/web`,
 
 Still not implemented:
 
-- a sync or conflict-resolution screen in the desktop app;
 - scheduling across a DST change (a date whose day window spans one is
   still refused by the day engine; fixed blocks on it are checked by their
   endpoints only);
-- preference or provenance records in the CSV. Preferences are a per-user
-  configuration, and provenance can be recomputed.
+- preference layers in the planning CSV. Placement provenance columns are
+  supported as described above; preferences remain separate configuration.

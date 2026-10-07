@@ -1,0 +1,192 @@
+name: Deploy backend
+
+# Deploys the server backend (backend/) to its Render web service (docs/ci-cd.md, "Backend deployment"):
+#
+#   resolve -> deploy (start the Render deploy of one exact commit, wait until it is live,
+#   then check /health and /ready on the public address).
+#
+# Starts by itself when CI has passed for a push to main, or by hand (Actions > Deploy backend >
+# Run workflow) for a chosen commit of main: an earlier commit is a code rollback.
+#
+# Nothing runs unless the repository variable BACKEND_DEPLOY_ENABLED is "true". Only a commit that
+# is on main and has a successful CI run is ever deployed. The Render service must have Auto-Deploy
+# off, so this workflow is the only thing that deploys it. Migrations are run by Render itself
+# (pre-deploy or start command, docs/render-deployment.md); no database address is known here.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit of main to deploy (full SHA). Blank: the tip of main. An earlier commit is a rollback."
+        required: false
+        default: ""
+      smoke_check:
+        description: "Also run backend.smoke_check afterwards. It WRITES two throwaway accounts and one task."
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    # Which commit, and whether it may be deployed at all.
+    if: >-
+      vars.BACKEND_DEPLOY_ENABLED == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Resolve the commit
+        id: commit
+        env:
+          REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.event.workflow_run.head_sha }}
+        run: |
+          sha="$(git rev-parse --verify --quiet "${REQUESTED:-origin/main}^{commit}")" || {
+            echo "Not a commit in this repository: ${REQUESTED}" >&2
+            exit 1
+          }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: The commit is on main
+        env:
+          SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          if ! git merge-base --is-ancestor "$SHA" origin/main; then
+            echo "$SHA is not on main: only commits of main are deployed." >&2
+            exit 1
+          fi
+
+      - name: CI passed for the commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          passed="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$SHA" \
+            --status success --json databaseId --jq length)"
+          if [ "$passed" -lt 1 ]; then
+            echo "No successful CI run for $SHA: it is not deployed." >&2
+            exit 1
+          fi
+
+  deploy:
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    # The "production" environment holds the Render settings; required reviewers on it make
+    # every deploy wait for an approval.
+    environment:
+      name: production
+      url: ${{ vars.BACKEND_URL }}
+    env:
+      SHA: ${{ needs.resolve.outputs.sha }}
+      BACKEND_URL: ${{ vars.BACKEND_URL }}
+      RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+    steps:
+      - name: Settings are present
+        run: |
+          missing=""
+          [ -n "$RENDER_API_KEY" ] || missing="$missing RENDER_API_KEY"
+          [ -n "$RENDER_SERVICE_ID" ] || missing="$missing RENDER_SERVICE_ID"
+          case "$BACKEND_URL" in https://*) ;; *) missing="$missing BACKEND_URL(https://...)" ;; esac
+          if [ -n "$missing" ]; then
+            echo "Missing in the production environment:$missing" >&2
+            exit 1
+          fi
+
+      - name: Start the Render deploy
+        id: start
+        run: |
+          response="$(curl -sS --fail-with-body --max-time 60 -X POST \
+            "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys" \
+            -H "Authorization: Bearer $RENDER_API_KEY" \
+            -H "Accept: application/json" -H "Content-Type: application/json" \
+            -d "{\"commitId\": \"$SHA\"}")"
+          id="$(jq -r '.id // empty' <<< "$response")"
+          if [ -z "$id" ]; then
+            echo "Render accepted the request without a deploy id; check the Render dashboard." >&2
+            exit 1
+          fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+          echo "Started Render deploy $id of $SHA."
+
+      - name: Wait until it is live
+        env:
+          DEPLOY_ID: ${{ steps.start.outputs.id }}
+        run: |
+          # Up to 30 minutes. A failed build or migration never goes live: the previous version keeps serving.
+          for attempt in $(seq 1 120); do
+            status="$(curl -sS --fail --max-time 30 \
+              "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys/$DEPLOY_ID" \
+              -H "Authorization: Bearer $RENDER_API_KEY" -H "Accept: application/json" \
+              | jq -r '.status // empty' || true)"
+            echo "[$attempt] ${status:-no answer}"
+            case "$status" in
+              live) exit 0 ;;
+              build_failed|update_failed|pre_deploy_failed|canceled|deactivated)
+                echo "Render deploy $DEPLOY_ID ended as $status; the previous version is still serving." >&2
+                exit 1 ;;
+            esac
+            sleep 15
+          done
+          echo "Render deploy $DEPLOY_ID was not live after 30 minutes." >&2
+          exit 1
+
+      - name: Health and readiness
+        run: |
+          curl -sS --fail --retry 8 --retry-delay 10 --retry-all-errors --max-time 90 "$BACKEND_URL/health" > /dev/null
+          ready="$(curl -sS --fail --retry 8 --retry-delay 10 --retry-all-errors --max-time 90 "$BACKEND_URL/ready")"
+          echo "$ready"
+          jq -e '.status == "ready" and .migrations == "current"' <<< "$ready" > /dev/null
+
+      - uses: actions/checkout@v4
+        if: github.event_name == 'workflow_dispatch' && inputs.smoke_check
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+
+      - name: Set up Python
+        if: github.event_name == 'workflow_dispatch' && inputs.smoke_check
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Smoke check (writes throwaway accounts)
+        if: github.event_name == 'workflow_dispatch' && inputs.smoke_check
+        run: |
+          python -m pip install --quiet "httpx>=0.27"
+          python -m backend.smoke_check "$BACKEND_URL"
+
+      - name: Summary
+        if: always()
+        env:
+          DEPLOY_ID: ${{ steps.start.outputs.id }}
+          OUTCOME: ${{ job.status }}
+        run: |
+          {
+            echo "### Backend deployment: $OUTCOME"
+            echo ""
+            echo "- Commit: \`$SHA\`"
+            echo "- Render deploy: \`${DEPLOY_ID:-not started}\`"
+            echo "- Address: $BACKEND_URL"
+          } >> "$GITHUB_STEP_SUMMARY"

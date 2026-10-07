@@ -7,10 +7,10 @@ Milestone 3 connects the desktop's local SQLite records
 - **Server side:** `backend/sync.py` handles pushes; `GET /changes` serves
   pulls.
 - **Desktop side:** the `app/sync/` package.
-- **User interface:** the local web profile (`app/web`, Milestone 4) exposes
-  this service over loopback HTTP for the web UI (`/local/...`, see
-  [web-api.md](web-api.md#local-profile)); the desktop still has no sync
-  screen.
+- **User interface:** the desktop Account page provides sign-in, recovery,
+  association, sync status and conflict resolution. The optional local web
+  profile exposes this service over loopback HTTP (`/local/...`, see
+  [web-api.md](web-api.md#local-profile)).
 
 ## Inert by default
 
@@ -29,9 +29,13 @@ ignored; it never blocks offline startup.
 - **Password:** sent once, to `/auth/login`. Never stored.
 - **Access token:** kept only in the `SyncService`'s memory. It is never
   written to SQLite, files, or logs.
-- **When the token is dropped:** on `sign_out()`, when the server answers
-  401 (status `auth_required`), or when the app closes. Afterwards you sign
-  in again.
+- **Renewal:** a refused access token is renewed once from a rotating refresh
+  credential. Renewals are serialized. An unrenewable session requires sign-in.
+- **Saved sign-in:** `sign_in(..., keep=True)` keeps the refresh credential
+  in the OS vault, replacing it on renewal. `restore_session()` restores the
+  active account after restart and retries connectivity failures. Sign-out
+  removes the credential and attempts server revocation. Access tokens are
+  discarded on close or sign-out.
 
 ## Accounts, ownership, and association
 
@@ -40,7 +44,9 @@ Each (backend URL, server user) pair is one `sync_accounts` row, keyed
 conflicts are stored under that key, so two accounts or two backends never
 mix.
 
-- **Signing in does not claim existing ownerless records.** Those records
+- **Creating an account** adopts the guest workspace and queues it for upload
+  transactionally.
+- **Signing into an existing account does not claim ownerless records.** Those records
   (`user_id IS NULL`) are only uploaded after the explicit
   `SyncService.associate_local_data()` step. That step assigns the signed-in
   account as owner (one logical mutation per record: version + 1). Records

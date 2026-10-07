@@ -13,13 +13,13 @@ It opens on **Day Schedule** with the sidebar collapsed.
 
 | Page | What it is now |
 | --- | --- |
-| Day Schedule | Today's workspace ([desktop-day.md](desktop-day.md)): the Day Window, the horizontal timeline, available tasks, the task form, the Engine choice beside Make Schedule, Day Preferences, CSV, Reset Day, the task list and the **Execute** tab |
+| Day Schedule | Today's workspace ([desktop-day.md](desktop-day.md)): the Day Window, the horizontal timeline, available tasks, the task form, the Engine choice beside Make Schedule, Day Preferences, CSV, Reset Day, the **Uncompleted / Tasks / Completed** outcome board |
 | Week / Month Schedule | Real calendar week and month ([desktop-calendar.md](desktop-calendar.md)): select a day, **Open Day**, the task form on the selected date, Reset Week/Month, the task list |
 | Project Schedule | Persisted project CRUD and project tasks ([details](desktop-projects-allocation.md)) |
 | Account | Registration/sign-in, explicit local-data association, profile, sync status and conflict resolution |
 | How to Use | The in-app guide: what the app does and how every view and feature works (`app/ui/guide_page.py`, text in `app/ui/guide_content.py`) |
 | About | Project purpose and creator attribution |
-| Productivity | The existing productivity analytics (scrolls on small windows) |
+| Productivity | General, Specific (Task-based / Time-based) and Project analytics (scrolls on small windows) |
 | Settings | English, appearance, interface size, persisted default engine and active scheduling preferences ([details](desktop-settings.md)) |
 
 - The sidebar starts collapsed and shows one letter per page (the page name

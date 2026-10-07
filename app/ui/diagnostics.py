@@ -389,7 +389,10 @@ class UIDiagnostics:
     def report(self) -> dict:
         with self._lock:
             phases: dict[str, dict] = {}
-            for (phase, name), stat in self._stats.items():
+            # Summarizing allocates objects and can trigger GC on this thread.
+            # Its callback re-enters the RLock and may add a new timing key.
+            # Iterate a snapshot so recording that collection remains safe.
+            for (phase, name), stat in self._stats.copy().items():
                 phases.setdefault(phase, {"counts": {}, "timings": {}})["timings"][name] = stat.summary()
             for phase, counts in self._counts.items():
                 phases.setdefault(phase, {"counts": {}, "timings": {}})["counts"] = dict(counts)

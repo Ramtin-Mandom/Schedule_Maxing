@@ -42,7 +42,7 @@ differential suites pass).
   `ProductivityService.build_schedule_cohort_report`,
   `GET /planning/analytics/schedule-cohort`.
 
-**Session 3 -- desktop** ([desktop-day.md](desktop-day.md#execute-milestone-5))
+**Session 3 -- desktop** ([desktop-day.md](desktop-day.md#uncompleted--tasks--completed))
 
 - Execute tab: legal actions only (Start, Pause, Resume, Finish, Skip, Cancel,
   Reschedule...), derived overdue/late states, planned vs actual vs active

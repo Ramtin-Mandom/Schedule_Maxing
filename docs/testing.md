@@ -5,6 +5,10 @@ changed in October 2026 to make the suite faster. No test was removed, skipped
 or weakened by that work, and no application code changed -- only test
 infrastructure.
 
+The sizes, timings and failure reports below are historical measurements from
+the test-speed work, not current suite totals or a current verification result.
+Use `python -m pytest --collect-only -q` to inspect current collection.
+
 ## Commands
 
 | Purpose | Command | Size | Time (Windows 10, Python 3.10) |
