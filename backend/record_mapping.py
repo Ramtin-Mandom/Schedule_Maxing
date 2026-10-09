@@ -83,6 +83,9 @@ def write_task(row, task) -> None:
         task.estimated_duration_minutes, task.priority, task.required,
     )
     row.points = task.points
+    kind, preferred = task.kind, task.preferred_time
+    row.kind = kind if isinstance(kind, str) else kind.value
+    row.preferred_time = preferred if preferred is None or isinstance(preferred, str) else preferred.value
     row.task_type_id = task.task_type_id
     row.required_date = task.required_date
     row.preferred_window_start_minute = window.start_minute if window else None
@@ -133,6 +136,7 @@ def task_content(row) -> dict:
         "tags": [item.tag for item in row.tag_rows],
         "estimated_duration_minutes": row.estimated_duration_minutes, "priority": row.priority,
         "points": row.points,
+        "kind": row.kind, "preferred_time": row.preferred_time,
         "task_type_id": row.task_type_id,
         "required": row.required, "required_date": row.required_date,
         "preferred_dates": [item.preferred_date for item in row.preferred_date_rows],

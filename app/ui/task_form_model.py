@@ -7,15 +7,21 @@ versions to type) and how it becomes a canonical Task or FixedBlock
 (app/planning/models.py). Day, Week, Month and later Projects use the same
 draft and the same rules.
 
-Flexible task fields: name, category, estimated duration (minutes, typed
-freely), priority 1-10, points (the user's own productivity value, 0-1000 --
-never the optimizer's placement score), the date it is planned for (the
-page's selected date; an imported task may be undated), "pin to this date"
-(required_date), "required" (must be scheduled), a preferred time window, a
-deadline (date and time), dependencies, a project and ordered tags.
+Three kinds, chosen in the form and never converted into one another:
 
-Fixed block fields: label, category, date, start and end. A fixed block is
-not a disguised flexible task, and neither kind is converted into the other.
+Flexible task fields: name, category, estimated duration (minutes, typed
+freely), points (the user's own productivity value, 0-1000 -- never the
+optimizer's placement score, and never a scheduling priority), the date it
+is planned for (the page's selected date; an imported task may be undated),
+"pin to this date" (required_date), "required" (must be scheduled), the
+preferred time (Early / Mid / Late: a third of the day's schedulable
+window), a deadline (date and time), dependencies, a project and ordered
+tags.
+
+Fixed block fields: label, category, points, date, start and end.
+
+To Do fields: name, category, points and tags. A To Do is a checklist item:
+it has no duration, time or date, and is never scheduled.
 
 Repeating (docs/recurrence.md): "Repeats" makes a task a recurring series
 whose start date is the form's date and whose time zone is the page's (an
@@ -55,11 +61,13 @@ from pydantic import ValidationError
 from app.planning.models import (
     DEFAULT_TASK_POINTS,
     MAX_TASK_POINTS,
+    TODO_PLACEHOLDER_MINUTES,
     FixedBlock,
-    LocalTimeWindow,
+    PreferredTime,
     RecurrenceFrequency,
     RecurrenceSpec,
     Task,
+    TaskKind,
 )
 from app.planning.time import (
     AmbiguousLocalTimeError,
@@ -81,7 +89,11 @@ from app.ui.time_fields import (
 
 #: The categories every form offers (a stored category outside this list is added for that record).
 CATEGORIES = ["study", "work", "class", "exercise", "sleep", "food", "event", "entertainment", "errand", "other"]
+#: The choices of the default-priority settings (a legacy value no scheduler reads; the task form has no priority).
 PRIORITIES = [str(value) for value in range(1, 11)]
+#: The form's preferred-time choices (app.planning.models.PreferredTime) and the one a new task starts with.
+PREFERRED_TIMES = tuple(value.value for value in PreferredTime)
+DEFAULT_PREFERRED_TIME = PreferredTime.MID.value
 MAX_TAG_LENGTH = 60
 #: The form's "Repeats" choices: "" does not repeat.
 REPEATS = ("", "daily", "weekly", "monthly")
@@ -99,19 +111,20 @@ class FormErrors(ValueError):
 
 @dataclass(frozen=True)
 class TaskDraft:
-    kind: Literal["task", "block"] = "task"
+    #: "task" (flexible), "block" (fixed) or "todo" (a checklist item).
+    kind: Literal["task", "block", "todo"] = "task"
     name: str = ""
     category: str = "study"
     #: ISO date, or "" for an undated flexible task.
     date: str = ""
+    #: Every kind: what completing it is worth.
+    points: str = str(DEFAULT_TASK_POINTS)
     # -- flexible task ---------------------------------------------------------------
     duration: str = ""
-    priority: str = "5"
-    points: str = str(DEFAULT_TASK_POINTS)
     required: bool = False
     pin_to_date: bool = False
-    window_start: str = ""
-    window_end: str = ""
+    #: "early", "mid" or "late": the preferred third of the day's schedulable window.
+    preferred_time: str = DEFAULT_PREFERRED_TIME
     deadline_date: str = ""
     deadline_time: str = ""
     dependency_ids: tuple[uuid.UUID, ...] = ()
@@ -189,8 +202,10 @@ def describe_rule(spec: RecurrenceSpec) -> str:
 
 def draft_from_task(task: Task, timezone_name: str, *, series: Task | None = None) -> TaskDraft:
     """The form's view of a stored task (`series`: an occurrence's series definition, for its description)."""
+    if task.is_todo:
+        return TaskDraft(kind="todo", name=task.name, category=task.category, points=str(task.points),
+                         tags=tuple(task.tags), project_id=task.project_id, task_type_id=task.task_type_id)
     planned = task.required_date or (task.preferred_dates[0] if task.preferred_dates else None)
-    window = task.preferred_time_window
     deadline_date = deadline_time = ""
     if task.deadline is not None:
         local = task.deadline.astimezone(_zone(timezone_name))
@@ -223,11 +238,10 @@ def draft_from_task(task: Task, timezone_name: str, *, series: Task | None = Non
         recurrence = dict(recurrence_role="occurrence", recurrence_note=note + ".")
     return TaskDraft(
         kind="task", name=task.name, category=task.category, date=format_date(planned),
-        duration=format_duration(task.estimated_duration_minutes), priority=str(task.priority),
+        duration=format_duration(task.estimated_duration_minutes),
         points=str(task.points),
         required=task.required, pin_to_date=task.required_date is not None,
-        window_start=format_clock(window.start_minute) if window else "",
-        window_end=format_clock(window.end_minute) if window else "",
+        preferred_time=task.preferred_time.value if task.preferred_time is not None else DEFAULT_PREFERRED_TIME,
         deadline_date=deadline_date, deadline_time=deadline_time,
         dependency_ids=tuple(task.dependency_ids), project_id=task.project_id, tags=tuple(task.tags),
         task_type_id=task.task_type_id,
@@ -239,7 +253,7 @@ def draft_from_block(block: FixedBlock) -> TaskDraft:
     start = local_minutes(block.planned_start, block.planned_date, block.timezone)
     end = local_minutes(block.planned_end, block.planned_date, block.timezone)
     return TaskDraft(kind="block", name=block.label, category=block.category, date=format_date(block.planned_date),
-                     start=format_clock(start), end=format_clock(end))
+                     points=str(block.points), start=format_clock(start), end=format_clock(end))
 
 
 def _zone(name: str):
@@ -263,29 +277,15 @@ def build_task(draft: TaskDraft, *, timezone_name: str, existing: Task | None = 
         errors["category"] = "Choose a category."
 
     duration = _field(errors, "duration", lambda: parse_duration(draft.duration))
-    priority = None
-    if draft.priority not in PRIORITIES:
-        errors["priority"] = "Choose a priority from 1 (low) to 10 (high)."
-    else:
-        priority = int(draft.priority)
-
     points = _field(errors, "points", lambda: parse_points(draft.points))
+    if draft.preferred_time not in PREFERRED_TIMES:
+        errors["preferred_time"] = "Choose a preferred time: Early, Mid or Late."
 
     planned: date_ | None = None
     if draft.date.strip():
         planned = _field(errors, "date", lambda: parse_date(draft.date))
     elif draft.pin_to_date:
         errors["date"] = "Choose the date this task is pinned to."
-
-    window = None
-    if draft.window_start.strip() or draft.window_end.strip():
-        start = _field(errors, "window_start", lambda: parse_clock(draft.window_start))
-        end = _field(errors, "window_end", lambda: parse_clock(draft.window_end, end_of_interval=True))
-        if start is not None and end is not None:
-            if end <= start:
-                errors["window_end"] = _overnight_message("preferred window")
-            else:
-                window = LocalTimeWindow(start_minute=start, end_minute=end)
 
     deadline = None
     if draft.deadline_date.strip() or draft.deadline_time.strip():
@@ -313,9 +313,9 @@ def build_task(draft: TaskDraft, *, timezone_name: str, existing: Task | None = 
 
     tags = [" ".join(tag.split()) for tag in draft.tags if tag.strip()]
     fields: dict = dict(
-        name=name, category=draft.category.strip(), estimated_duration_minutes=duration, priority=priority,
-        points=points,
-        required=draft.required, preferred_time_window=window, deadline=deadline,
+        name=name, category=draft.category.strip(), estimated_duration_minutes=duration,
+        points=points, kind=TaskKind.FLEXIBLE,
+        required=draft.required, preferred_time=draft.preferred_time, deadline=deadline,
         dependency_ids=list(dict.fromkeys(draft.dependency_ids)), project_id=draft.project_id, tags=tags,
     )
     previous_dates = list(existing.preferred_dates) if existing is not None else []
@@ -344,6 +344,39 @@ def build_task(draft: TaskDraft, *, timezone_name: str, existing: Task | None = 
     try:
         if existing is None:
             return Task(**fields)
+        data = existing.model_dump()
+        data.update(fields)
+        return Task.model_validate(data)
+    except ValidationError as error:
+        raise FormErrors({"form": _first_message(error)}) from None
+
+
+def build_todo(draft: TaskDraft, *, existing: Task | None = None) -> Task:
+    """
+    A new To Do, or `existing` (a To Do) with the form's fields changed. Only
+    name, category, points and tags are read from the draft, plus -- for a new
+    one -- the date it is added for (the day's checklist it belongs to; an
+    edited one keeps its own). Nothing about a duration or a time is taken
+    from the draft, whatever it carries.
+    """
+    errors: dict[str, str] = {}
+    name = draft.name.strip()
+    if not name:
+        errors["name"] = "Enter a name."
+    if not draft.category.strip():
+        errors["category"] = "Choose a category."
+    points = _field(errors, "points", lambda: parse_points(draft.points))
+    if errors:
+        raise FormErrors(errors)
+    fields: dict = dict(name=name, category=draft.category.strip(), points=points,
+                        tags=[" ".join(tag.split()) for tag in draft.tags if tag.strip()])
+    try:
+        if existing is None:
+            day = _field(errors, "date", lambda: parse_date(draft.date)) if draft.date.strip() else None
+            if errors:
+                raise FormErrors(errors)
+            return Task(kind=TaskKind.TODO, estimated_duration_minutes=TODO_PLACEHOLDER_MINUTES,
+                        preferred_dates=[day] if day is not None else [], **fields)
         data = existing.model_dump()
         data.update(fields)
         return Task.model_validate(data)
@@ -412,6 +445,7 @@ def build_block(draft: TaskDraft, *, timezone_name: str, existing: FixedBlock | 
     end = _field(errors, "end", lambda: parse_clock(draft.end, end_of_interval=True))
     if start is not None and end is not None and end <= start:
         errors["end"] = _overnight_message("fixed block")
+    points = _field(errors, "points", lambda: parse_points(draft.points))
     tz_name = existing.timezone if existing is not None else timezone_name
     instants = None
     if not errors:
@@ -425,7 +459,7 @@ def build_block(draft: TaskDraft, *, timezone_name: str, existing: FixedBlock | 
                              "at the change.")
     if errors:
         raise FormErrors(errors)
-    fields = dict(label=label, category=draft.category.strip(), planned_date=day, timezone=tz_name,
+    fields = dict(label=label, category=draft.category.strip(), points=points, planned_date=day, timezone=tz_name,
                   planned_start=instants[0], planned_end=instants[1])
     try:
         return existing.model_copy(update=fields) if existing is not None else FixedBlock(**fields)

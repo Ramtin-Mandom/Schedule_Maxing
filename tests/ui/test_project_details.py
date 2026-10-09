@@ -41,7 +41,7 @@ def task(planning, name, project=None, **kwargs):
 
 
 def draft(name="Read chapter", **kwargs) -> TaskDraft:
-    return TaskDraft(**{"kind": "task", "name": name, "category": "study", "duration": "30m", "priority": "5",
+    return TaskDraft(**{"kind": "task", "name": name, "category": "study", "duration": "30m",
                         **kwargs})
 
 
@@ -558,6 +558,6 @@ def test_an_unscheduled_project_task_can_still_be_edited_through_the_shared_form
     row = next(row for row in ok(day.load()).rows if row.name == "Homework (mat)")
     edit = ok(day.draft_for(row.ref))
     assert edit.name == "Homework" and edit.project_id == project.id
-    ok(day.save_draft(replace(edit, priority="7"), editing=row.ref))
+    ok(day.save_draft(replace(edit, points="7"), editing=row.ref))
     assert [row.name for row in ok(day.load()).rows] == ["Homework (mat)"]  # still one suffix
     assert ok(planning.get_task(row.ref.id)).name == "Homework"

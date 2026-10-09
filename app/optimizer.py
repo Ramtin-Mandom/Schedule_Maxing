@@ -64,6 +64,7 @@ from app.planning.models import FixedBlock as CanonicalFixedBlock
 from app.planning.models import ScheduledTask as CanonicalScheduledTask
 from app.planning.models import Task as CanonicalTask
 from app.planning.models import TaskRegistry, UnscheduledEntry, UnscheduledReasonCode, compute_total_score
+from app.planning.models import preferred_third_bounds
 from app.planning.preferences import DayPreferences, OptimizerMode, day_preferences_to_reward_settings, to_legacy_scoring_task
 from app.planning.time import MINUTES_PER_DAY
 from app.reward import RewardSettings, _preferred_window_for_task, calculate_task_score, load_reward_settings
@@ -1171,6 +1172,51 @@ def _best_start_in_free_interval(
     return best_start, best_start + duration, best_score
 
 
+def _preferred_start_range(task: CanonicalTask, day_total_minutes: int) -> tuple[int, int] | None:
+    """
+    The start offsets that put `task` inside its preferred third of the day
+    (Task.preferred_time: Early / Mid / Late of this day's own window, offset
+    0 .. day_total_minutes), or None when it has no preference. A placement
+    is inside when it lies wholly within the third; a task longer than the
+    third is inside only when it starts at the third's start.
+
+    This range is a preference tier, not a hard constraint: every engine
+    places the task inside it whenever a valid placement exists there, ranks
+    the placements inside it with the ordinary reward, and looks outside it
+    only when it holds no valid placement (see _best_candidate_for_canonical_task,
+    _run_greedy_tier and _refine_time_objective).
+    """
+    if task.preferred_time is None:
+        return None
+    lo, hi = preferred_third_bounds(task.preferred_time, 0, day_total_minutes)
+    return lo, max(lo, hi - task.estimated_duration_minutes)
+
+
+def _in_preferred_range(task: CanonicalTask, start: int, day_total_minutes: int) -> bool:
+    preferred = _preferred_start_range(task, day_total_minutes)
+    return preferred is not None and preferred[0] <= start <= preferred[1]
+
+
+def _canonical_scoring_task(
+    task: CanonicalTask, day_preferences: DayPreferences, day_window_start_minute: int, day_total_minutes: int
+) -> dict:
+    """
+    The reward's view of `task` in day-relative minutes. A task with a
+    preferred third scores its time preference against that third (so, when
+    it must fall outside, the closest placement to it scores best); any
+    other task against its category's preferred window, if it has one.
+    """
+    scoring_task = to_legacy_scoring_task(task, day_preferences)
+    if task.preferred_time is not None:
+        lo, hi = preferred_third_bounds(task.preferred_time, 0, day_total_minutes)
+        scoring_task["preference_time"] = {"start_time": lo, "end_time": hi}
+    else:
+        scoring_task["preference_time"] = _normalize_preferred_window(
+            scoring_task["preference_time"], day_window_start_minute
+        )
+    return scoring_task
+
+
 def _prepare_canonical_task_search(
     task: CanonicalTask,
     day_total_minutes: int,
@@ -1194,12 +1240,25 @@ def _prepare_canonical_task_search(
     if latest_start < first_start:
         return None
 
-    scoring_task = to_legacy_scoring_task(task, day_preferences)
-    scoring_task["preference_time"] = _normalize_preferred_window(
-        scoring_task["preference_time"], day_window_start_minute
-    )
+    scoring_task = _canonical_scoring_task(task, day_preferences, day_window_start_minute, day_total_minutes)
     adhd_mode = mode == OptimizerMode.ADHD_FRIENDLY
     return duration, first_start, latest_start, scoring_task, adhd_mode
+
+
+def _preferred_tier_first(search: Callable[[int, int], tuple[int, int, float] | None], task: CanonicalTask,
+                          first_start: int, latest_start: int, day_total_minutes: int
+                          ) -> tuple[int, int, float] | None:
+    """
+    `search(first_start, latest_start)` restricted to the task's preferred
+    third first; the whole feasible range only when the third holds no valid
+    placement (or the task has no preference).
+    """
+    preferred = _preferred_start_range(task, day_total_minutes)
+    if preferred is not None:
+        inside = search(max(first_start, preferred[0]), min(latest_start, preferred[1]))
+        if inside is not None:
+            return inside
+    return search(first_start, latest_start)
 
 
 def _best_candidate_for_canonical_task_exhaustive(
@@ -1231,46 +1290,50 @@ def _best_candidate_for_canonical_task_exhaustive(
     )
     if prepared is None:
         return None
-    duration, first_start, latest_start, scoring_task, adhd_mode = prepared
+    duration, full_first_start, full_latest_start, scoring_task, adhd_mode = prepared
 
     ordered = sorted(placed, key=lambda item: item.start)
 
-    best: tuple[int, int, float] | None = None
-    best_score = float("-inf")
+    def search(first_start: int, latest_start: int) -> tuple[int, int, float] | None:
+        best: tuple[int, int, float] | None = None
+        best_score = float("-inf")
 
-    cursor = 0
-    previous_item: _Placed | None = None
+        cursor = 0
+        previous_item: _Placed | None = None
 
-    for item in [*ordered, None]:
-        interval_end = item.start if item is not None else day_total_minutes
-        interval_start = cursor
+        for item in [*ordered, None]:
+            interval_end = item.start if item is not None else day_total_minutes
+            interval_start = cursor
 
-        if interval_end > interval_start:
-            clipped_start = max(first_start, interval_start)
-            clipped_latest = min(latest_start, interval_end - duration)
+            if interval_end > interval_start:
+                clipped_start = max(first_start, interval_start)
+                clipped_latest = min(latest_start, interval_end - duration)
 
-            if clipped_latest >= clipped_start:
-                for start in _candidate_starts(mode, duration, clipped_start, clipped_latest, day_window_start_minute):
-                    end = start + duration
-                    score = calculate_task_score(
-                        scoring_task,
-                        start,
-                        previous_task=previous_item,
-                        next_task=item,
-                        settings=settings,
-                        adhd_mode=adhd_mode,
-                        day_start=0,
-                        day_end=day_total_minutes,
-                    )
-                    if score > best_score:
-                        best_score = score
-                        best = (start, end, score)
+                if clipped_latest >= clipped_start:
+                    for start in _candidate_starts(mode, duration, clipped_start, clipped_latest,
+                                                   day_window_start_minute):
+                        end = start + duration
+                        score = calculate_task_score(
+                            scoring_task,
+                            start,
+                            previous_task=previous_item,
+                            next_task=item,
+                            settings=settings,
+                            adhd_mode=adhd_mode,
+                            day_start=0,
+                            day_end=day_total_minutes,
+                        )
+                        if score > best_score:
+                            best_score = score
+                            best = (start, end, score)
 
-        if item is not None:
-            cursor = max(cursor, item.end)
-            previous_item = item
+            if item is not None:
+                cursor = max(cursor, item.end)
+                previous_item = item
 
-    return best
+        return best
+
+    return _preferred_tier_first(search, task, full_first_start, full_latest_start, day_total_minutes)
 
 
 def _best_candidate_for_canonical_task(
@@ -1296,48 +1359,53 @@ def _best_candidate_for_canonical_task(
     )
     if prepared is None:
         return None
-    duration, first_start, latest_start, scoring_task, adhd_mode = prepared
+    duration, full_first_start, full_latest_start, scoring_task, adhd_mode = prepared
 
     grid_constrained = mode == OptimizerMode.ADHD_FRIENDLY and duration > ADHD_SHORT_TASK_THRESHOLD_MINUTES
     lattice_step = ADHD_QUARTER_HOUR_MINUTES if grid_constrained else None
 
     ordered = sorted(placed, key=lambda item: item.start)
 
-    best: tuple[int, int, float] | None = None
-    best_score = float("-inf")
+    def search(first_start: int, latest_start: int) -> tuple[int, int, float] | None:
+        if latest_start < first_start:
+            return None
+        best: tuple[int, int, float] | None = None
+        best_score = float("-inf")
 
-    cursor = 0
-    previous_item: _Placed | None = None
+        cursor = 0
+        previous_item: _Placed | None = None
 
-    for item in [*ordered, None]:
-        interval_end = item.start if item is not None else day_total_minutes
-        interval_start = cursor
+        for item in [*ordered, None]:
+            interval_end = item.start if item is not None else day_total_minutes
+            interval_start = cursor
 
-        candidate = _best_start_in_free_interval(
-            interval_start=interval_start,
-            interval_end=interval_end,
-            duration=duration,
-            first_start=first_start,
-            latest_start=latest_start,
-            previous_item=previous_item,
-            next_item=item,
-            scoring_task=scoring_task,
-            settings=settings,
-            adhd_mode=adhd_mode,
-            day_start=0,
-            day_end=day_total_minutes,
-            lattice_step=lattice_step,
-            lattice_anchor=day_window_start_minute,
-        )
-        if candidate is not None and candidate[2] > best_score:
-            best_score = candidate[2]
-            best = candidate
+            candidate = _best_start_in_free_interval(
+                interval_start=interval_start,
+                interval_end=interval_end,
+                duration=duration,
+                first_start=first_start,
+                latest_start=latest_start,
+                previous_item=previous_item,
+                next_item=item,
+                scoring_task=scoring_task,
+                settings=settings,
+                adhd_mode=adhd_mode,
+                day_start=0,
+                day_end=day_total_minutes,
+                lattice_step=lattice_step,
+                lattice_anchor=day_window_start_minute,
+            )
+            if candidate is not None and candidate[2] > best_score:
+                best_score = candidate[2]
+                best = candidate
 
-        if item is not None:
-            cursor = max(cursor, item.end)
-            previous_item = item
+            if item is not None:
+                cursor = max(cursor, item.end)
+                previous_item = item
 
-    return best
+        return best
+
+    return _preferred_tier_first(search, task, full_first_start, full_latest_start, day_total_minutes)
 
 
 def _make_dependency_lookup(
@@ -1402,7 +1470,11 @@ def _run_greedy_tier(
     `task_bonuses` (Catch-Up) is added to a task's candidate score only when
     choosing which task to place next -- a task-wide constant cannot change
     where a task goes -- and the stored score stays the insertion score.
-    Without bonuses the selection is exactly the baseline's,
+    A task that can still be placed inside its preferred third (Early / Mid
+    / Late) is chosen before any other, so weaker rewards of other tasks
+    never take its place there; a task whose third is already full is
+    chosen last. Without preferred thirds and bonuses the selection is
+    exactly the baseline's,
     mutating `placed`/`placed_by_task_id` in place so later tiers and
     dependency lookups see every placement made here. Returns
     (task_id -> (start, end, score) for every placed task, and the task_ids
@@ -1414,7 +1486,7 @@ def _run_greedy_tier(
     while remaining:
         best_task_id: uuid.UUID | None = None
         best_candidate: tuple[int, int, float] | None = None
-        best_score = float("-inf")
+        best_score: tuple[int, float] = (-1, float("-inf"))
 
         for task_id in remaining:
             earliest_start = lookup(task_id)
@@ -1435,7 +1507,9 @@ def _run_greedy_tier(
             if candidate is None:
                 continue
 
-            selection = candidate[2] + (task_bonuses.get(task_id, 0.0) if task_bonuses else 0.0)
+            task = registry[task_id]
+            tier = 1 if task.preferred_time is None else 2 * _in_preferred_range(task, candidate[0], day_total_minutes)
+            selection = (tier, candidate[2] + (task_bonuses.get(task_id, 0.0) if task_bonuses else 0.0))
             if selection > best_score:
                 best_task_id = task_id
                 best_candidate = candidate
@@ -1536,8 +1610,10 @@ def generate_day_schedule(
     placed = _validate_and_place_canonical_fixed_blocks(day_schedule.fixed_blocks, day_start_utc, day_end_utc)
     placed_by_task_id: dict[uuid.UUID, tuple[int, int]] = {}
 
+    # A To Do is a checklist item: never placed, and never reported as unscheduled.
     registry: dict[uuid.UUID, CanonicalTask] = {
-        task_id: day_schedule.tasks.get(task_id) for task_id in day_schedule.task_ids
+        task_id: task for task_id in day_schedule.task_ids
+        if not (task := day_schedule.tasks.get(task_id)).is_todo
     }
 
     # Detect cycles once, before any placement search begins (distinct from
@@ -1708,14 +1784,10 @@ def generate_day_schedule(
 # -----------------------------------------------------------------------------
 
 
-def _scoring_tasks(registry: Mapping[uuid.UUID, CanonicalTask], preferences: DayPreferences) -> dict[uuid.UUID, dict]:
-    tasks = {}
-    for task_id, task in registry.items():
-        scoring_task = to_legacy_scoring_task(task, preferences)
-        scoring_task["preference_time"] = _normalize_preferred_window(
-            scoring_task["preference_time"], preferences.day_window.start_minute)
-        tasks[task_id] = scoring_task
-    return tasks
+def _scoring_tasks(registry: Mapping[uuid.UUID, CanonicalTask], preferences: DayPreferences,
+                   day_total_minutes: int) -> dict[uuid.UUID, dict]:
+    return {task_id: _canonical_scoring_task(task, preferences, preferences.day_window.start_minute, day_total_minutes)
+            for task_id, task in registry.items()}
 
 
 def _final_scores(
@@ -1769,15 +1841,20 @@ def _refine_time_objective(
     from app.mode_objectives import RepackTask, mode_weight, refine
 
     fixed = [item for item in placed if item.fixed]
-    scoring_tasks = _scoring_tasks({task_id: registry[task_id] for task_id in results}, preferences)
+    scoring_tasks = _scoring_tasks({task_id: registry[task_id] for task_id in results}, preferences,
+                                   day_total_minutes)
     position = {task_id: index for index, task_id in enumerate(input_order)}
-    ranked = sorted(results, key=lambda task_id: (-registry[task_id].priority, position.get(task_id, 0)))
+    ranked = sorted(results, key=lambda task_id: position.get(task_id, 0))
     tasks = []
     for rank, task_id in enumerate(ranked):
         task = registry[task_id]
         dependencies = list(task.dependency_ids)
         earliest = max([0, *(external_ends[dep] for dep in dependencies if dep in external_ends and dep not in results)])
         latest = min(day_total_minutes, deadline_offsets.get(task_id, day_total_minutes))
+        if _in_preferred_range(task, results[task_id][0], day_total_minutes):
+            # Placed inside its preferred third: repacking may move it, but only within that third.
+            lo, hi = _preferred_start_range(task, day_total_minutes)
+            earliest, latest = max(earliest, lo), min(latest, hi + task.estimated_duration_minutes)
         tasks.append(RepackTask(
             task_id=task_id, duration=task.estimated_duration_minutes, earliest=earliest, latest_finish=latest,
             predecessors=tuple(dep for dep in dependencies if dep in results), rank=rank,
@@ -1853,7 +1930,7 @@ def evaluate_day_output(
             continue
         registry[placement.task_id] = task.model_copy(update={"estimated_duration_minutes": end - start})
         starts[placement.task_id] = start
-    scoring_tasks = _scoring_tasks(registry, preferences)
+    scoring_tasks = _scoring_tasks(registry, preferences, total)
     base = _final_scores(starts, registry, scoring_tasks, fixed, total, settings, adhd_mode=False)
     mode = preferences.optimizer_mode
     adhd = 0.0

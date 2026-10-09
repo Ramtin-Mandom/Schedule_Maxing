@@ -616,16 +616,16 @@ def effective_task_preferred_window(
     Resolve which preferred time window applies to a canonical Task
     (app.planning.models.Task) on a day with `day_preferences`, per
     precedence: explicit task_override (an explicit, request-scoped
-    override) > the task's own preferred_time_window > the day's effective
-    category preference for task.category > none.
+    override) > the task's own stored preferred_time_window > the day's
+    effective category preference for task.category > none.
 
-    This intentionally *reverses* legacy calculate_task_score's own
-    precedence (app/reward.py's _preferred_window_for_task, which favors a
-    YAML category/task-name override over the task's own preference_time)
-    -- that legacy function and its precedence are left completely
-    unchanged for existing legacy Task consumers; this is a new, separate
-    code path used only when scoring a canonical Task through
-    to_legacy_scoring_task below.
+    None of this applies to a task with a preferred third
+    (Task.preferred_time: Early / Mid / Late): the engine scores and places
+    it by that third alone (app/optimizer.py: _canonical_scoring_task,
+    _preferred_start_range), so nothing here can override it. The task's
+    own preferred_time_window is legacy data -- a custom window saved or
+    imported before thirds existed; the task form no longer sets one -- and
+    is read only for a task that has no third.
     """
     if task_override is not None:
         return {"start_time": task_override.start_minute, "end_time": task_override.end_minute}
@@ -653,15 +653,16 @@ def to_legacy_scoring_task(
 
     This does not resolve a placement/start time -- callers pass
     start_time to calculate_task_score separately, exactly as today; this
-    only bridges *task* fields (name/category/tag/duration/priority/
-    preference window), not scheduling.
+    only bridges *task* fields (name/category/tag/duration/preference
+    window), not scheduling. Neither the task's legacy priority nor its
+    points are passed: a placement's score is its quality, not the task's
+    worth, so every task scores as the reward's neutral priority (1).
     """
     return {
         "name": task.name,
         "category": task.category,
         "tag": task.tags[0] if task.tags else "",
         "duration": task.estimated_duration_minutes,
-        "priority": task.priority,
         "fixed": False,
         "preference_time": effective_task_preferred_window(task, day_preferences, task_override=task_override),
     }

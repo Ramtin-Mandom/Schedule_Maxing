@@ -35,7 +35,7 @@ reported) is repacked -- left (as early as possible) for Early, right (as
 late as possible) for Night -- in a bounded set of orders that respect
 in-day dependencies: every dependency-respecting order when there are at most
 MAX_EXHAUSTIVE_ORDER_TASKS tasks, else the baseline's chronological order and
-the priority order. Every candidate keeps every hard constraint; the best
+the input order. Every candidate keeps every hard constraint; the best
 objective wins (ties: Early by earlier L, then smaller G; Night by later F,
 then smaller G; then candidate order, the baseline first), and the baseline
 itself always competes, so refinement never returns a worse objective. This
@@ -132,7 +132,7 @@ class RepackTask:
     latest_finish: int
     #: In-day predecessors among the flexible set.
     predecessors: tuple[uuid.UUID, ...]
-    #: Stable rank (lower first) for the priority order and ties.
+    #: Stable rank (lower first) (input order) for the ranked order and ties.
     rank: int
 
 

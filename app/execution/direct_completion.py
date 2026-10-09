@@ -32,16 +32,30 @@ import uuid
 from app.execution.models import ExecutionStatus, TaskExecution
 
 
-def direct_execution(service, task_id: uuid.UUID) -> TaskExecution | None:
-    """The task's live task-only execution in use: its completed one, else its newest one that can be completed."""
-    own = [execution for execution in service.list_executions()
-           if execution.task_id == task_id and execution.scheduled_task_id is None
-           and execution.status != ExecutionStatus.CANCELLED]
+def _in_use(own: list[TaskExecution]) -> TaskExecution | None:
     completed = [execution for execution in own if execution.status == ExecutionStatus.COMPLETED]
     if completed:
         return completed[-1]
     usable = [execution for execution in own if execution.status != ExecutionStatus.SKIPPED]
     return usable[-1] if usable else None
+
+
+def direct_executions(service, task_ids) -> dict[uuid.UUID, TaskExecution]:
+    """direct_execution of each of `task_ids` that has one, from a single read of the executions."""
+    wanted = set(task_ids)
+    own: dict[uuid.UUID, list[TaskExecution]] = {}
+    if wanted:
+        for execution in service.list_executions():
+            if (execution.task_id in wanted and execution.scheduled_task_id is None
+                    and execution.status != ExecutionStatus.CANCELLED):
+                own.setdefault(execution.task_id, []).append(execution)
+    found = {task_id: _in_use(executions) for task_id, executions in own.items()}
+    return {task_id: execution for task_id, execution in found.items() if execution is not None}
+
+
+def direct_execution(service, task_id: uuid.UUID) -> TaskExecution | None:
+    """The task's live task-only execution in use: its completed one, else its newest one that can be completed."""
+    return direct_executions(service, [task_id]).get(task_id)
 
 
 def complete_directly(service, task) -> TaskExecution:

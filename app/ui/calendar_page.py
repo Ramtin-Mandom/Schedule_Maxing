@@ -185,6 +185,7 @@ class CalendarPage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         self.lower = lower = ctk.CTkFrame(self.body, fg_color="transparent")
         lower.grid(row=4, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_XL))
         self.form = TaskEditor(lower, on_submit=self.submit_task, on_cancel=self.cancel_edit,
+                               on_remove=self.remove_editing,
                                task_defaults=self.task_defaults)
         self.side = side = ctk.CTkFrame(lower, fg_color="transparent")
         side.columnconfigure(0, weight=1)
@@ -373,7 +374,8 @@ class CalendarPage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         self._leave_edit_mode()
         self._reset_editor()
         self.notice.show("success", f"{self.page_controller.period.title} was reset. Your default preferences, "
-                                    "undated tasks and execution history were kept.")
+                                    "undated tasks and other dates were kept; the reset dates' completions and points "
+                                    "were removed.")
 
     # ----------------------------- Rendering -----------------------------
 

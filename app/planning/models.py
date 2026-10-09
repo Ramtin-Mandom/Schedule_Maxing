@@ -194,6 +194,39 @@ class LocalTimeWindow(BaseModel):
         return self
 
 
+class PreferredTime(str, Enum):
+    """
+    The third of the day's schedulable window a flexible task prefers. The
+    window is whatever the date's day window is (not necessarily midnight to
+    midnight); preferred_third_bounds divides it.
+    """
+
+    EARLY = "early"
+    MID = "mid"
+    LATE = "late"
+
+
+def preferred_third_bounds(preferred: PreferredTime, window_start: int, window_end: int) -> tuple[int, int]:
+    """
+    [start, end) of `preferred`'s third of the window [window_start, window_end),
+    in the window's own unit (minutes). The three thirds are consecutive and
+    cover the whole window: a span that does not divide by three leaves no gap.
+    """
+    span = window_end - window_start
+    cuts = (window_start, window_start + span // 3, window_start + (2 * span) // 3, window_end)
+    index = (PreferredTime.EARLY, PreferredTime.MID, PreferredTime.LATE).index(PreferredTime(preferred))
+    return cuts[index], cuts[index + 1]
+
+
+class TaskKind(str, Enum):
+    """What a Task is. A fixed task is a FixedBlock (its own record), not a kind of Task."""
+
+    #: Placed by the scheduler.
+    FLEXIBLE = "flexible"
+    #: A checklist item: never scheduled, never on the timeline; completed for its points.
+    TODO = "todo"
+
+
 # -----------------------------------------------------------------------------
 # Project
 # -----------------------------------------------------------------------------
@@ -202,6 +235,11 @@ class LocalTimeWindow(BaseModel):
 #: Task.points: the default of a new task, and the largest value accepted.
 DEFAULT_TASK_POINTS = 1
 MAX_TASK_POINTS = 1000
+#: Task.priority of a task saved without one. Priority is a legacy stored field: no scheduler reads it.
+DEFAULT_TASK_PRIORITY = 5
+#: Task.estimated_duration_minutes of a To Do. A To Do has no duration; storage requires a positive value, so
+#: this placeholder is stored and never shown, scheduled or counted as planned time.
+TODO_PLACEHOLDER_MINUTES = 1
 
 #: ProjectMilestone.score: the score of a new milestone, and the accepted range.
 MIN_MILESTONE_SCORE = 1
@@ -372,8 +410,12 @@ class Task(BaseModel):
     category: str = Field(min_length=1)
     tags: list[str] = Field(default_factory=list)
 
+    #: flexible (placed by the scheduler) or todo (a checklist item, never scheduled).
+    kind: TaskKind = TaskKind.FLEXIBLE
+
     estimated_duration_minutes: int = Field(gt=0)
-    priority: int = Field(ge=1, le=10)
+    #: Legacy: kept for records, files and clients that carry it. Not a scheduling input any more.
+    priority: int = Field(default=DEFAULT_TASK_PRIORITY, ge=1, le=10)
     #: The user's own productivity value of the task (the task form's "Points"): what finishing it is worth to
     #: them, for analytics. Not a scheduling input and unrelated to a placement's optimizer `score`.
     points: int = Field(default=DEFAULT_TASK_POINTS, ge=0, le=MAX_TASK_POINTS)
@@ -385,6 +427,10 @@ class Task(BaseModel):
     required: bool = False
     required_date: date_ | None = None
     preferred_dates: list[date_] = Field(default_factory=list)
+    #: The third of the day's window the scheduler strongly prefers for this task (None: no preference).
+    preferred_time: PreferredTime | None = None
+    #: Legacy: a custom preferred window saved or imported before Early / Mid / Late. The task form no longer
+    #: sets one; it only scores a task that has no preferred_time (which always takes precedence).
     preferred_time_window: LocalTimeWindow | None = None
 
     dependency_ids: list[uuid.UUID] = Field(default_factory=list)
@@ -418,6 +464,10 @@ class Task(BaseModel):
         return self.recurrence is not None
 
     @property
+    def is_todo(self) -> bool:
+        return self.kind == TaskKind.TODO
+
+    @property
     def is_occurrence(self) -> bool:
         return self.series_id is not None
 
@@ -442,6 +492,12 @@ class Task(BaseModel):
     def _validate_no_self_dependency(self) -> "Task":
         if self.id in self.dependency_ids:
             raise ValueError("a task cannot depend on itself")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_todo(self) -> "Task":
+        if self.kind == TaskKind.TODO and (self.recurrence is not None or self.series_id is not None):
+            raise ValueError("a To Do does not repeat")
         return self
 
     @model_validator(mode="after")
@@ -474,6 +530,21 @@ class Task(BaseModel):
                 raise ValueError("a configured recurring series is dated by its rule: it has no required date, "
                                  "preferred dates or deadline of its own")
         return self
+
+
+def todo_date(task: Task) -> date_:
+    """
+    The calendar day a To Do belongs to -- its assigned day: the day it was
+    added for (required_date, else its earliest preferred date). Its points,
+    the day's counter and its completion statistics are all attributed to
+    this day, whenever it was actually ticked (the completion instant stays on
+    its execution). One saved before To Dos were dated has no assigned day
+    until PlanningService.assign_todo_dates gives it one; until then the UTC
+    date it was created stands in.
+    """
+    if task.required_date is not None:
+        return task.required_date
+    return min(task.preferred_dates) if task.preferred_dates else task.created_at.date()
 
 
 class TaskRegistry(BaseModel):
@@ -515,6 +586,8 @@ class FixedBlock(BaseModel):
     #: default mirrors app.models.FixedBlock's legacy default, so blocks
     #: created before categories existed stay valid.
     category: str = Field(default="fixed", min_length=1)
+    #: What completing it is worth (like Task.points). 0 for a block saved before fixed blocks had points.
+    points: int = Field(default=0, ge=0, le=MAX_TASK_POINTS)
 
     planned_date: date_
     timezone: str
@@ -547,6 +620,19 @@ class FixedBlock(BaseModel):
         if self.planned_end <= self.planned_start:
             raise ValueError("planned_end must be after planned_start")
         return self
+
+
+#: The namespace of a fixed block's execution id: uuid5(FIXED_BLOCK_EXECUTION_NAMESPACE, "<fixed block id>").
+FIXED_BLOCK_EXECUTION_NAMESPACE = uuid.UUID("9c1f4e7a-2b6d-4c35-a8f0-5d3e7b1a6c42")
+
+
+def fixed_block_execution_id(block_id: uuid.UUID) -> uuid.UUID:
+    """
+    The id of a fixed block's one execution (its completion record). Derived
+    from the block's id, so every device and the server name the same record
+    and a block can never have two.
+    """
+    return uuid.uuid5(FIXED_BLOCK_EXECUTION_NAMESPACE, str(block_id))
 
 
 class PlacementRemovalReason(str, Enum):

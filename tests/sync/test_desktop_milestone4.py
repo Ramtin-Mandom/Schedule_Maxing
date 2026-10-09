@@ -26,7 +26,7 @@ def test_complete_native_cloud_workflow(tmp_path, dialogs, server, make_device):
         fill_form(day, name="Meeting", fixed=True, start="540", end="613")
         day.form.submit_button.invoke()
         pump(app)
-        fill_form(day, name="Read", start="613", end="720", duration="13")
+        fill_form(day, name="Read", duration="13")
         day.form.submit_button.invoke()
         pump(app)
         planning = app.services.planning_controller
@@ -70,14 +70,14 @@ def test_complete_native_cloud_workflow(tmp_path, dialogs, server, make_device):
         day.make_schedule_button.invoke()
         pump(app, lambda: not day._busy)
         initial = ok(planning.get_placements(WEDNESDAY))
-        assert len(initial) == 1 and initial[0].planned_start.minute == 13
+        # Read prefers Mid (the form's default): the first minute of the middle third of the 9:00-17:00 day.
+        assert len(initial) == 1 and (initial[0].planned_start.hour, initial[0].planned_start.minute) == (11, 40)
         day.make_schedule_button.invoke()
         pump(app, lambda: not day._busy)
         assert ok(planning.get_placements(WEDNESDAY)) == initial
 
-        # High-priority additions do not move already scheduled work.
-        fill_form(day, name="Write", duration="43", start="613", end="900")
-        day.form.priority_select.variable.set("10")
+        # Additions do not move already scheduled work.
+        fill_form(day, name="Write", duration="43")
         day.form.submit_button.invoke()
         pump(app)
         day.make_schedule_button.invoke()

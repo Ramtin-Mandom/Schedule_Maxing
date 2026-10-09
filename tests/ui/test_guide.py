@@ -16,7 +16,7 @@ def test_every_topic_is_documented_once_in_reading_order() -> None:
     keys = [item.key for item in GUIDE_SECTIONS]
     assert keys == [
         "overview", "day_view", "week_view", "month_view", "projects", "project_tasks", "adding_tasks",
-        "fixed_blocks", "flexible_tasks", "preferred_times", "categories", "priority_points", "dependencies",
+        "fixed_blocks", "flexible_tasks", "preferred_times", "todos", "categories", "priority_points", "dependencies",
         "make_schedule", "scheduled_unscheduled", "task_workflow", "productivity", "day_window", "settings",
         "synchronization", "reset", "day_status_colours",
     ]

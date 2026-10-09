@@ -29,7 +29,13 @@ from app.planning.application import RangeScope
 from app.planning.models import ScheduledTask, Task
 from app.productivity.day_summary import DaySummary, summarize_range
 from app.ui.background import ControllerResult
-from app.ui.schedule_page_controller import ExecutablePlacement, display_namer, read_direct_completions
+from app.planning.models import todo_date
+from app.ui.schedule_page_controller import (
+    ExecutablePlacement,
+    display_namer,
+    read_direct_completions,
+    todo_completions,
+)
 from app.ui.task_status import StatusBoard, build_board
 
 
@@ -107,7 +113,10 @@ class DayOutcomeController:
     def _direct(self, day: date_):
         if self._timezone is None:
             return []
-        return read_direct_completions(self._planning, day, self._timezone, _unwrap)
+        todos = [task for task in _unwrap(self._planning.list_tasks()) if task.is_todo and todo_date(task) == day]
+        ticked = _unwrap(self._executions.direct_executions([task.id for task in todos])) if todos else {}
+        return [*read_direct_completions(self._planning, day, self._timezone, _unwrap),
+                *todo_completions(todos, ticked)]
 
     @staticmethod
     def _detail(day, placements, tasks, executions, shown=lambda task: task.name, direct=()) -> DayDetail:

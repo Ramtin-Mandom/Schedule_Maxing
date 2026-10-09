@@ -313,7 +313,8 @@ class SyncEngine:
         return self.store.has_ops(key, entity_type, wire_id) or self.store.open_conflict(key, entity_type, wire_id) is not None
 
     def prepare(self, account: Account, *, recurrence: bool = True, manual_placements: bool = True,
-                scheduling_modes: bool = True, task_types: bool = True, project_details: bool = True) -> int:
+                scheduling_modes: bool = True, task_types: bool = True, project_details: bool = True,
+                task_kinds: bool = True) -> int:
         """
         Materialize operations for the account's dirty records (see the module
         docstring). Returns how many. recurrence=False (a server without the
@@ -335,6 +336,8 @@ class SyncEngine:
         self.records.manual_placements = manual_placements
         self.records.task_types = task_types
         self.records.project_details = project_details
+        # A server without "task_kinds": kinds, preferred thirds and block points are left out of the payloads.
+        self.records.task_kinds = task_kinds
         with self.store.transaction():
             if task_types:
                 self._requeue_history_fields(account)

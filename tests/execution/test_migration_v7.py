@@ -19,7 +19,12 @@ from app.execution.service import ExecutionService
 from app.planning import workflow
 from app.planning.application import PlanningService
 from app.planning.repository import PlanningRepository
-from tests.execution.test_migration_v4 import V3_PLACEMENT_ID, V3_TASK_ID, _build_v3_database_with_planning_rows
+from tests.execution.test_migration_v4 import (
+    V3_PLACEMENT_ID,
+    V3_TASK_ID,
+    _build_v3_database_with_planning_rows,
+    without_block_completions,
+)
 
 TOMBSTONE_ID = "66666666-6666-4666-8666-666666666666"
 ACCOUNT = "http://backend.test#77777777-7777-4777-8777-777777777777"
@@ -29,7 +34,8 @@ TABLES = ("executions", "work_sessions", "tasks", "scheduled_tasks", "sync_accou
 
 def _rows(conn: sqlite3.Connection, table: str) -> list[dict]:
     conn.row_factory = sqlite3.Row
-    return [dict(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY 1, 2")]
+    return without_block_completions(
+        conn, table, [dict(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY 1, 2")])
 
 
 def _build_v6_database(db_path: Path) -> None:

@@ -47,7 +47,7 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 from app.optimizer import MandatoryTaskSchedulingError
-from app.planning.application import BatchApplyResult, RangeScope, ResetPreview, task_planned_date
+from app.planning.application import BatchApplyResult, RangeScope, ResetPreview, task_planned_date, todo_date
 from app.planning.csv_canonical import is_canonical_csv
 from app.planning.csv_import import ImportMode, read_csv_text
 from app.planning.errors import RegenerationRequiredError, StaleInputsError
@@ -243,8 +243,15 @@ class DaySnapshot(PageSnapshot):
     preference_version: int | None = None
     #: Tasks the saved run could not place whose reasons are not stored (known only as a count).
     unexplained_count: int = 0
-    #: Tasks completed on this date without a time slot (from their project): shown in the Completed column.
+    #: Tasks completed on this date without a time slot (from their project, or To Dos): shown in the Completed
+    #: column.
     direct_completions: list[DirectCompletion] = field(default_factory=list)
+    #: The date's fixed blocks: scheduled work too, completed on the board like placements.
+    fixed_blocks: list[FixedBlock] = field(default_factory=list)
+    #: The date's To Dos (app.planning.application.todo_date), oldest first: the cards under the timeline.
+    todos: list[Task] = field(default_factory=list)
+    #: The points of the date's own tasks that are not on the schedule (part of the day's possible points).
+    unplaced_points: int = 0
 
 
 RunStatus = Literal["generated", "already_current", "nothing_placed", "needs_regeneration", "failed"]
@@ -464,6 +471,10 @@ class DayScheduleController(SchedulePageController):
             preference_version=view.date_layer.version if view.date_layer is not None else None,
             unexplained_count=unexplained,
             direct_completions=read_direct_completions(planning, day, self.timezone, self._unwrap),
+            fixed_blocks=list(blocks),
+            todos=[task for task in self._unwrap(planning.list_tasks()) if task.is_todo and todo_date(task) == day],
+            unplaced_points=sum(tasks[task.ref.id].points for task in unplaced
+                                if task_planned_date(tasks[task.ref.id]) == day),
         )
 
     @staticmethod
@@ -829,10 +840,9 @@ def describe_reset(preview: ResetPreview, label: str, names_of: Callable[[list[u
     if preview.protected_recurring_task_ids:
         lines.append(f"{len(preview.protected_recurring_task_ids)} repeating task(s) are kept; only their "
                      f"entries in {what} are removed.")
-    if preview.placements_with_history_ids or preview.tasks_with_history_ids:
-        lines.append("Execution history (work sessions and feedback) is kept.")
+    lines.append(f"Completions, points and work sessions recorded for {what} are deleted with them.")
     lines.append(f"Kept: undated tasks, tasks planned outside {what}, projects, your default preferences and "
-                 "all execution history.")
+                 "everything recorded on other dates.")
     return "\n\n".join(lines)
 
 

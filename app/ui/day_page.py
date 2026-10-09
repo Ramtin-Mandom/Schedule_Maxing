@@ -19,13 +19,22 @@ on wide and medium windows, one on narrow ones):
   the usable day -- the Settings default, or the date's own override.
 - The horizontal timeline (app/ui/day_timeline.py): fixed blocks in their
   category color, scheduled work at its exact minutes, free gaps.
+- To Do: the checklist (app.planning.models.TaskKind.TODO) as sticky-note
+  cards in one row that scrolls sideways -- name, points, a Done box and a
+  small remove button each. A To Do is never scheduled or on the timeline;
+  ticking it is a completion like any other (it awards its points and shows
+  in Completed on the day it was ticked).
 - Available tasks: the date's tasks (and undated ones) that are not on the
-  schedule, as buttons that open them for editing, with genuine reasons.
-- Add Task (the reusable app/ui/task_editor.TaskEditor), and the actions:
+  schedule, as fixed-width buttons that open them for editing, with genuine
+  reasons, each with a small remove button. The area keeps its size: more
+  tasks scroll (down, and sideways when the window is narrower than a row).
+- Add Task (the reusable app/ui/task_editor.TaskEditor; a timeline item or
+  an available task opens in it for editing, with Remove), and the actions:
   the Engine choice right beside Make Schedule, Regenerate, Day Preferences,
   Import CSV, Export CSV and Reset Day.
 - The scheduled-task board (app/ui/task_status_board.py): Uncompleted |
-  Tasks | Completed, for the tasks the saved schedule placed on the date.
+  Tasks | Completed, for the tasks the saved schedule placed on the date
+  and the date's fixed blocks.
   Each move is the placement's TaskExecution changing state
   (app/ui/task_status.py), so it persists and synchronizes; tasks the
   scheduler could not place stay in Available tasks, never Uncompleted.
@@ -63,11 +72,39 @@ from app.ui.schedule_page_controller import day_label
 from app.ui.shell_state import LayoutMode
 from app.ui.task_actions import TaskFormActions
 from app.ui.task_editor import TaskEditor
-from app.ui.task_status import TaskStatusController
+from app.ui.task_status import DayPoints, StatusBoard, TaskStatusController, day_points
 from app.ui.task_status_board import TaskStatusBoard
 
 _FRESHNESS_TONE = {Freshness.CURRENT: "success", Freshness.STALE: "warning", Freshness.NONE: "info"}
-_CHIP_COLUMNS = {LayoutMode.WIDE: 3, LayoutMode.MEDIUM: 2, LayoutMode.NARROW: 1}
+#: Available tasks: at most four per row (two on a narrow window), the row's width shared equally.
+_CHIP_COLUMNS = {LayoutMode.WIDE: 4, LayoutMode.MEDIUM: 4, LayoutMode.NARROW: 2}
+#: At most this many rows are visible; more tasks scroll vertically.
+CHIP_VISIBLE_ROWS = 2
+CHIP_ROW_HEIGHT = 46
+#: An available task's button never grows with its text (longer text is cut) and has a small remove button.
+CHIP_REMOVE_WIDTH = 26
+CHIP_TEXT_CHARS = {LayoutMode.WIDE: 28, LayoutMode.MEDIUM: 24, LayoutMode.NARROW: 24}
+#: The sticky-note colours (light, dark): a muted golden header over a soft pastel-yellow body.
+TODO_HEADER = ("#C9A227", "#8C7320")
+TODO_BODY = ("#FBF1B8", "#5A5226")
+TODO_BODY_DONE = ("#E6E1C8", "#45422F")
+TODO_TEXT = ("#3D3310", "#F3ECC8")
+TODO_TEXT_DONE = ("#7A7354", "#A9A283")
+#: To Do notes: eight per row, two rows visible (16 notes; more scroll down). A note is an eighth of the row
+#: wide and as tall as it is wide, between these bounds.
+TODO_COLUMNS = 8
+TODO_VISIBLE_ROWS = 2
+TODO_CARD_SIZE = 150
+TODO_CARD_MIN = 72
+TODO_HEADER_HEIGHT = 24
+#: The space a note's cell adds around it (2 x TODO_GAP // 2).
+TODO_GAP = 6
+TODO_NAME_CHARS = 44
+
+
+def clip_text(text: str, limit: int) -> str:
+    """`text` cut to `limit` characters with an ellipsis (a bounded widget never grows with what it shows)."""
+    return text if len(text) <= limit else text[: max(1, limit - 1)].rstrip() + "…"
 _RETURN_NAMES = {"week": "Week", "month": "Month"}
 #: The header's text width per layout (a long status must never widen a narrow page).
 _HEADER_WRAP = {LayoutMode.WIDE: 760, LayoutMode.MEDIUM: 560, LayoutMode.NARROW: 400}
@@ -117,10 +154,15 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         self.window_bar = DayWindowBar(self.body, on_apply=self.apply_day_window,
                                        on_default=self.use_default_day_window)
         self.window_bar.grid(row=0, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_M))
-        self.schedule_canvas = DayTimeline(self.body, on_edit=lambda item: self.edit_ref(item.ref),
+        # The workspace: one card, the day's timeline on top and the To Do notes directly below it.
+        self.workspace = Card(self.body)
+        self.workspace.grid(row=1, column=0, sticky="ew", padx=theme.SPACE_M, pady=(0, theme.SPACE_M))
+        self.workspace.columnconfigure(0, weight=1)
+        self.schedule_canvas = DayTimeline(self.workspace, on_edit=lambda item: self.edit_ref(item.ref),
                                            on_remove=lambda item: self.remove_item(item),
                                            on_release=lambda item: self.release_item(item))
-        self.schedule_canvas.grid(row=1, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_M))
+        self.schedule_canvas.grid(row=0, column=0, sticky="ew", padx=theme.SPACE_S, pady=theme.SPACE_S)
+        self._build_todos()
         self._build_available()
         self._build_lower()
         self.set_layout(LayoutMode.WIDE)
@@ -150,6 +192,14 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         self.back_button = AppButton(top, "Back", self.go_back, variant="ghost", height=30)
         self.back_button.grid(row=0, column=2, sticky="e")
         self.back_button.grid_remove()
+        # Completed / Possible points of the date shown (task_status.day_points).
+        self.points_label = ctk.CTkLabel(top, text="0 / 0 pts", font=font(theme.SIZE_HEADING, "bold"),
+                                         text_color=theme.TEXT_PRIMARY, fg_color=theme.SECONDARY_BG, corner_radius=10,
+                                         padx=12, height=30)
+        self.points_label.grid(row=0, column=3, sticky="e", padx=(12, 0))
+        self.day_points = DayPoints()
+        self._points_board = StatusBoard()
+        self._points_todos: dict = {}
 
         self.nav = nav = ctk.CTkFrame(header, fg_color="transparent")
         nav.grid(row=1, column=0, sticky="w", pady=(6, 0))
@@ -179,18 +229,68 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
                                          anchor="w", justify="left", wraplength=760)
         self.status_label.grid(row=3, column=0, sticky="w", pady=(2, 0))
 
+    def _build_todos(self) -> None:
+        """The To Do notes: a grid of eight per row under the timeline, two rows visible, more scroll down."""
+        parent = self.workspace
+        self.todo_caption = ctk.CTkLabel(parent, text="To Do", font=font(theme.SIZE_SMALL, "bold"),
+                                         text_color=theme.TEXT_MUTED, anchor="w")
+        self.todo_caption.grid(row=1, column=0, sticky="w", padx=theme.SPACE_M, pady=(0, 2))
+        self.todo_area = AppScrollableFrame(parent, fg_color="transparent", height=TODO_CARD_SIZE)
+        # The scrollbar's own default length (200) would hold the area open: it follows the area instead.
+        self.todo_area._scrollbar.configure(height=TODO_CARD_MIN)
+        self.todo_area.grid(row=2, column=0, sticky="ew", padx=theme.SPACE_S, pady=(0, theme.SPACE_S))
+        for column in range(TODO_COLUMNS):
+            self.todo_area.columnconfigure(column, weight=1, uniform="todo")
+        for widget in (self.todo_caption, self.todo_area):
+            widget.grid_remove()  # shown only when there is something to list
+        #: The cards shown, in order: {"task", "frame", "done" (the box), "remove", "var", "name", "points"}.
+        self.todo_widgets: list[dict] = []
+        self._todo_token = 0
+        #: The side of a note now (its width is an eighth of the row; its height follows it, within bounds).
+        self.todo_card_size = TODO_CARD_SIZE
+        self._todo_width = 0
+        self._todo_sizing = Coalescer(self.todo_area, self._size_todos, delay_ms=60)
+        self.todo_area._parent_canvas.bind("<Configure>", self._todo_resized, add="+")
+
+    def _todo_resized(self, event) -> None:
+        # Only a real change of width changes the notes' size; nothing is laid out here.
+        if abs(event.width - self._todo_width) >= 6:
+            self._todo_sizing.request()
+
+    def _size_todos(self) -> None:
+        """Make the notes near-square for the current width, and the area as tall as its (at most two) rows."""
+        self._todo_width = width = self.todo_area._parent_canvas.winfo_width()
+        scale = self.todo_area._get_widget_scaling()
+        if width > 1:
+            self.todo_card_size = int(max(TODO_CARD_MIN, min(TODO_CARD_SIZE,
+                                                             width / scale / TODO_COLUMNS - TODO_GAP)))
+        size = self.todo_card_size
+        for widgets in self.todo_widgets:
+            widgets["frame"].configure(height=size)
+            widgets["name"].configure(wraplength=max(40, int(width / scale / TODO_COLUMNS) - TODO_GAP - 16)
+                                      if width > 1 else size - 16)
+        rows = (len(self.todo_widgets) + TODO_COLUMNS - 1) // TODO_COLUMNS
+        self.todo_area.configure(height=(size + TODO_GAP) * max(1, min(TODO_VISIBLE_ROWS, rows)))
+        # The scrollbar appears only when there is a third row to scroll to.
+        if rows > TODO_VISIBLE_ROWS:
+            self.todo_area._scrollbar.grid()
+        else:
+            self.todo_area._scrollbar.grid_remove()
+            self.todo_area._parent_canvas.yview_moveto(0)
+
     def _build_available(self) -> None:
         self.available_card = card = Card(self.body)
-        card.grid(row=2, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_M))
+        card.grid(row=3, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_M))
         card.columnconfigure(0, weight=1)
-        SectionTitle(card, "Available tasks", "Tasks for this date (or any date) that are not on the schedule. "
-                                              "Select one to edit it.", wraplength=620).grid(
-            row=0, column=0, sticky="ew", padx=theme.SPACE_L, pady=(theme.SPACE_L, 6))
+        ctk.CTkLabel(card, text="Available tasks", font=font(theme.SIZE_BODY, "bold"), text_color=theme.TEXT_PRIMARY,
+                     anchor="w").grid(row=0, column=0, sticky="w", padx=theme.SPACE_M, pady=(theme.SPACE_S, 0))
         self.available_note = ctk.CTkLabel(card, text="", font=font(theme.SIZE_SMALL), text_color=theme.TEXT_MUTED,
                                            anchor="w", justify="left", wraplength=760)
-        self.available_note.grid(row=1, column=0, sticky="ew", padx=theme.SPACE_L)
-        self.chip_area = AppScrollableFrame(card, fg_color="transparent", height=110)
-        self.chip_area.grid(row=2, column=0, sticky="ew", padx=theme.SPACE_S, pady=(4, theme.SPACE_M))
+        self.available_note.grid(row=1, column=0, sticky="ew", padx=theme.SPACE_M, pady=(0, theme.SPACE_S))
+        self.chip_area = AppScrollableFrame(card, fg_color="transparent", height=CHIP_ROW_HEIGHT)
+        # The scrollbar's own default length (200) would hold the area open: it follows the area instead.
+        self.chip_area._scrollbar.configure(height=CHIP_ROW_HEIGHT)
+        self.chip_area.grid(row=2, column=0, sticky="ew", padx=theme.SPACE_S, pady=(0, theme.SPACE_S))
         self.chip_area.grid_remove()  # shown only when there is something to list
         self._available_tasks = []
         self._chip_rows = 0
@@ -207,9 +307,9 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
 
     def _build_lower(self) -> None:
         self.lower = lower = ctk.CTkFrame(self.body, fg_color="transparent")
-        lower.grid(row=3, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_XL))
+        lower.grid(row=4, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_XL))
         self.form = TaskEditor(lower, on_submit=self.submit_task, on_cancel=self.cancel_edit,
-                               task_defaults=self.task_defaults)
+                               on_remove=self.remove_editing, task_defaults=self.task_defaults)
         self.side = side = ctk.CTkFrame(lower, fg_color="transparent")
         side.columnconfigure(0, weight=1)
         self._build_actions(side)
@@ -290,8 +390,10 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         for index in range(2):
             lower.columnconfigure(index, weight=0, minsize=0)
         pad = theme.SPACE_XL if mode != LayoutMode.NARROW else theme.SPACE_M
-        for widget in (self.header, self.window_bar, self.schedule_canvas, self.available_card, self.lower):
+        for widget in (self.header, self.window_bar, self.available_card, self.lower):
             widget.grid_configure(padx=pad)
+        # The workspace keeps a slim margin on every layout: the timeline needs the width.
+        self.workspace.grid_configure(padx=theme.SPACE_M)
         self.window_bar.set_layout(mode)
         self.status_label.configure(wraplength=_HEADER_WRAP[mode])
         self.status_board.set_layout(mode)
@@ -532,8 +634,8 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         self._reset_editor()
         self.last_run = None
         self.reasons_label.configure(text="")
-        self.notice.show("success", f"{day_label(self.page_controller.anchor_date)} was reset. Your default "
-                                    "preferences, undated tasks and execution history were kept.")
+        self.notice.show("success", f"{day_label(self.page_controller.anchor_date)} was reset: its tasks, fixed "
+                                    "blocks, To Dos, completions and points were removed. Other dates were kept.")
 
     def import_csv(self) -> None:
         if self._refuse_while_busy():
@@ -643,6 +745,7 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         self.schedule_canvas.draw(snapshot)
         self._show_engine(snapshot)
         self._show_available(snapshot)
+        self._show_todos(snapshot)
         self.regenerate_button.configure(
             state="normal" if snapshot.freshness != Freshness.NONE and not self._busy else "disabled")
         self._refresh_status_board(snapshot)
@@ -656,18 +759,134 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
             return
         self._board_token += 1
         token, day, executables = self._board_token, snapshot.day, list(snapshot.executables)
-        direct = list(snapshot.direct_completions)
+        direct, blocks = list(snapshot.direct_completions), list(snapshot.fixed_blocks)
 
         def done(result) -> None:
             if token != self._board_token:
                 return
             if result.ok:
                 self.status_board.render(result.value)
+                self._points_board = result.value
+                self._show_points()
             else:
                 self.status_board.notice.show("error", result.error or "The task statuses could not be read.")
 
         controller = self.status_controller
-        self._io(lambda: controller.board(day, executables, direct), done, blocking=False, newest="board")
+        todos = list(snapshot.todos)
+        self._io(lambda: controller.board(day, executables, direct, blocks, todos), done, blocking=False,
+                 newest="board")
+
+    # ----------------------------- To Do -----------------------------
+
+    def _show_todos(self, snapshot: DaySnapshot) -> None:
+        """Draw the To Do cards, then read which are done (only the newest read is shown)."""
+        tasks = list(snapshot.todos)
+        self._todo_token += 1
+        token = self._todo_token
+        self._render_todos(tasks, {})
+        self._points_todos = {}
+        self._show_points()
+        if self.status_controller is None or not tasks:
+            return
+
+        def done(result) -> None:
+            if token == self._todo_token and result.ok:
+                self._render_todos(tasks, result.value, known=True)
+                self._points_todos = result.value
+                self._show_points()
+
+        controller = self.status_controller
+        self._io(lambda: controller.todo_executions(tasks), done, blocking=False, newest="todos")
+
+    def _show_points(self) -> None:
+        """The date's Completed / Possible points, from the board and To Do states last read."""
+        snapshot = self.snapshot
+        if snapshot is None:
+            return
+        board = self._points_board if self._points_board.day == snapshot.day else StatusBoard()
+        if board.day != snapshot.day:  # the board has not been read yet: its items are all still pending
+            from app.ui.task_status import build_board
+
+            board = build_board(snapshot.day, snapshot.executables, {}, (), snapshot.fixed_blocks, {})
+        dated_unplaced = sum(1 for task in snapshot.unplaced if task.date_text != "Any date")
+        self.day_points = day_points(board, snapshot.todos, self._points_todos, snapshot.unplaced_points, dated_unplaced)
+        self.points_label.configure(text=self.day_points.text)
+
+    def _render_todos(self, tasks, executions, *, known: bool = False) -> None:
+        """One card per To Do. `known`: the completion states were read, so the Done boxes can be used."""
+        for widgets in self.todo_widgets:
+            widgets["frame"].destroy()
+        self.todo_widgets = []
+        for widget in (self.todo_caption, self.todo_area):
+            if tasks:
+                widget.grid()
+            else:
+                widget.grid_remove()
+        size = self.todo_card_size
+        for index, task in enumerate(tasks):
+            execution = executions.get(task.id)
+            completed = execution is not None and execution.status.value == "completed"
+            text_color = TODO_TEXT_DONE if completed else TODO_TEXT
+            # One note of two connected parts: a slim golden header (Done, remove) over a pastel body (the name).
+            # The note itself is the body; the header is a golden cap whose lower corners are squared off, so
+            # only the note's own four corners are round.
+            frame = ctk.CTkFrame(self.todo_area, fg_color=TODO_BODY_DONE if completed else TODO_BODY,
+                                 corner_radius=theme.RADIUS_CONTROL, width=TODO_CARD_MIN, height=size)
+            frame.grid(row=index // TODO_COLUMNS, column=index % TODO_COLUMNS, sticky="ew", padx=TODO_GAP // 2,
+                       pady=TODO_GAP // 2)
+            frame.grid_propagate(False)  # a long name wraps and is cut; the card never grows
+            frame.columnconfigure(0, weight=1)
+            frame.rowconfigure(1, weight=1)
+            ctk.CTkFrame(frame, fg_color=TODO_HEADER, corner_radius=theme.RADIUS_CONTROL, height=TODO_HEADER_HEIGHT
+                         ).grid(row=0, column=0, columnspan=2, sticky="new")
+            ctk.CTkFrame(frame, fg_color=TODO_HEADER, corner_radius=0, height=TODO_HEADER_HEIGHT // 2).place(
+                x=0, y=TODO_HEADER_HEIGHT // 2, relwidth=1)
+            var = tk.BooleanVar(value=completed)
+            box = ctk.CTkCheckBox(frame, text="Done", variable=var, text_color=TODO_TEXT[0], fg_color=theme.ACCENT,
+                                  bg_color=TODO_HEADER, border_color=TODO_TEXT[0],
+                                  font=font(theme.SIZE_CAPTION, "bold"), width=40,
+                                  checkbox_width=14, checkbox_height=14, border_width=2, height=18,
+                                  state="normal" if known and not self._busy else "disabled",
+                                  command=lambda task=task, var=var: self.set_todo_done(task, var.get()))
+            box.grid(row=0, column=0, sticky="w", padx=(6, 0), pady=3)
+            remove = AppButton(frame, "✕", lambda task=task: self.remove_ref(self._todo_ref(task)), variant="ghost",
+                               width=18, height=16, font=font(theme.SIZE_CAPTION, "bold"), bg_color=TODO_HEADER,
+                               style=dict(text_color=TODO_TEXT[0], border_color=TODO_HEADER, hover_color=TODO_BODY))
+            remove.grid(row=0, column=1, sticky="e", padx=(0, 4), pady=3)
+            name = ctk.CTkLabel(frame, text=("✓ " if completed else "") + clip_text(task.name, TODO_NAME_CHARS),
+                                font=font(theme.SIZE_SMALL, "bold"), text_color=text_color, anchor="nw", justify="left",
+                                wraplength=size - 16)
+            name.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=7, pady=(4, 0))
+            points = ctk.CTkLabel(frame, text=f"{task.points} pts", font=font(theme.SIZE_CAPTION, "bold"),
+                                  text_color=text_color, anchor="e")
+            points.grid(row=2, column=0, columnspan=2, sticky="e", padx=7, pady=(0, 3))
+            for widget in (frame, name):
+                widget.bind("<Button-1>", lambda _event, task=task: self.edit_ref(self._todo_ref(task)), add="+")
+            self.todo_widgets.append({"task": task, "frame": frame, "done": box, "remove": remove, "var": var,
+                                      "name": name, "points": points, "completed": completed})
+        if tasks:
+            self._size_todos()
+
+    @staticmethod
+    def _todo_ref(task):
+        from app.ui.schedule_page_controller import RowRef
+
+        return RowRef("task", task.id, task.version)
+
+    def set_todo_done(self, task, done: bool) -> None:
+        """Persist a To Do's completion (or take it back), then redraw the page from what was saved."""
+        if self.status_controller is None or self._refuse_while_busy():
+            if self.snapshot is not None:
+                self._show_todos(self.snapshot)  # the box goes back to the saved state
+            return
+
+        def finished(result) -> None:
+            if not result.ok:
+                self.notice.show("error", result.error or "The To Do was not changed.")
+            self.reload()  # the Completed column and the checklist both come from saved state
+
+        controller = self.status_controller
+        self._io(lambda: controller.set_todo_done(task, done), finished)
 
     def move_task(self, card, target) -> None:
         """Persist one card's move to another column, then redraw the board from what was saved."""
@@ -732,6 +951,10 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
                          "were not stored, so they are not shown; they appear after the next run that changes the "
                          "schedule.")
         self.available_note.configure(text=" ".join(notes))
+        if notes:
+            self.available_note.grid()
+        else:
+            self.available_note.grid_remove()  # no empty line above the tasks
 
     def _render_available(self) -> None:
         """Keep only the viewport and one spare row of large lists as Tk buttons."""
@@ -743,7 +966,7 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         first, last = 0, len(tasks)
         if len(tasks) > 24:
             canvas = self.chip_area._parent_canvas
-            row_height = round(50 * self.chip_area._get_widget_scaling())
+            row_height = round(CHIP_ROW_HEIGHT * self.chip_area._get_widget_scaling())
             row = max(0, int(canvas.canvasy(0) / row_height))
             first = max(0, row - 1) * columns
             last = min(len(tasks), (row + int(canvas.winfo_height() / row_height) + 3) * columns)
@@ -751,11 +974,15 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         by_ref = {chip.task.ref: chip for chip in previous}
         chips = []
         for index, task in enumerate(tasks[first:last], start=first):
-            text = task.text + (f"\n{task.reason}" if task.reason else "")
+            limit = CHIP_TEXT_CHARS.get(self.layout, 22)
+            text = clip_text(task.text, limit) + (f"\n{clip_text(task.reason, limit)}" if task.reason else "")
             chip = by_ref.pop(task.ref, None)
             if chip is None:
                 chip = AppButton(self.chip_area, text, lambda ref=task.ref: self.edit_ref(ref), variant="secondary",
-                                 height=44, font=font(theme.SIZE_SMALL))
+                                 height=40, width=60, font=font(theme.SIZE_SMALL))
+                chip.remove_button = AppButton(self.chip_area, "✕", lambda ref=task.ref: self.remove_ref(ref),
+                                               variant="ghost", width=CHIP_REMOVE_WIDTH, height=28,
+                                               font=font(theme.SIZE_CAPTION, "bold"))
                 target = focus_target(chip)
                 for key, direction in (("Up", -1), ("Down", 1)):
                     target.bind(f"<{key}>", lambda event, chip=chip, direction=direction:
@@ -767,13 +994,16 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
                     chip.configure(text=text)
                 if chip.task.ref.version != task.ref.version:
                     chip.configure(command=lambda ref=task.ref: self.edit_ref(ref))
+                    chip.remove_button.configure(command=lambda ref=task.ref: self.remove_ref(ref))
             chip.task = task
             cell = (index // columns, index % columns)
             if getattr(chip, "_task_cell", None) != cell:
-                chip.grid(row=cell[0], column=cell[1], sticky="ew", padx=4, pady=3)
+                chip.grid(row=cell[0], column=2 * cell[1], sticky="ew", padx=(4, 2), pady=3)
+                chip.remove_button.grid(row=cell[0], column=2 * cell[1] + 1, sticky="w", padx=(0, 6), pady=3)
                 chip._task_cell = cell
             chips.append(chip)
         for chip in by_ref.values():
+            chip.remove_button.destroy()
             chip.destroy()
         self.chips = chips
 
@@ -797,12 +1027,23 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
 
     def _place_chips(self) -> None:
         columns = _CHIP_COLUMNS.get(self.layout, 1)
-        for column in range(3):
-            self.chip_area.columnconfigure(column, weight=1 if column < columns else 0, uniform="chip")
+        for chip in self.chips:  # the column count may have changed: every chip is placed again
+            chip._task_cell = None
+        # The row's width is shared equally by its columns (a task's button stretches; its X keeps its size).
+        for column in range(4):
+            self.chip_area.columnconfigure(2 * column, weight=1 if column < columns else 0,
+                                           uniform="chip" if column < columns else "")
         virtual = len(self._available_tasks) > 24
         self._chip_scale = self.chip_area._get_widget_scaling()
-        rows = (len(self._available_tasks) + columns - 1) // columns if virtual else 0
-        height = round(50 * self._chip_scale)
+        total_rows = (len(self._available_tasks) + columns - 1) // columns
+        # As tall as its rows, up to two: a single task does not open a tall empty box.
+        self.chip_area.configure(height=CHIP_ROW_HEIGHT * max(1, min(CHIP_VISIBLE_ROWS, total_rows)))
+        if total_rows > CHIP_VISIBLE_ROWS:  # the scrollbar appears only when there is a third row to scroll to
+            self.chip_area._scrollbar.grid()
+        else:
+            self.chip_area._scrollbar.grid_remove()
+        rows = total_rows if virtual else 0
+        height = round(CHIP_ROW_HEIGHT * self._chip_scale)
         for row in range(max(rows, self._chip_rows)):
             self.chip_area.rowconfigure(row, minsize=height if row < rows else 0)
         self._chip_rows = rows
@@ -824,6 +1065,8 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
                        self.next_button, self.today_button, self.go_button):
             button.configure(state=state)
         self.window_bar.set_enabled(not busy)
+        for widgets in self.todo_widgets:
+            widgets["done"].configure(state=state)
         self.status_board.set_busy(busy)
         self.regenerate_button.configure(state="disabled" if busy or self.snapshot is None
                                          or self.snapshot.freshness == Freshness.NONE else "normal")

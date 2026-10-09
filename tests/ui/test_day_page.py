@@ -55,7 +55,7 @@ def test_the_persisted_day_flow(tmp_path: Path, dialogs) -> None:
         day.form.category_select.variable.set("exercise")
         day.form.submit_button.invoke()
         pump(app)
-        fill_form(day, name="Read", duration="13", start="613", end="720")
+        fill_form(day, name="Read", duration="13", preferred="Mid")
         day.form.submit_button.invoke()
         pump(app)
         assert dialogs.errors == [] and [item.name for item in day.snapshot.timeline] == ["Gym"]
@@ -64,18 +64,21 @@ def test_the_persisted_day_flow(tmp_path: Path, dialogs) -> None:
         gym = day.schedule_canvas.item_bounds(item_named(day, "Gym").key)
         box = day.schedule_canvas.canvas.find_withtag(f"box:{item_named(day, 'Gym').key}")[0]
         assert day.schedule_canvas.canvas.itemcget(box, "fill") == theme.resolve(theme.category_style("exercise").fill)
-        geometry = TimelineGeometry()
+        geometry = day.schedule_canvas.geometry  # fitted to the canvas: the whole day, no horizontal scrolling
         assert (gym[0], gym[2]) == (geometry.x(540), geometry.x(630))
+        assert geometry == TimelineGeometry().fitted(geometry.width()) and not hasattr(day.schedule_canvas, "h_scroll")
 
         run_make_schedule(app, day)
         pump(app)
         assert day.notice.text.startswith("Done: Scheduled 1 task(s)") and day.freshness_badge.cget("text") == "Current"
         read = item_named(day, "Read")
-        assert (read.start_minute, read.end_minute, read.time_text) == (630, 643, "10:30 AM – 10:43 AM")
+        # Mid: the middle third of the whole-day window starts at 8:00 AM.
+        assert (read.start_minute, read.end_minute, read.time_text) == (480, 493, "8:00 AM – 8:13 AM")
         pump(app)
         bounds = day.schedule_canvas.item_bounds(read.key)
-        assert bounds[2] - bounds[0] == 13  # drawn exactly 13 minutes wide
-        assert day.chips == [] and any(gap.start_minute == 643 for gap in day.snapshot.free_gaps)
+        geometry = day.schedule_canvas.geometry
+        assert abs((bounds[2] - bounds[0]) - max(2, 13 * geometry.px_per_minute)) < 1e-6  # exactly 13 minutes wide
+        assert day.chips == [] and any(gap.start_minute == 493 for gap in day.snapshot.free_gaps)
 
         saved = saved_state(app)
         run_make_schedule(app, day)
@@ -85,7 +88,7 @@ def test_the_persisted_day_flow(tmp_path: Path, dialogs) -> None:
         # The keyboard way to the same actions: the timeline selects and describes an item.
         day.schedule_canvas.select(read.key)
         pump(app)
-        assert "Read: 10:30 AM – 10:43 AM (13 min), scheduled" in day.schedule_canvas.details.cget("text")
+        assert "Read: 8:00 AM – 8:13 AM (13 min), scheduled" in day.schedule_canvas.details.cget("text")
 
         # Engine: saved for this date only (in the background, with the controls disabled meanwhile).
         day.engine_select.choose("ADHD friendly")
@@ -115,7 +118,8 @@ def test_the_persisted_day_flow(tmp_path: Path, dialogs) -> None:
         assert item_named(day, "Essay").start_minute % 15 == 0
         pump(app)
         assert len(day.snapshot.executables) == 2  # both scheduled tasks wait in the board's Tasks column
-        assert sorted(card.name for card in day.status_board.board.column(TaskOutcome.PENDING)) == ["Essay", "Read"]
+        assert sorted(card.name for card in day.status_board.board.column(TaskOutcome.PENDING)) == [
+            "Essay", "Gym", "Read"]  # the fixed block is completed on the board too
 
         # Day Preferences: a native editor of the date layer, inherited values shown.
         day.open_preferences()
@@ -155,7 +159,7 @@ def test_the_persisted_day_flow(tmp_path: Path, dialogs) -> None:
         before = saved_state(app)
         day.reset_button.invoke()
         pump(app)
-        assert "Reset Wed Jun 5?" in dialogs.confirms[-1] and "execution history" in dialogs.confirms[-1]
+        assert "Reset Wed Jun 5?" in dialogs.confirms[-1] and "points" in dialogs.confirms[-1]
         assert "nothing was deleted" in day.notice.text and saved_state(app) == before
 
         dialogs.confirm = True
@@ -223,5 +227,159 @@ def test_csv_v2_through_native_dialogs_and_the_way_back_to_week(tmp_path: Path, 
         pump(app)
         assert app.shell.current == "week" and week.page_controller.anchor_date == WEDNESDAY - timedelta(days=2)
         assert dialogs.errors == []
+    finally:
+        close_app(app)
+
+
+def test_task_types_todo_cards_remove_controls_and_bounded_lists(tmp_path: Path, dialogs) -> None:
+    """Flexible / Fixed / To Do through the real form and page: points, Early / Late, the To Do cards, the remove
+    controls (form, available-task X, To Do X), completion of a fixed block and a To Do, and a restart."""
+    from app.ui.day_page import TODO_CARD_SIZE, TODO_NAME_CHARS
+    from tests.ui.test_desktop_app import board_names, press
+
+    path = tmp_path / "kinds.db"
+    long_name = "Buy " + "oat milk " * 30
+    app = open_app(path, tmp_path)
+    try:
+        day, form = app.pages["day"], app.pages["day"].form
+
+        def add(**fields) -> None:
+            fill_form(day, **fields)
+            form.submit_button.invoke()
+            pump(app)
+
+        add(name="Read", duration="30", preferred="Early", points="40")
+        add(name="Write", duration="30", preferred="Late")
+        add(name="Class", fixed=True, start="540", end="600", points="30")
+        form.set_kind("todo")
+        form.name_field.variable.set(long_name)
+        form.points_field.variable.set("15")
+        form.submit_button.invoke()
+        pump(app, until=lambda: len(day.todo_widgets) == 1)
+        assert dialogs.errors == [] and form.kind == "todo"  # the next one is a To Do again
+
+        # The To Do is a bounded sticky note, not a schedule row; available tasks keep a fixed width too.
+        card = day.todo_widgets[0]
+        assert card["task"].points == 15 and card["points"].cget("text") == "15 pts" and not card["completed"]
+        assert card["frame"].cget("height") == day.todo_card_size <= TODO_CARD_SIZE  # bounded, whatever the name
+        assert len(card["name"].cget("text")) <= TODO_NAME_CHARS < len(long_name)
+        assert day.todo_area._parent_frame.winfo_manager() == "grid" and sorted(tree_names(day)) == ["Class", "Read", "Write"]
+        assert sorted(chip.task.name for chip in day.chips) == ["Read", "Write"]
+        assert all(chip.remove_button.winfo_exists() for chip in day.chips)
+
+        run_make_schedule(app, day)
+        pump(app)
+        assert sorted(item.name for item in day.snapshot.timeline) == ["Class", "Read", "Write"]  # never the To Do
+        assert item_named(day, "Read").end_minute <= 480 and item_named(day, "Write").start_minute >= 960
+
+        # Selecting a scheduled task opens it in the form for reconfiguration, with Remove.
+        assert form.remove_button.winfo_manager() == ""  # adding: no Remove
+        day.edit_ref(item_named(day, "Read").ref)
+        pump(app, until=lambda: form.editing)
+        assert (form.kind, form.points_field.get(), form.preferred_select.get()) == ("task", "40", "Early")
+        assert form.remove_button.winfo_manager() == "grid" and form.remove_button.cget("text") == "Remove task"
+        form.remove_button.invoke()
+        pump(app, until=lambda: "Read" not in tree_names(day))
+        assert not form.editing and form.remove_button.winfo_manager() == ""
+
+        # The X of an available task removes it at once.
+        add(name="Extra", duration="20")
+        pump(app, until=lambda: [chip.task.name for chip in day.chips] == ["Extra"])
+        day.chips[0].remove_button.invoke()
+        pump(app, until=lambda: day.chips == [])
+        assert "Extra" not in tree_names(day)
+
+        # Completion: the fixed block on the board, the To Do with its Done box.
+        pump(app, until=lambda: "Class" in board_names(day)["pending"])
+        press(app, day, "Class", "right")
+        pump(app, until=lambda: "Class" in board_names(day)["completed"])
+        pump(app, until=lambda: day.todo_widgets and day.todo_widgets[0]["done"].cget("state") == "normal")
+        day.todo_widgets[0]["done"].toggle()
+        pump(app, until=lambda: day.todo_widgets and day.todo_widgets[0]["completed"])
+        executions = {e.task_name: e for e in app.services.execution_controller.list_executions().value}
+        assert (executions["Class"].points, executions["Class"].status.value) == (30, "completed")
+        todo_execution = executions[long_name.strip()]
+        assert (todo_execution.points, todo_execution.status.value, todo_execution.canonical_planned_start) == (
+            15, "completed", None)
+    finally:
+        close_app(app)
+
+    app = open_app(path, tmp_path)  # after a restart everything is as it was saved
+    try:
+        day = app.pages["day"]
+        pump(app, until=lambda: day.todo_widgets and day.todo_widgets[0]["completed"])
+        assert sorted(item.name for item in day.snapshot.timeline) == ["Class", "Write"]
+        pump(app, until=lambda: "Class" in board_names(day)["completed"])
+        day.todo_widgets[0]["remove"].invoke()  # the To Do's own X
+        pump(app, until=lambda: day.todo_widgets == [])
+        assert day.todo_area._parent_frame.winfo_manager() == "" and day.snapshot.todos == []
+    finally:
+        close_app(app)
+
+
+def test_the_workspace_fits_the_whole_day_and_shows_todos_eight_per_row(tmp_path: Path, dialogs) -> None:
+    """One workspace: the 24-hour timeline fitted to its width (no horizontal scrolling, vertical labels on
+    narrow blocks) above the To Do grid -- eight notes per row, two rows (16) visible, more scroll down."""
+    from app.planning.models import TODO_PLACEHOLDER_MINUTES, Task, TaskKind
+    from app.ui.day_page import TODO_CARD_SIZE, TODO_COLUMNS, TODO_GAP
+
+    app = open_app(tmp_path / "workspace.db", tmp_path)
+    try:
+        app.deiconify()
+        pump(app)
+        day = app.pages["day"]
+        planning = app.services.planning_controller
+        timeline = day.schedule_canvas
+        assert timeline.master is day.workspace and day.todo_area._parent_frame.master is day.workspace
+
+        fill_form(day, name="Lecture", fixed=True, start="540", end="630")
+        day.form.submit_button.invoke()
+        pump(app)
+        fill_form(day, name="Read", duration="30", preferred="Late")
+        day.form.submit_button.invoke()
+        pump(app)
+        run_make_schedule(app, day)
+        pump(app, until=lambda: timeline.item_bounds(item_named(day, "Read").key) is not None)
+        canvas, geometry = timeline.canvas, timeline.geometry
+        pump(app, until=lambda: abs(timeline.geometry.width() - canvas.winfo_width()) <= 2)
+        geometry = timeline.geometry
+        assert geometry.x(0) >= 0 and geometry.x(1440) <= canvas.winfo_width()  # 12 AM to 12 AM, all visible
+        assert not canvas.cget("xscrollcommand") and len(canvas.find_withtag("hour")) >= 8
+        read = item_named(day, "Read")
+        assert canvas.find_withtag(f"vertical:{read.key}")  # a narrow block is named vertically
+        timeline.select(read.key)
+        pump(app)
+        assert "Read:" in timeline.details.cget("text")
+
+        def todo_rows() -> list[tuple[int, int]]:
+            return [(int(w["frame"].grid_info()["row"]), int(w["frame"].grid_info()["column"]))
+                    for w in day.todo_widgets]
+
+        def add_todos(count: int) -> None:
+            for index in range(count):
+                assert planning.add_or_update_task(Task(
+                    name=f"Note {len(day.todo_widgets) + index + 1}", category="errand", kind=TaskKind.TODO,
+                    points=index, estimated_duration_minutes=TODO_PLACEHOLDER_MINUTES,
+                    preferred_dates=[day.page_controller.anchor_date])).ok
+            wanted = len(day.todo_widgets) + count
+            day.reload()
+            pump(app, until=lambda: len(day.todo_widgets) == wanted)
+
+        add_todos(16)
+        assert int(timeline.grid_info()["row"]) < int(day.todo_area._parent_frame.grid_info()["row"])  # below it
+        assert TODO_COLUMNS == 8 and todo_rows() == [(index // 8, index % 8) for index in range(16)]
+        size = day.todo_card_size
+        two_rows = day.todo_area._desired_height
+        assert two_rows == 2 * (size + TODO_GAP) and size <= TODO_CARD_SIZE == 150  # a quarter lower than before
+        assert day.todo_area._scrollbar.winfo_manager() == ""  # 16 fit in the two rows: no scrollbar
+        assert not day.todo_area._parent_canvas.cget("xscrollcommand")  # and never a sideways one
+        widths = {w["frame"].winfo_width() for w in day.todo_widgets}
+        assert max(widths) - min(widths) <= 2 and abs(max(widths) - size) <= 40, (widths, size)  # equal, near-square
+        window = (app.winfo_width(), app.winfo_height())
+
+        add_todos(2)  # a third row: the grid keeps its two rows and scrolls; the window does not grow
+        assert todo_rows()[-1] == (2, 1) and day.todo_area._desired_height == two_rows
+        assert day.todo_area._scrollbar.winfo_manager() == "grid"
+        assert (app.winfo_width(), app.winfo_height()) == window
     finally:
         close_app(app)
