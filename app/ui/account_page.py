@@ -471,11 +471,11 @@ class AccountPage(ctk.CTkFrame):
                 self.database_checked(result.value)
                 return
             self.render(result.value)
-            if result.value.reachable:
-                self.connection_notice.show("success", "The server answered.")
+            report = "\n".join(result.value.checks)
+            if result.value.check_failed:
+                self.connection_notice.show("warning", report + "\nEverything keeps working offline.")
             else:
-                self.connection_notice.show("warning", "The server did not answer. Check your network; "
-                                                       "everything keeps working offline.")
+                self.connection_notice.show("success", report)
 
         self._run("check", self.controller.check_backend, done, (self.check_button,))
 

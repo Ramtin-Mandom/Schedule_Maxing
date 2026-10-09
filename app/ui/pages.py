@@ -235,12 +235,13 @@ class SettingsPage(ctk.CTkFrame):
         self.default_for_select.grid(row=1, column=0, columnspan=2, sticky="ew", padx=16, pady=4)
         self.default_name = LabeledEntry(card, "Name")
         self.default_duration = LabeledEntry(card, "Duration", placeholder="e.g. 60 min")
+        # Priority is no longer shown or used (tasks have points, and no scheduler reads a priority); the
+        # stored default is carried through unchanged so saved settings stay readable.
         self.default_priority = LabeledSelect(card, "Priority (1-10)", PRIORITIES)
         self.default_points = LabeledEntry(card, "Points")
         self.default_name.grid(row=2, column=0, sticky="new", padx=(16, 8), pady=4)
         self.default_duration.grid(row=2, column=1, sticky="new", padx=(8, 16), pady=4)
-        self.default_priority.grid(row=3, column=0, sticky="new", padx=(16, 8), pady=4)
-        self.default_points.grid(row=3, column=1, sticky="new", padx=(8, 16), pady=4)
+        self.default_points.grid(row=3, column=0, sticky="new", padx=(16, 8), pady=4)
         buttons = ctk.CTkFrame(card, fg_color="transparent")
         buttons.grid(row=4, column=0, columnspan=2, sticky="w", padx=16, pady=(8, 4))
         self.save_default_button = AppButton(buttons, "Save default values", self.save_task_default)

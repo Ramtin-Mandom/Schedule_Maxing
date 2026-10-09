@@ -291,6 +291,8 @@ def _parse_task(row: dict[str, str]) -> Task:
         estimated_duration_minutes=_int(row, "duration_minutes"),
         priority=_int(row, "priority"),
         **({"points": _int(row, "points")} if _text(row, "points") else {}),
+        **({"kind": _text(row, "kind")} if _text(row, "kind") else {}),
+        **({"preferred_time": _text(row, "preferred_time")} if _text(row, "preferred_time") else {}),
         required=required_text == "true",
         required_date=_date(row, "required_date", required=False),
         preferred_dates=[date_.fromisoformat(str(day)) for day in _json(row, "preferred_dates", list, empty=[])],
@@ -323,6 +325,7 @@ def _parse_fixed_block(row: dict[str, str]) -> FixedBlock:
     end = _instant(row, "end_utc", required=True)
     block = FixedBlock(
         id=_record_id(row), label=_text(row, "name"), category=_text(row, "category") or "fixed",
+        **({"points": _int(row, "points")} if _text(row, "points") else {}),
         planned_date=day, timezone=tz_name, planned_start=start, planned_end=end, **_audit(row),
     )
     _check_interval(row, start, end, day, tz_name)

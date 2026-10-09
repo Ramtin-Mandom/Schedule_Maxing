@@ -490,7 +490,7 @@ def test_preferred_window_scores_against_local_wall_clock_not_day_offset():
     placement = result.placements[0]
     day_start_utc = datetime(2024, 6, 3, 8, 0, tzinfo=timezone.utc)
     assert placement.planned_start == day_start_utc + timedelta(minutes=60)  # 09:00
-    assert placement.score == pytest.approx(5 * 5 + 3)  # priority + full time bonus, no other component
+    assert placement.score == pytest.approx(5 + 3)  # neutral importance + full time bonus, no other component
 
 
 def test_category_preferred_window_scores_against_local_wall_clock_not_day_offset():

@@ -27,7 +27,7 @@ import sqlalchemy as sa
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
-from app.planning.models import derived_task_type_id
+from app.planning.models import derived_task_type_id, fixed_block_execution_id
 from backend import models
 from backend.app import create_app
 from backend.database import JSONDocument, UTCDateTime, create_backend_engine
@@ -462,6 +462,9 @@ PLACEMENT_FIELDS_SINCE_0013 = {"task_name": None, "task_tags": None, "task_point
                                "task_estimate_minutes": None, "task_type_id": None, "task_type_label": None}
 
 #: 0014: an existing project has no planned dates, is ongoing and has no milestones.
+#: Task kinds, preferred thirds and fixed-block points (0016).
+TASK_FIELDS_SINCE_0016 = {"kind": "flexible", "preferred_time": None}
+BLOCK_FIELDS_SINCE_0016 = {"points": 0}
 PROJECT_FIELDS_SINCE_0014 = {"start_date": None, "estimated_end_date": None, "completed_at": None, "milestones": [],
                              "task_defaults": {"duration_minutes": None, "priority": None, "points": None}}
 
@@ -485,7 +488,10 @@ def as_of_head(value):
             converted = {**PLACEMENT_FIELDS_SINCE_0007, **PLACEMENT_FIELDS_SINCE_0010, **PLACEMENT_FIELDS_SINCE_0013,
                          **converted}
         if {"estimated_duration_minutes", "priority", "dependency_ids"} <= set(value):
-            converted = {**TASK_FIELDS_SINCE_0008, **TASK_FIELDS_SINCE_0009, **TASK_FIELDS_SINCE_0013, **converted}
+            converted = {**TASK_FIELDS_SINCE_0008, **TASK_FIELDS_SINCE_0009, **TASK_FIELDS_SINCE_0013,
+                         **TASK_FIELDS_SINCE_0016, **converted}
+        if {"label", "planned_start", "planned_end"} <= set(value) and "task_id" not in value:  # a fixed block
+            converted = {**BLOCK_FIELDS_SINCE_0016, **converted}
         if {"frequency", "interval"} <= set(value):
             converted = {**RECURRENCE_FIELDS_SINCE_0009, **converted}
         if {"name", "description", "version"} <= set(value) and "category" not in value:  # a project record
@@ -570,6 +576,8 @@ def test_a_populated_0003_database_upgrades_losslessly(predecessor, monkeypatch,
         E3: (T3, PL3),       # historical, but its (tombstoned) task and placement exist: bound to them
         E4: (None, None),    # legacy id, no task
         E5: (T2, None),      # canonical task link without a placement
+        # 0016: the fixed block saved before blocks could be completed counts as done (its derived id)
+        str(fixed_block_execution_id(uuid.UUID(FB1))): (None, None),
     }
 
 
@@ -693,7 +701,7 @@ def test_the_previous_head_upgrades_to_0007_keeping_every_record_and_replay(pred
     with predecessor.connect() as connection:
         assert current_revision(connection) == head_revision()
         assert {table: connection.execute(sa.text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
-                for table in tables} == before
+                for table in tables} == {**before, "executions": before["executions"] + 1}  # 0016: the block's
         assert [tuple(row) for row in connection.execute(sa.text("SELECT id, change_seq FROM users ORDER BY id"))] == users
         unknown = connection.execute(sa.text(
             "SELECT COUNT(*) FROM placements WHERE task_category IS NOT NULL OR removal_reason IS NOT NULL "

@@ -339,8 +339,10 @@ def test_to_legacy_scoring_task_reaches_calculate_task_score():
 
     assert scoring_task["preference_time"] == {"start_time": 480, "end_time": 600}
     score = calculate_task_score(scoring_task, start_time=480, settings=settings)
-    # priority(9) * weight_importance(5) * category_multiplier(2.0) + time_bonus(10, fully inside window)
-    assert score == pytest.approx(9 * 5 * 2.0 + 10.0)
+    # The task's priority (9) is not a scheduling input: neutral importance * weight_importance(5) *
+    # category_multiplier(2.0) + time_bonus(10, fully inside window)
+    assert "priority" not in scoring_task
+    assert score == pytest.approx(5 * 2.0 + 10.0)
 
 
 # -----------------------------------------------------------------------------

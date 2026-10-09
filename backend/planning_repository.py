@@ -326,7 +326,7 @@ class ServerPlanningRepository:
             models.Task.required_date.between(start_date, end_date),
             models.Task.required_date.is_(None) & (models.Task.deadline_utc.is_(None) | (models.Task.deadline_utc >= boundary)),
         ))
-        return self._tasks(rows)
+        return [task for task in self._tasks(rows) if not task.is_todo]  # a To Do is never scheduled
 
     def list_tasks_planned_in_range(
         self, start_date: date_, end_date: date_, *, include_undated: bool = True, include_deleted: bool = False,
@@ -339,6 +339,8 @@ class ServerPlanningRepository:
                           include_deleted=include_deleted)
         result = []
         for task in self._tasks(rows):
+            if task.is_todo:
+                continue  # a To Do is never part of a date's schedule
             planned = task_planned_date(task)
             if planned is not None:
                 if start_date <= planned <= end_date:
@@ -525,6 +527,29 @@ class ServerPlanningRepository:
                                                                       cancel_reason=CancelReason(reason)))
             return str(row.id)
 
+    def soft_delete_executions(self, *, task_ids: Iterable = (), placement_ids: Iterable = (),
+                               execution_ids: Iterable = (), deleted_at: datetime) -> int:
+        """
+        Tombstone every live execution of these tasks, of these placements, or
+        with one of these ids (see the SQLite repository), through the
+        Mutator: a server version and a change-log entry each.
+        """
+        removed = 0
+        with self.transaction():
+            for column, ids in ((models.Execution.task_id, task_ids),
+                                (models.Execution.scheduled_task_id, placement_ids),
+                                (models.Execution.id, execution_ids)):
+                wanted = [uuid.UUID(str(value)) for value in ids]
+                if not wanted:
+                    continue
+                rows = self._session.scalars(select(models.Execution).where(
+                    models.Execution.user_id == self._user_id, models.Execution.deleted_at.is_(None),
+                    column.in_(wanted))).all()
+                for row in rows:
+                    self._mutator.delete_execution(row.id, row.version)
+                    removed += 1
+        return removed
+
     def get_placements(self, placement_ids: Iterable, *, include_deleted: bool = False) -> dict[uuid.UUID, ScheduledTask]:
         return {row.id: _placement(row) for row in self._by_ids(models.Placement, placement_ids, include_deleted)}
 
@@ -660,11 +685,13 @@ def _task_payload(task: Task):
 
 
 def _block_fields(block: FixedBlock) -> dict:
-    return block.model_dump(include={"label", "category", "planned_date", "timezone", "planned_start", "planned_end"})
+    return block.model_dump(include={"label", "category", "points", "planned_date", "timezone", "planned_start",
+                                     "planned_end"})
 
 
 def _block(row) -> FixedBlock:
-    return FixedBlock(label=row.label, category=row.category, planned_date=row.planned_date, timezone=row.timezone,
+    return FixedBlock(label=row.label, category=row.category, points=row.points, planned_date=row.planned_date,
+                      timezone=row.timezone,
                       planned_start=row.planned_start, planned_end=row.planned_end, **_audit(row))
 
 

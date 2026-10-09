@@ -10,7 +10,6 @@ from pathlib import Path
 
 from app.ui import tracker_view
 from app.ui.projects_controller import ProjectsController
-from app.ui.task_editor import NEW_TYPE, OWN_TYPE
 from app.ui.task_form_model import CATEGORIES, TaskDraft
 from tests.ui.test_day_status_board import scheduled_day
 from tests.ui.test_desktop_app import close_app, press, pump
@@ -99,7 +98,7 @@ def test_three_sections_with_boxes_and_their_own_filters(tmp_path: Path, dialogs
         project = projects.create("Thesis").value
         idle = projects.create("Idle").value
         assert projects.add_task(project.id, TaskDraft(kind="task", name="Outline", category="study", duration="30m",
-                                                       priority="5", points="7"), day.snapshot.day.isoformat()).ok
+                                                       points="7"), day.snapshot.day.isoformat()).ok
         outline = projects.load(project.id).value.tasks[0]
         assert projects.set_task_completed(outline.task_id, True).ok  # completed without ever being scheduled
         page.section_buttons["Project"].invoke()
@@ -127,13 +126,9 @@ def test_three_sections_with_boxes_and_their_own_filters(tmp_path: Path, dialogs
         assert app.shell.current == "productivity" and page.section == "Project"
         assert page.project_tiles.values()["Total points collected"] == "7"
 
-        # The task form offers the type control without a redesign: keep its own type, pick one, or name a new one.
+        # The task form has no advanced settings: no task-type, deadline, dependency or repeat controls.
         form = app.pages["day"].form
-        values = form.type_select.values
-        assert values[0] == OWN_TYPE and values[-1] == NEW_TYPE and {"Read", "Write"} <= set(values)
-        form.type_select.choose(NEW_TYPE)
-        assert form.new_type_field.winfo_manager() == "grid"
-        form.type_select.choose(OWN_TYPE)
-        assert form.new_type_field.winfo_manager() == ""
+        assert not any(hasattr(form, name) for name in (
+            "more_frame", "type_select", "deadline_date", "dependency_picker", "repeat_select"))
     finally:
         close_app(app)

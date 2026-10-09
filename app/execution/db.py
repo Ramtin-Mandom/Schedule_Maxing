@@ -1160,6 +1160,79 @@ _V15_STATEMENTS: tuple[str, ...] = (
 )
 
 
+#: app.planning.models.TaskKind / PreferredTime values, for the v16 CHECKs.
+TASK_KINDS = ("flexible", "todo")
+PREFERRED_TIMES = ("early", "mid", "late")
+
+# Version 16: a task's kind (flexible, or a To Do checklist item that is never scheduled) and its preferred
+# third of the day (early / mid / late; NULL = none), and a fixed block's points. Existing tasks are flexible
+# with no preferred third; existing fixed blocks get 0 points.
+_V16_STATEMENTS: tuple[str, ...] = (
+    f"ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'flexible' CHECK (kind IN "
+    f"({', '.join(repr(kind) for kind in TASK_KINDS)}))",
+    "ALTER TABLE tasks ADD COLUMN preferred_time TEXT CHECK (preferred_time IS NULL OR preferred_time IN "
+    f"({', '.join(repr(value) for value in PREFERRED_TIMES)}))",
+    "ALTER TABLE fixed_blocks ADD COLUMN points INTEGER NOT NULL DEFAULT 0 CHECK (points BETWEEN 0 AND 1000)",
+)
+
+
+def backfill_fixed_block_completions(connection: sqlite3.Connection) -> int:
+    """
+    Give every live fixed block that has no execution yet a completed one worth
+    0 points: a block saved before fixed blocks could be completed counts as
+    done, and is worth nothing. The execution's id is derived from the block's
+    (fixed_block_execution_id), so a block that already has its execution --
+    completed or not, from this backfill or from the user -- is left exactly as
+    it is, and running this again changes nothing. Returns the rows added.
+    The planned times are the block's own; the completion instant is its end.
+    """
+    from app.planning.models import fixed_block_execution_id
+
+    blocks = connection.execute(
+        "SELECT id, user_id, label, category, planned_date, timezone, planned_start, planned_end, "
+        "planned_start_utc, planned_end_utc, created_at FROM fixed_blocks WHERE deleted_at IS NULL"
+    ).fetchall()
+    added = 0
+    for block in blocks:
+        execution_id = str(fixed_block_execution_id(uuid.UUID(block[0])))
+        start, end = datetime.fromisoformat(block[6]), datetime.fromisoformat(block[7])
+        stamp = block[10] or block[9]
+        added += connection.execute(
+            "INSERT OR IGNORE INTO executions (id, task_name, category, tag, planned_duration, priority, points, "
+            "status, created_at, updated_at, user_id, canonical_planned_date, canonical_timezone, "
+            "canonical_planned_start, canonical_planned_end, actual_final_end_at) "
+            "VALUES (?, ?, ?, '', ?, 5, 0, 'completed', ?, ?, ?, ?, ?, ?, ?, ?)",
+            (execution_id, block[2], block[3], round((end - start).total_seconds() / 60), stamp, stamp, block[1],
+             block[4], block[5], block[6], block[7], block[7]),
+        ).rowcount
+    return added
+
+
+def _migrate_v15_to_v16(connection: sqlite3.Connection) -> None:
+    """
+    Version 16 (_V16_STATEMENTS) plus backfill_fixed_block_completions for the
+    fixed blocks that exist now. Change capture is suppressed while the
+    completions are written (like v12): the upgrade itself marks nothing for
+    synchronization -- the server backfills the same ids for the blocks it
+    stores. One transaction with its user_version bump and foreign_key_check.
+    """
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        for statement in _V16_STATEMENTS:
+            connection.execute(statement)
+        capture = connection.execute("SELECT value FROM sync_control WHERE name = 'applying_remote'").fetchone()[0]
+        connection.execute("UPDATE sync_control SET value = 1 WHERE name = 'applying_remote'")
+        backfill_fixed_block_completions(connection)
+        connection.execute("UPDATE sync_control SET value = ? WHERE name = 'applying_remote'", (capture,))
+        _check_foreign_keys(connection, 16)
+        connection.execute("PRAGMA user_version = 16")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+    connection.execute("COMMIT")
+
+
 def legacy_task_type_roots(tasks: dict[str, tuple[str | None, str | None, str | None]]) -> dict[str, str]:
     """
     {task id: id of the task its type is derived from} for tasks stored before
@@ -1301,6 +1374,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     (13, _V13_STATEMENTS),
     (14, _V14_STATEMENTS),
     (15, _V15_STATEMENTS),
+    (16, _migrate_v15_to_v16),
 )
 
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1][0]

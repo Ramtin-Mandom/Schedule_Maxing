@@ -147,7 +147,7 @@ class ProjectDialog(ModalDialog):
     """
     Edit a project's name, description, planned dates and the defaults of its
     new tasks; the result is (name, description, start, end, (default
-    duration, priority, points)) as typed, or None.
+    duration, priority, points)) as typed, or None (the priority is the stored one: it is not shown).
     """
 
     def __init__(self, parent, project: ProjectRow) -> None:
@@ -175,7 +175,8 @@ class ProjectDialog(ModalDialog):
         self.default_priority.variable.set("" if defaults.priority is None else str(defaults.priority))
         self.default_points = LabeledEntry(self.body, "Default points", placeholder="not set", wraplength=380)
         self.default_points.variable.set("" if defaults.points is None else str(defaults.points))
-        for row, widget in enumerate((self.default_duration, self.default_priority, self.default_points), start=5):
+        # The default priority is not shown (no scheduler reads a priority); a stored one is carried through.
+        for row, widget in enumerate((self.default_duration, self.default_points), start=5):
             widget.grid(row=row, column=0, sticky="ew", pady=4)
         self.initial_focus = self.name.entry
         self.add_buttons("Save project", lambda: self.close(

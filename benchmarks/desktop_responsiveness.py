@@ -36,7 +36,6 @@ def reference_behavior():
     from app.ui.paint_widgets import AppOptionMenu, AppScrollableFrame, AppTextbox
     from app.ui.tk_lifecycle import DesktopCollection
     from app.ui.day_page import DaySchedulePage
-    from app.ui.task_editor import DependencyPicker
 
     patches = ExitStack()
     patches.enter_context(patch.object(AppOptionMenu, "_draw", ctk.CTkOptionMenu._draw))
@@ -56,22 +55,8 @@ def reference_behavior():
         page.chips = []
         original_chips(page, snapshot)
 
-    original_choices = DependencyPicker.set_choices
-
-    def rewrite_choices(picker, choices, selected=None):
-        # Reproduce exactly one variable write per choice (including no-op writes).
-        # Extra value reads are a small reference-harness overhead, disclosed in the report.
-        old_vars = {key: (var, var.get()) for key, var in picker.vars.items()}
-        original_choices(picker, choices, selected)
-        for key, var in picker.vars.items():
-            old_var, old_value = old_vars.get(key, (None, False))
-            value = var.get()
-            if (var is old_var and value == old_value) or (var is not old_var and not value):
-                var.set(value)
-
     patches.enter_context(patch.object(DesktopCollection, "collect", collect))
     patches.enter_context(patch.object(DaySchedulePage, "_show_available", rebuild_chips))
-    patches.enter_context(patch.object(DependencyPicker, "set_choices", rewrite_choices))
     return patches
 
 

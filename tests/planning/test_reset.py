@@ -119,7 +119,8 @@ def test_reset_applies_the_preview_and_restores_inherited_date_preferences(
     assert [x.id for x in planning_service.list_placements(NEXT_MON, NEXT_MON)] == [world["placements"]["standup_next"].id]
     assert [x.planned_date for x in planning_service.list_fixed_blocks()] == [WED]
     assert set(planning_service.generation_records(MON, WED)) == {WED}
-    assert execution_service.get_execution(world["execution"].id) == world["execution"]  # history untouched
+    # The reset dates' executions are removed with their plan (completions, points and statistics included).
+    assert world["execution"].id not in {item.id for item in execution_service.list_executions()}
 
 
 def test_reset_writes_versioned_tombstones_that_sync_will_see(planning_service: PlanningService, world, connection) -> None:

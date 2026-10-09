@@ -53,6 +53,7 @@ from typing import Protocol
 from pydantic import BaseModel, Field
 
 from app.planning.history import CompletionHistory, HistoryBounds, ScheduleHistory, historical_plan
+from app.planning.models import todo_date
 from app.planning.time import local_date_of, validate_timezone
 from app.productivity.buckets import TimeBucket, day_of_week_for_date, time_bucket_for_instant
 from app.productivity.day_summary import DayStatusClass, classify_day
@@ -1229,6 +1230,12 @@ def completion_items(history: CompletionHistory, timezone_name: str) -> list[Com
     carries the key of its occurrence -- the last placement of its lineage,
     or the execution itself when it has no placement -- so an occurrence
     completed under two placements is counted once (merge_completions).
+
+    The date a completion counts on (local_date) is the local date it was
+    completed, except for a To Do: its completion and points count on the
+    day the To Do belongs to (app.planning.models.todo_date), the same day
+    the Day page's points counter shows them on. completed_at is always the
+    actual instant.
     """
     items = []
     for execution in history.executions:
@@ -1249,10 +1256,12 @@ def completion_items(history: CompletionHistory, timezone_name: str) -> list[Com
             name, category = execution.task_name, execution.category
             tags = (execution.tag,) if execution.tag else None
             type_id = task.task_type_id if task is not None else None
+        counted_on = (todo_date(task) if task is not None and task.is_todo and placement is None
+                      else local_date_of(execution.actual_final_end_at, timezone_name))
         items.append(CompletionItem(
             execution_id=execution.id, occurrence_key=key, task_id=execution.task_id,
             placement_id=execution.scheduled_task_id, completed_at=utc(execution.actual_final_end_at),
-            local_date=local_date_of(execution.actual_final_end_at, timezone_name), points=execution.points,
+            local_date=counted_on, points=execution.points,
             active_minutes=execution.actual_active_duration_minutes, name=name, category=category, tags=tags,
             type_id=type_id, planned_weekday=weekday, planned_bucket=bucket,
         ))

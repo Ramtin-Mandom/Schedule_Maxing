@@ -217,6 +217,25 @@ def _sync_transport(backend_url: str | None, factory: Callable[[str], SyncTransp
         return None
 
 
+def assign_todo_dates(service, timezone: str) -> int:
+    """
+    Date the workspace's To Dos saved before To Dos had a day
+    (PlanningService.assign_todo_dates: the local date they were created on;
+    dated ones are untouched, so this does nothing from the second time on).
+    A failure never keeps the workspace from opening: they are dated the next
+    time it opens.
+    """
+    from app.persistence.errors import NotSignedInError
+
+    try:
+        return service.assign_todo_dates(timezone)
+    except NotSignedInError:
+        return 0  # direct storage before sign-in: nothing to read yet
+    except Exception:  # noqa: BLE001 - e.g. storage that is not reachable yet; see the docstring
+        logging.getLogger(__name__).warning("Undated To Dos could not be dated now.", exc_info=True)
+        return 0
+
+
 def _build_controllers(
     planning_service: PlanningService,
     execution_repository: ExecutionRepository,
@@ -226,6 +245,7 @@ def _build_controllers(
     sync_service: SyncService,
 ) -> tuple[PlanningController, ExecutionController, ProductivityController]:
     planning = PlanningController(service=planning_service.scoped(scope), timezone=timezone, project_root=project_root)
+    assign_todo_dates(planning_service.scoped(scope), timezone)
     executions = execution_repository.scoped(scope)
     execution = ExecutionController(
         ExecutionService(executions),

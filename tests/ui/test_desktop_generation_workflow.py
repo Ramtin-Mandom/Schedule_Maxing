@@ -221,7 +221,9 @@ def test_reset_is_previewed_then_confirmed_and_keeps_defaults_and_history(servic
     assert ok(controller.get_task(essay.id)) is None and ok(controller.get_task(undated.id)) is not None
     assert ok(controller.date_preferences(MON)) is None
     assert ok(controller.user_preferences()).overrides.optimizer_mode == OptimizerMode.ADHD_FRIENDLY
-    assert ok(services.execution_controller.find_execution_for_placement(placement.id)).id == execution.id
+    # The reset date's executions go with its plan.
+    assert ok(services.execution_controller.find_execution_for_placement(placement.id)) is None
+    assert execution.id not in {item.id for item in ok(services.execution_controller.list_executions())}
 
 
 def test_a_canonical_csv_is_previewed_without_writing_then_imported(services, tmp_path: Path) -> None:

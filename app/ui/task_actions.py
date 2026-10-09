@@ -180,6 +180,11 @@ class TaskFormActions:
         self._io(lambda: (controller.delete_description(ref), controller.removal_choices(ref)),
                  lambda loaded: self._confirm_removal(ref, *loaded))
 
+    def remove_editing(self) -> None:
+        """Remove the record loaded in the form (the form's "Remove task" button)."""
+        if self._editing:
+            self.remove_ref(self._editing)
+
     def _confirm_removal(self, ref: RowRef, description, choices=None) -> None:
         if not description.ok:
             messagebox.showerror("Could Not Remove", description.error or "Unknown error.", parent=self)

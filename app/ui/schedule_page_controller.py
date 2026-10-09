@@ -86,6 +86,7 @@ from app.ui.task_form_model import (
     TaskDraft,
     build_block,
     build_task,
+    build_todo,
     categories_for,
     describe_rule,
     draft_from_block,
@@ -253,18 +254,32 @@ def read_direct_completions(planning: PlanningController, day: date_, timezone_n
     first: one windowed read of the completion history (the record the
     analytics use), never a scan of every execution. Only tasks that still
     exist are listed: a removed task leaves the Day page like a removed
-    scheduled one does (its completion stays in the history and statistics).
+    scheduled one does. To Dos are not listed here: a To Do is shown on the
+    day it belongs to, whenever it was ticked (todo_completions).
     """
     start = local_day_start_utc(day, timezone_name)
     history = unwrap(planning.completion_history(start, local_day_start_utc(day + timedelta(days=1), timezone_name)))
     found = [execution for execution in history.executions
              if execution.scheduled_task_id is None and execution.task_id is not None
              and local_date_of(execution.actual_final_end_at, timezone_name) == day]
-    tasks = {task_id: task for task_id, task in history.tasks.items() if task.deleted_at is None}
+    tasks = {task_id: task for task_id, task in history.tasks.items()
+             if task.deleted_at is None and not task.is_todo}
     found = [execution for execution in found if execution.task_id in tasks]
     shown = display_namer(planning, tasks.values(), unwrap)
     return [DirectCompletion(execution, tasks[execution.task_id], shown(tasks[execution.task_id]))
             for execution in sorted(found, key=lambda item: (item.actual_final_end_at, item.id))]
+
+
+def todo_completions(todos, executions: dict[uuid.UUID, TaskExecution]) -> list[DirectCompletion]:
+    """
+    The completed ones of a day's To Dos (`executions`: their completion
+    records by task id), as the records its Completed list shows: on the
+    day the To Do belongs to, not on the date it happened to be ticked.
+    """
+    done = [(task, executions[task.id]) for task in todos
+            if task.id in executions and executions[task.id].status.value == "completed"]
+    return [DirectCompletion(execution, task, task.name)
+            for task, execution in sorted(done, key=lambda pair: (pair[1].actual_final_end_at, pair[1].id))]
 
 
 def default_anchor(mode_name: str, today: date_) -> date_:
@@ -411,7 +426,8 @@ class SchedulePageController:
         """
         try:
             tasks = [task for task in self._unwrap(self._planning.list_tasks())
-                     if not (editing is not None and editing.kind == "task" and task.id == editing.id)]
+                     if not task.is_todo
+                     and not (editing is not None and editing.kind == "task" and task.id == editing.id)]
             labels = {task.id: self._task_display(task) for task in tasks}
             counts: dict[str, int] = {}
             for label in labels.values():
@@ -515,10 +531,23 @@ class SchedulePageController:
         """
         try:
             expected_version = self._precondition(editing)
-            if editing is not None and editing.kind != ("task" if draft.kind == "task" else "block"):
+            if editing is not None and editing.kind != ("block" if draft.kind == "block" else "task"):
                 raise InvalidFormError("A task cannot become a fixed block (or the other way round) by editing; "
                                        "remove it and add the other kind.")
-            if draft.kind == "block":
+            if draft.kind == "todo":
+                stored = None
+                if editing is not None:
+                    stored = self._unwrap(self._planning.get_task(editing.id))
+                    if stored is None:
+                        raise _Failure("That To Do no longer exists.")
+                    if not stored.is_todo:
+                        raise InvalidFormError("A scheduled task cannot become a To Do by editing; remove it and "
+                                               "add a To Do.")
+                result = self._planning.add_or_update_task(build_todo(draft, existing=stored),
+                                                           expected_version=expected_version)
+                if not result.ok:
+                    raise _FormFailure(result.error or "The To Do could not be saved.", result.cause)
+            elif draft.kind == "block":
                 stored = self._find_block(editing.id) if editing is not None else None
                 block = build_block(draft, timezone_name=self.timezone, existing=stored)
                 result = self._planning.save_fixed_block(block, expected_version=expected_version)
@@ -530,6 +559,9 @@ class SchedulePageController:
                     stored = self._unwrap(self._planning.get_task(editing.id))
                     if stored is None:
                         raise _Failure("That task no longer exists.")
+                if stored is not None and stored.is_todo:
+                    raise InvalidFormError("A To Do cannot become a scheduled task by editing; remove it and add "
+                                           "a task.")
                 if stored is not None and stored.is_series and draft.needs_configuration and not draft.date.strip():
                     draft = replace(draft, date=self.form_date.isoformat())  # configuring: it starts on this page's date
                 if draft.new_type_label.strip():
@@ -566,7 +598,7 @@ class SchedulePageController:
             raise _Failure("This occurrence's series was deleted; only this occurrence can be changed.")
         content = {name: getattr(edited, name) for name in (
             "project_id", "name", "category", "tags", "estimated_duration_minutes", "priority", "points", "required",
-            "preferred_time_window")}
+            "preferred_time", "preferred_time_window")}
         definition = series.model_copy(update=content)
         return self._planning.edit_series(definition, expected_version=series.version, scope=chosen,
                                           cutoff=stored.occurrence_slot if chosen == EditScope.FUTURE else None)
@@ -581,17 +613,21 @@ class SchedulePageController:
                 if task.is_occurrence or task.is_series:
                     return ControllerResult.success(
                         f"Remove \u201c{self._task_display(task)}\u201d, a repeating task? Removed occurrences are "
-                        "never generated again, and their saved schedule entries go with them. Occurrences already "
-                        "started or finished, and ones you edited on their own, are kept. Execution history "
-                        "(work sessions, feedback) is kept."
+                        "never generated again, and their saved schedule entries, completions and points go with "
+                        "them. Occurrences already started or finished, and ones you edited on their own, are kept."
                     )
+                if task.is_todo:
+                    return ControllerResult.success(
+                        f"Remove the To Do \u201c{self._task_display(task)}\u201d? Its completion and points are "
+                        "removed with it.")
                 return ControllerResult.success(
-                    f"Remove the task \u201c{self._task_display(task)}\u201d? Its saved schedule entries are removed too. "
-                    "Execution history (work sessions, feedback) is kept."
+                    f"Remove the task \u201c{self._task_display(task)}\u201d? Its saved schedule entries, completions "
+                    "and points are removed with it."
                 )
             block = self._find_block(ref.id)
             return ControllerResult.success(
-                f"Remove the fixed block \u201c{block.label}\u201d on {day_label(block.planned_date)}?")
+                f"Remove the fixed block \u201c{block.label}\u201d on {day_label(block.planned_date)}? Its "
+                "completion and points are removed with it.")
         except _Failure as failure:
             return ControllerResult.failure(failure.message, failure.cause)
 
@@ -824,7 +860,6 @@ class SchedulePageController:
 
         series_rows = self._series_rows(start, end)
         shown = display_namer(self._planning, [*tasks.values(), *series_rows], self._unwrap)
-        placed_task_ids = {p.task_id for p in placements}
         for placement in placements:
             task = tasks[placement.task_id]
             day = placement.planned_date
@@ -840,8 +875,10 @@ class SchedulePageController:
         for task_id in planning_range.task_ids:
             task = tasks[task_id]
             planned = task_planned_date(task)
-            window = task.preferred_time_window
-            window_text = f"pref {format_window(window.start_minute, window.end_minute)}" if window else "any time"
+            window = task.preferred_time_window if task.preferred_time is None else None  # legacy data only
+            window_text = (f"prefers {task.preferred_time.value}" if task.preferred_time is not None
+                           else f"pref {format_window(window.start_minute, window.end_minute)}" if window
+                           else "any time")
             sort_start = window.start_minute if window else 0
             type_label = "flexible"
             if task.is_occurrence:
@@ -851,11 +888,6 @@ class SchedulePageController:
                 day_label=day_label(planned) if planned is not None else "any",
                 name=shown(task), type_label=type_label, time_text=window_text,
             )))
-            if task.id not in placed_task_ids and planned is not None and self._in_range(planned) and window:
-                canvas.append(CanvasItem(
-                    self._day_index(planned), f"{shown(task)}  · pref", task.category,
-                    window.start_minute, window.end_minute, "preview",
-                ))
         for series in series_rows:
             rule = series.recurrence
             first = rule.start_date if rule.configured else None
