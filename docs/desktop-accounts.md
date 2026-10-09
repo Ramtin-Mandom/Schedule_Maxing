@@ -43,8 +43,11 @@ password in this (default) mode.
    (`DEFAULT_BACKEND_URL` in `config/settings.py`). Only for development, set
    `SCHEDULE_MAXING_BACKEND_URL` before starting to use another server (for
    example `http://127.0.0.1:8000`), or to `off` for no backend at all.
-   **Check connection** only asks the backend whether it answers; it never
-   reads, writes or uploads a record.
+   **Check connection** never reads, writes or uploads a record. It checks,
+   one after the other, that the server answers, that the server reaches its
+   own database, that the server accepts this device's session (when signed
+   in), and how the last synchronization ended -- and says which one failed.
+   A server that was idle can take up to a minute to answer the first time.
 4. **Create an account** (or sign in) on the same page. From then on nothing
    else is needed: saving is local, and uploading and downloading are automatic.
 
@@ -69,7 +72,8 @@ PostgreSQL is the only copy, so there is nothing to associate or synchronize.
 
 - Shows whether you are signed in and whether the server can be reached.
   There is no address to enter: the app uses its own API.
-- **Check connection** tests whether the server answers.
+- **Check connection** tests the server, its database, the account session
+  and the last synchronization separately, and names the stage that failed.
 - Nothing is sent until you sign in, so the app still works fully offline.
 
 **Keep me signed in**

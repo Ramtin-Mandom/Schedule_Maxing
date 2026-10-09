@@ -117,12 +117,12 @@ _TASK_COLUMNS = (
     "recurrence_frequency", "recurrence_interval", "recurrence_day_of_month",
     "recurrence_end_date", "recurrence_count", "recurrence_start_date", "recurrence_timezone",
     "series_id", "occurrence_slot", "occurrence_state", "series_version", "series_predecessor_id",
-    "created_at", "updated_at", "version", "deleted_at",
+    "created_at", "updated_at", "version", "deleted_at", "kind", "preferred_time",
 )
 
 _FIXED_BLOCK_COLUMNS = (
     "id", "user_id", "label", "category", "planned_date", "timezone", "planned_start", "planned_end",
-    "planned_start_utc", "planned_end_utc", "created_at", "updated_at", "version", "deleted_at",
+    "planned_start_utc", "planned_end_utc", "created_at", "updated_at", "version", "deleted_at", "points",
 )
 
 _PLACEMENT_COLUMNS = (
@@ -555,10 +555,10 @@ class PlanningRepository:
         start_date in that timezone.
         """
         with self._read():
-            return self._load_tasks(
+            return _schedulable(self._load_tasks(
                 _ELIGIBLE_FOR_RANGE_WHERE,
                 (start_date.isoformat(), end_date.isoformat(), _range_start_text(start_date, timezone_name)),
-            )
+            ))
 
     def list_tasks_planned_in_range(
         self,
@@ -577,12 +577,13 @@ class PlanningRepository:
         """
         with self._read():
             if include_undated:
-                return self._load_tasks(
+                return _schedulable(self._load_tasks(
                     _PLANNED_IN_RANGE_WHERE,
                     (start_date.isoformat(), end_date.isoformat(), _range_start_text(start_date, timezone_name)),
                     include_deleted,
-                )
-            return self._load_tasks(_DATED_IN_RANGE_WHERE, (start_date.isoformat(), end_date.isoformat()), include_deleted)
+                ))
+            return _schedulable(self._load_tasks(_DATED_IN_RANGE_WHERE, (start_date.isoformat(), end_date.isoformat()),
+                                                 include_deleted))
 
     def existing_task_ids(self, task_ids: Iterable[uuid.UUID], *, include_deleted: bool = False) -> set[uuid.UUID]:
         return self._existing_ids("tasks", task_ids, include_deleted)
@@ -908,6 +909,31 @@ class PlanningRepository:
             )
             return row["id"]
 
+    def soft_delete_executions(
+        self, *, task_ids: Iterable[uuid.UUID] = (), placement_ids: Iterable[uuid.UUID] = (),
+        execution_ids: Iterable[uuid.UUID] = (), deleted_at: datetime,
+    ) -> int:
+        """
+        Tombstone (version + 1, like ExecutionRepository.soft_delete_execution)
+        every live execution of these tasks, of these placements, or with one
+        of these ids: the records that go with a task, a fixed block or a
+        day's schedule the user deletes. A tombstoned execution is in no
+        history, statistic or points total, and the tombstone synchronizes.
+        Matching is by id only. Returns how many were removed.
+        """
+        stamp = deleted_at.astimezone(timezone.utc).isoformat()
+        owner_sql, owner_params = self._owner_sql()
+        removed = 0
+        with self.transaction():
+            for column, ids in (("task_id", task_ids), ("scheduled_task_id", placement_ids), ("id", execution_ids)):
+                for chunk in _chunks(_ids(ids)):
+                    removed += self._connection.execute(
+                        "UPDATE executions SET deleted_at = ?, updated_at = ?, version = version + 1 "
+                        f"WHERE {column} IN ({_placeholders(chunk)}) AND {_LIVE}{owner_sql}",
+                        (stamp, stamp, *chunk, *owner_params),
+                    ).rowcount
+        return removed
+
     def get_placements(
         self, placement_ids: Iterable[uuid.UUID], *, include_deleted: bool = False
     ) -> dict[uuid.UUID, ScheduledTask]:
@@ -1164,6 +1190,11 @@ class PlanningRepository:
         return found
 
 
+def _schedulable(tasks: list[Task]) -> list[Task]:
+    """A range's work to plan: a To Do is a checklist item, never part of any date's schedule."""
+    return [task for task in tasks if not task.is_todo]
+
+
 def _range_start_text(start_date: date_, timezone_name: str) -> str:
     """The first instant of `start_date` in the planning timezone, as deadline_utc-comparable text."""
     return _utc_text(local_day_start_utc(start_date, timezone_name))
@@ -1241,6 +1272,8 @@ def _task_to_row(task: Task) -> tuple:
         task.updated_at.isoformat(),
         task.version,
         _iso(task.deleted_at),
+        task.kind.value,
+        task.preferred_time.value if task.preferred_time is not None else None,
     )
 
 
@@ -1275,6 +1308,8 @@ def _row_to_task(
             "estimated_duration_minutes": row["estimated_duration_minutes"],
             "priority": row["priority"],
             "points": row["points"],
+            "kind": row["kind"],
+            "preferred_time": row["preferred_time"],
             "task_type_id": _uuid_or_none(row["task_type_id"]),
             "required": bool(row["required"]),
             "required_date": _date_or_none(row["required_date"]),
@@ -1302,6 +1337,7 @@ def _fixed_block_to_row(block: FixedBlock) -> tuple:
         block.timezone, block.planned_start.isoformat(), block.planned_end.isoformat(),
         _utc_text(block.planned_start), _utc_text(block.planned_end),
         block.created_at.isoformat(), block.updated_at.isoformat(), block.version, _iso(block.deleted_at),
+        block.points,
     )
 
 
@@ -1312,6 +1348,7 @@ def _row_to_fixed_block(row: sqlite3.Row) -> FixedBlock:
             "user_id": _uuid_or_none(row["user_id"]),
             "label": row["label"],
             "category": row["category"],
+            "points": row["points"],
             "planned_date": date_.fromisoformat(row["planned_date"]),
             "timezone": row["timezone"],
             "planned_start": datetime.fromisoformat(row["planned_start"]),

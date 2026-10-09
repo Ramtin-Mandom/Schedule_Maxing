@@ -129,6 +129,8 @@ SCHEDULING_MODES_FEATURE = "scheduling_modes"
 TASK_TYPES_FEATURE = "task_types"
 #: A project's planned dates, completion and milestones.
 PROJECT_DETAILS_FEATURE = "project_details"
+#: A task's kind (flexible / todo) and preferred third of the day, and a fixed block's points.
+TASK_KINDS_FEATURE = "task_kinds"
 
 
 @dataclass(frozen=True)
@@ -193,6 +195,17 @@ class SyncStatus:
     #: active one. Pending, conflicts and the last successful sync are its -- durable, so they are known after a
     #: restart before anyone signs in again.
     workspace_account: Account | None = None
+
+
+@dataclass(frozen=True)
+class ConnectionCheck:
+    """One stage of SyncService.diagnose_connection."""
+
+    #: api | database | session | sync
+    stage: str
+    #: ok | failed | skipped
+    state: str
+    message: str
 
 
 def _utcnow() -> datetime:
@@ -552,6 +565,63 @@ class SyncService:
             return False
         return True
 
+    def diagnose_connection(self) -> list[ConnectionCheck]:
+        """
+        Check each stage between this device and its records on the server,
+        separately: the API answers (GET /health), the API reaches its migrated
+        database (GET /ready), the server accepts this device's session (an
+        authenticated request), and how the last synchronization ended. It
+        stops at the first stage nothing later can pass without. Nothing is
+        written and no synchronization runs.
+        """
+        transport = self._require_transport()
+        try:
+            self._reaching(transport.health)
+        except (TransportError, ProtocolError, AuthenticationError) as error:
+            return [ConnectionCheck("api", "failed", str(error))]
+        checks = [ConnectionCheck("api", "ok", f"{transport.base_url} answered.")]
+
+        ready = getattr(transport, "ready", None)
+        try:
+            if ready is None:
+                raise ProtocolError("no readiness check", status=404)
+            ready()
+            checks.append(ConnectionCheck("database", "ok", "The server reaches its database."))
+        except TransportError as error:
+            if error.body.get("migrations") == "pending":
+                message = "The server reaches its database, but the database has not been migrated to its version."
+            elif error.status == 503:
+                message = "The server is running but cannot reach its database."
+            else:
+                message = str(error)
+            return [*checks, ConnectionCheck("database", "failed", message)]
+        except (ProtocolError, AuthenticationError) as error:
+            if getattr(error, "status", None) != 404:
+                return [*checks, ConnectionCheck("database", "failed", str(error))]
+            checks.append(ConnectionCheck("database", "skipped", "This server does not report its database state."))
+
+        with self._state_lock:
+            token = self._token
+        if token is None:
+            return [*checks, ConnectionCheck("session", "skipped", "Not signed in, so the account and "
+                                                                   "synchronization were not checked.")]
+        try:
+            self._authorized(token, transport.capabilities)
+        except AuthenticationError:
+            return [*checks, ConnectionCheck("session", "failed", "The server no longer accepts this device's "
+                                                                  "session. Sign in again.")]
+        except (TransportError, ProtocolError) as error:
+            return [*checks, ConnectionCheck("session", "failed", str(error))]
+        checks.append(ConnectionCheck("session", "ok", "The server accepted this device's session."))
+
+        report = self.last_report
+        if report.status in ("offline", "auth_required", "error"):
+            checks.append(ConnectionCheck("sync", "failed", f"The last synchronization failed: {report.message} "
+                                                            "Use Sync now to try again."))
+        else:
+            checks.append(ConnectionCheck("sync", "ok", "The last synchronization reported no problem."))
+        return checks
+
     def _require_transport(self) -> SyncTransport:
         if self._transport is None:
             raise RuntimeError("No backend is configured.")
@@ -659,9 +729,11 @@ class SyncService:
                 modes = SCHEDULING_MODES_FEATURE in features
                 types = TASK_TYPES_FEATURE in features
                 details = PROJECT_DETAILS_FEATURE in features
+                kinds = TASK_KINDS_FEATURE in features
                 for _ in range(MAX_PUSH_ROUNDS):
                     self._engine.prepare(account, recurrence=recurrence, manual_placements=manual,
-                                         scheduling_modes=modes, task_types=types, project_details=details)
+                                         scheduling_modes=modes, task_types=types, project_details=details,
+                                         task_kinds=kinds)
                     batch = self._engine.next_batch(account, self._push_batch_size)
                     if not batch:
                         break

@@ -118,36 +118,6 @@ def test_paint_does_not_dispatch_pending_idle_callbacks():
         collection.close()
 
 
-def test_unchanged_dependency_choices_do_not_fire_variable_traces():
-    import uuid
-    import customtkinter as ctk
-    from app.ui.task_editor import DependencyPicker
-    from app.ui.task_form_model import Choice
-
-    try:
-        root = ctk.CTk()
-    except tk.TclError:
-        pytest.skip("no display available for Tk")
-    collection = tk_lifecycle.DesktopCollection(root)
-    try:
-        picker = DependencyPicker(root)
-        choices = [Choice(uuid.uuid4(), "Synthetic")]
-        picker.set_choices(choices)
-        writes = []
-        var = picker.vars[choices[0].id]
-        var.trace_add("write", lambda *_: writes.append(True))
-        picker.set_choices(choices)
-        assert writes == []
-        picker.set_choices(choices, (choices[0].id,))
-        assert writes == [True] and picker.selected() == (choices[0].id,)
-        picker.set_choices(choices)
-        assert writes == [True]  # a reload preserves the actual selection
-    finally:
-        root.destroy()
-        tk_lifecycle.release_resources(root)
-        collection.close()
-
-
 def test_available_chips_reuse_widgets_but_refresh_versions_and_remove_deleted_tasks(tmp_path, monkeypatch):
     from app.planning.models import Task
     from tests.ui.test_desktop_app import open_app, close_app, pump, WEDNESDAY, _display_available

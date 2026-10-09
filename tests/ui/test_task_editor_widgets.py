@@ -69,8 +69,9 @@ def test_defaults_points_steps_and_added_categories(tmp_path: Path, dialogs) -> 
         assert form.points_field.get() == "0"  # never below 0
 
         form.defaults_button.invoke()  # no category: the general defaults
-        assert (form.name_field.get(), form.duration_field.get(), form.priority_select.get(),
-                form.points_field.get()) == ("Task", "1 h", "5", "20")
+        assert (form.name_field.get(), form.duration_field.get(), form.points_field.get()) == ("Task", "1 h", "20")
+        assert not hasattr(form, "priority_select") and not hasattr(form, "more_button")  # no priority, no "more"
+        assert form.preferred_select.values == ["Early", "Mid", "Late"] and form.preferred_select.get() == "Mid"
         form.name_field.variable.set("")
         form.category_select.variable.set("study")
         form.defaults_button.invoke()
@@ -141,10 +142,21 @@ def test_times_tags_and_a_minute_precise_task(tmp_path: Path, dialogs) -> None:
         form = day.form
         assert not hasattr(form, "date_field")  # no date to type: a new task starts on the page's date
         assert form.date_text == WEDNESDAY.isoformat() and not hasattr(form, "date_label")  # the date is not shown
-        form.toggle_more()
+        # The three task types show only their own fields, at once.
+        assert list(form.kind_buttons) == ["task", "block", "todo"]
+        assert not hasattr(form, "window_start") and not hasattr(form, "toggle_more")  # no custom preferred window
+        form.set_kind("todo")
         pump(app)
+        shown_for_todo = {name: widget.winfo_manager() == "grid" for name, widget in (
+            ("points", form.points_field), ("tags", form.tag_input), ("task", form.task_frame),
+            ("block", form.block_frame), ("project", form.project_select))}
+        assert shown_for_todo == {"points": True, "tags": True, "task": False, "block": False, "project": False}
+        form.set_kind("block")
+        pump(app)
+        assert form.block_frame.winfo_manager() == "grid" and form.points_field.winfo_manager() == "grid"
+        assert form.task_frame.winfo_manager() == "" and form.tag_input.winfo_manager() == ""
 
-        start = form.window_start
+        start = form.start_field
         assert not hasattr(start, "up_button") and start.meridiem == "AM"  # no spinner; AM by default
         start.hour_var.set("10")
         start.minute_var.set("13")
@@ -168,11 +180,16 @@ def test_times_tags_and_a_minute_precise_task(tmp_path: Path, dialogs) -> None:
         start.normalize()
         pump(app)
         assert start.error == ""
-        end = form.window_end
+        end = form.end_field
         end.hour_var.set("12")
         end.minute_var.set("00")
         assert end.meridiem == "AM" and end.get() == "12:00 AM (next day)" and end.value() == 1440
         assert end.next_day_label.winfo_manager() == "grid"  # it says so beside the input
+        # Back to a flexible task: the block's typed times stay hidden and are not part of what is saved.
+        form.set_kind("task")
+        form.preferred_select.variable.set("Late")
+        pump(app)
+        assert form.task_frame.winfo_manager() == "grid" and form.block_frame.winfo_manager() == ""
 
         tags = form.tag_input
         for text in ("focus", "math", "focus"):
@@ -197,11 +214,12 @@ def test_times_tags_and_a_minute_precise_task(tmp_path: Path, dialogs) -> None:
         pump(app)
         assert dialogs.errors == [] and "Flashcards" in tree_names(day)
         task = stored(app)["Flashcards"]
-        assert task.estimated_duration_minutes == 13
-        assert (task.preferred_time_window.start_minute, task.preferred_time_window.end_minute) == (613, 1440)
+        assert task.estimated_duration_minutes == 13 and not task.is_todo
+        assert task.preferred_time.value == "late" and task.preferred_time_window is None  # nothing of the block's
         assert task.tags == ["reading"] and task.preferred_dates == [WEDNESDAY]
         assert form.name_field.get() == "" and form.date_text == WEDNESDAY.isoformat()  # ready for the next
-        assert form.window_start.get() == "" and form.window_start.meridiem == "AM"
+        assert form.start_field.get() == "" and form.start_field.meridiem == "AM"
+        assert form.preferred_select.get() == "Mid"  # a new task starts from the default again
     finally:
         close_app(app)
 

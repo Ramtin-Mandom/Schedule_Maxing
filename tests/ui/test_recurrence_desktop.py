@@ -38,7 +38,7 @@ def _restore_installed_registry():
 
 def weekly_draft(**fields) -> TaskDraft:
     return TaskDraft(**{"name": "Gym", "category": "exercise", "date": MON.isoformat(), "duration": "45",
-                        "priority": "6", "repeat": "weekly", "repeat_weekdays": (0, 3), **fields})
+                        "repeat": "weekly", "repeat_weekdays": (0, 3), **fields})
 
 
 # -----------------------------------------------------------------------------
@@ -160,12 +160,12 @@ def test_edit_scopes_from_one_occurrence(week: SchedulePageController) -> None:
 
     from_thursday = {row.date: row for row in rows(week)["repeat"]}[MON + timedelta(days=3)]
     draft = week.draft_for(from_thursday.ref).value
-    assert week.save_draft(replace(draft, priority="9"), editing=from_thursday.ref, scope="future").ok
+    assert week.save_draft(replace(draft, points="9"), editing=from_thursday.ref, scope="future").ok
     labels = rows(week)
     assert len(labels["repeats"]) == 2  # the series now ends on Wednesday; a new segment starts Thursday
     week.make_schedule()
     later = [row for row in rows(week)["repeat"] if row.date >= MON + timedelta(days=3)]
-    assert later and all(week.planning.get_task(row.ref.id).value.priority == 9 for row in later)
+    assert later and all(week.planning.get_task(row.ref.id).value.points == 9 for row in later)
 
 
 def test_removal_scopes_from_one_occurrence(week: SchedulePageController) -> None:

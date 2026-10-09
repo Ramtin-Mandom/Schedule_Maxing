@@ -120,7 +120,7 @@ MAX_LINEAGE = 64
 #: The content fields an occurrence takes from its series definition.
 _CONTENT_FIELDS = (
     "project_id", "name", "category", "tags", "estimated_duration_minutes", "priority", "points", "required",
-    "preferred_time_window",
+    "preferred_time", "preferred_time_window",
 )
 #: The occurrence fields its series dictates (public: synchronization re-derives an occurrence from a series).
 SERIES_CONTENT_FIELDS = _CONTENT_FIELDS

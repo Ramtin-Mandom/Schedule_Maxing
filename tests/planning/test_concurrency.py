@@ -15,7 +15,6 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from app.execution.errors import ExecutionDeletedError, ExecutionNotFoundError, ExecutionVersionConflictError
-from app.execution.models import ExecutionStatus
 from app.execution.service import ExecutionService
 from app.planning.application import PlanningService
 from app.planning.errors import DuplicateEntityError, InvalidEntityError, VersionConflictError
@@ -184,8 +183,8 @@ def test_soft_deletion_keeps_history_and_tombstones_are_not_reusable(
     assert planning_service.get_task(task.id) is None
     assert planning_service.placements_for_date(MON) == []
     assert planning_service.list_placements(include_deleted=True)[0].deleted_at is not None  # a tombstone, not gone
-    history = execution_service.get_execution(execution.id)
-    assert history.status == ExecutionStatus.IN_PROGRESS and history.task_id == task.id
+    with pytest.raises(ExecutionNotFoundError):  # its executions are removed with it (tombstoned, like it)
+        execution_service.get_execution(execution.id)
     with pytest.raises(DuplicateEntityError):
         planning_service.create_task(make_task("Reuse", id=task.id))
 

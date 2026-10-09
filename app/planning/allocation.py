@@ -150,7 +150,7 @@ def _priority_ordered_topological_sort(
                 dependents[dependency_id].append(task_id)
 
     def tie_break(task_id: uuid.UUID) -> tuple:
-        return (-registry[task_id].priority, str(task_id))
+        return str(task_id)
 
     ready = sorted((task_id for task_id, degree in in_degree.items() if degree == 0), key=tie_break)
     order: list[uuid.UUID] = []

@@ -177,6 +177,8 @@ from app.planning.models import (
     PLACEMENT_SNAPSHOT_FIELDS,
     DayScheduleOutput,
     FixedBlock,
+    fixed_block_execution_id,
+    todo_date,
     OccurrenceState,
     PlacementOrigin,
     PlacementRemovalReason,
@@ -202,6 +204,7 @@ from app.planning.preferences import (
 from app.planning.provenance import GenerationRecord, placements_digest
 from app.planning.repository import PlanningRepository
 from app.planning.scope import OwnerScope
+from app.planning.time import local_date_of, validate_timezone
 
 Clock = Callable[[], datetime]
 
@@ -738,6 +741,25 @@ class PlanningService:
         with self._repository.transaction():
             return self._write_tasks([task], {task.id: expected_version})[0]
 
+    def assign_todo_dates(self, timezone_name: str) -> int:
+        """
+        Give every live To Do that has no assigned day one: the calendar date
+        it was created on in `timezone_name` (the user's time zone) -- the
+        day it was added, as nearly as it can be recovered. A To Do that
+        already has a day is never touched, so running this again changes
+        nothing; nothing but those To Dos' dates is written (ordinary task
+        updates: versioned, and synchronized like any edit). Returns how many
+        were dated.
+        """
+        validate_timezone(timezone_name)
+        with self._repository.transaction():
+            undated = [task for task in self._repository.list_tasks()
+                       if task.is_todo and task.required_date is None and not task.preferred_dates]
+            for task in undated:
+                day = local_date_of(task.created_at, timezone_name)
+                self._write_tasks([task.model_copy(update={"preferred_dates": [day]})], {task.id: task.version})
+            return len(undated)
+
     def save_task(self, task: Task, *, expected_version: int | None = None) -> Task:
         """Create (expected_version=None) or update one task."""
         if expected_version is None:
@@ -856,6 +878,8 @@ class PlanningService:
             (placement.id for group in placements.values() for placement in group), deleted_at=now,
             removal_reason=cascade_reason,
         )
+        # A deleted task leaves nothing behind: its executions (completions, points, statistics) go with it.
+        self._repository.soft_delete_executions(task_ids=live, deleted_at=now)
         return len(live)
 
     # ------------------------------------------------------------------
@@ -1022,10 +1046,12 @@ class PlanningService:
             state = self._repository.record_states("fixed_blocks", [block_id]).get(str(block_id))
             if state is None or state[1]:
                 return False
-            if not self._repository.soft_delete_fixed_block(
-                block_id, deleted_at=self._clock(), expected_version=expected_version
-            ):
+            now = self._clock()
+            if not self._repository.soft_delete_fixed_block(block_id, deleted_at=now, expected_version=expected_version):
                 self._check_version("fixed_block", block_id, expected_version)
+            # Its one execution (its completion and points) goes with it.
+            self._repository.soft_delete_executions(
+                execution_ids=[fixed_block_execution_id(uuid.UUID(str(block_id)))], deleted_at=now)
             return True
 
     def set_fixed_blocks_for_date(
@@ -1805,6 +1831,12 @@ class PlanningService:
             for block in blocks.values():
                 if not self._repository.soft_delete_fixed_block(block.id, deleted_at=now, expected_version=block.version):
                     self._check_version("fixed_block", block.id, block.version)
+            # The range's record of what happened goes with its plan: the executions of every removed
+            # placement (a kept repeating or undated task's attempt on these dates included) and fixed block.
+            # The deleted tasks' executions go with the tasks (_delete_tasks). Other dates are untouched.
+            self._repository.soft_delete_executions(
+                placement_ids=[*plan.placement_ids, *plan.cascade_placement_ids],
+                execution_ids=[fixed_block_execution_id(block.id) for block in blocks.values()], deleted_at=now)
             tasks = self._repository.get_tasks(plan.task_ids)
             deleted_tasks = self._delete_tasks(
                 {task.id: task.version for task in tasks.values()}, cascade_reason=PlacementRemovalReason.RESET
@@ -1832,6 +1864,9 @@ class PlanningService:
         preferences = self._repository.list_date_preference_records(start_date, end_date)
         dated = self._repository.list_tasks_planned_in_range(start_date, end_date, include_undated=False)
         tasks = [task for task in dated if task.recurrence is None]
+        # The range's To Dos (never in a schedulable range) are its tasks too.
+        tasks += [task for task in self._repository.list_tasks()
+                  if task.is_todo and start_date <= todo_date(task) <= end_date]
         protected = [task.id for task in dated if task.recurrence is not None]
         task_ids = {task.id for task in tasks}
 

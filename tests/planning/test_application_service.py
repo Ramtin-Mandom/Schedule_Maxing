@@ -199,7 +199,7 @@ def test_project_with_tasks_cannot_be_deleted(planning_service: PlanningService)
     assert planning_service.delete_project(project.id, expected_version=project.version) is True
 
 
-def test_deleting_a_task_never_touches_its_execution_history(
+def test_deleting_a_task_removes_its_executions_and_only_its_own(
     planning_service: PlanningService, execution_service: ExecutionService
 ) -> None:
     task = planning_service.save_task(make_task("Worked on"))
@@ -208,14 +208,17 @@ def test_deleting_a_task_never_touches_its_execution_history(
     execution_service.start(execution.id)
     execution_service.complete(execution.id)
 
+    # Another task with the very same name, completed too: ids decide, never names.
+    twin = planning_service.save_task(make_task("Worked on"))
+    kept = execution_service.complete(execution_service.create_canonical_execution(twin, None).id)
+
     planning_service.delete_task(task.id, expected_version=task.version)
 
     assert planning_service.placements_for_date(MON) == []  # placements go with their task
-    history = execution_service.get_execution(execution.id)  # history stays, identity intact
-    assert history.status == ExecutionStatus.COMPLETED
-    assert history.task_id == task.id and history.scheduled_task_id == placement.id
-    assert history.task_name == "Worked on"
-    assert len(execution_service.list_sessions(execution.id)) == 1
+    # ...and so do its completions (points, statistics): nothing of a deleted task is left in the history.
+    assert [item.id for item in execution_service.list_executions()] == [kept.id]
+    assert execution_service.get_execution(kept.id).status == ExecutionStatus.COMPLETED
+    assert planning_service.delete_task(task.id, expected_version=task.version) is False  # again: nothing to do
 
 
 # -----------------------------------------------------------------------------

@@ -9,7 +9,15 @@ shown next to their fields, with the typed values kept.
 
 Controls:
 
-- Times (preferred window, deadline time, fixed-block start/end) use the
+- Task type: Flexible | Fixed | To Do. Choosing one shows only that kind's
+  fields at once; a draft is built from the shown kind's fields alone, so a
+  value typed for another kind is never saved (app/ui/task_form_model.py).
+  Flexible: name, category, project, points, duration, preferred time
+  (Early / Mid / Late), required, tags. Fixed: label, category, points,
+  start, end. To Do: name, category, points, tags. There are no advanced
+  settings: no deadline, task type, dependency or repeat controls. What a
+  stored record has of those is kept as it is when the record is edited.
+- Times (fixed-block start/end) use the
   shared [ Hour ] : [ Minute ] [ AM/PM ] input (app/ui/clock_input.py),
   exact to the minute; an end time of 12:00 AM means the next midnight.
   No minutes-from-midnight and no spinners anywhere.
@@ -25,25 +33,20 @@ Controls:
 - Points: typed, or stepped by 10 with the - / + buttons.
 - DurationField: minutes typed as "13", "1 h 13 min" or "1:13", or stepped
   (1 minute, 15 with Shift).
-- DateField (the optional deadline date): YYYY-MM-DD, Up/Down move a day.
 - TagInput: Enter adds the typed tag as a chip (it never submits the form);
   a chip's button (or Enter/Space on it) removes it; Backspace in the empty
   entry removes the last tag. Tags keep their order. The chips are one row,
   scrolled sideways when they are wider than the form.
-- Above the submit button: "Add more options" (window, deadline, type,
-  dependencies, repeats) and "Use default values", which fills the name (if
-  empty), duration, priority and points from the chosen category's defaults
-  (the general ones when no category is chosen).
-- DependencyPicker: checkboxes labelled by task name and date, kept by id.
-- Repeats (docs/recurrence.md): does not repeat / daily / weekly (weekday
-  checkboxes) / monthly (day of month), every N, ending never, on a date or
-  after N occurrences. The page's date is the series' start. An edited
-  series or occurrence shows what it is (recurrence_note); for an occurrence
-  the repeat controls are off -- the page asks, when saving, whether the
-  change applies to that occurrence, it and every later one, or the series.
+- Above the submit button: "Use default values", which fills the name (if
+  empty), duration and points from the chosen category's defaults (the
+  general ones when no category is chosen).
+- While a stored record is being edited: "Remove task" (the page removes it
+  through its services) and "Cancel edit".
+- An edited series or occurrence shows what it is (recurrence_note); for an
+  occurrence the page asks, when saving, whether the change applies to that
+  occurrence, it and every later one, or the series.
 
-A fixed block (label, category, start, end on the page's date) and a
-flexible task are different forms; editing never switches between them.
+The three kinds are different forms; editing never switches between them.
 """
 
 from __future__ import annotations
@@ -75,9 +78,7 @@ from app.planning.models import DEFAULT_TASK_POINTS, MAX_TASK_POINTS, ProjectTas
 from app.ui.task_defaults import TaskDefaultsStore, resolve_task_default
 from app.ui.task_form_model import (
     CATEGORIES,
-    PRIORITIES,
-    WEEKDAY_NAMES,
-    Choice,
+    DEFAULT_PREFERRED_TIME,
     EditorOptions,
     TaskDraft,
     parse_points,
@@ -95,12 +96,11 @@ NO_PROJECT = "None"
 NO_CATEGORY = "(none)"
 UNSET_CATEGORY = "other"
 POINTS_STEP = 10
-#: The task-type choices that are not a stored type: keep the task's own type / create one from the name below.
-OWN_TYPE = "(its own type)"
-NEW_TYPE = "New type..."
-#: "Repeats" labels and the draft values they stand for.
-REPEAT_LABELS = {"Does not repeat": "", "Daily": "daily", "Weekly": "weekly", "Monthly": "monthly"}
-END_LABELS = {"Never": "never", "On a date": "on", "After a number of times": "after"}
+#: The task-type switch: draft kind -> its button text, and what the kind is called in titles.
+KIND_LABELS = {"task": "Flexible", "block": "Fixed", "todo": "To Do"}
+KIND_NOUNS = {"task": "task", "block": "fixed block", "todo": "To Do"}
+#: "Preferred time" labels and the draft values they stand for (a third of the day's schedulable window).
+PREFERRED_LABELS = {"Early": "early", "Mid": "mid", "Late": "late"}
 
 
 def _shift_held(event) -> bool:
@@ -280,64 +280,19 @@ class TagInput(ctk.CTkFrame):
             self._on_change()
 
 
-class DependencyPicker(ctk.CTkFrame):
-    """Choose dependencies by name; the selection is kept by task id."""
-
-    def __init__(self, parent) -> None:
-        super().__init__(parent, fg_color="transparent")
-        self.columnconfigure(0, weight=1)
-        ctk.CTkLabel(self, text="Depends on", text_color=theme.TEXT_MUTED, font=font(theme.SIZE_SMALL, "bold"),
-                     anchor="w").grid(row=0, column=0, sticky="ew", pady=(0, 4))
-        self.list = AppScrollableFrame(self, height=110, fg_color=theme.INPUT_BG, corner_radius=theme.RADIUS_CONTROL)
-        self.list.grid(row=1, column=0, sticky="ew")
-        self.list.columnconfigure(0, weight=1)
-        self.empty = ctk.CTkLabel(self.list, text="No other tasks yet.", text_color=theme.TEXT_MUTED,
-                                  font=font(theme.SIZE_SMALL), anchor="w")
-        self.choices: list[Choice] = []
-        self.vars: dict[uuid.UUID, tk.BooleanVar] = {}
-        self.boxes: dict[uuid.UUID, ctk.CTkCheckBox] = {}
-
-    def set_choices(self, choices: list[Choice], selected: tuple[uuid.UUID, ...] | None = None) -> None:
-        keep = set(selected if selected is not None else self.selected())
-        if [(c.id, c.label) for c in choices] != [(c.id, c.label) for c in self.choices]:
-            for box in self.boxes.values():
-                box.destroy()
-            self.vars, self.boxes = {}, {}
-            for row, choice in enumerate(choices):
-                var = tk.BooleanVar(value=False)
-                box = ctk.CTkCheckBox(self.list, text=choice.label, variable=var, text_color=theme.TEXT_PRIMARY,
-                                      fg_color=theme.ACCENT)
-                box.grid(row=row, column=0, sticky="w", padx=8, pady=2)
-                make_keyboard_accessible(box, activate=box.toggle, ring=False)
-                self.vars[choice.id], self.boxes[choice.id] = var, box
-            self.choices = list(choices)
-        if choices:
-            self.empty.grid_remove()
-        else:
-            self.empty.grid(row=0, column=0, sticky="w", padx=8, pady=4)
-        for choice_id, var in self.vars.items():
-            selected_now = choice_id in keep
-            if var.get() != selected_now:
-                var.set(selected_now)
-        self._missing = [choice_id for choice_id in keep if choice_id not in self.vars]
-
-    def selected(self) -> tuple[uuid.UUID, ...]:
-        chosen = tuple(choice.id for choice in self.choices if self.vars[choice.id].get())
-        # A stored dependency that is not offered (e.g. deleted since) is kept, never silently dropped.
-        return chosen + tuple(getattr(self, "_missing", []))
-
-
 class TaskEditor(Card):
-    """Add or edit one flexible task or fixed block; `on_submit(draft)` saves it, `on_cancel()` leaves edit mode."""
+    """
+    Add or edit one flexible task, fixed block or To Do; `on_submit(draft)` saves it, `on_cancel()` leaves edit
+    mode and `on_remove()` (when given) removes the record being edited.
+    """
 
-    FIELD_NAMES = ("name", "category", "duration", "priority", "points", "window_start", "window_end",
-                   "deadline_date", "deadline_time", "start", "end", "repeat_interval", "repeat_day_of_month",
-                   "repeat_until", "repeat_count")
-    REPEAT_FIELDS = ("repeat", "repeat_interval", "repeat_day_of_month", "repeat_until", "repeat_count", "repeat_end")
+    FIELD_NAMES = ("name", "category", "duration", "points", "start", "end")
 
     def __init__(self, parent, *, on_submit: Callable[[TaskDraft], None], on_cancel: Callable[[], None],
-                 task_defaults: TaskDefaultsStore | None = None, date_selector: bool = False) -> None:
+                 task_defaults: TaskDefaultsStore | None = None, date_selector: bool = False,
+                 on_remove: Callable[[], None] | None = None) -> None:
         super().__init__(parent)
+        self._on_remove = on_remove
         #: The Projects page's form: a date to choose where the project choice is (the page supplies the
         #: project), and flexible tasks only -- a fixed block belongs to no project.
         self.date_selector = date_selector
@@ -355,20 +310,21 @@ class TaskEditor(Card):
         self.date_text = ""
         self.options = EditorOptions(timezone="UTC")
         self._project_ids: dict[str, uuid.UUID | None] = {NO_PROJECT: None}
-        self._type_ids: dict[str, uuid.UUID | None] = {OWN_TYPE: None}
+        #: The draft the form was last loaded from: what it does not show (see draft()) is carried from it.
+        self._loaded = TaskDraft()
 
         self.title = SectionTitle(self, "Add a task", "Flexible tasks are placed by the scheduler; fixed blocks stay "
-                                                       "where you put them.", wraplength=280)
+                                                       "where you put them; To Dos are a checklist.", wraplength=280)
         self.title.grid(row=0, column=0, sticky="ew", padx=theme.SPACE_L, pady=(theme.SPACE_L, 8))
         switch = ctk.CTkFrame(self, fg_color="transparent")
         switch.grid(row=1, column=0, sticky="ew", padx=theme.SPACE_L)
-        switch.columnconfigure((0, 1), weight=1, uniform="kind")
+        switch.columnconfigure((0, 1, 2), weight=1, uniform="kind")
         self.kind_buttons = {
-            "task": AppButton(switch, "Flexible task", lambda: self.set_kind("task"), variant="secondary", height=32),
-            "block": AppButton(switch, "Fixed block", lambda: self.set_kind("block"), variant="secondary", height=32),
+            kind: AppButton(switch, label, lambda kind=kind: self.set_kind(kind), variant="secondary", height=32)
+            for kind, label in KIND_LABELS.items()
         }
-        self.kind_buttons["task"].grid(row=0, column=0, sticky="ew", padx=(0, 4))
-        self.kind_buttons["block"].grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        for column, button in enumerate(self.kind_buttons.values()):
+            button.grid(row=0, column=column, sticky="ew", padx=(0 if column == 0 else 3, 0 if column == 2 else 3))
 
         body = self.body = ctk.CTkFrame(self, fg_color="transparent")
         body.grid(row=2, column=0, sticky="ew", padx=theme.SPACE_L, pady=(8, 0))
@@ -382,46 +338,29 @@ class TaskEditor(Card):
             self.date_field = DateField(body, "Date", hint=DateField.FORMAT_HINT)
             switch.grid_remove()
         self.name_field.grid(row=0, column=0, columnspan=2, sticky="ew", pady=4)
+        # Every kind has points: what completing it is worth (never a scheduling priority).
+        self.points_field = PointsField(body)
+        self.points_field.variable.set(str(DEFAULT_TASK_POINTS))
+        self.points_field.grid(row=2, column=0, columnspan=2, sticky="new", pady=4)
 
         # Flexible task fields
         self.task_frame = ctk.CTkFrame(body, fg_color="transparent")
         self.task_frame.columnconfigure((0, 1), weight=1, uniform="task")
         self.duration_field = DurationField(self.task_frame)
-        self.priority_select = LabeledSelect(self.task_frame, "Priority (1-10)", PRIORITIES)
-        self.priority_select.variable.set("5")
+        self.preferred_select = LabeledSelect(self.task_frame, "Preferred time", list(PREFERRED_LABELS))
+        self._set_preferred(DEFAULT_PREFERRED_TIME)
+        Tooltip(self.preferred_select, "The third of the day's schedulable hours the scheduler places it in "
+                                       "whenever it fits there")
         self.duration_field.grid(row=0, column=0, sticky="new", padx=(0, 6), pady=4)
-        self.priority_select.grid(row=0, column=1, sticky="new", padx=(6, 0), pady=4)
-        self.points_field = PointsField(self.task_frame)
-        self.points_field.variable.set(str(DEFAULT_TASK_POINTS))
-        self.points_field.grid(row=1, column=0, columnspan=2, sticky="new", pady=4)
+        self.preferred_select.grid(row=0, column=1, sticky="new", padx=(6, 0), pady=4)
         self.required_var = tk.BooleanVar(value=False)
         self.required_check = ctk.CTkCheckBox(self.task_frame, text="Required (must be scheduled)",
                                               variable=self.required_var, text_color=theme.TEXT_PRIMARY,
                                               fg_color=theme.ACCENT)
         self.required_check.grid(row=2, column=0, columnspan=2, sticky="w", pady=3)
         make_keyboard_accessible(self.required_check, activate=self.required_check.toggle, ring=False)
-        self.tag_input = TagInput(self.task_frame)
-        self.tag_input.grid(row=4, column=0, columnspan=2, sticky="ew", pady=4)
-        self.more_frame = ctk.CTkFrame(self.task_frame, fg_color="transparent")
-        self.more_frame.columnconfigure((0, 1), weight=1, uniform="more")
-        # One time input per row: [hh]:[mm][AM/PM] stays whole even in the narrow form column.
-        self.window_start = ClockInput(self.more_frame, "Preferred from")
-        self.window_end = ClockInput(self.more_frame, "Preferred until", end_of_interval=True)
-        self.window_start.grid(row=0, column=0, columnspan=2, sticky="new", pady=4)
-        self.window_end.grid(row=1, column=0, columnspan=2, sticky="new", pady=4)
-        self.deadline_date = DateField(self.more_frame, "Deadline date", optional=True)
-        self.deadline_time = ClockInput(self.more_frame, "Deadline time")
-        self.deadline_date.grid(row=2, column=0, columnspan=2, sticky="new", pady=4)
-        self.deadline_time.grid(row=3, column=0, columnspan=2, sticky="new", pady=4)
-        # The reusable task type: independent of category and tags; several tasks may share one.
-        self.type_select = LabeledSelect(self.more_frame, "Task type", [OWN_TYPE, NEW_TYPE],
-                                         command=lambda _value: self._show_new_type())
-        self.type_select.grid(row=5, column=0, columnspan=2, sticky="ew", pady=4)
-        self.new_type_field = LabeledEntry(self.more_frame, "New type name", placeholder="e.g. Reading")
-        self.dependency_picker = DependencyPicker(self.more_frame)
-        self.dependency_picker.grid(row=7, column=0, columnspan=2, sticky="ew", pady=4)
-        self._build_repeat(self.more_frame)
-        self.more_open = False
+        # Tags belong to flexible tasks and To Dos (a fixed block has none).
+        self.tag_input = TagInput(body)
         #: What the record being edited is ("task", "series", "occurrence"); a new record is a "task".
         self.recurrence_role = "task"
         self.needs_configuration = False
@@ -438,71 +377,26 @@ class TaskEditor(Card):
 
         self.timezone_label = ctk.CTkLabel(body, text="", text_color=theme.TEXT_MUTED, font=font(theme.SIZE_CAPTION),
                                            anchor="w")
-        self.timezone_label.grid(row=4, column=0, columnspan=2, sticky="ew")
+        self.timezone_label.grid(row=6, column=0, columnspan=2, sticky="ew")
 
         self.notice = Notice(self, wraplength=280)
         self.notice.grid(row=3, column=0, sticky="ew", padx=theme.SPACE_L, pady=(8, 0))
         self.notice.hide()
         bar = self.options_bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.grid(row=4, column=0, sticky="ew", padx=theme.SPACE_L, pady=(10, 0))
-        bar.columnconfigure((0, 1), weight=1, uniform="options")
-        self.more_button = AppButton(bar, "Add more options ▸", self.toggle_more, variant="ghost", height=32,
-                                     font=font(theme.SIZE_SMALL, "bold"))
-        self.more_button.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        bar.columnconfigure(0, weight=1)
         self.defaults_button = AppButton(bar, "Use default values", self.use_defaults, variant="secondary", height=32,
                                          font=font(theme.SIZE_SMALL, "bold"))
-        self.defaults_button.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        self.defaults_button.grid(row=0, column=0, sticky="ew")
         Tooltip(self.defaults_button, "Fill in the defaults of the chosen category (set in Settings)")
         self.submit_button = AppButton(self, "+ Add task", self.submit, height=44)
         self.submit_button.grid(row=5, column=0, sticky="ew", padx=theme.SPACE_L, pady=(8, 8))
+        # Shown only while a stored record is being edited.
+        self.remove_button = AppButton(self, "Remove task", self.remove, variant="danger", height=34)
         self.cancel_edit_button = AppButton(self, "Cancel edit", lambda: self._on_cancel(), variant="secondary",
                                             height=34)
-        ctk.CTkFrame(self, fg_color="transparent", height=10).grid(row=7, column=0)
+        ctk.CTkFrame(self, fg_color="transparent", height=10).grid(row=8, column=0)
         self.set_kind("task")
-
-    def _build_repeat(self, parent) -> None:
-        """The "Repeats" controls (a series; docs/recurrence.md)."""
-        frame = self.repeat_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        frame.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(8, 4))
-        frame.columnconfigure((0, 1), weight=1, uniform="repeat")
-        self.repeat_select = LabeledSelect(frame, "Repeats", list(REPEAT_LABELS),
-                                           command=lambda _value: self._show_repeat())
-        self.repeat_select.grid(row=0, column=0, columnspan=2, sticky="ew", pady=4)
-        self.repeat_interval = LabeledEntry(frame, "Every", placeholder="1", hint="days / weeks / months",
-                                            wraplength=130)
-        self.repeat_interval.variable.set("1")
-        self.repeat_day_of_month = LabeledEntry(frame, "Day of month", placeholder="start date's",
-                                                hint="Months without it are skipped.", wraplength=130)
-        self.weekday_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        self.weekday_vars = [tk.BooleanVar(value=False) for _ in WEEKDAY_NAMES]
-        for index, (name, variable) in enumerate(zip(WEEKDAY_NAMES, self.weekday_vars)):
-            box = ctk.CTkCheckBox(self.weekday_frame, text=name, variable=variable, width=60,
-                                  text_color=theme.TEXT_PRIMARY, fg_color=theme.ACCENT)
-            box.grid(row=index // 4, column=index % 4, sticky="w", pady=2)
-            make_keyboard_accessible(box, activate=box.toggle, ring=False)
-        self.repeat_end = LabeledSelect(frame, "Ends", list(END_LABELS), command=lambda _value: self._show_repeat())
-        self.repeat_until = DateField(frame, "Last date", optional=True)
-        self.repeat_count = LabeledEntry(frame, "Occurrences", placeholder="e.g. 10", wraplength=130)
-
-    def _show_repeat(self) -> None:
-        """Show only the repeat controls that apply to the chosen frequency and end."""
-        repeat = REPEAT_LABELS.get(self.repeat_select.get(), "")
-        end = END_LABELS.get(self.repeat_end.get(), "never")
-        for widget in (self.repeat_interval, self.repeat_day_of_month, self.weekday_frame, self.repeat_end,
-                       self.repeat_until, self.repeat_count):
-            widget.grid_remove()
-        if not repeat:
-            return
-        self.repeat_interval.grid(row=1, column=0, sticky="new", padx=(0, 6), pady=4)
-        if repeat == "monthly":
-            self.repeat_day_of_month.grid(row=1, column=1, sticky="new", padx=(6, 0), pady=4)
-        if repeat == "weekly":
-            self.weekday_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=4)
-        self.repeat_end.grid(row=3, column=0, columnspan=2, sticky="ew", pady=4)
-        if end == "on":
-            self.repeat_until.grid(row=4, column=0, columnspan=2, sticky="new", pady=4)
-        elif end == "after":
-            self.repeat_count.grid(row=4, column=0, columnspan=2, sticky="new", pady=4)
 
     # ------------------------------------------------------------------ fields
 
@@ -510,11 +404,7 @@ class TaskEditor(Card):
     def fields(self) -> dict[str, LabeledEntry | ClockInput]:
         return {**({"date": self.date_field} if self.date_selector else {}),
                 "name": self.name_field, "duration": self.duration_field, "points": self.points_field,
-                "window_start": self.window_start, "window_end": self.window_end,
-                "deadline_date": self.deadline_date, "deadline_time": self.deadline_time,
-                "start": self.start_field, "end": self.end_field, "repeat_interval": self.repeat_interval,
-                "repeat_day_of_month": self.repeat_day_of_month, "repeat_until": self.repeat_until,
-                "repeat_count": self.repeat_count}
+                "start": self.start_field, "end": self.end_field}
 
     def set_kind(self, kind: str) -> None:
         if self.editing and kind != self.kind:
@@ -522,39 +412,45 @@ class TaskEditor(Card):
         self.kind = kind
         for key, button in self.kind_buttons.items():
             active = key == kind
-            button.configure(text=("✓ " if active else "") + ("Flexible task" if key == "task" else "Fixed block"),
+            button.configure(text=("✓ " if active else "") + KIND_LABELS[key],
                              fg_color=theme.ACCENT if active else theme.SECONDARY_BG,
                              text_color=theme.TEXT_ON_ACCENT if active else theme.TEXT_PRIMARY,
                              state="disabled" if self.editing and not active else "normal")
+        # Only the chosen kind's fields are shown (and only they are read into a saved record).
+        self.name_field.label.configure(text="Label" if kind == "block" else "Name")
         if kind == "task":
             self.block_frame.grid_remove()
-            self.task_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
-            self.name_field.label.configure(text="Name")
+            self.task_frame.grid(row=3, column=0, columnspan=2, sticky="ew")
             self.category_select.grid(row=1, column=0, columnspan=1, sticky="new", padx=(0, 6), pady=4)
             (self.date_field if self.date_selector else self.project_select).grid(
                 row=1, column=1, sticky="new", padx=(6, 0), pady=4)
         else:
             self.task_frame.grid_remove()
-            self.block_frame.grid(row=3, column=0, columnspan=2, sticky="ew")
-            self.name_field.label.configure(text="Label")
-            self.project_select.grid_remove()  # a fixed block has no project
+            self.project_select.grid_remove()  # a fixed block and a To Do belong to no project
             self.category_select.grid(row=1, column=0, columnspan=2, sticky="new", padx=0, pady=4)
-        self.more_button.configure(state="normal" if kind == "task" else "disabled")
+            if kind == "block":
+                self.block_frame.grid(row=4, column=0, columnspan=2, sticky="ew")
+            else:
+                self.block_frame.grid_remove()
+        if kind == "block":
+            self.tag_input.grid_remove()
+        else:
+            self.tag_input.grid(row=5, column=0, columnspan=2, sticky="ew", pady=4)
+        if kind == "todo":
+            self.timezone_label.grid_remove()  # a To Do has no time
+        else:
+            self.timezone_label.grid()
         self._title()
+
+    def _set_preferred(self, value: str) -> None:
+        self.preferred_select.variable.set(next(
+            (label for label, stored in PREFERRED_LABELS.items() if stored == value), "Mid"))
 
     def set_date(self, day: date | str | None) -> None:
         """The date a new task/block gets (the page's selected date); an edited record's own date while editing."""
         self.date_text = day.isoformat() if isinstance(day, date) else (day or "").strip()
         if self.date_selector:
             self.date_field.variable.set(self.date_text)
-
-    def toggle_more(self) -> None:
-        self.more_open = not self.more_open
-        if self.more_open:
-            self.more_frame.grid(row=6, column=0, columnspan=2, sticky="ew")
-        else:
-            self.more_frame.grid_remove()
-        self.more_button.configure(text="Fewer options ▾" if self.more_open else "Add more options ▸")
 
     def _category(self) -> str:
         """The chosen category ("" while none is chosen)."""
@@ -569,8 +465,7 @@ class TaskEditor(Card):
             self.name_field.variable.set(default.name)
         if self.kind == "task":
             self.duration_field.show(default.duration)
-            self.priority_select.variable.set(str(default.priority))
-            self.points_field.variable.set(str(default.points))
+        self.points_field.variable.set(str(default.points))
         self.clear_errors()
 
     def set_options(self, options: EditorOptions) -> None:
@@ -586,54 +481,33 @@ class TaskEditor(Card):
                 label += f" ({choice.id})"
             self._project_ids[label] = choice.id
         self.project_select.set_values(list(self._project_ids))
-        self._type_ids = {OWN_TYPE: None}
-        for choice in options.task_types:
-            label = choice.label
-            while label in self._type_ids or label == NEW_TYPE:
-                label += f" ({choice.id})"
-            self._type_ids[label] = choice.id
-        self.type_select.set_values([*self._type_ids, NEW_TYPE])
-        self.dependency_picker.set_choices(options.dependencies)
         self.timezone_label.configure(text=f"Times are in {options.timezone}.")
-
-    def _show_new_type(self) -> None:
-        """The name field appears only while "New type..." is chosen."""
-        if self.type_select.get() == NEW_TYPE:
-            self.new_type_field.grid(row=6, column=0, columnspan=2, sticky="ew", pady=4)
-        else:
-            self.new_type_field.grid_remove()
-
-    def set_dependencies(self, dependency_ids: list[uuid.UUID]) -> None:
-        self.dependency_picker.set_choices(self.options.dependencies, tuple(dependency_ids))
-        if dependency_ids and not self.more_open:
-            self.toggle_more()
 
     # ------------------------------------------------------------------ draft
 
     def draft(self) -> TaskDraft:
-        project_label = self.project_select.get()
-        type_label = self.type_select.get()
-        return TaskDraft(
-            task_type_id=self._type_ids.get(type_label),
-            new_type_label=self.new_type_field.get().strip() if type_label == NEW_TYPE else "",
+        """
+        The form as a draft. The form has no deadline, task type, dependency or
+        repeat controls: for a record being edited those values are carried
+        unchanged from the draft it was loaded from (so saving never clears
+        what is stored), and a new record has none.
+        """
+        base = self._loaded if self.editing else TaskDraft()
+        return replace(
+            base,
             kind=self.kind, name=self.name_field.get(), category=self._category() or UNSET_CATEGORY,
             date=self.date_field.get().strip() if self.date_selector else self.date_text,
-            duration=self.duration_field.get(), priority=self.priority_select.get(), points=self.points_field.get(),
-            required=self.required_var.get(),
-            pin_to_date=self._pin_to_date, window_start=self.window_start.get(), window_end=self.window_end.get(),
-            deadline_date=self.deadline_date.get(), deadline_time=self.deadline_time.get(),
-            dependency_ids=self.dependency_picker.selected(), project_id=self._project_ids.get(project_label),
+            duration=self.duration_field.get(), points=self.points_field.get(),
+            required=self.required_var.get(), pin_to_date=self._pin_to_date,
+            preferred_time=PREFERRED_LABELS.get(self.preferred_select.get(), DEFAULT_PREFERRED_TIME),
+            project_id=self._project_ids.get(self.project_select.get()),
             tags=tuple(self.tag_input.tags), start=self.start_field.get(), end=self.end_field.get(),
-            repeat=REPEAT_LABELS.get(self.repeat_select.get(), ""), repeat_interval=self.repeat_interval.get(),
-            repeat_weekdays=tuple(day for day, variable in enumerate(self.weekday_vars) if variable.get()),
-            repeat_day_of_month=self.repeat_day_of_month.get(),
-            repeat_end=END_LABELS.get(self.repeat_end.get(), "never"), repeat_until=self.repeat_until.get(),
-            repeat_count=self.repeat_count.get(), recurrence_role=self.recurrence_role,
-            needs_configuration=self.needs_configuration,
+            recurrence_role=self.recurrence_role, needs_configuration=self.needs_configuration,
         )
 
     def load(self, draft: TaskDraft, *, editing: bool) -> None:
         """Fill the form from a draft (editing a stored record, or a blank one for adding)."""
+        self._loaded = draft
         self.editing = False  # allow the kind to change while loading
         self.set_kind(draft.kind)
         self.editing = editing
@@ -646,40 +520,17 @@ class TaskEditor(Card):
         # Editing shows the record's own date; a new blank draft without one keeps the page's selected day.
         self.set_date(draft.date if editing or draft.date else self.date_text)
         self.duration_field.variable.set(draft.duration)
-        self.priority_select.variable.set(draft.priority if draft.priority in PRIORITIES else "5")
+        self._set_preferred(draft.preferred_time)
         self.points_field.variable.set(draft.points)
         self.required_var.set(draft.required)
         self._pin_to_date = draft.pin_to_date
-        self.window_start.variable.set(draft.window_start)
-        self.window_end.variable.set(draft.window_end)
-        self.deadline_date.variable.set(draft.deadline_date)
-        self.deadline_time.variable.set(draft.deadline_time)
         project = next((label for label, value in self._project_ids.items() if value == draft.project_id), NO_PROJECT)
         self.project_select.variable.set(project)
-        chosen_type = next((label for label, value in self._type_ids.items()
-                            if value is not None and value == draft.task_type_id), OWN_TYPE)
-        self.type_select.variable.set(chosen_type)
-        self.new_type_field.variable.set("")
-        self._show_new_type()
-        self.dependency_picker.set_choices(self.options.dependencies, draft.dependency_ids)
         self.tag_input.set_tags(list(draft.tags))
         self.start_field.variable.set(draft.start)
         self.end_field.variable.set(draft.end)
         self.recurrence_role = draft.recurrence_role if editing else "task"
         self.needs_configuration = draft.needs_configuration and editing
-        self.repeat_select.variable.set(next(label for label, value in REPEAT_LABELS.items() if value == draft.repeat))
-        self.repeat_interval.variable.set(draft.repeat_interval or "1")
-        for day, variable in enumerate(self.weekday_vars):
-            variable.set(day in draft.repeat_weekdays)
-        self.repeat_day_of_month.variable.set(draft.repeat_day_of_month)
-        self.repeat_end.variable.set(next(label for label, value in END_LABELS.items() if value == draft.repeat_end))
-        self.repeat_until.variable.set(draft.repeat_until)
-        self.repeat_count.variable.set(draft.repeat_count)
-        self._show_repeat()
-        if self.recurrence_role == "occurrence":
-            self.repeat_frame.grid_remove()  # one occurrence does not repeat; its series does
-        else:
-            self.repeat_frame.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(8, 4))
         note = draft.recurrence_note if editing else ""
         self.recurrence_note.configure(text=note)
         if note:
@@ -687,29 +538,34 @@ class TaskEditor(Card):
         else:
             self.recurrence_note.grid_remove()
         self.clear_errors()
-        has_more = any((draft.window_start, draft.deadline_date, draft.dependency_ids, draft.repeat))
-        if has_more != self.more_open and draft.kind == "task":
-            self.toggle_more()
         if not editing and self.project_defaults is not None:
             # A new task of a project starts from what the project explicitly configured (nothing else is filled:
             # an unset value leaves the form as every other new task's, and typing over any of them wins).
             configured = self.project_defaults
             if configured.duration_minutes is not None and not draft.duration.strip():
                 self.duration_field.show(configured.duration_minutes)
-            if configured.priority is not None:
-                self.priority_select.variable.set(str(configured.priority))
             if configured.points is not None:
                 self.points_field.variable.set(str(configured.points))
+        if editing and self._on_remove is not None:
+            self.remove_button.grid(row=6, column=0, sticky="ew", padx=theme.SPACE_L, pady=(0, 8))
+        else:
+            self.remove_button.grid_remove()
         if editing:
-            self.cancel_edit_button.grid(row=6, column=0, sticky="ew", padx=theme.SPACE_L, pady=(0, 8))
+            self.cancel_edit_button.grid(row=7, column=0, sticky="ew", padx=theme.SPACE_L, pady=(0, 8))
         else:
             self.cancel_edit_button.grid_remove()
         self._title()
 
     def _title(self) -> None:
-        noun = "task" if self.kind == "task" else "fixed block"
+        noun = KIND_NOUNS[self.kind]
         self.title.title_label.configure(text=f"Edit {noun}" if self.editing else f"Add a {noun}")
         self.submit_button.configure(text="Save changes" if self.editing else f"+ Add {noun}")
+        self.remove_button.configure(text=f"Remove {noun}")
+
+    def remove(self) -> None:
+        """Remove the record being edited (the page confirms and removes it through its services)."""
+        if self.editing and self._on_remove is not None:
+            self._on_remove()
 
     def clear_errors(self) -> None:
         for field in self.fields.values():
@@ -722,9 +578,6 @@ class TaskEditor(Card):
         for name, text in (errors or {}).items():
             if name in self.fields:
                 self.fields[name].set_error(text)
-                if (name in ("window_start", "window_end", "deadline_date", "deadline_time", *self.REPEAT_FIELDS)
-                        and not self.more_open):
-                    self.toggle_more()
         self.notice.show("error", message)
 
     def submit(self) -> None:

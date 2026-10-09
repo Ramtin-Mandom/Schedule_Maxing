@@ -50,7 +50,7 @@ from app.ui.account_controller import (
     masked_email,
     validate_credentials,
 )
-from app.ui.app_services import Workspace
+from app.ui.app_services import Workspace, assign_todo_dates
 from app.ui.background import ControllerResult, WorkerRegistry, install_registry
 from app.ui.execution_controller import ExecutionController
 from app.ui.planning_controller import PlanningController
@@ -179,6 +179,7 @@ class DirectAppServices:
 def _build_controllers(account, timezone_name: str, project_root: str | None
                        ) -> tuple[PlanningController, ExecutionController, ProductivityController]:
     planning = PlanningController(service=account.planning_service(), timezone=timezone_name, project_root=project_root)
+    assign_todo_dates(account.planning_service(), timezone_name)
     execution = ExecutionController(account.execution_service(), sync_state=lambda _execution_id: "server")
     productivity = ProductivityController(account.productivity_service(timezone_name), execution, storage="server",
                                           task_tags=lambda: task_tags(planning))

@@ -513,3 +513,254 @@ def test_canonical_csv_round_trip_preview_updates_and_refusals(services, tmp_pat
     assert not page.apply_csv(plan).ok  # never imported without an explicit choice
     ok(page.apply_csv(plan, legacy_mode=ImportMode.APPEND))
     assert "Old style" in {task.name for task in ok(controller.list_tasks())}
+
+
+# -----------------------------------------------------------------------------
+# Task kinds: To Do, fixed-block completion, and the remove controls
+# -----------------------------------------------------------------------------
+
+
+def test_todos_stay_off_the_schedule_and_every_remove_control_deletes_through_the_services(
+    db_path: Path, tmp_path: Path,
+) -> None:
+    from app.execution.lifecycle import TaskOutcome
+    from app.planning.models import PreferredTime, preferred_third_bounds
+    from app.ui.schedule_page_controller import RowRef
+    from app.ui.task_form_model import TaskDraft
+    from app.ui.task_status import TaskStatusController
+
+    def names(items) -> list[str]:
+        return sorted(item.name for item in items)
+
+    services = open_app_services(db_path, timezone=TZ, project_root=str(tmp_path))
+    try:
+        page = day_page(services)
+        today = DAY.isoformat()
+        for name, preferred in (("Read", "early"), ("Write", "late"), ("Extra", "mid")):
+            ok(page.save_draft(TaskDraft(kind="task", name=name, category="study", date=today, duration="30",
+                                         points="40", preferred_time=preferred)))
+        ok(page.save_draft(TaskDraft(kind="block", name="Class", category="class", date=today, points="30",
+                                     start="9:00 AM", end="10:00 AM")))
+        snapshot = ok(page.save_draft(TaskDraft(kind="todo", name="Buy milk", category="errand", points="15",
+                                                date=today)))
+
+        # The To Do is a checklist item: listed on its own, never a row, an available task or a timeline item.
+        assert names(snapshot.todos) == ["Buy milk"] and snapshot.todos[0].points == 15
+        assert names(snapshot.unplaced) == ["Extra", "Read", "Write"] and names(snapshot.rows) == [
+            "Class", "Extra", "Read", "Write"]
+        todo_ref = RowRef("task", snapshot.todos[0].id, snapshot.todos[0].version)
+        assert ok(page.draft_for(todo_ref)).kind == "todo"
+
+        # Removing an available task (its small X): through the services, and it is gone at once.
+        extra = next(task for task in snapshot.unplaced if task.name == "Extra")
+        snapshot = ok(page.delete(extra.ref))
+        assert names(snapshot.unplaced) == ["Read", "Write"]
+        assert ok(services.planning_controller.get_task(extra.ref.id)) is None
+
+        snapshot = ok(page.make_schedule()).snapshot
+        placed = {item.name: item for item in snapshot.timeline}
+        assert sorted(placed) == ["Class", "Read", "Write"] and names(snapshot.todos) == ["Buy milk"]
+        early = preferred_third_bounds(PreferredTime.EARLY, *snapshot.window)
+        late = preferred_third_bounds(PreferredTime.LATE, *snapshot.window)
+        assert early[0] <= placed["Read"].start_minute and placed["Read"].end_minute <= early[1]
+        assert late[0] <= placed["Write"].start_minute and placed["Write"].end_minute <= late[1]
+
+        # A selected scheduled task opens in the form as itself (reconfiguration), and Remove deletes it.
+        assert (ok(page.draft_for(placed["Read"].ref)).kind, ok(page.draft_for(placed["Read"].ref)).points) == (
+            "task", "40")
+        snapshot = ok(page.delete(placed["Read"].ref))
+        assert sorted(item.name for item in snapshot.timeline) == ["Class", "Write"]
+        assert ok(services.planning_controller.get_task(placed["Read"].ref.id)) is None
+
+        # Completing: the fixed block on the board, the To Do from its card -- each worth its own points.
+        status = TaskStatusController(services.execution_controller)
+        board = ok(status.board(DAY, snapshot.executables, snapshot.direct_completions, snapshot.fixed_blocks))
+        class_card = next(card for card in board.cards if card.name == "Class")
+        assert class_card.block is not None and class_card.outcome == TaskOutcome.PENDING and class_card.points == 30
+        assert ok(status.move(class_card, TaskOutcome.COMPLETED)).points == 30
+        assert ok(status.todo_executions(snapshot.todos)) == {}
+        assert ok(status.set_todo_done(snapshot.todos[0], True)).points == 15
+        board = ok(status.board(DAY, snapshot.executables, snapshot.direct_completions, snapshot.fixed_blocks))
+        assert next(card for card in board.cards if card.name == "Class").outcome == TaskOutcome.COMPLETED
+        assert ok(status.todo_executions(snapshot.todos))[snapshot.todos[0].id].status.value == "completed"
+    finally:
+        services.close()
+
+    # After a restart everything is as it was saved; then the To Do's X removes it for good.
+    services = open_app_services(db_path, timezone=TZ, project_root=str(tmp_path))
+    try:
+        page = day_page(services)
+        snapshot = ok(page.load())
+        assert names(snapshot.todos) == ["Buy milk"] and snapshot.fixed_blocks[0].points == 30
+        assert sorted(item.name for item in snapshot.timeline) == ["Class", "Write"]
+        status = TaskStatusController(services.execution_controller)
+        assert ok(status.todo_executions(snapshot.todos))[snapshot.todos[0].id].points == 15
+        board = ok(status.board(DAY, snapshot.executables, snapshot.direct_completions, snapshot.fixed_blocks))
+        assert next(card for card in board.cards if card.name == "Class").outcome == TaskOutcome.COMPLETED
+        todo = snapshot.todos[0]
+        snapshot = ok(page.delete(RowRef("task", todo.id, todo.version)))
+        assert snapshot.todos == [] and ok(services.planning_controller.get_task(todo.id)) is None
+    finally:
+        services.close()
+
+
+def test_points_counter_and_complete_removal_on_delete_and_reset_day(db_path: Path, tmp_path: Path) -> None:
+    """Completed / Possible points of a date, and deletion / Reset Day leaving nothing of what they remove:
+    not the completion, not its points -- while another date (and a task of the same name) is untouched."""
+    from app.execution.lifecycle import TaskOutcome
+    from app.ui.schedule_page_controller import RowRef
+    from app.ui.task_form_model import TaskDraft
+    from app.ui.task_status import TaskStatusController, day_points
+
+    services = open_app_services(db_path, timezone=TZ, project_root=str(tmp_path))
+    try:
+        status = TaskStatusController(services.execution_controller)
+        page, other = day_page(services), day_page(services, NEXT)
+
+        def state(controller):
+            snapshot = ok(controller.load())
+            board = ok(status.board(snapshot.day, snapshot.executables, snapshot.direct_completions,
+                                    snapshot.fixed_blocks))
+            done = ok(status.todo_executions(snapshot.todos))
+            return snapshot, board, day_points(board, snapshot.todos, done, snapshot.unplaced_points)
+
+        def complete(controller, name: str) -> None:
+            snapshot, board, _ = state(controller)
+            todo = next((task for task in snapshot.todos if task.name == name), None)
+            if todo is not None:
+                ok(status.set_todo_done(todo, True))
+            else:
+                ok(status.move(next(card for card in board.cards if card.name == name), TaskOutcome.COMPLETED))
+
+        def executions() -> list[str]:
+            return sorted(item.task_name for item in ok(services.execution_controller.list_executions()))
+
+        def add(controller, **fields) -> None:
+            ok(controller.save_draft(TaskDraft(date=controller.day.isoformat(), category="study", **fields)))
+
+        add(page, kind="task", name="Read", duration="30", points="40")
+        add(page, kind="block", name="Class", points="30", start="9:00 AM", end="10:00 AM")
+        add(page, kind="todo", name="Milk", points="15")
+        add(other, kind="todo", name="Milk", points="5")  # the same name on another date: a different record
+        add(other, kind="block", name="Gym", points="20", start="9:00 AM", end="10:00 AM")
+        assert state(page)[2].text == "0 / 85 pts" and state(other)[2].text == "0 / 25 pts"  # unscheduled counts
+        ok(page.make_schedule())
+        assert state(page)[2].text == "0 / 85 pts"
+
+        complete(page, "Read")
+        assert state(page)[2].text == "40 / 85 pts"
+        for controller, name in ((page, "Class"), (page, "Milk"), (other, "Milk"), (other, "Gym")):
+            complete(controller, name)
+        points = state(page)[2]
+        assert (points.text, points.completed_count, points.incomplete_count) == ("85 / 85 pts", 3, 0)
+        assert state(other)[2].text == "25 / 25 pts" and executions() == ["Class", "Gym", "Milk", "Milk", "Read"]
+
+        # Removing each kind removes its completion and points with it -- and nothing else.
+        snapshot = state(page)[0]
+        todo = snapshot.todos[0]
+        assert "points are removed" in ok(page.delete_description(RowRef("task", todo.id, todo.version)))
+        ok(page.delete(RowRef("task", todo.id, todo.version)))
+        assert state(page)[2].text == "70 / 70 pts" and executions() == ["Class", "Gym", "Milk", "Read"]
+        ok(page.delete(next(item.ref for item in snapshot.timeline if item.name == "Class")))
+        assert state(page)[2].text == "40 / 40 pts" and executions() == ["Gym", "Milk", "Read"]
+        ok(page.delete(next(item.ref for item in snapshot.timeline if item.name == "Read")))
+        assert state(page)[2].text == "0 / 0 pts" and executions() == ["Gym", "Milk"]
+        assert state(other)[2].text == "25 / 25 pts"  # the other date's Milk and Gym are as they were
+
+        # Reset Day: the date's tasks, fixed blocks, To Dos and what was recorded for them -- no other date's.
+        add(page, kind="task", name="Write", duration="30", points="10")
+        add(page, kind="block", name="Lab", points="7", start="1:00 PM", end="2:00 PM")
+        add(page, kind="todo", name="Call", points="3")
+        ok(page.make_schedule())
+        for name in ("Write", "Lab", "Call"):
+            complete(page, name)
+        assert state(page)[2].text == "20 / 20 pts" and len(executions()) == 5
+        plan = ok(page.reset_plan())
+        assert "points" in plan.message and not plan.blocked
+        snapshot = ok(page.reset_day(plan))
+        assert (snapshot.rows, snapshot.todos, snapshot.timeline) == ([], [], [])
+        assert state(page)[2].text == "0 / 0 pts" and executions() == ["Gym", "Milk"]
+        assert state(other)[2].text == "25 / 25 pts" and [task.name for task in state(other)[0].todos] == ["Milk"]
+    finally:
+        services.close()
+
+    services = open_app_services(db_path, timezone=TZ, project_root=str(tmp_path))  # after a restart: the same
+    try:
+        assert sorted(item.task_name for item in ok(services.execution_controller.list_executions())) == ["Gym", "Milk"]
+        assert ok(day_page(services).load()).rows == [] and len(ok(day_page(services, NEXT).load()).todos) == 1
+    finally:
+        services.close()
+
+
+def test_todos_have_one_assigned_day_for_the_counter_the_board_and_the_statistics(db_path: Path, tmp_path: Path) -> None:
+    """A To Do saved before To Dos were dated gets the local date it was created on (once; dated ones are never
+    touched), and a To Do's points and completion count on its assigned day everywhere -- whenever it is ticked."""
+    from datetime import timezone as tz
+
+    from app.execution.lifecycle import TaskOutcome
+    from app.planning.models import TODO_PLACEHOLDER_MINUTES, TaskKind, todo_date
+    from app.productivity.tracker import completion_items
+    from app.ui.task_status import TaskStatusController, day_points
+
+    def todo(name: str, **fields) -> Task:
+        return Task(name=name, category="errand", kind=TaskKind.TODO, estimated_duration_minutes=TODO_PLACEHOLDER_MINUTES,
+                    **fields)
+
+    # 02:00 UTC on the 25th is still the evening of the 24th (DAY) in Toronto: the UTC date would be the wrong day.
+    created = datetime(2026, 9, 25, 2, 0, tzinfo=tz.utc)
+    services = open_app_services(db_path, timezone=TZ, project_root=str(tmp_path))
+    try:
+        service = services.planning_service
+        legacy = service.create_task(todo("Legacy", points=15, created_at=created, updated_at=created))
+        dated = service.create_task(todo("Dated", points=5, preferred_dates=[NEXT], created_at=created))
+        flexible = service.create_task(Task(name="Read", category="study", estimated_duration_minutes=30,
+                                            created_at=created))
+        assert todo_date(legacy) == date(2026, 9, 25)  # the stand-in until it is dated
+    finally:
+        services.close()
+
+    services = open_app_services(db_path, timezone=TZ, project_root=str(tmp_path))  # opening dates it, once
+    try:
+        planning, service = services.planning_controller, services.planning_service
+        stored = ok(planning.get_task(legacy.id))
+        assert stored.preferred_dates == [DAY] and todo_date(stored) == DAY and stored.version == legacy.version + 1
+        assert ok(planning.get_task(dated.id)) == dated and ok(planning.get_task(flexible.id)) == flexible
+        assert service.assign_todo_dates(TZ) == 0 and ok(planning.get_task(legacy.id)) == stored  # idempotent
+
+        status = TaskStatusController(services.execution_controller)
+        page, other = day_page(services), day_page(services, NEXT)
+
+        def view(controller):
+            snapshot = ok(controller.load())
+            board = ok(status.board(snapshot.day, snapshot.executables, snapshot.direct_completions,
+                                    snapshot.fixed_blocks, snapshot.todos))
+            points = day_points(board, snapshot.todos, ok(status.todo_executions(snapshot.todos)),
+                                snapshot.unplaced_points)
+            completed = [card.name for card in board.column(TaskOutcome.COMPLETED)]
+            return snapshot, points.text, completed
+
+        def counted() -> dict[str, date]:
+            """name -> the date the productivity statistics count its completion on (all of history)."""
+            history = ok(planning.completion_history(datetime(2020, 1, 1, tzinfo=tz.utc),
+                                                     datetime(2100, 1, 1, tzinfo=tz.utc)))
+            return {item.name: item.local_date for item in completion_items(history, TZ)}
+
+        assert [task.name for task in view(page)[0].todos] == ["Legacy"]
+        assert [task.name for task in view(other)[0].todos] == ["Dated"]
+
+        # Ticked now (the real clock: a different day from DAY): everything still says DAY.
+        execution = ok(status.set_todo_done(stored, True))
+        assert execution.actual_final_end_at.astimezone(ZoneInfo(TZ)).date() != DAY  # the real instant is kept
+        assert view(page)[1:] == ("15 / 15 pts", ["Legacy"]) and counted() == {"Legacy": DAY}
+        assert view(other)[1:] == ("0 / 5 pts", [])
+        today = day_page(services, datetime.now(ZoneInfo(TZ)).date())
+        assert view(today)[2] == []  # not listed on the day it happened to be ticked
+
+        ok(status.set_todo_done(stored, False))  # reversal: the counter and the statistics both drop it
+        assert view(page)[1:] == ("0 / 15 pts", []) and counted() == {}
+        ok(status.set_todo_done(stored, True))
+        assert counted() == {"Legacy": DAY}
+        ok(planning.remove_task(stored.id, expected_version=stored.version))  # deletion: gone from both
+        assert view(page)[1:] == ("0 / 0 pts", []) and counted() == {}
+    finally:
+        services.close()

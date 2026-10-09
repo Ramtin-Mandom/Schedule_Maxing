@@ -4,6 +4,7 @@ reset propagating as server-side deletions."""
 
 from __future__ import annotations
 
+import http.server
 import socket
 import threading
 import time
@@ -99,3 +100,51 @@ def test_refresh_and_logout_over_real_http(http_backend) -> None:
         transport.profile(pair.token)
     with pytest.raises(AuthenticationError):
         transport.refresh(pair.refresh_token)
+
+
+class _SleepyHandler(http.server.BaseHTTPRequestHandler):
+    """Answers every request with {}; the first one only after `first_delay` seconds (a server waking up)."""
+
+    first_delay = 1.5
+    paths: list[str] = []
+
+    def do_GET(self) -> None:  # noqa: N802 - the http.server interface
+        first = not self.paths
+        self.paths.append(self.path)
+        if first:
+            time.sleep(self.first_delay)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"{}")
+
+    def log_message(self, *args) -> None:
+        pass
+
+
+@pytest.fixture
+def sleepy_backend():
+    _SleepyHandler.paths = []
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _SleepyHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_a_server_that_is_waking_up_is_waited_for_before_the_first_request(sleepy_backend) -> None:
+    transport = HttpTransport(sleepy_backend, timeout=0.5, wake_timeout=10)
+    assert transport.profile("token") == {}  # slower than `timeout`: only the wake probe waited
+    assert _SleepyHandler.paths == ["/health", "/me"]
+    transport.profile("token")
+    assert _SleepyHandler.paths == ["/health", "/me", "/me"]  # awake: no further probe
+
+
+def test_a_server_that_stays_silent_is_reported_with_the_stage_that_failed(sleepy_backend) -> None:
+    with pytest.raises(TransportError, match="no answer within 0.5 seconds"):
+        HttpTransport(sleepy_backend, timeout=0.5, wake_timeout=0.5).health()
+    with pytest.raises(TransportError, match="could not be resolved"):
+        HttpTransport("http://no-such-host.invalid", timeout=2).health()

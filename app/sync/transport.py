@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import socket
+import ssl
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -34,7 +35,12 @@ from typing import Any, Protocol
 
 
 class TransportError(Exception):
-    """Retryable: the server could not be reached or failed (timeouts, 5xx)."""
+    """Retryable: the server could not be reached or failed (timeouts, 5xx). `status`/`body`: its answer, if any."""
+
+    def __init__(self, message: str, *, status: int | None = None, body: dict | None = None):
+        super().__init__(message)
+        self.status = status
+        self.body = body or {}
 
 
 class AuthenticationError(Exception):
@@ -96,6 +102,8 @@ class SyncTransport(Protocol):
     #: Remove all of the account's task data on the server ({removed, cursor}); see backend/task_data_reset.py.
     def reset_task_data(self, token: str) -> dict: ...
 
+    # Optional (looked up with getattr): ready() -> dict, the server's database readiness (GET /ready).
+
     #: The server's sync protocol version and features ({protocol_version, features, ...}); an older server that
     #: has no such endpoint answers as protocol 1 without features (see capabilities_via).
     def capabilities(self, token: str) -> dict: ...
@@ -116,7 +124,7 @@ def _classify(status: int, body: dict | None) -> Exception:
     if status == 401:
         return AuthenticationError("The backend refused the credentials or the session has expired.")
     if status >= 500 or status in (408, 429):
-        return TransportError(f"The backend is unavailable (HTTP {status}).")
+        return TransportError(f"The backend is unavailable (HTTP {status}).", status=status, body=body)
     return ProtocolError(f"The backend refused the request (HTTP {status} {code}).".replace(" )", ")"),
                          status=status, code=code or None, body=(body or {}).get("error"))
 
@@ -160,6 +168,28 @@ def health_via(request) -> dict:
     return request("GET", "/health", None, None)
 
 
+def ready_via(request) -> dict:
+    """GET /ready: the server's own database and migration check (503 with a body when it is not ready)."""
+    return request("GET", "/ready", None, None)
+
+
+def _describe(error: BaseException, timeout: float) -> str:
+    """Which stage of reaching the server failed, in words (never an address or a credential)."""
+    reason = getattr(error, "reason", error)  # URLError wraps the socket/TLS error
+    if isinstance(reason, socket.gaierror):
+        return "the server's name could not be resolved (DNS); check the address and the network connection"
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        return ("the server's TLS certificate was not trusted; check this computer's date and time and any "
+                "proxy or antivirus that inspects HTTPS")
+    if isinstance(reason, ssl.SSLError):
+        return "the secure (TLS) connection could not be established"
+    if isinstance(reason, (socket.timeout, TimeoutError)):
+        return f"no answer within {timeout:g} seconds"
+    if isinstance(reason, ConnectionRefusedError):
+        return "the connection was refused (nothing is listening at that address)"
+    return type(reason).__name__ if isinstance(reason, BaseException) else type(error).__name__
+
+
 def request_recovery_via(request, identifier: str) -> dict:
     return request("POST", "/auth/recovery/request", None, {"identifier": identifier})
 
@@ -193,13 +223,35 @@ def pull_via(request, token: str, after: int, limit: int) -> PullPage:
 
 
 class HttpTransport:
-    def __init__(self, base_url: str, *, timeout: float = 10.0) -> None:
+    """
+    `wake_timeout`: a hosted server that was idle can be asleep and need most
+    of a minute to start answering (a Render free web service does). So the
+    first request, and the first after a failure, is preceded by GET /health
+    with this longer timeout; requests themselves keep the short `timeout`.
+    Only that side-effect-free probe waits longer: no request is ever resent.
+    """
+
+    def __init__(self, base_url: str, *, timeout: float = 10.0, wake_timeout: float = 75.0) -> None:
         if not base_url.startswith(("https://", "http://")):
             raise ValueError("the backend URL must start with https:// (or http:// for a local server)")
         self.base_url = base_url.rstrip("/")
         self._timeout = timeout
+        self._wake_timeout = max(timeout, wake_timeout)
+        self._awake = False
 
     def _request(self, method: str, path: str, token: str | None, body: dict | None) -> dict:
+        if not self._awake:
+            self._send("GET", "/health", None, None, self._wake_timeout)
+            self._awake = True
+            if (method, path) == ("GET", "/health"):
+                return {"status": "ok"}
+        try:
+            return self._send(method, path, token, body, self._timeout)
+        except TransportError:
+            self._awake = False
+            raise
+
+    def _send(self, method: str, path: str, token: str | None, body: dict | None, timeout: float) -> dict:
         data = json.dumps(body).encode("utf-8") if body is not None else None
         request = urllib.request.Request(self.base_url + path, data=data, method=method)
         request.add_header("Accept", "application/json")
@@ -208,7 +260,7 @@ class HttpTransport:
         if token is not None:
             request.add_header("Authorization", f"Bearer {token}")
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as response:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
                 return json.loads(response.read().decode("utf-8") or "{}")
         except urllib.error.HTTPError as error:
             try:
@@ -217,7 +269,7 @@ class HttpTransport:
                 payload = None
             raise _classify(error.code, payload) from None
         except (urllib.error.URLError, socket.timeout, TimeoutError, ConnectionError) as error:
-            raise TransportError(f"Could not reach the backend: {type(error).__name__}.") from None
+            raise TransportError(f"Could not reach the backend: {_describe(error, timeout)}.") from None
         except ValueError:
             raise TransportError("The backend returned an unreadable response.") from None
 
@@ -247,6 +299,9 @@ class HttpTransport:
 
     def health(self) -> dict:
         return health_via(self._request)
+
+    def ready(self) -> dict:
+        return ready_via(self._request)
 
     def reset_task_data(self, token: str) -> dict:
         return reset_task_data_via(self._request, token)

@@ -31,11 +31,9 @@ def test_reference_mode_is_scoped_and_restores_production_methods():
     from app.ui.paint_widgets import AppOptionMenu, AppScrollableFrame
     from app.ui.tk_lifecycle import DesktopCollection
     from app.ui.day_page import DaySchedulePage
-    from app.ui.task_editor import DependencyPicker
 
     methods = [(AppOptionMenu, "_draw"), (AppScrollableFrame, "__init__"),
-               (DesktopCollection, "collect"), (DaySchedulePage, "_show_available"),
-               (DependencyPicker, "set_choices")]
+               (DesktopCollection, "collect"), (DaySchedulePage, "_show_available")]
     originals = [getattr(owner, name) for owner, name in methods]
     with reference_behavior():
         assert AppOptionMenu._draw is ctk.CTkOptionMenu._draw

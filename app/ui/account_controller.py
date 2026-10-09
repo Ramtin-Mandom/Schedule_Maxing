@@ -39,7 +39,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 
 from app.sync.engine import AssociationError, AssociationPreview, ConflictResolutionError
@@ -142,6 +142,11 @@ def validate_credentials(email: str, password: str, *, registering: bool = False
     return errors
 
 
+#: The stages of SyncService.diagnose_connection, as the Account page names them.
+CHECK_STAGES = {"api": "Server", "database": "Server database", "session": "Account session",
+                "sync": "Synchronization"}
+
+
 def friendly_error(error: BaseException, *, signing_in: bool = False) -> str:
     """One readable, actionable sentence for a failure of an account or sync operation."""
     if isinstance(error, InvalidInput):
@@ -216,6 +221,10 @@ class ConnectionView:
     headline: str
     #: What to do next, if anything.
     detail: str
+    #: Check connection only: one line per stage checked (API, database, session, synchronization), and
+    #: whether a stage failed. Empty when no check ran.
+    checks: tuple[str, ...] = ()
+    check_failed: bool = False
 
     @property
     def can_sync(self) -> bool:
@@ -461,8 +470,11 @@ class AccountController:
 
     def check_backend(self) -> ControllerResult[ConnectionView]:
         def op() -> ConnectionView:
-            self._sync.check_connectivity()
-            return self.view(self._sync.status())
+            checks = self._sync.diagnose_connection()
+            marks = {"ok": "OK", "failed": "FAILED", "skipped": "not checked"}
+            lines = tuple(f"{CHECK_STAGES[check.stage]}: {marks[check.state]} — {check.message}" for check in checks)
+            return replace(self.view(self._sync.status()), checks=lines,
+                           check_failed=any(check.state == "failed" for check in checks))
 
         return self._call(op)
 

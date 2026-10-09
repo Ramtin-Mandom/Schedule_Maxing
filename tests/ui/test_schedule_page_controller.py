@@ -400,9 +400,8 @@ def test_reset_planning_data_is_scoped_to_the_page_and_keeps_history(db_path, tm
         assert snapshot.rows == []
         assert [t.name for t in stack.service.list_tasks()] == ["Next week"]
         assert len(stack.service.fixed_blocks_for_date(date(2024, 6, 10))) == 1
-        history = ok(stack.executions.get_execution(execution.id))
-        assert history.task_name == "Study" and history.status.value == "in_progress"
-        assert len(ExecutionService(ExecutionRepository(stack.connection)).list_sessions(execution.id)) == 1
+        # The page's executions are removed with its plan.
+        assert ok(stack.executions.list_executions()) == [] and not stack.executions.get_execution(execution.id).ok
     finally:
         stack.close()
 

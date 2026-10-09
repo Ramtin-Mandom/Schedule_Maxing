@@ -68,6 +68,9 @@ _TASK_FIELDS_SINCE_RECURRENCE = ("series_id", "occurrence_slot", "occurrence_sta
 #: An occurrence's bookkeeping: two devices' copies of one slot converge when everything else is equal.
 OCCURRENCE_BOOKKEEPING = ("occurrence_state", "series_version")
 _BLOCK_FIELDS = ("label", "category", "planned_date", "timezone", "planned_start", "planned_end")
+#: Sent only to a server with "task_kinds": a task's kind and preferred third of the day, a fixed block's points.
+TASK_KIND_FIELDS = ("kind", "preferred_time")
+BLOCK_KIND_FIELDS = ("points",)
 _PLACEMENT_FIELDS = ("task_id", "planned_date", "timezone", "planned_start", "planned_end", "score",
                      "optimization_metadata", "task_category")
 #: Removal provenance: written by the server with a tombstone (never part of a create/update payload).
@@ -131,6 +134,9 @@ class LocalRecords:
         #: Whether the server stores a project's dates, completion and milestones ("project_details"): without
         #: it they are left out of payloads and stay recorded here (uploaded once the server has it).
         self.project_details = True
+        #: Whether the server stores task kinds, preferred thirds and fixed-block points ("task_kinds"): without
+        #: it they are left out of payloads (an older server rejects unknown fields) and stay recorded here.
+        self.task_kinds = True
         self.planning = planning
         self.executions = executions
 
@@ -150,10 +156,11 @@ class LocalRecords:
             payload = model and {"label": model.label}
         elif entity_type == "task":
             model = self.planning.get_task(record_id, include_deleted=True)
-            payload = model and _dump(model, (*_TASK_FIELDS, *TASK_TYPE_FIELDS) if self.task_types else _TASK_FIELDS)
+            payload = model and _dump(model, (*_TASK_FIELDS, *(TASK_TYPE_FIELDS if self.task_types else ()),
+                                              *(TASK_KIND_FIELDS if self.task_kinds else ())))
         elif entity_type == "fixed_block":
             model = self.planning.get_fixed_blocks([record_id], include_deleted=True).get(record_id)
-            payload = model and _dump(model, _BLOCK_FIELDS)
+            payload = model and _dump(model, (*_BLOCK_FIELDS, *(BLOCK_KIND_FIELDS if self.task_kinds else ())))
         elif entity_type == "placement":
             model = self.planning.get_placements([record_id], include_deleted=True).get(record_id)
             fields = (*_PLACEMENT_FIELDS, *_PLACEMENT_INTENT_FIELDS) if self.manual_placements else _PLACEMENT_FIELDS
@@ -276,11 +283,18 @@ class LocalRecords:
             # older client created) never erases the type this device recorded.
             stored = self.planning.get_task(uuid.UUID(str(meta["id"])), include_deleted=True)
             local_type = stored.task_type_id if stored is not None else None
+            # Likewise its kind and preferred third: a record without them keeps what this device recorded.
+            kinds = ({name: record.get(name) for name in TASK_KIND_FIELDS} if record.get("kind") is not None
+                     else stored.model_dump(include=set(TASK_KIND_FIELDS)) if stored is not None else {})
             model = Task.model_validate({**meta, **{
                 name: record.get(name) if name in _TASK_FIELDS_SINCE_RECURRENCE else record[name]
-                for name in _TASK_FIELDS}, "task_type_id": record.get("task_type_id") or local_type})
+                for name in _TASK_FIELDS}, "task_type_id": record.get("task_type_id") or local_type, **kinds})
         elif entity_type == "fixed_block":
-            model = FixedBlock.model_validate({**meta, **{name: record[name] for name in _BLOCK_FIELDS}})
+            block_id = uuid.UUID(str(meta["id"]))
+            stored = self.planning.get_fixed_blocks([block_id], include_deleted=True).get(block_id)
+            points = record["points"] if record.get("points") is not None else stored.points if stored is not None else 0
+            model = FixedBlock.model_validate({**meta, **{name: record[name] for name in _BLOCK_FIELDS},
+                                               "points": points})
         elif entity_type == "placement":
             # .get: a record acknowledged before the server had these fields (an older shadow) has none of them.
             fields = {name: record.get(name) for name in (*_PLACEMENT_FIELDS, *_PLACEMENT_REMOVAL_FIELDS)}

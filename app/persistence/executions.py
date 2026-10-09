@@ -186,6 +186,13 @@ class DirectExecutionService:
         candidate = build_canonical_execution(task, scheduled_task, now=self._account.clock(), user_id=self._owner(user_id))
         return self._create(candidate, reuse_placement=False)
 
+    def create_fixed_block_execution(self, block) -> TaskExecution:
+        """The one execution of a fixed block (app/execution/fixed_block_completion.py); its id is derived."""
+        from app.execution.fixed_block_completion import build_fixed_block_execution
+
+        candidate = build_fixed_block_execution(block, now=self._account.clock(), user_id=self._owner(block.user_id))
+        return self._create(candidate, reuse_placement=False)
+
     def get_or_create_canonical_execution(self, task: CanonicalTask, scheduled_task: CanonicalScheduledTask, *,
                                           user_id: uuid.UUID | None = None) -> TaskExecution:
         candidate = build_canonical_execution(task, scheduled_task, now=self._account.clock(), user_id=self._owner(user_id))

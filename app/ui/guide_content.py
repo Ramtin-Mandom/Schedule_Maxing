@@ -45,10 +45,16 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
         "button to where you came from.",
         (
             "Day Window: the start and end of the usable day, above the schedule.",
-            "Timeline: fixed blocks in their category colour, scheduled tasks at their exact minutes, and the "
-            "free gaps between them.",
+            "Points (top right): Completed / Possible points of the date -- its scheduled tasks, fixed blocks "
+            "and To Dos, and its tasks that are not scheduled yet (possible only).",
+            "Timeline: the whole day, 12 AM to 12 AM, fitted to the window (no sideways scrolling): fixed blocks "
+            "in their category colour, scheduled tasks at their exact minutes, and the free gaps between them. "
+            "Narrow blocks show their name vertically; select a block to read its details below.",
+            "To Do: the date's sticky notes, directly under the timeline -- eight per row, two rows, more scroll "
+            "down.",
             "Available tasks: tasks for this date (and tasks with no date) that are not on the schedule yet, "
-            "with the reason when it is known. Select one to edit it.",
+            "with the reason when it is known -- up to four per row and two rows, more scroll down. Select one "
+            "to edit it; its X removes it.",
             "Add a task, Make Schedule, the engine choice, Day Preferences, CSV import/export and Reset Day.",
             "Uncompleted | Tasks | Completed: the scheduled tasks of the date, and what happened to each.",
         ),
@@ -111,7 +117,7 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
             "time, and any time it was scheduled at is removed. Cancel changes nothing.",
             "× on the left of a task removes it after a confirmation, from the project and from the Day, Week and "
             "Month pages; points it already earned stay in your statistics.",
-            "Task defaults (in Edit...): a default duration, priority and points for this project's new tasks. "
+            "Task defaults (in Edit...): a default duration and points for this project's new tasks. "
             "Leave one empty to use the category's default. What you type in the form always wins, then the "
             "project's defaults, then the category's, then the app's. Changing them only affects tasks you add "
             "afterwards, and every new project starts with none set.",
@@ -130,27 +136,37 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
         "to the date the page has selected. On the Day page that is the date shown (today unless you opened "
         "another); on Week and Month it is the day you selected. The form shows that date above the fields.",
         (
-            "Name, category, duration (like 45 min or 1 h 15 min) and priority are all you need.",
-            "Points (0 to 1000, default 1) is what finishing the task is worth to you; the - and + buttons change "
-            "it by 10. It is saved for your productivity statistics and never changes where the scheduler puts the "
-            "task.",
+            "Task type: Flexible (the scheduler places it), Fixed (you set its start and end) or To Do (a "
+            "checklist item that is never scheduled). The form shows only the fields of the type you choose.",
+            "For a flexible task, name, category, duration (like 45 min or 1 h 15 min) and a preferred time are "
+            "all you need.",
+            "Points (0 to 1000, default 1) is what finishing it is worth to you, for every type; the - and + "
+            "buttons change it by 10. It is counted in your productivity statistics when you complete it and "
+            "never changes where the scheduler puts a task.",
             "Category and Project sit side by side. Without a category the task is saved as other. Project starts "
             "at None and lists your projects; a task with a project also appears in that project's task list.",
             "Times are entered as [hour] : [minute] [AM/PM]. Type the hour (1-12) and minute (00-59); click the "
             "AM/PM button, or type a or p, to switch. An end time of 12:00 AM means midnight at the end of the day.",
             "Required: the task must be scheduled; if it cannot be, the schedule is not saved and you are told why.",
-            "Add more options: preferred time, deadline, task type, dependencies and repeats.",
-            "Use default values fills in the name (if empty), duration, priority and points of the chosen "
+            "The form has no advanced settings. A task that already has a deadline, dependencies, a task type "
+            "or a repeat rule (an older or imported one) keeps them when you edit it.",
+            "Removing a task, a fixed block or a To Do removes everything recorded for it too: its scheduled "
+            "entries, its completion and its points.",
+            "Use default values fills in the name (if empty), duration and points of the chosen "
             "category, or the general ones without a category. Change them, and add your own categories, in "
             "Settings > Task defaults and categories.",
-            "Editing a task keeps its own date.",
+            "Editing a task keeps its own date. Select a task on the timeline or in Available tasks to open it "
+            "in the form; while it is open, Remove deletes it.",
         ),
     )),
     GuideSection("fixed_blocks", "Fixed tasks (blocks)", (
         "A fixed block is something that happens at a set time: a class, a shift, a meal, sleep. Choose Fixed "
-        "block in the form, then give it a label, a category and its start and end. The scheduler never moves "
+        "in the form, then give it a label, a category, points and its start and end. The scheduler never moves "
         "a fixed block and never places anything on top of it.",
         (
+            "A fixed block is on the Day page's Uncompleted | Tasks | Completed board like scheduled tasks: "
+            "mark it completed to get its points. Its points never affect the schedule.",
+            "Fixed blocks saved before they had points are worth 0 points and count as completed.",
             "Two fixed blocks cannot overlap; touching end-to-start is fine.",
             "A fixed block must lie inside the date's day window.",
             "A block cannot run past midnight; split it into two blocks at midnight.",
@@ -161,33 +177,46 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
         "date, around the fixed blocks and inside the day window. Times are exact to the minute.",
     )),
     GuideSection("preferred_times", "Preferred times", (
-        "Under More options, Preferred from / Preferred until tell the scheduler when you would like a task to "
-        "happen, for example a workout in the morning. It is a preference, not a rule: the task still goes "
-        "elsewhere when that time is taken, just with a lower score.",
-        "A category can have a preferred time too (Settings or Day Preferences); a task's own preferred time "
-        "wins over its category's.",
+        "Every flexible task has one preferred time: Early, Mid or Late. The day's schedulable hours (its day "
+        "window, not midnight to midnight) are divided into three equal parts; an 8:00 AM to 11:00 PM day is "
+        "Early 8:00 AM - 1:00 PM, Mid 1:00 PM - 6:00 PM and Late 6:00 PM - 11:00 PM.",
+        "It is a very strong preference: whenever the task fits in its part of the day it is placed there, and "
+        "the other scores only choose where inside it. It is still not a rule: when that part of the day is "
+        "full, the task goes as close to it as it fits instead of being left out.",
+        "A category can have a preferred time too (Settings or Day Preferences); it only applies to tasks "
+        "without an Early / Mid / Late choice, such as imported ones.",
+    )),
+    GuideSection("todos", "To Do items", (
+        "A To Do is a checklist item: a name, a category and points -- no duration and no time. It belongs to "
+        "the date it was added on, is never scheduled and never appears on the timeline. To Dos are the sticky "
+        "notes under the Day page's timeline: eight per row, two rows, and more scroll down.",
+        (
+            "Tick Done to complete one: you get its points, and it appears under Completed for that day.",
+            "Untick it to take the completion back.",
+            "The small X removes it, with its completion and points. Select its name to edit it in the form.",
+        ),
     )),
     GuideSection("categories", "Categories", (
         "Every task and fixed block has a category: study, work, class, exercise, sleep, food, event, "
         "entertainment, errand or other. Categories give items their colour on the schedule and can have their "
-        "own importance (a multiplier on priority; 1 is neutral) and preferred time in Settings.",
+        "own importance (a multiplier on the scheduler's score; 1 is neutral) and preferred time in Settings.",
     )),
-    GuideSection("priority_points", "Priority, the scheduler's score, and points", (
-        "Priority goes from 1 (low) to 10 (high). When the scheduler compares possible times for a task, it "
-        "gives each one a score:",
+    GuideSection("priority_points", "The scheduler's score, and points", (
+        "Tasks have no priority. When the scheduler compares possible times for a task, it first keeps to the "
+        "task's preferred time (Early, Mid or Late) wherever that is possible, and then gives each remaining "
+        "time a score for how good the placement is:",
         (
-            "priority, multiplied by the priority weight and the category's importance;",
-            "a bonus for being close to the preferred time;",
+            "the category's importance (times the importance weight);",
+            "a bonus for being inside, or close to, the preferred time;",
             "a bonus for being near tasks with the same or related tags;",
             "a penalty for leaving awkward small gaps (the fragmentation penalty).",
         ),
-        "The highest-scoring valid time wins, so high-priority tasks get the best times first. The weights are "
-        "in Settings under Default scheduling preferences.",
+        "The highest-scoring valid time wins. The weights are in Settings under Default scheduling preferences.",
         "Points are different: they are your own value for a task (set in the form), counted when you complete "
         "it. The scheduler never reads them, and its score is never your points.",
     )),
     GuideSection("dependencies", "Dependencies", (
-        "Under More options, Depends on lists your other tasks. A task that depends on another is only "
+        "A task that depends on another (set in an imported file or an older version) is only "
         "scheduled after that task has finished. Dependencies are kept by task, not by name, so tasks with the "
         "same name stay distinct. Circular dependencies (A needs B, B needs A) cannot be scheduled; Make "
         "Schedule and planning report them so you can remove one.",
@@ -295,11 +324,12 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
     )),
     GuideSection("reset", "Reset", (
         "Reset Day, Reset Week and Reset Month clear the tasks planned for those dates, their fixed blocks, "
-        "their scheduled entries and their own preferences (including a custom day window). You always see "
-        "exactly what would be deleted and confirm first.",
+        "their To Dos, their scheduled entries, everything recorded for them (completions, points and work "
+        "sessions) and their own preferences (including a custom day window). You always see exactly what "
+        "would be deleted and confirm first.",
         (
             "Kept: tasks with no date, tasks planned on other dates, projects (with their milestones and task "
-            "defaults), your default preferences and all execution history.",
+            "defaults), your default preferences and everything recorded on other dates.",
             "Repeating tasks are kept; only their entries on the reset dates go.",
             "A reset is refused, with nothing deleted, while tasks outside the dates depend on tasks inside them.",
         ),

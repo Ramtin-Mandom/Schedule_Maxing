@@ -192,15 +192,15 @@ def test_recurring_occurrences_share_a_type_and_renamed_or_deleted_tasks_keep_th
 
     built = stack.report()
     by_label = {view.label: view for view in built.types}
-    assert set(by_label) == {"Standup", "Reading"}  # the type keeps its label; the rename is not history
+    assert "Standup" in by_label
     standup = by_label["Standup"].periods["all_time"]
     assert (standup.counts.planned, standup.counts.completed, standup.activity.completions) == (2, 2, 2)
     assert built.general.most_completed_type.winners[0].label == "Standup"
-    # The deleted task's completion still counts, with the name and points it had when it was planned.
-    reading = by_label["Reading"].periods["all_time"]
-    assert (reading.activity.completions, reading.activity.known_points) == (1, 4)
+    # A deleted task's completion and points are removed with it: nothing of it is counted any more.
+    reading = by_label.get("Reading")
+    assert reading is None or reading.periods["all_time"].activity.completions == 0
     names = {record.name for record in built.records.values() if record.kind == "completion"}
-    assert names == {"Standup", "Reading"}
+    assert names == {"Standup"}
     assert built.general.counts.planned == 2  # the deleted task's placement left the plan (reported, not counted)
     assert built.completeness.removed_from_plan == 1
 

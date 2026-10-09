@@ -168,7 +168,7 @@ def test_light_dark_and_interface_size_persist_across_restarts(tmp_path: Path, d
         assert "Done:" in settings.notice.text and "saved" in settings.notice.text
         canvas = app.pages["day"].schedule_canvas
         settle(app, 0.2)
-        assert canvas.canvas.cget("background") == theme.resolve(theme.CANVAS_BG, theme.DARK)
+        assert canvas.canvas.cget("background") == theme.resolve(theme.CARD_BG, theme.DARK)  # part of its card
         settings.scale_select.choose("115%")
     finally:
         close_app(app)
@@ -200,12 +200,17 @@ def test_moving_resizing_minimizing_and_scaling_settle_into_a_stable_layout(tmp_
                     (place("700x700+30+30"), LayoutMode.NARROW), (place("700x700+160+120"), LayoutMode.NARROW),
                     (place("1100x760+60+40"), LayoutMode.MEDIUM), (place("1440x880+30+30"), LayoutMode.WIDE)]
         checks_before = app.shell.layout_checks.runs
+        size = None
         for geometry, mode in expected:
             draws = canvas.draw_count
             app.geometry(geometry)
             settle(app)
             assert app.shell_state.layout == mode and day.layout == mode, geometry
-            assert canvas.draw_count == draws  # resizing never repaints the schedule
+            # The timeline is fitted to its width: a new width repaints it once the resize has settled (never
+            # per Configure event), and moving the window without resizing it never repaints.
+            moved_only = geometry.split("+")[0] == size
+            assert canvas.draw_count - draws <= (0 if moved_only else 2), geometry
+            size = geometry.split("+")[0]
             events.clear()
             wait_fixed(app, 0.4)  # measures that no late Configure arrives: a deliberate fixed wait
             if events:  # the window manager may deliver one late toplevel Configure; a feedback loop never stops

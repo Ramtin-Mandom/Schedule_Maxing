@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from app.execution.errors import ExecutionError, ExecutionVersionConflictError, InvalidTransitionError
 from app.execution.lifecycle import TaskOutcome
 from app.execution.models import ExecutionStatus, TaskExecution
-from app.execution import direct_completion
+from app.execution import direct_completion, fixed_block_completion
 from app.execution.service import ExecutionService, compute_active_duration_minutes
 from app.planning.models import ScheduledTask as CanonicalScheduledTask
 from app.planning.models import Task as CanonicalTask
@@ -140,6 +140,23 @@ class ExecutionController:
     def reopen_directly(self, task_id: uuid.UUID) -> ControllerResult[TaskExecution | None]:
         """Undo a direct completion of the task (None: it had none)."""
         return self._call(lambda: direct_completion.reopen_directly(self._service, task_id))
+
+    def set_fixed_block_outcome(self, block, outcome: TaskOutcome | str) -> ControllerResult[TaskExecution | None]:
+        """Move a fixed block to the Uncompleted / Tasks / Completed column (its one execution; idempotent)."""
+        return self._call(lambda: fixed_block_completion.set_fixed_block_outcome(self._service, block, outcome))
+
+    def fixed_block_executions(self, block_ids) -> ControllerResult[dict[uuid.UUID, TaskExecution]]:
+        """The executions of these fixed blocks, by block id (blocks without one are absent; never creates any)."""
+        def read() -> dict[uuid.UUID, TaskExecution]:
+            found = ((block_id, fixed_block_completion.fixed_block_execution(self._service, block_id))
+                     for block_id in block_ids)
+            return {block_id: execution for block_id, execution in found if execution is not None}
+
+        return self._call(read)
+
+    def direct_executions(self, task_ids) -> ControllerResult[dict[uuid.UUID, TaskExecution]]:
+        """The task-only execution in use of each of these tasks (To Dos), by task id; absent when it has none."""
+        return self._call(lambda: direct_completion.direct_executions(self._service, list(task_ids)))
 
     def set_outcomes(self, items, outcome: TaskOutcome | str) -> ControllerResult:
         """Every (task, placement) of `items` to the column `outcome`, in one transaction (a BulkOutcomeResult)."""
