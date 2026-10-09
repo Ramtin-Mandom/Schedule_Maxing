@@ -69,6 +69,9 @@ OPTIMIZER_MODES = ("precise_greedy", "adhd_friendly", "early_finish", "night_owl
 RECURRENCE_FREQUENCIES = ("daily", "weekly", "monthly")
 #: app.planning.models.OccurrenceState (docs/recurrence.md).
 OCCURRENCE_STATES = ("modified", "skipped", "deleted", "superseded")
+#: app.planning.models.TaskKind / PreferredTime.
+TASK_KINDS = ("flexible", "todo")
+PREFERRED_TIMES = ("early", "mid", "late")
 ENTITY_TYPES = ("project", "task", "fixed_block", "placement", "preference", "schedule_generation", "execution",
                 "task_type")
 SYNC_STATUSES = ("applied", "conflict", "rejected")
@@ -226,6 +229,10 @@ class _TaskContent:
     points: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     #: The task's reusable type (one of the user's task_types; NULL: not assigned yet). Not a scheduling input.
     task_type_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    #: app.planning.models.TaskKind: flexible, or todo (a checklist item, never scheduled).
+    kind: Mapped[str] = mapped_column(String(20), nullable=False, server_default="flexible")
+    #: app.planning.models.PreferredTime: the preferred third of the day (NULL: none).
+    preferred_time: Mapped[str | None] = mapped_column(String(10), nullable=True)
     required: Mapped[bool] = mapped_column(Boolean, nullable=False)
     required_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     preferred_window_start_minute: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -260,6 +267,9 @@ def _task_checks(table: str) -> tuple:
         CheckConstraint("estimated_duration_minutes > 0", name=f"ck_{table}_duration"),
         CheckConstraint("priority BETWEEN 1 AND 10", name=f"ck_{table}_priority"),
         CheckConstraint("points BETWEEN 0 AND 1000", name=f"ck_{table}_points"),
+        CheckConstraint(_in("kind", TASK_KINDS), name=f"ck_{table}_kind"),
+        CheckConstraint(f"preferred_time IS NULL OR {_in('preferred_time', PREFERRED_TIMES)}",
+                        name=f"ck_{table}_preferred_time"),
         CheckConstraint(
             "(preferred_window_start_minute IS NULL) = (preferred_window_end_minute IS NULL)", name=f"ck_{table}_window"
         ),
@@ -317,6 +327,8 @@ def _task_checks(table: str) -> tuple:
 class _FixedBlockContent:
     label: Mapped[str] = mapped_column(String(500), nullable=False)
     category: Mapped[str] = mapped_column(String(100), nullable=False)
+    #: What completing the block is worth (app.planning.models.FixedBlock.points); 0 for older blocks.
+    points: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     planned_date: Mapped[date] = mapped_column(Date, nullable=False)
     timezone: Mapped[str] = mapped_column(String(64), nullable=False)
     planned_start: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
@@ -325,6 +337,7 @@ class _FixedBlockContent:
 
 def _fixed_block_checks(table: str) -> tuple:
     return (
+        CheckConstraint("points BETWEEN 0 AND 1000", name=f"ck_{table}_points"),
         CheckConstraint("length(label) > 0", name=f"ck_{table}_label"),
         CheckConstraint("length(category) > 0", name=f"ck_{table}_category"),
         CheckConstraint("planned_end > planned_start", name=f"ck_{table}_order"),

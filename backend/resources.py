@@ -80,9 +80,11 @@ from app.planning.models import (
     OCCURRENCE_TOMBSTONE_STATES,
     LocalTimeWindow,
     OccurrenceState,
+    PreferredTime,
     ProjectMilestone,
     ProjectTaskDefaults,
     RecurrenceSpec,
+    TaskKind,
 )
 from app.planning.models import PlacementOrigin, PlacementRemovalReason
 from app.planning.recurrence import SeriesRule, cadence_problem, occurrence_task_id
@@ -208,9 +210,13 @@ class TaskFields(Strict):
     #: The task's reusable type (one of the caller's task types). Omitted or null (an older client): a create
     #: stores none, an update keeps the stored one -- a type is never cleared.
     task_type_id: uuid.UUID | None = None
+    #: flexible, or todo (a checklist item, never scheduled); omitted by older clients: flexible.
+    kind: TaskKind = TaskKind.FLEXIBLE
     required: bool = False
     required_date: date_ | None = None
     preferred_dates: list[date_] = Field(default_factory=list, max_length=MAX_PREFERRED_DATES)
+    #: The preferred third of the day (early / mid / late); omitted or null: none.
+    preferred_time: PreferredTime | None = None
     preferred_time_window: LocalTimeWindow | None = None
     dependency_ids: list[uuid.UUID] = Field(default_factory=list, max_length=MAX_DEPENDENCIES)
     deadline: AwareDatetime | None = None
@@ -255,6 +261,8 @@ class TaskOut(TaskFields, RecordMeta):
 class FixedBlockFields(Strict):
     label: str = Field(min_length=1, max_length=500)
     category: str = Field(default="fixed", min_length=1, max_length=100)
+    #: What completing the block is worth; omitted by older clients: 0.
+    points: int = Field(default=0, ge=0, le=MAX_TASK_POINTS)
     planned_date: date_
     timezone: str
     planned_start: AwareDatetime
@@ -600,7 +608,7 @@ def _task_validate(session, user_id, payload: TaskFields, existing) -> None:
 
 #: The occurrence fields its series dictates (app/planning/series.py: _CONTENT_FIELDS, occurrence_for).
 _SERIES_CONTENT = frozenset({"project_id", "name", "category", "tags", "estimated_duration_minutes", "priority",
-                             "points", "required", "preferred_time_window"})
+                             "points", "required", "preferred_time", "preferred_time_window"})
 
 
 def _check_series_precondition(session, user_id, series, payload: TaskFields) -> None:

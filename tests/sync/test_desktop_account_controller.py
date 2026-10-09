@@ -330,3 +330,37 @@ def test_switching_backend_or_account_isolates_records_and_in_flight_results(mak
     desktop.services.switch_workspace()
     assert desktop.services.workspace.scope == OwnerScope.ownerless() and desktop.names() == set()
     assert set(desktop.owners()) == {"Alice's plan", "Bob's plan"}  # nothing deleted or re-owned
+
+
+def test_check_connection_names_the_stage_that_failed(make_desktop, alice_server) -> None:
+    transport = FlakyTransport(alice_server.client)
+    transport.ready = lambda: {"status": "ready"}
+    desktop = make_desktop("desk", transport)
+    desktop.connect()
+
+    signed_out = desktop.ok(desktop.account.check_backend())
+    assert not signed_out.check_failed and [line.split(":")[0] for line in signed_out.checks] == [
+        "Server", "Server database", "Account session"]
+    assert "not checked" in signed_out.checks[2]  # an answering server proves nothing about the account
+
+    desktop.sign_in()
+    signed_in = desktop.ok(desktop.account.check_backend())
+    assert not signed_in.check_failed and len(signed_in.checks) == 4 and "OK" in signed_in.checks[2]
+
+    def database_down():
+        raise TransportError("The backend is unavailable (HTTP 503).", status=503,
+                             body={"status": "unavailable", "database": "unreachable"})
+
+    transport.ready = database_down
+    broken = desktop.ok(desktop.account.check_backend())
+    assert broken.check_failed and broken.reachable is True
+    assert broken.checks[0].startswith("Server: OK") and "cannot reach its database" in broken.checks[1]
+    assert len(broken.checks) == 2
+
+    def refused(_token):
+        raise AuthenticationError("expired")
+
+    transport.ready = lambda: {"status": "ready"}
+    transport.capabilities = refused
+    ended = desktop.ok(desktop.account.check_backend())
+    assert ended.check_failed and "Sign in again" in ended.checks[2]

@@ -202,3 +202,56 @@ def test_the_tracker_reads_completion_activity_from_the_server_schema(alice, bob
 
     theirs = bob.productivity_service("UTC").build_tracker_report()  # another account sees none of it
     assert theirs.general.activity.completions == 0 and theirs.types == [] and theirs.time.days == []
+
+
+def test_deleting_a_todo_removes_its_completion_records_on_the_server_and_nothing_else(alice, bob, clock, engine) -> None:
+    """Direct (server database) mode: a deleted To Do takes its completion, points and statistics with it --
+    by id, leaving a same-named To Do, a scheduled task and another account untouched -- and stays deleted."""
+    from app.execution.direct_completion import complete_directly
+    from app.planning.models import TODO_PLACEHOLDER_MINUTES, TaskKind
+
+    def todo(owner, points: int) -> Task:
+        return Task(user_id=owner, name="Buy milk", category="errand", kind=TaskKind.TODO, points=points,
+                    estimated_duration_minutes=TODO_PLACEHOLDER_MINUTES, preferred_dates=[MON])
+
+    def totals(account) -> tuple[int, int]:
+        activity = account.productivity_service("UTC").build_tracker_report().general.activity
+        return activity.completions, activity.known_points
+
+    planning, executions = alice.planning_service(), alice.execution_service()
+    doomed, twin = planning.create_task(todo(alice.user_id, 15)), planning.create_task(todo(alice.user_id, 5))
+    scheduled = planning.create_task(new_task(alice.user_id))
+    work = executions.get_or_create_canonical_execution(scheduled, place(planning, scheduled))
+    theirs = bob.planning_service().create_task(todo(bob.user_id, 7))
+    clock.now = at(MON, 9) + timedelta(days=2)  # ticked two days after the day they belong to
+    done = complete_directly(executions, doomed)
+    kept = complete_directly(executions, twin)
+    executions.complete(work.id)
+    complete_directly(bob.execution_service(), theirs)
+    assert (done.points, done.status.value, done.canonical_planned_start) == (15, "completed", None)
+    assert totals(alice) == (3, 15 + 5 + 3) and totals(bob) == (1, 7)
+    # A To Do's completion counts on the day it belongs to, not the day it was ticked.
+    report = alice.productivity_service("UTC").build_tracker_report()
+    assert report.general.highest_point_day.winners[0].start_date == MON
+
+    assert planning.delete_task(doomed.id, expected_version=doomed.version) is True
+    assert sorted(item.id for item in executions.list_executions()) == sorted([kept.id, work.id])
+    assert totals(alice) == (2, 5 + 3) and totals(bob) == (1, 7)  # only its own completion and points are gone
+    assert planning.get_task(doomed.id) is None and planning.get_task(twin.id) is not None
+
+    # Again: nothing more to delete, and nothing else changes.
+    assert planning.delete_task(doomed.id, expected_version=doomed.version) is False
+    assert totals(alice) == (2, 5 + 3) and len(executions.list_executions()) == 2
+
+    # What synchronization reads: both records are tombstones with a delete in the change feed, so no device
+    # is ever sent the To Do or its completion as live again.
+    with Session(engine) as session:
+        task_row = session.get(models.Task, (alice.user_id, doomed.id))
+        execution_row = session.get(models.Execution, (alice.user_id, uuid.UUID(done.id)))
+        assert task_row.deleted_at is not None and execution_row.deleted_at is not None
+        last = {}
+        for entry in session.scalars(sa.select(models.ChangeLogEntry).where(
+                models.ChangeLogEntry.user_id == alice.user_id).order_by(models.ChangeLogEntry.seq)):
+            last[entry.entity_id] = entry.operation
+        assert last[doomed.id] == "delete" and last[uuid.UUID(done.id)] == "delete"
+        assert last[twin.id] != "delete" and last[uuid.UUID(kept.id)] != "delete"

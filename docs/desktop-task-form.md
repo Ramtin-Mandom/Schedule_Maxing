@@ -9,6 +9,9 @@ You never type ids, owners, timestamps or versions. Dependencies and projects
 are chosen by name but kept by id, so duplicate task names work: the choices
 show the date, and a short id suffix where names and dates still collide.
 
+The form's **Task type** switch chooses Flexible, Fixed or To Do and shows only that type's fields; a saved
+record is built from the shown type's fields alone.
+
 ## Flexible task
 
 | Field | Meaning |
@@ -19,18 +22,24 @@ show the date, and a short id suffix where names and dates still collide.
 | Pinned date | No longer a form control. A new task is not pinned; editing a task that is pinned (`required_date`, a hard constraint) keeps it pinned |
 | Required | The task must be scheduled (`required`) |
 | Duration | Whole minutes, from 1 minute to 24 h: `13`, `13 min`, `1 h 13 min`, `1h13m`, `1:13` |
-| Priority | 1 (low) to 10 (high) |
+| Preferred time | Early, Mid or Late: a third of the date's day window (not midnight to midnight). The scheduler places the task there whenever it fits, and looks elsewhere only when that third has no valid placement |
 | Points | 0 to 1000, default 1, typed or changed by 10 with − / +: what finishing the task is worth to the user, for productivity analytics. Not a scheduling input (the inputs fingerprint excludes it) and never the optimizer's placement `score`. Each execution snapshots the task's points when it is created |
 | Tags | An ordered list. **Enter** adds the typed tag as a chip and never submits the task. A chip's ✕ removes it, and **Backspace** in the empty tag field removes the last one. The chips stay on one row and scroll sideways when they are wider than the form. Blank and repeated tags are ignored. There is no mandatory tag. The scoring adapter still reads only the first tag, and the engine is unchanged |
-| More options → Preferred from / until | An optional preferred window. Leave both empty for "any time" |
-| More options → Deadline | Date and time. Both are needed if either is given |
-| More options → Depends on | Chosen by name, kept by id |
-| Use default values | Fills the name (if empty), duration, priority and points from the chosen category's defaults, or the general ones when no category is chosen. Out of the box: priority 5, 60 minutes, 20 points, named after the category. Changed in Settings, stored in `task_defaults.json` beside the database (this device only); "Reset All Task Data" removes added categories and changed values |
-| More options → Task type | The reusable type the task counts under on the Productivity page. "(its own type)" keeps the stored type (a new task gets one of its own); pick an existing type to share it, or "New type..." and a name to create one. Independent of category and tags; an occurrence always has its series' type |
+| Deadline | Date and time. Both are needed if either is given |
+| Depends on | Chosen by name, kept by id |
+| Use default values | Fills the name (if empty), duration and points from the chosen category's defaults, or the general ones when no category is chosen. Out of the box: 60 minutes, 20 points, named after the category. Changed in Settings, stored in `task_defaults.json` beside the database (this device only); "Reset All Task Data" removes added categories and changed values |
+| Task type | The reusable type the task counts under on the Productivity page. "(its own type)" keeps the stored type (a new task gets one of its own); pick an existing type to share it, or "New type..." and a name to create one. Independent of category and tags; an occurrence always has its series' type |
 
 ## Fixed block
 
-Label, category, start and end, on the page's selected date (as for a task, the date is not typed).
+Label, category, points, start and end, on the page's selected date (as for a task, the date is not typed).
+A fixed block is completed on the Day page's board like scheduled work, for its points; they never affect
+the schedule.
+
+## To Do
+
+Name, category, points and tags. A checklist item: no duration, time or date; never scheduled. It is listed
+as a card under the Day timeline, where it is completed (Done) or removed (✕).
 
 - A fixed block is not a disguised flexible task, and editing never turns
   one kind into the other. To change the kind, remove the record and add the
@@ -76,7 +85,7 @@ adjusted:
   is refused for a deadline or block, with a request to choose another time.
 - **Blocks across a daylight-saving change.** A block that spans the change
   is refused, with a request to split it at the change.
-- **Recurrence.** "Repeats" (in More options) makes the task a recurring
+- **Recurrence.** "Repeats" makes the task a recurring
   series starting on the page's date in the page's time zone: daily, weekly
   (weekdays), monthly (day of month; months without it are skipped), every N,
   ending never, on a date or after N times. A template saved before series

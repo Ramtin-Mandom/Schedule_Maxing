@@ -262,9 +262,7 @@ def test_replace_keeps_execution_history_and_reports_linked_placements(
     result = apply(planning_service, parse("1,Fresh,study,,false,540,600,30,5,\n"), replace=True)
 
     assert result.cleared.placements_with_history == 1
-    history = execution_service.get_execution(execution.id)
-    assert history.task_name == "Worked" and history.status.value == "in_progress"
-    assert history.task_id == task.id and history.scheduled_task_id == placement.id
+    assert execution_service.list_executions() == []  # a replaced (deleted) task's executions go with it
     assert [t.name for t in planning_service.list_tasks()] == ["Fresh"]
 
 

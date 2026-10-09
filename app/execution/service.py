@@ -317,6 +317,14 @@ class ExecutionService:
         candidate = self._build_canonical_execution(task, scheduled_task, user_id=user_id)
         return self._repository.get_or_create_by_scheduled_task_id(candidate)
 
+    @_atomic
+    def create_fixed_block_execution(self, block) -> TaskExecution:
+        """The one execution of a fixed block (app/execution/fixed_block_completion.py); its id is derived."""
+        from app.execution.fixed_block_completion import build_fixed_block_execution
+
+        return self._repository.create_execution(
+            build_fixed_block_execution(block, now=self._clock(), user_id=self._new_record_owner(block.user_id)))
+
     def _build_canonical_execution(
         self,
         task: CanonicalTask,
@@ -673,7 +681,8 @@ def build_canonical_execution(
             canonical_planned_end=scheduled_task.planned_end,
         )
     else:
-        planned_duration_minutes = task.estimated_duration_minutes
+        # A To Do has no duration (its stored minutes are a placeholder): nothing was planned.
+        planned_duration_minutes = 0 if task.is_todo else task.estimated_duration_minutes
         canonical_kwargs = dict(
             scheduled_task_id=None,
             canonical_planned_date=None,

@@ -131,7 +131,7 @@ def test_native_projects(tmp_path, dialogs):
         page.on_show()
         pump(app, until=lambda: not page._busy and page.snapshot.selected.task_defaults.configured)
         assert page.form.duration_field.get() == "45 min" and page.form.points_field.get() == "12"
-        assert page.form.priority_select.get() == "5"  # not configured: the form's own value stays
+        assert not hasattr(page.form, "priority_select")  # the form has no priority
 
         # "View performance" opens Performance -> Project with this project selected; coming back keeps the panel.
         page.performance_button.invoke()

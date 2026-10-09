@@ -115,7 +115,10 @@ COLUMNS_V2 = COLUMNS_V1 + (
 #: optional on import (an earlier version 2 file has none: the history is then unknown, never guessed).
 COLUMNS = COLUMNS_V2 + ("task_category", "removal_reason", "superseded_by_id", "points",
                         "series_id", "occurrence_slot", "occurrence_state", "series_version", "series_predecessor_id",
-                        "origin", "preserved")
+                        "origin", "preserved",
+                        # A task's kind (flexible / todo) and preferred third of the day; "points" also carries a
+                        # fixed block's. Optional on import: a file without them means flexible, no third, 0 points.
+                        "kind", "preferred_time")
 
 
 @dataclass(frozen=True)
@@ -248,6 +251,8 @@ def _task_row(task: Task) -> dict[str, str]:
         "duration_minutes": str(task.estimated_duration_minutes),
         "priority": str(task.priority),
         "points": str(task.points),
+        "kind": task.kind.value,
+        "preferred_time": task.preferred_time.value if task.preferred_time else "",
         "required": "true" if task.required else "false",
         "required_date": task.required_date.isoformat() if task.required_date else "",
         "preferred_dates": json.dumps([day.isoformat() for day in task.preferred_dates]),
@@ -270,6 +275,7 @@ def _block_row(block: FixedBlock) -> dict[str, str]:
     return {
         "record_type": "fixed_block",
         **_record(block),
+        "points": str(block.points),
         "date": block.planned_date.isoformat(),
         "timezone": block.timezone,
         "name": block.label,

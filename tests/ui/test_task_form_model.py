@@ -16,7 +16,17 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.planning.models import FixedBlock, Project, RecurrenceFrequency, RecurrenceSpec, Task
+from app.planning.models import (
+    DEFAULT_TASK_PRIORITY,
+    TODO_PLACEHOLDER_MINUTES,
+    FixedBlock,
+    PreferredTime,
+    Project,
+    RecurrenceFrequency,
+    RecurrenceSpec,
+    Task,
+    TaskKind,
+)
 from app.planning.scope import OwnerScope
 from app.ui import background
 from app.ui.app_services import open_app_services
@@ -26,6 +36,7 @@ from app.ui.task_form_model import (
     TaskDraft,
     build_block,
     build_task,
+    build_todo,
     categories_for,
     draft_from_block,
     draft_from_task,
@@ -151,15 +162,17 @@ def test_bad_durations_are_refused_not_rounded(text: str) -> None:
 
 
 def valid_draft(**changes) -> TaskDraft:
-    base = TaskDraft(name="Read", category="study", date=DAY.isoformat(), duration="13 min", priority="7",
-                     window_start="10:13 AM", window_end="11:00 AM", tags=("reading", "deep"))
+    base = TaskDraft(name="Read", category="study", date=DAY.isoformat(), duration="13 min", preferred_time="late",
+                     tags=("reading", "deep"))
     return TaskDraft(**{**base.__dict__, **changes})
 
 
 def test_a_minute_precise_task_is_built_from_the_form() -> None:
     task = build_task(valid_draft(), timezone_name="UTC")
-    assert task.estimated_duration_minutes == 13 and task.priority == 7
-    assert (task.preferred_time_window.start_minute, task.preferred_time_window.end_minute) == (613, 660)
+    assert task.estimated_duration_minutes == 13 and task.kind == TaskKind.FLEXIBLE
+    # The form's one preferred time is a third of the day; it never sets a custom window or a priority.
+    assert task.preferred_time == PreferredTime.LATE and task.preferred_time_window is None
+    assert task.priority == DEFAULT_TASK_PRIORITY
     assert task.preferred_dates == [DAY] and task.required_date is None and task.tags == ["reading", "deep"]
     pinned = build_task(valid_draft(pin_to_date=True, required=True), timezone_name="UTC")
     assert pinned.required_date == DAY and pinned.required and pinned.preferred_dates == []
@@ -169,16 +182,34 @@ def test_a_minute_precise_task_is_built_from_the_form() -> None:
 
 def test_every_invalid_field_is_reported_at_once() -> None:
     with pytest.raises(FormErrors) as info:
-        build_task(TaskDraft(name=" ", duration="0", priority="11", pin_to_date=True, window_start="9:00 AM",
+        build_task(TaskDraft(name=" ", duration="0", preferred_time="noon", pin_to_date=True,
                              deadline_date="2026-09-30"), timezone_name="UTC")
-    assert set(info.value.errors) == {"name", "duration", "priority", "date", "window_end", "deadline_time"}
+    assert set(info.value.errors) == {"name", "duration", "preferred_time", "date", "deadline_time"}
 
 
-def test_windows_may_end_at_midnight_but_never_run_overnight() -> None:
-    task = build_task(valid_draft(window_start="10:00 PM", window_end="12:00 AM"), timezone_name="UTC")
-    assert task.preferred_time_window.end_minute == 1440
-    with pytest.raises(FormErrors, match="continue past midnight"):
-        build_task(valid_draft(window_start="10:00 PM", window_end="2:00 AM"), timezone_name="UTC")
+def test_each_kind_saves_its_points_and_only_its_own_fields() -> None:
+    """Flexible, Fixed and To Do all carry points; a To Do takes nothing about time from the draft."""
+    stale = dict(duration="2 h", start="9:00 AM", end="10:00 AM", preferred_time="early", required=True,
+                 pin_to_date=True, deadline_date=DAY.isoformat(), deadline_time="5:00 PM", repeat="daily")
+    todo = build_todo(TaskDraft(kind="todo", name="Buy milk", category="errand", points="15", tags=("shop",),
+                                date=DAY.isoformat(), **stale))
+    assert todo.kind == TaskKind.TODO and todo.is_todo and (todo.name, todo.points, todo.tags) == ("Buy milk", 15, ["shop"])
+    assert todo.estimated_duration_minutes == TODO_PLACEHOLDER_MINUTES  # a stored placeholder, never the typed 2 h
+    # It belongs to the day it was added for (that day's checklist); nothing else about time is taken.
+    assert (todo.preferred_time, todo.required, todo.required_date, todo.preferred_dates, todo.deadline,
+            todo.recurrence) == (None, False, None, [DAY], None, None)
+    assert draft_from_task(todo, "UTC").kind == "todo" and draft_from_task(todo, "UTC").points == "15"
+    renamed = build_todo(replace(draft_from_task(todo, "UTC"), name="Buy oat milk", points="20"), existing=todo)
+    assert (renamed.id, renamed.name, renamed.points, renamed.kind) == (todo.id, "Buy oat milk", 20, TaskKind.TODO)
+    with pytest.raises(FormErrors) as info:
+        build_todo(TaskDraft(kind="todo", name="", points="many"))
+    assert set(info.value.errors) == {"name", "points"}
+
+    block = build_block(TaskDraft(kind="block", name="Class", category="class", date=DAY.isoformat(), points="30",
+                                  start="9:00 AM", end="10:00 AM"), timezone_name="UTC")
+    assert block.points == 30 and draft_from_block(block).points == "30"
+    flexible = build_task(valid_draft(points="40"), timezone_name="UTC")
+    assert flexible.points == 40 and draft_from_task(flexible, "UTC").preferred_time == "late"
 
 
 def test_deadlines_and_blocks_refuse_times_skipped_or_repeated_by_daylight_saving() -> None:
@@ -362,7 +393,7 @@ def test_stale_versions_type_changes_and_deletes_with_dependents_are_refused(ser
     assert not converted.ok and "cannot become a fixed block" in converted.error
 
     ok(controller.save_draft(valid_draft(name="After", dependency_ids=(fresh.id,))))
-    assert "saved schedule entries are removed too" in ok(controller.delete_description(fresh))
+    assert "saved schedule entries, completions and points are removed with it" in ok(controller.delete_description(fresh))
     refused = controller.delete(rows(controller)["Base"])
     assert not refused.ok and "After" in refused.error and "depend" in refused.error
     assert "Base" in rows(controller)

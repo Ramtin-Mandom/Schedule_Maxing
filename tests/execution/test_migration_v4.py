@@ -20,7 +20,7 @@ from app.execution.db import LATEST_SCHEMA_VERSION, MigrationError, get_connecti
 from app.execution.errors import ExecutionLinkError
 from app.execution.repository import ExecutionRepository
 from app.execution.service import ExecutionService
-from app.planning.models import Task
+from app.planning.models import Task, fixed_block_execution_id
 from app.planning.repository import PlanningRepository
 from tests.execution.test_migration_v2 import _build_v1_database
 from tests.execution.test_migration_v3 import ORPHAN_TASK_ID, _build_v2_database_with_canonical_rows
@@ -30,9 +30,21 @@ V3_BLOCK_ID = "44444444-4444-4444-8444-444444444444"
 V3_PLACEMENT_ID = "55555555-5555-4555-8555-555555555555"
 
 
+def without_block_completions(conn: sqlite3.Connection, table: str, rows: list[dict]) -> list[dict]:
+    """
+    `rows` without the completions schema v16 adds for the fixed blocks that existed before it (their ids are
+    derived from the blocks'): new records of the upgrade, not changes to anything that was stored.
+    """
+    if table != "executions" or not conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'fixed_blocks'").fetchone():
+        return rows
+    added = {str(fixed_block_execution_id(uuid.UUID(row[0]))) for row in conn.execute("SELECT id FROM fixed_blocks")}
+    return [row for row in rows if row["id"] not in added]
+
+
 def _rows(conn: sqlite3.Connection, table: str) -> list[dict]:
     conn.row_factory = sqlite3.Row
-    return [dict(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY 1")]
+    return without_block_completions(conn, table, [dict(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY 1")])
 
 
 def _build_v3_database_with_planning_rows(db_path: Path) -> None:

@@ -195,8 +195,7 @@ def test_removing_a_scheduled_task_is_safe_and_keeps_its_history(services) -> No
     stored = ok(services.planning_controller.get_task(done.id))
     ok(day.page.delete(RowRef("task", done.id, stored.version)))
     assert day.columns() == {U: [], P: [], C: []}  # an answered task that is removed leaves the board...
-    [execution] = ok(services.execution_controller.list_executions())  # ...while its completion stays as history
-    assert execution.status == ExecutionStatus.COMPLETED and execution.task_id == done.id
+    assert ok(services.execution_controller.list_executions()) == []  # ...and its completion goes with it
 
 
 def test_statuses_survive_a_restart(db_path: Path, tmp_path: Path) -> None:

@@ -113,10 +113,13 @@ def close_app(app) -> None:
     gc.collect()
 
 
-def fill_form(page, *, name: str, day: str = "1", fixed: bool = False, start="480", end="720", duration="60") -> None:
+def fill_form(page, *, name: str, day: str = "1", fixed: bool = False, start="480", end="720", duration="60",
+              preferred: str | None = None, points: str | None = None) -> None:
     """
     Fill the task editor like a user: select day N of the page (the form has no date field; a Week/Month
-    task gets the selected day, a Day task the page's date), then enter times as hour, minute and AM/PM.
+    task gets the selected day, a Day task the page's date), then -- for a fixed block -- enter its times as
+    hour, minute and AM/PM. A flexible task has no time to type (start/end are ignored for it): `preferred`
+    chooses its Early / Mid / Late third (the form's own choice when None).
     """
     from app.ui.time_fields import minutes_to_clock
 
@@ -142,10 +145,11 @@ def fill_form(page, *, name: str, day: str = "1", fixed: bool = False, start="48
         enter(form.end_field, int(end))
     else:
         form.duration_field.variable.set(duration)
-        form.priority_select.variable.set("5")
-        enter(form.window_start, int(start))
-        enter(form.window_end, int(end))
+        if preferred is not None:
+            form.preferred_select.variable.set(preferred)
         form.tag_input.set_tags(["tag"])
+    if points is not None:
+        form.points_field.variable.set(points)
 
 
 def tree_names(page) -> list[str]:
@@ -226,9 +230,10 @@ def test_create_edit_delete_schedule_execute_close_reopen_reset(tmp_path: Path, 
     assert dialogs.errors == []
     assert day.freshness_badge.cget("text") == "Current"
     pump(app)
-    assert board_names(day) == {"pending": ["Study"], "completed": [], "uncompleted": []}
+    # The date's fixed block is scheduled work too: it waits on the board beside the placed task.
+    assert board_names(day) == {"pending": ["Lecture", "Study"], "completed": [], "uncompleted": []}
     press(app, day, "Study", "right")
-    assert board_names(day) == {"pending": [], "completed": ["Study"], "uncompleted": []}
+    assert board_names(day) == {"pending": ["Lecture"], "completed": ["Study"], "uncompleted": []}
     day.back_button.invoke()
     pump(app)
     assert app.shell.current == "week"
@@ -248,7 +253,7 @@ def test_create_edit_delete_schedule_execute_close_reopen_reset(tmp_path: Path, 
         pump(app)
         assert board_names(day)["completed"] == ["Study"]
 
-        # Reset Week: previewed and confirmed; execution history is kept.
+        # Reset Week: previewed and confirmed; what was recorded for the week goes with it.
         week.reset_button.invoke()
         pump(app)
         assert "Reset the week of Mon Jun 3" in dialogs.confirms[-1]
@@ -259,8 +264,7 @@ def test_create_edit_delete_schedule_execute_close_reopen_reset(tmp_path: Path, 
 
     connection = get_connection(db_path)
     try:
-        [execution] = ExecutionService(ExecutionRepository(connection)).list_executions()
-        assert execution.status.value == "completed" and execution.task_name == "Study"
+        assert ExecutionService(ExecutionRepository(connection)).list_executions() == []
     finally:
         connection.close()
 
@@ -270,11 +274,11 @@ def test_invalid_input_shows_an_error_and_saves_nothing(tmp_path: Path, dialogs:
     try:
         day = app.pages["day"]
         fill_form(day, name="Bad", duration="0")
-        day.form.window_start.hour_var.set("13")  # hours are 1-12 beside the AM/PM toggle
+        day.form.points_field.variable.set("many")
         day.form.submit_button.invoke()
         pump(app)
         assert day.form.duration_field.error == "A task takes at least 1 minute."  # shown next to its field
-        assert "hour goes from 1 to 12" in day.form.window_start.error
+        assert "whole number" in day.form.points_field.error
         assert day.form.notice.text.startswith("Error:")
         assert tree_names(day) == []
         assert day.form.name_field.get() == "Bad"  # the user's input is kept for correction

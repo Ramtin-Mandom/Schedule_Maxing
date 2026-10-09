@@ -74,6 +74,8 @@ V12_TASK_COLUMNS = ("task_type_id",)
 V12_PLACEMENT_COLUMNS = ("task_name", "task_tags", "task_points", "task_estimate_minutes", "task_type_id",
                          "task_type_label")
 #: Schema v14 (a project's planned dates, completion and milestones) -- project columns older code never wrote.
+#: Schema v16: a task's kind and preferred third of the day.
+V16_TASK_COLUMNS = ("kind", "preferred_time")
 V14_PROJECT_COLUMNS = ("start_date", "estimated_end_date", "completed_at", "milestones", "task_defaults")
 
 
@@ -88,7 +90,7 @@ def pre_v8_writers():
     from app.planning.application import PlanningService as CurrentService
     from app.planning.models import PLACEMENT_SNAPSHOT_FIELDS
 
-    absent = (*V8_COLUMNS, *V9_TASK_COLUMNS, *V10_EXECUTION_COLUMNS, *V12_TASK_COLUMNS)
+    absent = (*V8_COLUMNS, *V9_TASK_COLUMNS, *V10_EXECUTION_COLUMNS, *V12_TASK_COLUMNS, *V16_TASK_COLUMNS)
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(CurrentService, "_resolve_task_types", lambda self, tasks, stored: tasks)
         patch.setattr(CurrentService, "placement_snapshots", lambda self, tasks: {
@@ -116,7 +118,15 @@ def pre_v8_writers():
             {**dict(row), **dict.fromkeys(V14_PROJECT_COLUMNS)}))
         original_row_to_task = planning_repository._row_to_task
         patch.setattr(planning_repository, "_row_to_task", lambda row, *rest: original_row_to_task(
-            {**dict(row), "points": 1, **{column: None for column in (*V9_TASK_COLUMNS, *V12_TASK_COLUMNS)}}, *rest))
+            {**dict(row), "points": 1, "kind": "flexible", "preferred_time": None,
+             **{column: None for column in (*V9_TASK_COLUMNS, *V12_TASK_COLUMNS)}}, *rest))
+        # Schema v16: a fixed block's points.
+        block_columns, block_to_row = planning_repository._FIXED_BLOCK_COLUMNS, planning_repository._fixed_block_to_row
+        row_to_block = planning_repository._row_to_fixed_block
+        patch.setattr(planning_repository, "_FIXED_BLOCK_COLUMNS", tuple(c for c in block_columns if c != "points"))
+        patch.setattr(planning_repository, "_fixed_block_to_row", lambda block: tuple(
+            value for column, value in zip(block_columns, block_to_row(block)) if column != "points"))
+        patch.setattr(planning_repository, "_row_to_fixed_block", lambda row: row_to_block({**dict(row), "points": 0}))
         yield
 
 
@@ -213,6 +223,15 @@ def test_a_synchronized_milestone3_database_opens_unchanged_in_its_owners_worksp
             after = {table: rows(connection, table, before_columns[table]) for table in PRESERVED_TABLES}
             # Schema v13 queues the task types that v12 derived for upload; every existing mark is untouched.
             after["sync_dirty"] = [row for row in after["sync_dirty"] if row[0] != "task_type"]
+            # Schema v16 completes (for 0 points) the fixed blocks saved before blocks could be completed: one
+            # new execution per block, its id derived from the block's -- never a second one on a reopen.
+            from app.planning.models import fixed_block_execution_id
+
+            added = {str(fixed_block_execution_id(uuid.UUID(row[0])))
+                     for row in connection.execute("SELECT id FROM fixed_blocks")}
+            backfilled = [row for row in after["executions"] if row[0] in added]
+            assert len(backfilled) == len(added) == 1
+            after["executions"] = [row for row in after["executions"] if row[0] not in added]
             assert after == before
             assert set(rows(connection, "scheduled_tasks", list(V7_PLACEMENT_COLUMNS))) == {(None, None, None)}
             account = connection.execute("SELECT pull_cursor, active, associated_at, last_synced_at FROM sync_accounts "
