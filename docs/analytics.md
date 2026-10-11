@@ -273,6 +273,10 @@ timezone, as the cohort does.
 - **Unresolved** = not started + in progress + paused. **Overdue, not started** is its due, not-started part.
 - **Points** are the execution's `points` snapshot, never a placement's optimizer `score` and never the
   task's current value. A completion without a snapshot has unknown points; it is counted, its points are not.
+  Fixed blocks and To Dos are completed for points too, through ordinary executions.
+- **A To Do's date**: its completion and points count on the day the To Do belongs to
+  (`app.planning.models.todo_date`), whenever it was ticked -- the same day the Day page's
+  Completed / Possible counter shows them on. Every other completion counts on the local date it was completed.
 - **Highest-point day**: the largest sum of known points over finished local dates. Today is returned as the
   partial period and cannot be the record.
 - **Best week**: the largest sum of known points over whole Monday–Sunday weeks that lie between the first

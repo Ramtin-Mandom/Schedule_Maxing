@@ -219,7 +219,7 @@ The answers are recorded in one SQLite transaction:
   the precondition of a *new* live occurrence is its series' current state: the
   series is live, the slot is still one of its dates, and an occurrence that
   follows its series (no exception state) carries the series' current content
-  (name, category, tags, estimate, priority, points, required, preferred window,
+  (name, category, tags, estimate, priority, points, required, preferred time and window,
   project). Otherwise the create is a `series_changed` conflict whose `current`
   is the series. So an occurrence expanded offline from an older rule -- or
   under a series another device deleted -- can never get around the series

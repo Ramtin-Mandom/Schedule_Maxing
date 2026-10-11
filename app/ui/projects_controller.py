@@ -468,7 +468,7 @@ class ProjectsController:
 
     def remove_task(self, task_id: uuid.UUID, *, expected_version: int, scope: str | None = None
                     ) -> ControllerResult[PageSnapshot]:
-        """Remove a task exactly as the schedule pages do (its saved placements go with it; history is kept)."""
+        """Remove a task exactly as the schedule pages do (its saved placements, completions and points go with it)."""
         return self._form(self.today()).delete(RowRef("task", task_id, expected_version), scope=scope)
 
     def set_task_completed(self, task_id: uuid.UUID, completed: bool) -> ControllerResult[bool]:
