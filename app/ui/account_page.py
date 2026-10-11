@@ -63,6 +63,7 @@ from app.ui.components import (
     SectionTitle,
     font,
 )
+from app.ui.conflict_view import ConflictComparison
 from app.ui.pages import PageHeader
 
 
@@ -323,31 +324,12 @@ class AccountPage(ctk.CTkFrame):
                                             anchor="w", justify="left", wraplength=460)
         self.conflicts_empty.grid(row=2, column=0, columnspan=3, sticky="ew", padx=theme.SPACE_L, pady=(6, 0))
 
-        self.detail_frame = ctk.CTkFrame(card, fg_color="transparent")
-        self.detail_frame.grid(row=3, column=0, columnspan=3, sticky="ew", padx=theme.SPACE_L, pady=(8, 0))
-        self.detail_frame.columnconfigure(0, weight=1)
-        self.detail_title = ctk.CTkLabel(self.detail_frame, text="", font=font(theme.SIZE_BODY, "bold"),
-                                         text_color=theme.TEXT_PRIMARY, anchor="w", justify="left", wraplength=440)
-        self.detail_title.grid(row=0, column=0, columnspan=2, sticky="ew")
-        self.difference_tree = ttk.Treeview(self.detail_frame, columns=("field", "local", "remote"), show="headings",
-                                            height=5)
-        for column, label, width in (("field", "Field", 120), ("local", "This device", 170),
-                                     ("remote", "Server", 170)):
-            self.difference_tree.heading(column, text=label)
-            self.difference_tree.column(column, width=width, stretch=True)
-        self.difference_tree.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 6))
-        self.choice_buttons = {
-            "keep_local": AppButton(self.detail_frame, RESOLUTION_LABELS["keep_local"],
-                                    lambda: self.resolve("keep_local"), variant="secondary"),
-            "accept_remote": AppButton(self.detail_frame, RESOLUTION_LABELS["accept_remote"],
-                                       lambda: self.resolve("accept_remote"), variant="secondary"),
-        }
-        self.choice_buttons["keep_local"].grid(row=2, column=0, sticky="ew", padx=(0, 4))
-        self.choice_buttons["accept_remote"].grid(row=2, column=1, sticky="ew", padx=(4, 0))
-        self.choice_reasons = ctk.CTkLabel(self.detail_frame, text="", font=font(theme.SIZE_SMALL),
-                                           text_color=theme.TEXT_MUTED, anchor="w", justify="left", wraplength=440)
-        self.choice_reasons.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0))
-        self.detail_frame.grid_remove()
+        # The comparison and the two choices are the same widget the conflict dialog shows (conflict_view.py).
+        self.detail_frame = comparison = ConflictComparison(card, on_choice=self.resolve)
+        comparison.grid(row=3, column=0, columnspan=3, sticky="ew", padx=theme.SPACE_L, pady=(8, 0))
+        self.detail_title, self.difference_tree = comparison.title, comparison.difference_tree
+        self.choice_buttons, self.choice_reasons = comparison.choice_buttons, comparison.reasons
+        comparison.grid_remove()
         self.conflict_notice = Notice(card, wraplength=440)
         self.conflict_notice.grid(row=4, column=0, columnspan=3, sticky="ew", padx=theme.SPACE_L, pady=(8, 0))
         self.conflict_notice.hide()
@@ -744,29 +726,7 @@ class AccountPage(ctk.CTkFrame):
         if conflict is None:
             self.detail_frame.grid_remove()
             return
-        dash = "—"
-        versions = (f"This device: changed {conflict.local_updated_at or dash}, based on server version "
-                    f"{conflict.base_version or dash}. Server: version {conflict.remote_version or dash}, changed "
-                    f"{conflict.remote_updated_at or dash}.")
-        title = f"{conflict.title} — {conflict.kind}\n{versions}"
-        if conflict.remote_deleted:
-            title += "\nThe server deleted this record."
-        if conflict.server_message:
-            title += f"\nServer: {conflict.server_message}"
-        if conflict.context:
-            title += "\n" + "\n".join(conflict.context)
-        self.detail_title.configure(text=title)
-        self.difference_tree.delete(*self.difference_tree.get_children())
-        for index, difference in enumerate(conflict.differences):
-            self.difference_tree.insert("", tk.END, iid=str(index),
-                                        values=(difference.field, difference.local, difference.remote))
-        reasons = []
-        for choice, button in self.choice_buttons.items():
-            reason = conflict.choices.get(choice, "Not available.")
-            self._enable(button, reason is None and "resolve" not in self.busy)
-            if reason:
-                reasons.append(f"{RESOLUTION_LABELS[choice]} is not available: {reason}")
-        self.choice_reasons.configure(text="\n".join(reasons))
+        self.detail_frame.show(conflict, enabled="resolve" not in self.busy)
         self.detail_frame.grid()
 
     def resolve(self, choice: str) -> None:
