@@ -342,8 +342,9 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
             "the last sync. Sync now retries at once; Check connection only checks the connection.",
             "Sign out hides that account's records on this device and returns to guest mode. Unsent changes are "
             "kept and sent when you sign in to it again; another account never receives them.",
-            "If the same record changed in two places, the Account page shows the conflict and lets you choose. "
-            "Nothing is overwritten silently.",
+            "If the same record changed in two places, a dialog says that the server's version differs from yours "
+            "and shows both, so you can choose which to keep. Decide later leaves it on the Account page, where "
+            "you can choose at any time. Nothing is overwritten silently.",
         ),
         "With direct PostgreSQL storage everything is saved straight to the database, so there is nothing to "
         "sync.",

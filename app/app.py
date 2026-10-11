@@ -89,6 +89,7 @@ from app.ui.components import (
     LabeledEntry,
     font,
 )
+from app.ui.conflict_view import ConflictDialog
 from app.ui.execution_controller import ExecutionController
 from app.ui.guide_page import GuidePage
 from app.ui.pages import PageHeader, PlaceholderPage, ScrollPage, SettingsPage
@@ -285,6 +286,11 @@ class ScheduleOptimizerApp(ctk.CTk):
         #: One status read at a time (refresh_status); requests made while it runs become one more read.
         self._status_reading = False
         self._status_again = False
+        #: Conflicts a synchronization ended with are asked about once, in a dialog (_ask_about_conflicts).
+        self._conflicts_unasked = False
+        self._conflicts_asked: set[str] = set()
+        self._conflicts_reading = False
+        self.conflict_dialog: ConflictDialog | None = None
         self._closing = False
         #: True once the window is destroyed and its storage closed (the end of _on_close's polling).
         self._closed = False
@@ -466,6 +472,8 @@ class ScheduleOptimizerApp(ctk.CTk):
         if self.services is None or self.shell is None:
             return
         if not reload_only:
+            if self.conflict_dialog is not None:  # it asked about the previous workspace's records
+                self.conflict_dialog.close(None)
             self.services.switch_workspace()
             self._build_workspace_pages(replace=True)
             self.shell.sidebar.set_footer(self.services.workspace_label())
@@ -528,7 +536,51 @@ class ScheduleOptimizerApp(ctk.CTk):
             self._seen_report = report
             if report.pulled:  # records changed remotely: the visible page re-reads them
                 self._reload_current_page()
+            if report.conflicts:
+                self._conflicts_unasked = True
+        if self._conflicts_unasked:
+            self._ask_about_conflicts()
         return view
+
+    def _can_ask_about_conflicts(self) -> bool:
+        """Not over another dialog, and not on the Account page, which lists the conflicts itself."""
+        try:
+            grabbed = self.grab_current()
+        except (KeyError, tk.TclError):  # e.g. the grab is on a combobox popdown
+            grabbed = self
+        return (not self._closing and self.conflict_dialog is None and grabbed is None
+                and self.shell is not None and self.shell.current != "account")
+
+    def _ask_about_conflicts(self) -> None:
+        """
+        A synchronization ended with conflicts: show the ones not asked about
+        yet in a ConflictDialog (the Account page's comparison and choices).
+        Each conflict is asked about once; "Decide later" leaves it open on
+        the Account page. When it cannot be asked now, the next status read
+        tries again.
+        """
+        if self._conflicts_reading or not self._can_ask_about_conflicts():
+            return
+        controller, current = self.account_controller, self.services.workspace_guard()
+        self._conflicts_reading = True
+
+        def read(result) -> None:
+            self._conflicts_reading = False
+            if not result.ok or not current() or not self._can_ask_about_conflicts():
+                return
+            self._conflicts_unasked = False
+            new = [conflict for conflict in result.value if conflict.id not in self._conflicts_asked]
+            self._conflicts_asked.update(conflict.id for conflict in new)
+            if new:
+                self.conflict_dialog = ConflictDialog(
+                    self, new, resolve=controller.resolve,
+                    on_resolved=lambda: self.apply_workspace(reload_only=True), on_close=self._conflict_dialog_closed)
+
+        if not run_in_background(self, controller.conflicts, read, still_current=lambda: True):
+            self._conflicts_reading = False  # shutting down
+
+    def _conflict_dialog_closed(self) -> None:
+        self.conflict_dialog = None
 
     def _poll_status(self) -> None:
         self._status_poll = None
