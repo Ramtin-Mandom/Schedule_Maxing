@@ -54,8 +54,10 @@ def test_the_tests_are_skipped_only_by_the_explicit_off_switch():
 def test_only_the_publishing_job_may_write_and_only_for_tags():
     assert WORKFLOW["permissions"] == {"contents": "read"}
     assert JOBS["publish"]["permissions"] == {"contents": "write"}
-    for name in ("verify", "test", "build"):
+    for name in ("verify", "build"):
         assert "permissions" not in JOBS[name]
+    # The test check only reads: the pull request the commit came from, and its CI run.
+    assert JOBS["test"]["permissions"] == {"contents": "read", "actions": "read", "pull-requests": "read"}
     assert "github.event_name == 'push'" in JOBS["publish"]["if"] and "refs/tags/v" in JOBS["publish"]["if"]
 
 
@@ -74,7 +76,11 @@ def test_the_build_is_checked_and_tested_before_it_is_uploaded():
     order = [build.index(marker) for marker in ("build_windows.ps1", "test_installer.py", "checksums.py --verify",
                                                 "actions/upload-artifact")]
     assert order == sorted(order)
-    assert "xvfb-run -a python -m pytest" in steps_text("test") and "ruff check" in steps_text("test")
+    # The suite is not run a second time: a release relies on CI having passed for the pull request the
+    # tagged commit came from, and only commits of main are released.
+    check = steps_text("test")
+    assert "pr_tests_passed.sh" in check and "git merge-base --is-ancestor" in check and "origin/main" in check
+    assert "pytest" not in check
 
 
 def test_a_stable_release_with_exactly_the_installer_and_its_checksums():

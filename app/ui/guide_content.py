@@ -38,6 +38,18 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
         "the day window, and come after the tasks they depend on. When something does not fit, it is left "
         "unscheduled and you are told why.",
         "The app knows today's date from your computer's clock and time zone. You never type today's date.",
+        "A first day, start to finish:",
+        (
+            "Open Day Schedule and check the Day Window (when your usable day starts and ends).",
+            "Add what is fixed: choose Fixed in the form and give each class, shift or meal its start and end.",
+            "Add what is flexible: choose Flexible and give each task a duration, a preferred time (Early, Mid "
+            "or Late) and points.",
+            "Add small reminders as To Dos: they are never scheduled and wait as sticky notes under the timeline.",
+            "Choose Make Schedule. The flexible tasks appear on the timeline around your fixed blocks.",
+            "As the day goes on, mark each task and fixed block Completed or Uncompleted on the board, and tick "
+            "your To Dos. The points counter at the top right shows what you earned out of what was possible.",
+            "Look back on the Week, Month and Productivity pages.",
+        ),
     )),
     GuideSection("day_view", "Day view", (
         "Day Schedule is today's page. Opening it from the navigation always shows today; the date controls "
@@ -56,7 +68,8 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
             "with the reason when it is known -- up to four per row and two rows, more scroll down. Select one "
             "to edit it; its X removes it.",
             "Add a task, Make Schedule, the engine choice, Day Preferences, CSV import/export and Reset Day.",
-            "Uncompleted | Tasks | Completed: the scheduled tasks of the date, and what happened to each.",
+            "Uncompleted | Tasks | Completed: the scheduled tasks and fixed blocks of the date, and what "
+            "happened to each.",
         ),
     )),
     GuideSection("week_view", "Week view", (
@@ -116,7 +129,7 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
             "Click a task that is not completed to choose a day for it: the same task moves to that day without a "
             "time, and any time it was scheduled at is removed. Cancel changes nothing.",
             "× on the left of a task removes it after a confirmation, from the project and from the Day, Week and "
-            "Month pages; points it already earned stay in your statistics.",
+            "Month pages, together with its scheduled entries, its completion and its points.",
             "Task defaults (in Edit...): a default duration and points for this project's new tasks. "
             "Leave one empty to use the category's default. What you type in the form always wins, then the "
             "project's defaults, then the category's, then the app's. Changing them only affects tasks you add "
@@ -206,7 +219,7 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
         "task's preferred time (Early, Mid or Late) wherever that is possible, and then gives each remaining "
         "time a score for how good the placement is:",
         (
-            "the category's importance (times the importance weight);",
+            "the category's importance (times the weight Settings calls Priority weight);",
             "a bonus for being inside, or close to, the preferred time;",
             "a bonus for being near tasks with the same or related tags;",
             "a penalty for leaving awkward small gaps (the fragmentation penalty).",
@@ -228,7 +241,14 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
             "Normal: tasks may start at any minute, at the best-scoring time.",
             "ADHD friendly: tasks longer than 30 minutes start on the quarter hour, and filling short gaps with "
             "short tasks is rewarded. Durations never change.",
+            "Early finish: places the same tasks as Normal, then packs them so the day's work ends as early as "
+            "possible, with few idle gaps.",
+            "Night owl: places the same tasks as Normal, then packs them late in the day, with few idle gaps.",
+            "Catch-up: favours categories you often left uncompleted in the last 90 days (it needs at least 5 "
+            "recorded outcomes; until then it behaves exactly like Normal).",
         ),
+        "Every engine keeps the same rules and the same Early / Mid / Late preference. The choice is saved for "
+        "that date only; Use default engine goes back to the default engine from Settings.",
         "The first run places everything that fits. If nothing changed since, Make Schedule says the schedule is "
         "already current. After a change, it keeps the work that still fits and adds the rest. Regenerate "
         "replaces all work that has not started yet; started or finished work always stays.",
@@ -241,8 +261,8 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
         "An unscheduled task is never counted as Uncompleted: it was never on the schedule.",
     )),
     GuideSection("task_workflow", "Uncompleted, Tasks and Completed", (
-        "On the Day page, every task the schedule placed on the date starts in the middle column, Tasks. Say what "
-        "happened with the buttons on each card:",
+        "On the Day page, every task the schedule placed on the date, and every fixed block of the date, starts "
+        "in the middle column, Tasks. Say what happened with the buttons on each card:",
         (
             "In Tasks: × moves the task to Uncompleted (it did not happen), → moves it to Completed.",
             "In Uncompleted: → brings the task back to Tasks.",
@@ -254,6 +274,8 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
             "Two tasks with the same name, or the days of a repeating task, each keep their own status.",
             "A project task completed with Done in its project, without ever being scheduled, appears in "
             "Completed on the day you completed it. Its × brings it back to not completed.",
+            "A To Do is not on the board until you tick it Done; it then appears in Completed on its own day.",
+            "Completing anything adds its points to the day's Completed / Possible counter at the top right.",
             "Completed and uncompleted work, with your points and planned versus actual times, appears on the "
             "Productivity page.",
         ),
@@ -296,6 +318,10 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
             "each category's importance and preferred time. Each value shows where it comes from; Use inherited "
             "goes back to the app default.",
             "Day Preferences (on the Day page) changes the same values for one date only.",
+            "Task defaults and categories: what Use default values fills in on the task form (name, duration "
+            "and points) for each category and for no category, and your own added categories. Saved on this "
+            "computer.",
+            "Reset all task data: see Reset.",
         ),
     )),
     GuideSection("synchronization", "Synchronization", (

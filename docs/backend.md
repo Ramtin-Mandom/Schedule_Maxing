@@ -141,6 +141,15 @@ provenance and freshness).
 | `PUT /<resource>/{id}` | Update; takes the full content plus `base_version` |
 | `DELETE /<resource>/{id}?base_version=N` | Soft delete; returns the tombstone |
 
+Tasks carry `kind` (`flexible`, or `todo` for a checklist item that is never
+scheduled; default `flexible`) and `preferred_time` (`early`, `mid`, `late`
+or null: the preferred third of the date's day window). `priority` is a
+legacy field, default 5, that no scheduler reads. Fixed blocks carry `points`
+(0 to 1000, default 0) and are completed through one execution whose id is
+derived from the block's (`app.planning.models.fixed_block_execution_id`).
+Migration `0016_task_kinds` adds these columns and backfills a completed,
+0-point execution for every existing fixed block.
+
 Placements also carry `task_category` (the task's category when the
 placement was saved: taken from the request, else from the task on create;
 never changed afterwards) and, on tombstones only, `removal_reason` and

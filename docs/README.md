@@ -1,6 +1,8 @@
 # Documentation
 
 The [project README](../README.md) covers setup, CLI usage and the architecture.
+End users have the same material, without the internals, in the app itself:
+**How to Use** in the navigation (`app/ui/guide_content.py`).
 These guides describe the current repository; deployment availability must be
 checked separately by the operator.
 
@@ -8,8 +10,8 @@ checked separately by the operator.
 
 - [Windows installation, builds, releases and updates](windows-distribution.md)
 - [Layout and navigation](desktop-layout.md)
-- [Day scheduling](desktop-day.md), [Week and Month calendars](desktop-calendar.md)
-- [Task entry and editing](desktop-task-form.md)
+- [Day scheduling, To Dos and points](desktop-day.md), [Week and Month calendars](desktop-calendar.md)
+- [Task entry and editing: Flexible, Fixed and To Do](desktop-task-form.md)
 - [Projects, milestones and task defaults](desktop-projects-allocation.md)
 - [Settings and task-data reset](desktop-settings.md)
 - [Accounts, saved sign-in and synchronization](desktop-accounts.md)
