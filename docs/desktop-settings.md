@@ -45,6 +45,19 @@ Ramtin Rezaei as the project's creator.
 Tests: `test_settings_controller.py`, `test_settings_page.py`, existing Day preference,
 appearance and account suites. A backend is not required for local Settings.
 
+## Task defaults and categories
+
+The **Task defaults and categories** card sets what the task form's **Use default
+values** fills in: a name, a duration and points, for each category and for no category
+(out of the box 60 minutes and 20 points, named after the category). Categories you add
+here join the built-in ones in every task form. They are stored in `task_defaults.json`
+beside the database, on this device only. A default priority saved by an earlier version
+stays in the file but is no longer shown or used: tasks have points, not a priority.
+
+A category's **importance** and **preferred time** are scheduling preferences (above),
+not task defaults. The preferred time applies only to tasks without their own Early /
+Mid / Late choice.
+
 ## Reset All Task Data
 
 The red **Reset all task data** card at the bottom of Settings removes the

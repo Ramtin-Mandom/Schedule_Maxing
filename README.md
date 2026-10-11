@@ -44,8 +44,10 @@ Since Milestone 2, the desktop app and the CLI keep all planning data (tasks, fi
 
 ## Main Features
 
-- Add fixed tasks that cannot be moved, such as sleep, classes, work, or meals.
-- Add flexible tasks with duration, priority, category, tag, preferred time window, and dependencies.
+- Add fixed tasks that cannot be moved, such as sleep, classes, work, or meals, and complete them for points.
+- Add flexible tasks with a duration, category, tags, points and a preferred time (Early, Mid or Late: a third of the day's window).
+- Add To Dos: checklist items that are never scheduled and are ticked off for their points.
+- See each day's Completed / Possible points on the Day page.
 - Optimize a day, week, or month schedule.
 - Use a reward function to prioritize important tasks and preferred time windows.
 - Support task dependencies using PERT-style graph logic.
@@ -58,6 +60,17 @@ Since Milestone 2, the desktop app and the CLI keep all planning data (tasks, fi
 - Record actual task execution locally (start/pause/resume/complete/skip) with optional focus/energy/interruption feedback.
 - View personal productivity insights (completion rates, duration accuracy, best-supported times of day) with an evidence/sample-count label on every figure.
 - Get a historical duration suggestion (with its evidence and reasoning) when entering a new task, without ever overwriting your own entry automatically.
+
+### New in 1.1.0
+
+- **Task types.** The task form has one switch -- Flexible, Fixed or To Do -- and shows only that type's fields. It has no advanced settings any more: priority, preferred window, deadline, dependency and repeat controls are gone from the form (a record that already has a deadline, dependencies or a repeat rule keeps them, and the scheduler still honours those).
+- **Points instead of priority.** Every type has points (0 to 1000). They are counted when you complete the item and never affect placement; no scheduler reads a task priority.
+- **Early / Mid / Late.** A flexible task prefers a third of the date's day window. It is a very strong preference in every scheduling mode, but not a hard constraint.
+- **To Dos.** Sticky notes under the Day timeline, ticked Done for their points.
+- **Fixed blocks earn points** and are completed on the Day board like scheduled tasks.
+- **Day page redesign.** The timeline shows the whole day fitted to the window (no sideways scrolling), with the To Do notes, the available tasks and a Completed / Possible points counter.
+
+Details: [task form](docs/desktop-task-form.md) and [Day page](docs/desktop-day.md).
 
 ---
 
@@ -278,12 +291,12 @@ Exports: the original `time,task` 30-minute-block CSV (legacy, lossy), the exact
 
 Contains the CustomTkinter desktop UI. On startup it opens the application database (`app/ui/app_services.py`) and builds every page on that one connection; if the database cannot be opened it shows the error instead of a scheduler whose changes could not be saved.
 
-- Day, Week (7 days), and Month (30 days) pages, each showing real dates from an explicit, editable start date, in the configured timezone.
-- A task form that creates and edits flexible tasks and fixed blocks. Dependencies are picked from the task table by row, so they are stored as task ids, never names.
-- An Added Tasks table keyed by task/fixed-block id (Edit Selected / Remove Selected), so duplicate names are fine.
-- **Make Schedule**, which allocates the page's dates, generates each date with the canonical day engine, and saves the whole range in one transaction.
-- **Upload CSV...** (append or replace), **Export CSV...**, and a **Reset...** with explicit scope.
-- The Uncompleted | Tasks | Completed board for the saved placements (Day), the selected-day panel with All Tasks Complete / No Tasks Complete (Week/Month), and the Productivity page.
+- Day, Week (Monday to Sunday) and Month (a real calendar month) pages showing real dates in the planning timezone, plus Project Schedule, Productivity, Settings, Account and the in-app How to Use guide.
+- One task form that creates and edits flexible tasks, fixed blocks and To Dos. Records are kept by id, so duplicate names are fine.
+- The Day page: a full-day timeline, To Do notes, the tasks not yet scheduled, and a Completed / Possible points counter.
+- **Make Schedule** on the Day page, which generates the date with the canonical day engine in the chosen mode and saves it in one transaction.
+- **Import CSV...** and **Export CSV...** (previewed), and previewed **Reset Day / Week / Month**.
+- The Uncompleted | Tasks | Completed board for the saved placements and fixed blocks (Day), the selected-day panel with All Tasks Complete / No Tasks Complete (Week/Month), and the Productivity page.
 
 Every widget callback is a thin call into a Tk-free presenter (`app/ui/schedule_page_controller.py`); the page is then redrawn from a fresh read of SQLite. Widgets contain no SQL and no scheduling logic.
 
@@ -567,9 +580,9 @@ The left sidebar starts collapsed; open it with the ☰ button (keyboard: Tab, t
 
 The **Account** page connects to an optional backend: register, sign in and out, associate this device's records with your account (only after you confirm a preview), see pending changes, conflicts and the last successful sync (also in the status bar above every page), run **Sync now**, and decide conflicts. Scheduling never needs an account or internet. Details and recovery steps: [docs/desktop-accounts.md](docs/desktop-accounts.md).
 
-Tasks and fixed blocks are entered with one reusable form on Day, Week and Month. It has no date field -- a new task gets the page's selected real date (Day: today unless opened for another date; Week/Month: the selected day) -- and every clock time is entered as **[hour] : [minute] [AM/PM]**, exact to the minute. It takes free durations such as `13 min` or `1 h 13 min`, tags added with Enter, and optional preferred windows, deadlines, projects and dependencies. Field meanings and time limitations: [docs/desktop-task-form.md](docs/desktop-task-form.md).
+Flexible tasks, fixed blocks and To Dos are entered with one reusable form on Day, Week and Month; a **Task type** switch shows only the chosen type's fields. It has no date field -- a new task gets the page's selected real date (Day: today unless opened for another date; Week/Month: the selected day) -- and every clock time is entered as **[hour] : [minute] [AM/PM]**, exact to the minute. It takes free durations such as `13 min` or `1 h 13 min`, points, a preferred time (Early, Mid or Late), an optional project and tags added with Enter. Field meanings and time limitations: [docs/desktop-task-form.md](docs/desktop-task-form.md).
 
-The **Day Schedule** opens on today's date (from the computer's clock and time zone). A **Day Window** bar above the Day, Week and Month schedules sets the selected date's start and end of the usable day: the Settings default, or an override for that date only. The Day page shows a horizontal timeline with every fixed block (in its category's color) and scheduled task at its exact minutes, the free time inside the scheduling window, and the tasks not yet scheduled. The **Engine** choice beside **Make Schedule** selects one of the [five scheduling modes](docs/scheduling-modes.md) for that date only. Make Schedule keeps saved work that still fits, and an unchanged day is not regenerated. **Day Preferences**, **Import/Export CSV** (canonical format v2, previewed first) and a previewed **Reset Day** complete the page. Details: [docs/desktop-day.md](docs/desktop-day.md).
+The **Day Schedule** opens on today's date (from the computer's clock and time zone). A **Day Window** bar above the Day, Week and Month schedules sets the selected date's start and end of the usable day: the Settings default, or an override for that date only. The Day page shows a timeline of the whole day, fitted to the window, with every fixed block (in its category's color) and scheduled task at its exact minutes and the free time inside the scheduling window; below it are the date's To Do notes and the tasks not yet scheduled, and at the top right the date's Completed / Possible points. The **Engine** choice beside **Make Schedule** selects one of the [five scheduling modes](docs/scheduling-modes.md) for that date only. Make Schedule keeps saved work that still fits, and an unchanged day is not regenerated. **Day Preferences**, **Import/Export CSV** (canonical format v2, previewed first) and a previewed **Reset Day** complete the page. Details: [docs/desktop-day.md](docs/desktop-day.md).
 
 **Week** and **Month** are real calendar views (Monday-first weeks; true 28/29/30/31-day months with a month choice for the current year). They show fixed blocks and scheduled work at their actual times and unscheduled tasks in entry order, and they mute past days without hiding them. Select a day and **Open Day** to schedule it; **Back** returns to the same week or month. Details: [docs/desktop-calendar.md](docs/desktop-calendar.md).
 
@@ -702,7 +715,7 @@ If you run `python -m app.productivity.predictor_comparison_cli --save-model` an
 
 ### Recording execution (desktop UI)
 
-The Day page uses an **Uncompleted | Tasks | Completed** board for saved placements. Move a card to record completion or noncompletion, or return it to Tasks to reopen it. Week and Month expose the selected day's outcomes too. The former Execute tab is no longer the desktop workflow. The execution service retains Start/Pause/Resume/Complete/Skip lifecycle operations and session history for its API consumers.
+The Day page uses an **Uncompleted | Tasks | Completed** board for saved placements and the date's fixed blocks. Move a card to record completion or noncompletion, or return it to Tasks to reopen it. To Dos are completed by ticking **Done** on their note. Week and Month expose the selected day's outcomes too. The former Execute tab is no longer the desktop workflow. The execution service retains Start/Pause/Resume/Complete/Skip lifecycle operations and session history for its API consumers.
 
 Project tasks may also be completed directly from Project Schedule without a time slot. These task-only completions count once in history and analytics. See [Day controls](docs/desktop-day.md#uncompleted--tasks--completed), [project tasks](docs/desktop-projects-allocation.md), and [execution contracts](docs/execution-rescheduling.md).
 
@@ -914,7 +927,7 @@ Project Schedule manages persisted projects and task assignments; calendar filte
 
 **Your moves stay put.** A task you move yourself is a manual placement: every later Make Schedule or Regenerate keeps it where you put it (and places other work around it) until you choose "Release manual placement" on the Day timeline. If it no longer fits -- say a class was added over it -- nothing is changed and you are told what to do (move it, change the setting, or release it). Started or finished work is always kept as recorded. See [Manual placements](docs/execution-rescheduling.md#manual-placements-milestone-6).
 
-A repeating task is a recurring series (daily, weekly or monthly, every N, ending never, on a date or after N times) with an explicit start date and time zone. Each original date becomes its own concrete occurrence when a range is scheduled, previewed or expanded; occurrences can be moved (keeping their identity), edited or removed on their own, from one occurrence on, or for the entire series, while started or finished work is kept. Templates saved before this need setup. See [Recurring series](docs/recurrence.md).
+The desktop task form no longer creates repeating tasks (1.1.0); existing, imported and synchronized series keep working as described here. A repeating task is a recurring series (daily, weekly or monthly, every N, ending never, on a date or after N times) with an explicit start date and time zone. Each original date becomes its own concrete occurrence when a range is scheduled, previewed or expanded; occurrences can be moved (keeping their identity), edited or removed on their own, from one occurrence on, or for the entire series, while started or finished work is kept. Templates saved before this need setup. See [Recurring series](docs/recurrence.md).
 
 ### Saved data: SQLite, import, export, reset, and backups (Milestone 2)
 

@@ -76,7 +76,14 @@ The right side of Week and Month is the **Selected day** panel
 the former "Tasks this week/month" list. For the selected date it lists the
 **scheduled** tasks (live placements) with their outcome -- Completed,
 Uncompleted, or Tasks (pending) -- and the day's counts, planned hours and
-points. Editing single tasks happens on the Day page (Open Day).
+points. A project task completed without a slot, and a To Do ticked Done,
+are listed as completed on their day. Editing single tasks happens on the Day
+page (Open Day).
+
+The task form below the calendar is the same three-type form as on the Day
+page (Flexible, Fixed or To Do; [desktop-task-form.md](desktop-task-form.md)):
+a To Do added here belongs to the selected day and is ticked on that day's
+Day page.
 
 - **All Tasks Complete** marks every scheduled task of the date completed;
   **No Tasks Complete** marks them all uncompleted. One transaction
@@ -102,17 +109,18 @@ points. Editing single tasks happens on the Day page (Open Day).
 - Resets only the period's own dates: the seven days of the week, or the 1st
   to the last day of the month.
 - It uses the same previewed, token-confirmed `reset_range` as Reset Day.
-  Before anything is deleted it lists the tasks, fixed blocks, scheduled
-  entries, schedule records and date preferences that go. It also lists
-  scheduled entries of those tasks outside the period that go with them, and
-  repeating tasks that are kept.
+  Before anything is deleted it lists the tasks (To Dos included), fixed
+  blocks, scheduled entries, schedule records and date preferences that go.
+  It also lists scheduled entries of those tasks outside the period that go
+  with them, and repeating tasks that are kept. The completions, points and
+  work sessions recorded for the reset dates are deleted with them.
 - Cancelling deletes nothing.
 - Confirming applies exactly the preview, atomically. It is refused, with
   nothing deleted, if anything changed after the preview.
 - The reset is refused when a task outside the period depends on a task
   inside it; the message names them.
-- Undated tasks, other dates, projects, your defaults and all execution
-  history are kept.
+- Undated tasks, other dates, projects, your defaults and everything
+  recorded on other dates are kept.
 
 ## Loading and staying current
 

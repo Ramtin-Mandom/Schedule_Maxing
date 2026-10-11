@@ -16,12 +16,14 @@ moves a whole project's tasks; the page no longer offers it).
 The detail view has three sections; Project Tasks and Milestones scroll on their own:
 
 - **Add Task** is the shared task form with a date where the Day page's has the project
-  choice (fixed blocks are not offered: they belong to no project). The task is saved for
+  choice (fixed blocks and To Dos are not offered: they belong to no project). It has the
+  flexible task's fields -- duration, preferred time (Early / Mid / Late), points, required
+  and tags. The task is saved for
   that date exactly as one added on a Week/Month day: no time slot, nothing is scheduled.
 - **Project Tasks** lists every task of the project, wherever it was created, with its
   saved placements and its completion in words; a row is green only once its task is
   finished. Each row has an "×" on the left (the schedule pages' own removal and
-  confirmation: saved placements go with the task, execution history is kept) and a
+  confirmation: the task's saved placements, completions and points go with it) and a
   **Done** checkbox. Clicking the row of an unfinished task asks for a day and moves that
   same task there unscheduled: its saved placements are removed (never-started attempts
   are withdrawn, started or finished history is kept).
@@ -43,9 +45,10 @@ the action adds nothing, unticking Done (or "back to Tasks" on the Day board) re
 record and withdraws it from every statistic, and if a task ends up completed both on a
 slot and directly the analytics count it once (`tracker.merge_completions`).
 
-**Project task defaults.** A project may configure the duration, priority and points of
+**Project task defaults.** A project may configure the duration and points of
 its new tasks (Edit…; `Project.task_defaults`, each value unset by default and never
-inherited from another project). For a new task of the project the precedence is: what
+inherited from another project). A default priority stored by an earlier version is kept
+but no longer shown: tasks have no priority. For a new task of the project the precedence is: what
 was typed, then the project's configured values, then the category's defaults, then the
 application's (`app/ui/task_defaults.resolve_task_default`); an unset project value never
 replaces a category default. The Add Task form starts from the configured values and its

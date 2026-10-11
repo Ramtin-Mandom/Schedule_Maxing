@@ -20,8 +20,8 @@ on wide and medium windows, one on narrow ones):
 - The horizontal timeline (app/ui/day_timeline.py): fixed blocks in their
   category color, scheduled work at its exact minutes, free gaps.
 - To Do: the checklist (app.planning.models.TaskKind.TODO) as sticky-note
-  cards in one row that scrolls sideways -- name, points, a Done box and a
-  small remove button each. A To Do is never scheduled or on the timeline;
+  cards, eight per row and two rows (more scroll down) -- name, points, a
+  Done box and a small remove button each. A To Do is never scheduled or on the timeline;
   ticking it is a completion like any other (it awards its points and shows
   in Completed on the day it was ticked).
 - Available tasks: the date's tasks (and undated ones) that are not on the
