@@ -13,7 +13,7 @@ The inspected checkout already contains:
 | Canonical domain | `app/planning/models.py`: Project, TaskType, Task, RecurrenceSpec, FixedBlock, ScheduledTask; `app/execution/models.py`: TaskExecution and WorkSession. `app/models.py` retains the older optimizer-facing models. |
 | Local storage | SQLite repositories in `app/planning` and `app/execution`, with the local migration chain in `app/execution/db.py`. This remains the offline client store. |
 | Server storage | SQLAlchemy 2 models in `backend/models.py`, PostgreSQL/psycopg in production and SQLite for portable tests. Composite `(user_id, id)` keys and foreign keys enforce owned relationships. |
-| Server migrations | Alembic revisions 0001–0014 already cover normalized records, browser sessions, recurrence, recovery, task types, snapshots and project milestones. 0015 adds native refresh sessions only. |
+| Server migrations | Alembic revisions 0001–0014 already cover normalized records, browser sessions, recurrence, recovery, task types, snapshots and project milestones. 0015 adds native refresh sessions only. The later 0016 (release 1.1.0) adds task kinds (To Dos), the Early / Mid / Late preferred time, and fixed-block points and completions. |
 | Domain services | `PlanningService`, recurrence/workflow, execution lifecycle, server planning repository, resource validators, and transactional `Mutator`. |
 | Accounts | `AccountService`, Argon2id hashes, JWT access tokens, cookie sessions, credential epochs and password recovery. |
 | Synchronization | Desktop `app/sync` outbox/shadow/conflict handling; server `/sync/push`, `/changes`, immutable revisions and persisted idempotency outcomes. Versions and tombstones are preserved. |

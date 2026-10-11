@@ -1,8 +1,16 @@
 name: CI
 
+# The tests run once per change: for its pull request. A push to main (the merge) and a release tag do not
+# run them again -- the backend deployment and the release reuse the pull request's result
+# (.github/scripts/pr_tests_passed.sh). workflow_dispatch runs them by hand for any branch.
 on:
-  push:
   pull_request:
+  workflow_dispatch:
+
+# A newer push to the same pull request replaces the run of the older one.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:

@@ -5,9 +5,9 @@ Actions from three workflow files in `.github/workflows/`:
 
 | Workflow | File | Starts on | Result |
 |---|---|---|---|
-| **CI** | `ci.yml` | every push and every pull request | the commit is tested, compiled and linted |
+| **CI** | `ci.yml` | every pull request (and by hand) | the change is tested, compiled and linted — once; nothing later tests it again |
 | **Release** (desktop delivery) | `release.yml` | a pushed tag `vX.Y.Z`, or by hand (dry run) | a GitHub Release with the Windows installer, which installed copies update to |
-| **Deploy backend** (server deployment) | `deploy-backend.yml` | CI passing for a push to `main`, or by hand | the backend on Render runs that commit |
+| **Deploy backend** (server deployment) | `deploy-backend.yml` | a push to `main` whose pull request passed CI, or by hand | the backend on Render runs that commit |
 
 The project ships two different things, so it has two delivery paths:
 
@@ -16,9 +16,9 @@ The project ships two different things, so it has two delivery paths:
 
 ```mermaid
 flowchart LR
-    push[push / pull request] --> ci[CI<br/>test, desktop-only,<br/>direct-desktop, postgres]
-    ci -- passed, push to main --> gate{deployment<br/>switched on?}
-    gate -- yes --> resolve[resolve<br/>commit on main,<br/>CI passed]
+    push[pull request] --> ci[CI<br/>test, desktop-only,<br/>direct-desktop, postgres]
+    ci -- passed, merged to main --> gate{deployment<br/>switched on?}
+    gate -- yes --> resolve[resolve<br/>commit on main,<br/>its pull request passed CI]
     resolve --> approve[production environment<br/>optional approval]
     approve --> deploy[Render deploy<br/>wait until live]
     deploy --> check["check /health and /ready"]
@@ -55,8 +55,16 @@ python -m compileall .
 ruff check .
 ```
 
-A commit message containing `[skip ci]` skips CI for that push (a GitHub feature). Such a push is
-then never deployed either, because deployment starts only from a CI run that passed.
+The tests run **once per change, for its pull request**. The merge to `main` and a release tag do not
+run them again: the backend deployment and the release both call
+`.github/scripts/pr_tests_passed.sh`, which finds the last pull request merged into `main` that the
+commit contains and requires CI to have passed for the commit it was merged from. Two consequences:
+
+- A pull request whose last commit says `[skip ci]` has no CI run, so what it merges is neither
+  deployed nor releasable until CI has passed for that commit (Actions > CI > Run workflow, on the
+  pull request's branch).
+- A commit pushed **straight to `main`** is not tested by anything; it rides on the last pull
+  request's result. Change code through pull requests.
 
 ## 2. Desktop delivery (`release.yml`)
 
@@ -71,7 +79,7 @@ git push origin v1.2.3
 | Job | Runs on | What it does |
 |---|---|---|
 | `verify` | Ubuntu | the tag must be exactly `v` + the version in `app/version.py`, and no release for it may exist yet |
-| `test` | Ubuntu | the complete suite, compileall and ruff — the same commands as CI's `test` job |
+| `test` | Ubuntu | no second test run: the tagged commit must be on `main` and CI must have passed for the pull request it came from (`pr_tests_passed.sh`) |
 | `build` | Windows | needs `verify` and `test`. Packaging and start-up tests on Windows, PyInstaller build with bundle checks and a packaged self-test (`packaging\windows\build_windows.ps1`), the Inno Setup installer, an install / restart / upgrade / uninstall test of that installer, checksum verification, then the installer and `SHA256SUMS.txt` are uploaded as a workflow artifact |
 | `publish` | Ubuntu | needs `build`; tag pushes only. Creates a stable GitHub Release (not a draft, not a pre-release, marked latest) with exactly the installer and `SHA256SUMS.txt` |
 
@@ -100,13 +108,12 @@ both jobs are skipped and nothing contacts Render.
 
 ### What happens
 
-1. **Trigger.** CI finishes for a push to `main` of this repository and passed. (A failed or
-   cancelled CI run, a pull request, or a fork never starts a deployment.) Or someone starts it by
-   hand.
+1. **Trigger.** A push to `main` (a merged pull request). A pull request by itself, or a fork, never
+   starts a deployment. Or someone starts it by hand.
 2. **`resolve`** decides which commit is deployed and refuses anything else:
-   - the commit CI just tested, or for a manual run the commit given as `ref` (blank: the tip of `main`);
+   - the pushed commit, or for a manual run the commit given as `ref` (blank: the tip of `main`);
    - it must be on `main`;
-   - it must have a successful CI run.
+   - CI must have passed for the pull request it came from.
 3. **`deploy`** runs in the `production` environment. If that environment has required reviewers,
    the job waits here for an approval.
    - **Settings are present** — fails early, naming what is missing, never printing a value.
