@@ -262,8 +262,12 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         self._todo_width = width = self.todo_area._parent_canvas.winfo_width()
         scale = self.todo_area._get_widget_scaling()
         if width > 1:
+            # The scrollbar takes its width from the notes when it appears: the size is that of the whole row,
+            # so a third row does not make the notes (and the area) lower.
+            scrollbar = self.todo_area._scrollbar
+            row_width = width + (scrollbar.winfo_width() if scrollbar.winfo_ismapped() else 0)
             self.todo_card_size = int(max(TODO_CARD_MIN, min(TODO_CARD_SIZE,
-                                                             width / scale / TODO_COLUMNS - TODO_GAP)))
+                                                             row_width / scale / TODO_COLUMNS - TODO_GAP)))
         size = self.todo_card_size
         for widgets in self.todo_widgets:
             widgets["frame"].configure(height=size)

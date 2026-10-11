@@ -228,7 +228,10 @@ Environment settings. GitHub never holds it, and CI uses none of the above.
   as environment variables, never as script text.
 - **Pinned actions.** Only GitHub's own `actions/*` are used, each pinned to a major version.
 - **Guard tests.** `tests/test_release_workflow.py` and `tests/test_deploy_workflow.py` read the
-  workflow files and fail the ordinary test suite if one of these properties is removed.
+  workflow files and fail the ordinary test suite if one of these properties is removed;
+  `tests/test_workflows.py` checks what every workflow must keep, including any workflow added later.
+  They find a job by what it does and read the order from `needs`, so renaming a job or rewording a
+  step does not break them -- only losing a property does.
 
 ## 6. Limitations
 
