@@ -237,6 +237,17 @@ sync service supports are offered:
 
 There is no merge, and nothing is overwritten silently (no last-write-wins).
 
+**The dialog.** When a synchronization (Sync now or the background one) ends
+with a new conflict, a dialog says that the server's version differs from
+yours and shows the same comparison and the same two choices
+(`app/ui/conflict_view.py`: `ConflictComparison` is the widget the Account
+page uses, and a choice goes through `AccountController.resolve`). Several new
+conflicts are asked about one after the other. **Decide later** closes the
+dialog and changes nothing: what is undecided stays open under **Conflicts**.
+A conflict is asked about once per run of the app. The dialog does not open
+over another dialog or while the Account page is shown; it opens at the next
+status read (every 4 seconds) once neither is the case.
+
 ## Recovery
 
 | What you see | What to do |
