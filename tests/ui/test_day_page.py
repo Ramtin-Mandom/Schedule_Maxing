@@ -364,6 +364,8 @@ def test_the_workspace_fits_the_whole_day_and_shows_todos_eight_per_row(tmp_path
             wanted = len(day.todo_widgets) + count
             day.reload()
             pump(app, until=lambda: len(day.todo_widgets) == wanted)
+            # The notes take their final size a moment after the area has its width (a coalesced resize).
+            pump(app, until=lambda: not day._todo_sizing.pending)
 
         add_todos(16)
         assert int(timeline.grid_info()["row"]) < int(day.todo_area._parent_frame.grid_info()["row"])  # below it
