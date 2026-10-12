@@ -129,7 +129,7 @@ def test_abuse_shows_up_in_the_counters_without_identifying_anyone(engine, clock
     totals = security_events.counters()
     assert totals["sign_in_failed"] == 5 and totals["rate_limited|scope=login_fail_pair"] == 2
     assert totals["verification_token_refused|kind=registration"] == 1 and totals["recovery_token_refused"] == 1
-    assert totals["email_not_accepted|error=MailError|kind=verification"] == 1
+    assert totals["email_not_accepted|error=TimeoutError|kind=verification"] == 1
     for secret in ("alice@example.com", "new@example.com", "a wrong password", PASSWORD, "not-a-token"):
         assert secret not in caplog.text
     security_events.reset()

@@ -352,7 +352,7 @@ def test_a_provider_outage_is_retried_with_backoff_and_never_bypasses_verificati
     mail.fail = True
     assert ask(api, "alice@example.com").status_code == 202  # the answer does not depend on the provider
     [row] = rows(api)
-    assert (row.status, row.attempts, row.last_error) == ("pending", 1, "MailError") and row.accepted_at is None
+    assert (row.status, row.attempts, row.last_error) == ("pending", 1, "TimeoutError") and row.accepted_at is None
     assert count(api, models.User) == 0
     assert drain(api, mail) == 0 and rows(api)[0].attempts == 1  # not due yet: no hammering
     clock.advance(seconds=61)

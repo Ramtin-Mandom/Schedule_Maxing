@@ -43,7 +43,7 @@ pycparser==3.0
 pydantic==2.13.3
 pydantic_core==2.46.3
 Pygments==2.20.0
-PyJWT==2.14.0
+PyJWT==2.15.1
 PyOTP==2.10.0
 pytest==9.0.3
 python-dateutil==2.9.0.post0
