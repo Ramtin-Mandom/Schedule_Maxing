@@ -51,7 +51,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend import models
-from backend.mail import MailAdapter, OutboundEmail
+from backend.mail import MailAdapter, MailError, OutboundEmail
 from backend.settings import BackendSettings
 
 LOG = logging.getLogger("schedule_maxing.mail")
@@ -266,7 +266,10 @@ def _send_one(session: Session, row_id: uuid.UUID, adapter: MailAdapter, setting
     except Exception as error:  # noqa: BLE001 - whatever failed, the row decides: retry later or give up
         session.rollback()
         row = session.get(outbox, row_id, populate_existing=True)
-        row.last_error, row.locked_until = type(error).__name__[:80], None
+        # A MailError's text is the class of what went wrong underneath (TimeoutError, SMTPAuthenticationError,
+        # "HTTP 403"): safe to keep, and what tells a blocked port from a wrong password.
+        cause = str(error) if isinstance(error, MailError) and str(error) else type(error).__name__
+        row.last_error, row.locked_until = cause[:80], None
         from backend import security_events
 
         security_events.record("email_given_up" if row.attempts >= MAX_ATTEMPTS else "email_not_accepted",
