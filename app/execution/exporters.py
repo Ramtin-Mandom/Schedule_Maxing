@@ -29,6 +29,7 @@ import csv
 import json
 from pathlib import Path
 
+from app.csv_safety import safe_row
 from app.execution.models import TaskExecution
 
 _FIELDS = (
@@ -61,7 +62,7 @@ def export_executions_to_csv(executions: list[TaskExecution], path: str | Path) 
         writer.writeheader()
         for execution in executions:
             row = execution.model_dump(mode="json")
-            writer.writerow({field: row[field] for field in _FIELDS})
+            writer.writerow(safe_row({field: row[field] for field in _FIELDS}))  # opened in spreadsheets
 
 
 def export_executions_to_json(executions: list[TaskExecution], path: str | Path) -> None:

@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from backend.errors import ApiError
+from backend.passwords import PasswordWorkBusyError
 
 LOG = logging.getLogger("schedule_maxing.api")
 
@@ -29,6 +30,12 @@ def install_error_handlers(app: FastAPI) -> None:
         if error.status == 429 and "retry_after" in error.details:
             headers = {"Retry-After": str(error.details["retry_after"])}
         return JSONResponse(error.body(), status_code=error.status, headers=headers)
+
+    @app.exception_handler(PasswordWorkBusyError)
+    async def _busy(_request: Request, error: PasswordWorkBusyError) -> JSONResponse:
+        # Too many passwords being hashed at once (backend/passwords.py): nothing was verified or counted.
+        body = {"error": {"code": "temporarily_unavailable", "message": str(error)}}
+        return JSONResponse(body, status_code=503, headers={"Retry-After": "2"})
 
     @app.exception_handler(RequestValidationError)
     async def _validation(_request: Request, error: RequestValidationError) -> JSONResponse:

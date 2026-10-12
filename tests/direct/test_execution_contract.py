@@ -264,7 +264,9 @@ def driver(request, tmp_path, backend, engine, clock):
 
         app = create_app(BackendSettings(database_url="sqlite://", jwt_secret=TEST_SECRET), engine=engine, clock=clock)
         with TestClient(app) as client:
-            assert client.post("/auth/register", json={"email": "alice@example.com", "password": PASSWORD}).status_code == 201
+            from tests.backend.conftest import register
+
+            register(client, "alice@example.com", PASSWORD)
             yield RestDriver(client, "alice@example.com")
 
 

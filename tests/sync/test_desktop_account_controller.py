@@ -102,7 +102,7 @@ def make_desktop(tmp_path: Path):
 def test_credential_validation_happens_before_anything_is_sent() -> None:
     assert validate_credentials("", "")["email"] == "Enter your email address."
     assert "valid email" in validate_credentials("alice", "secret123")["email"]
-    assert validate_credentials("a@b.co", "short", registering=True) == {"password": "Use at least 8 characters."}
+    assert validate_credentials("a@b.co", "short", registering=True) == {"password": "Use at least 15 characters."}
     assert validate_credentials("a@b.co", "short") == {}  # signing in: the server judges an existing password
     assert "display_name" in validate_credentials("a@b.co", "long enough", registering=True, display_name="x" * 201)
 
@@ -119,12 +119,21 @@ def test_connection_register_sign_in_profile_and_sign_out(make_desktop, server) 
     assert desktop.state().state == "signed_out"
     assert desktop.services.sync_service.remembered_backend_url() == "http://backend.test"  # saved, never a password
 
-    invalid = desktop.account.register("alice", "short")
-    assert not invalid.ok and isinstance(invalid.cause, InvalidInput) and set(invalid.cause.errors) == {"email", "password"}
+    invalid = desktop.account.request_registration("alice")
+    assert not invalid.ok and isinstance(invalid.cause, InvalidInput) and set(invalid.cause.errors) == {"email"}
     assert transport.pushed == []
-    desktop.ok(desktop.account.register("alice@example.com", PASSWORD, display_name="Alice"))
-    again = desktop.account.register("alice@example.com", PASSWORD)
-    assert again.error == "An account with this email already exists. Sign in instead."
+    # Step 1 emails a code and creates nothing; step 2 creates the account with the password chosen then.
+    assert "on its way" in desktop.ok(desktop.account.request_registration("alice@example.com"))
+    assert not desktop.account.sign_in("alice@example.com", PASSWORD).ok  # no account before the code is used
+    short = desktop.account.create_account(server.mail.token("alice@example.com"), "short", "short")
+    assert not short.ok and isinstance(short.cause, InvalidInput) and set(short.cause.errors) == {"password"}
+    wrong_code = desktop.account.create_account("not-the-code", PASSWORD, PASSWORD)
+    assert not wrong_code.ok and "invalid, already used or expired" in wrong_code.error
+    desktop.services.sync_service.confirm_registration(server.mail.token("alice@example.com"), PASSWORD,
+                                                       display_name="Alice")
+    # Asking again for an address that has an account answers the same and mails only a notice.
+    assert "on its way" in desktop.ok(desktop.account.request_registration("alice@example.com"))
+    assert "already" in server.mail.to("alice@example.com")[-1].subject
 
     wrong = desktop.account.sign_in("alice@example.com", "not the password")
     assert wrong.error == "The email or password is incorrect." and desktop.state().state == "signed_out"
@@ -364,3 +373,47 @@ def test_check_connection_names_the_stage_that_failed(make_desktop, alice_server
     transport.capabilities = refused
     ended = desktop.ok(desktop.account.check_backend())
     assert ended.check_failed and "Sign in again" in ended.checks[2]
+
+
+def test_two_step_sign_in_password_change_and_sign_out_everywhere(make_desktop, alice_server) -> None:
+    import pyotp
+
+    from app.ui.account_controller import MfaRequired
+
+    desktop = make_desktop("desk", InProcessTransport(alice_server.client))
+    desktop.connect()
+    desktop.sign_in()
+    account, new_password = desktop.account, "an entirely different passphrase"
+    assert desktop.ok(account.mfa_status()) == {"available": True, "enabled": False, "recovery_codes_left": 0}
+    assert [item["current"] for item in desktop.ok(account.list_sessions())] == [True]
+
+    # Setting up an authenticator needs the password, and counts only once a code from it was confirmed.
+    assert account.mfa_begin("not the password").error == "The current password is incorrect."
+    totp = pyotp.TOTP(desktop.ok(account.mfa_begin(PASSWORD))["secret"])
+    refused = account.mfa_confirm(PASSWORD, "000000")
+    assert not refused.ok and "not valid" in refused.error
+    codes = desktop.ok(account.mfa_confirm(PASSWORD, totp.now()))
+    assert len(codes) == 10 and desktop.ok(account.mfa_status())["enabled"] is True
+
+    # Changing the password: the same rule as everywhere, then every session ends and this device signs in again.
+    weak = account.change_password(PASSWORD, "too short", "too short")
+    assert not weak.ok and isinstance(weak.cause, InvalidInput) and set(weak.cause.errors) == {"password"}
+    assert account.change_password("not the password", new_password, new_password).error == (
+        "The current password is incorrect.")
+    changed = account.change_password(PASSWORD, new_password, new_password)
+    assert not changed.ok and isinstance(changed.cause, MfaRequired)  # signing in again takes the second step
+    wrong = account.complete_sign_in("123456")
+    assert not wrong.ok and "not valid" in wrong.error
+    desktop.ok(account.complete_sign_in(codes[0]))  # a recovery code works, once
+    assert desktop.state().state == "signed_in"
+
+    # Sign out everywhere ends the server's sessions and signs this device out; local work is untouched.
+    desktop.ok(account.sign_out_everywhere())
+    assert desktop.state().state == "signed_out"
+    assert not account.sign_in("alice@example.com", PASSWORD).ok  # the old password is gone
+    challenged = account.sign_in("alice@example.com", new_password)
+    assert not challenged.ok and isinstance(challenged.cause, MfaRequired) and desktop.state().state == "signed_out"
+    assert not account.complete_sign_in(codes[0]).ok  # that recovery code was used
+    desktop.ok(account.complete_sign_in(codes[1]))
+    assert desktop.state().state == "signed_in"
+

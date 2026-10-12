@@ -49,10 +49,11 @@ def test_refresh_rotates_and_preserves_identity(client, engine, clock):
         assert all(len(row.token_hash) == 64 for row in credentials)
 
 
-def test_replay_revokes_family_but_not_another_login(client):
+def test_replay_revokes_family_but_not_another_login(client, clock):
     first = sign_in(client)
     independent = client.post("/auth/login", json={"email": "native@example.com", "password": PASSWORD}).json()
     second = refresh(client, first).json()
+    clock.advance(seconds=11)  # past the grace for a client racing itself: this is replay
     assert refresh(client, first).status_code == 401
     assert refresh(client, second).status_code == 401
     for pair in (first, second):

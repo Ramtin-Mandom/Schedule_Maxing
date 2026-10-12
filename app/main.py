@@ -56,6 +56,7 @@ import csv
 from datetime import date as date_
 from pathlib import Path
 
+from app.csv_safety import spreadsheet_safe
 from app.execution.db import get_connection, resolve_db_path
 from app.optimizer import _to_offset
 from app.planning.application import PlanningService, RangeScope
@@ -180,7 +181,7 @@ def export_day_schedule_to_csv(day_output, output_path: Path) -> None:
                 task_end = task.time_window.end_time
 
                 if task_start <= block_start < task_end:
-                    task_name = task.name
+                    task_name = spreadsheet_safe(task.name)  # opened in spreadsheets: a name is never a formula
                     break
 
             writer.writerow([

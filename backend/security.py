@@ -20,6 +20,8 @@ Nothing here logs or returns a password, a hash, or a token.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -84,12 +86,52 @@ def verify_access_token_claims(token: str, settings: BackendSettings, now: datet
     return user_id, epoch
 
 
+MFA_TOKEN_TYPE = "mfa"
+#: How long a passed password check may wait for its second step.
+MFA_TOKEN_TTL_SECONDS = 300
+
+
+def purpose_key(settings: BackendSettings, purpose: str) -> str:
+    """
+    The signing key of one token purpose. Access tokens use JWT_SECRET itself; every other purpose has its own
+    key derived from it (HMAC-SHA256 under a purpose label), so a token of one purpose never verifies as
+    another -- by its key, and by its `typ` claim as well.
+    """
+    if purpose == TOKEN_TYPE:
+        return settings.jwt_secret
+    return hmac.new(settings.jwt_secret.encode("utf-8"), f"schedule-maxing/{purpose}/v1".encode("utf-8"),
+                    hashlib.sha256).hexdigest()
+
+
+def issue_mfa_token(user_id: uuid.UUID, settings: BackendSettings, now: datetime, credential_epoch: int) -> str:
+    """
+    Proof that the password step was passed, good only for the second step (POST /auth/mfa/verify): its own
+    key and `typ`, a short life, the credential epoch. It is not an access token and opens nothing else.
+    """
+    claims = {
+        "cep": int(credential_epoch), "sub": str(user_id), "iss": settings.jwt_issuer, "aud": settings.jwt_audience,
+        "iat": int(now.timestamp()), "nbf": int(now.timestamp()),
+        "exp": int(now.timestamp()) + MFA_TOKEN_TTL_SECONDS, "jti": uuid.uuid4().hex, "typ": MFA_TOKEN_TYPE,
+    }
+    return jwt.encode(claims, purpose_key(settings, MFA_TOKEN_TYPE), algorithm=JWT_ALGORITHM)
+
+
+def verify_mfa_token(token: str, settings: BackendSettings, now: datetime) -> tuple[uuid.UUID, int]:
+    """(user id, credential epoch) of a valid second-step token; TokenError otherwise."""
+    user_id, epoch, _ = _verified(token, settings, now, MFA_TOKEN_TYPE)
+    return user_id, epoch
+
+
 def verify_access_identity(token: str, settings: BackendSettings, now: datetime) -> tuple[uuid.UUID, int, uuid.UUID | None]:
     """Verified identity and optional native-session id; legacy tokens remain compatible."""
+    return _verified(token, settings, now, TOKEN_TYPE)
+
+
+def _verified(token: str, settings: BackendSettings, now: datetime, token_type: str) -> tuple[uuid.UUID, int, uuid.UUID | None]:
     try:
         claims = jwt.decode(
             token,
-            settings.jwt_secret,
+            purpose_key(settings, token_type),
             algorithms=[JWT_ALGORITHM],
             audience=settings.jwt_audience,
             issuer=settings.jwt_issuer,
@@ -109,7 +151,7 @@ def verify_access_identity(token: str, settings: BackendSettings, now: datetime)
         raise TokenError("ExpiredSignatureError")
     if now.timestamp() < nbf or now.timestamp() < iat:
         raise TokenError("ImmatureSignatureError")
-    if claims.get("typ") != TOKEN_TYPE:
+    if claims.get("typ") != token_type:
         raise TokenError("wrong token type")
     epoch = claims.get("cep", 0)
     if not isinstance(epoch, int) or isinstance(epoch, bool) or epoch < 0:

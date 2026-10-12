@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -100,6 +101,10 @@ def merged_environment(env_file: str | Path | None, environ: Mapping[str, str] |
 def load_direct_settings(env_file: str | Path | None = None, environ: Mapping[str, str] | None = None,
                          **overrides) -> DirectDatabaseSettings:
     """Direct-mode settings from the process environment and, if given, one explicit env file."""
+    if getattr(sys, "frozen", False):
+        # Database credentials reach every account's data: a development tool, never a distributed feature.
+        raise DirectConfigError("Direct PostgreSQL mode is a development tool; it is not available in the "
+                                "installed application.")
     environ = os.environ if environ is None else environ
     from_environment = bool(environ.get(ENV_DATABASE_URL, "").strip())
     values = merged_environment(env_file, environ)

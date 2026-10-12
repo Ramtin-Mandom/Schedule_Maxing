@@ -21,7 +21,8 @@ tokens that desktop synchronization uses.
       session started under an older epoch is refused (backend/recovery.py).
     - Every cookie-authenticated request with an unsafe method (anything but
       GET/HEAD/OPTIONS) must send X-CSRF-Token (an HMAC of the session token
-      under the server secret, compared in constant time) and, when the
+      under a key of its own, derived from the server secret and never the
+      token-signing key; compared in constant time) and, when the
       browser sends Origin, come from the server's own origin or one listed
       in ALLOWED_ORIGINS. Bearer-token requests are unaffected: browsers never
       attach them on their own, so they carry no CSRF risk.
@@ -45,6 +46,7 @@ from sqlalchemy.orm import Session
 
 from backend import models
 from backend.errors import ApiError
+from backend.security import purpose_key
 from backend.settings import BackendSettings
 
 COOKIE_NAME = "sm_session"
@@ -57,16 +59,20 @@ def _digest(token: str) -> str:
 
 
 def csrf_token_for(token: str, settings: BackendSettings) -> str:
-    return hmac.new(settings.jwt_secret.encode("utf-8"), b"csrf:" + token.encode("utf-8"), hashlib.sha256).hexdigest()
+    # Its own key (derived from the server secret under a purpose label): never the token-signing key itself.
+    key = purpose_key(settings, "csrf").encode("utf-8")
+    return hmac.new(key, b"csrf:" + token.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def start_session(
-    session: Session, user_id: uuid.UUID, settings: BackendSettings, now: datetime, credential_epoch: int = 0
+    session: Session, user_id: uuid.UUID, settings: BackendSettings, now: datetime, credential_epoch: int = 0,
+    client_label: str | None = None,
 ) -> tuple[str, models.BrowserSession]:
     token = secrets.token_urlsafe(32)
     row = models.BrowserSession(
         id=uuid.uuid4(), user_id=user_id, token_hash=_digest(token), created_at=now,
         expires_at=now + timedelta(minutes=settings.browser_session_ttl_minutes), credential_epoch=credential_epoch,
+        client_label=client_label,
     )
     session.add(row)
     session.commit()
@@ -123,4 +129,5 @@ def authenticate(request: Request, session: Session, now: datetime) -> uuid.UUID
     token = request.cookies.get(COOKIE_NAME)
     row = live_session(session, token, now)
     check_request(request, token, request.app.state.settings)
+    request.state.session_ref = ("browser", row.id)
     return row.user_id

@@ -108,7 +108,7 @@ def test_identities_carry_no_secret_and_no_orm_object(backend, engine) -> None:
     fields = {field.name for field in dataclasses.fields(identity)}
     # credential_epoch is a counter (docs/backend.md "Password recovery"), not a secret.
     assert fields == {"id", "email", "username", "display_name", "version", "created_at", "updated_at",
-                      "credential_epoch"}
+                      "credential_epoch", "email_verified"}
     for value in (repr(identity), repr(session.identity), repr(session.profile())):
         assert PASSWORD not in value and "$argon2" not in value
     assert not isinstance(identity, models.Base) and session.identity == identity

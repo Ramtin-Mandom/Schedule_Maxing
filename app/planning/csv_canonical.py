@@ -49,7 +49,7 @@ from pydantic import ValidationError
 
 from app.planning.application import RecordBatch, task_planned_date
 from app.planning.csv_export import COLUMNS_V2, FORMAT_VERSION
-from app.planning.csv_import import CsvImportError, ImportIssue, read_csv_text
+from app.planning.csv_import import CsvImportError, ImportIssue, bounded_reader, read_csv_text
 from app.planning.models import FixedBlock, LocalTimeWindow, Project, RecurrenceSpec, ScheduledTask, Task
 from app.planning.time import local_minutes, minutes_to_hhmm
 
@@ -73,7 +73,7 @@ def parse_canonical_csv_file(path: str | Path) -> RecordBatch:
 
 def parse_canonical_csv(text: str) -> RecordBatch:
     """Parse and fully validate a canonical planning CSV. Raises CsvImportError listing every problem."""
-    reader = csv.DictReader(io.StringIO(text))
+    reader = bounded_reader(text)
     header = [name.strip() for name in (reader.fieldnames or [])]
     if "format_version" not in header:
         raise CsvImportError([ImportIssue(

@@ -38,8 +38,6 @@ from sqlalchemy.orm import Session
 
 from backend import models
 from backend.passwords import (
-    MAX_PASSWORD_LENGTH,
-    MIN_PASSWORD_LENGTH,
     hash_password,
     needs_rehash,
     normalize_identifier,
@@ -83,27 +81,56 @@ class AccountIdentity:
     #: The credential epoch read together with the password check: a token or session issued for this
     #: identity carries it, so a password reset after the check makes that token useless (backend/recovery.py).
     credential_epoch: int = 0
+    #: Whether the owner of the mailbox proved it is theirs (backend/verification.py).
+    email_verified: bool = False
 
 
 def _identity(user: models.User) -> AccountIdentity:
     return AccountIdentity(id=user.id, email=user.email, username=user.username, display_name=user.display_name,
                            version=user.version, created_at=user.created_at, updated_at=user.updated_at,
-                           credential_epoch=user.credential_epoch or 0)
+                           credential_epoch=user.credential_epoch or 0,
+                           email_verified=user.email_verified_at is not None)
 
 
-def check_email(email: str) -> str:
-    """The normalized email, or AccountValidationError (the API's RegisterIn applies the same rule)."""
-    normalized = normalize_identifier(email)
-    local, _, domain = normalized.partition("@")
-    if not 3 <= len(email) <= MAX_EMAIL_LENGTH or not local or "." not in domain or " " in normalized:
+def check_email(email: str, *, check_dns: bool = False) -> str:
+    """
+    The one mailbox `email` names, normalized -- or AccountValidationError. Applied wherever an address is
+    *stored* (registration, an email change); sign-in and recovery only look an address up, with the same
+    normalize_identifier(), so every stored address is found exactly as it was entered.
+
+    Syntax is the email-validator library's: exactly one address, so no recipient list, no display name
+    ("Name <a@b.c>"), no quoted local part, no bracketed IP, no control characters or line breaks (nothing that
+    could become another header or recipient). Normalization is NFKC, trimmed and case-folded, with the
+    domain in its Unicode form; plus tags and dots are part of the address and are kept (what they mean is
+    the provider's business).
+
+    check_dns: also refuse a domain that DNS answers cannot receive mail. A DNS timeout or failure refuses
+    nothing (it is not an answer), and a pass says nothing about the mailbox existing or whose it is --
+    only the emailed link proves that.
+    """
+    from email_validator import EmailNotValidError, EmailUndeliverableError, caching_resolver, validate_email
+
+    if not isinstance(email, str) or not 3 <= len(email) <= MAX_EMAIL_LENGTH:
         raise AccountValidationError("email must be an email address")
-    return normalized
+    try:
+        result = validate_email(
+            email.strip(), check_deliverability=check_dns, allow_display_name=False, allow_quoted_local=False,
+            allow_domain_literal=False, dns_resolver=caching_resolver(timeout=3) if check_dns else None)
+    except EmailUndeliverableError:
+        raise AccountValidationError("that email address's domain cannot receive mail") from None
+    except EmailNotValidError:
+        raise AccountValidationError("email must be one email address") from None
+    return normalize_identifier(result.normalized)
 
 
-def check_password(password: str) -> None:
-    if not MIN_PASSWORD_LENGTH <= len(password) <= MAX_PASSWORD_LENGTH:
-        raise AccountValidationError(
-            f"The password must be {MIN_PASSWORD_LENGTH} to {MAX_PASSWORD_LENGTH} characters long.")
+def check_password(password: str, *, email: str | None = None, username: str | None = None) -> None:
+    """The rule for a new password, wherever one is set (backend/password_policy.py); AccountValidationError."""
+    from backend.password_policy import WeakPasswordError, check_new_password
+
+    try:
+        check_new_password(password, email=email, username=username)
+    except WeakPasswordError as error:
+        raise AccountValidationError(str(error)) from None
 
 
 def check_username(username: str | None) -> str | None:
@@ -135,9 +162,17 @@ class AccountService:
                  display_name: str | None = None) -> AccountIdentity:
         """Create an account (committed). AccountExistsError when the email or username is taken."""
         normalized_email = check_email(email)
-        check_password(password)
         normalized_username = check_username(username)
+        check_password(password, email=normalized_email, username=normalized_username)
         name = clean_display_name(display_name)
+        # Before the expensive hash: a taken identifier is refused without one (the constraints below still
+        # decide a race). The answer is the same AccountExistsError either way.
+        taken = models.User.email == normalized_email
+        if normalized_username is not None:
+            taken = taken | (models.User.username == normalized_username)
+        if self._session.scalar(select(models.User.id).where(taken).limit(1)) is not None:
+            self._session.rollback()
+            raise AccountExistsError()
         now = self._clock()
         user = models.User(
             id=uuid.uuid4(), email=normalized_email, username=normalized_username, display_name=name,
@@ -151,6 +186,19 @@ class AccountService:
             self._session.rollback()
             raise AccountExistsError() from None
         return _identity(user)
+
+    def account_subject(self, *, email: str | None = None, username: str | None = None) -> str:
+        """
+        The key under which sign-in failures of this email or username are counted (backend/login_guard.py):
+        the account's id when one matches -- one counter for both of its names -- else the normalized
+        identifier, so an unknown account is counted like an existing one. Never shown to a client.
+        """
+        if (email is None) == (username is None):
+            raise AccountValidationError("give exactly one of email or username")
+        normalized = normalize_identifier(email if email is not None else username)
+        column = models.User.email if email is not None else models.User.username
+        user_id = self._session.scalar(select(models.User.id).where(column == normalized))
+        return f"account:{user_id}" if user_id is not None else f"id:{normalized}"
 
     def authenticate(self, *, password: str, email: str | None = None, username: str | None = None) -> AccountIdentity:
         """
