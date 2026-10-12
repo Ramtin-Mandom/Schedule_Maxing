@@ -199,19 +199,22 @@ def test_postgresql_backstops_the_placement_extension_object(pg_engine) -> None:
 
 
 def test_concurrent_registrations_create_exactly_one_account(pg_app) -> None:
+    from tests.backend.conftest import mint_verification_token
+
     results: list[int] = []
+    token = mint_verification_token(pg_app.state.session_factory, "race@example.com", pg_app.state.clock)
 
     def attempt() -> None:
         with TestClient(pg_app) as client:
-            results.append(client.post("/auth/register", json={
-                "email": "race@example.com", "password": "correct horse battery"}).status_code)
+            results.append(client.post("/auth/verify/confirm", json={
+                "token": token, "password": "correct horse battery"}).status_code)
 
     threads = [threading.Thread(target=attempt) for _ in range(8)]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join(timeout=60)
-    assert sorted(results) == [201] + [409] * 7
+    assert sorted(results) == [201] + [400] * 7
 
 
 def test_concurrent_mutations_get_gap_free_ordered_sequence_numbers(pg_app, pg_engine) -> None:

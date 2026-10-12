@@ -17,7 +17,7 @@ from backend import models
 from backend.database import create_backend_engine, session_factory
 from backend.inspect_db import inspect_database
 from backend.migrate import upgrade
-from tests.backend.conftest import task_payload
+from tests.backend.conftest import mint_verification_token, task_payload
 
 
 @pytest.mark.slow
@@ -59,7 +59,10 @@ def test_real_uvicorn_auth_storage_and_isolation(tmp_path):
                 pairs = []
                 for email in ("alice@example.com", "bob@example.com"):
                     credentials = {"email": email, "password": secrets.token_urlsafe(24)}
-                    assert client.post("/auth/register", json=credentials).status_code == 201
+                    token = mint_verification_token(session_factory(engine), email)
+                    confirmed = client.post("/auth/verify/confirm", json={"token": token,
+                                                                         "password": credentials["password"]})
+                    assert confirmed.status_code == 201
                     login = client.post("/auth/login", json=credentials)
                     assert login.status_code == 200
                     pairs.append(login.json())

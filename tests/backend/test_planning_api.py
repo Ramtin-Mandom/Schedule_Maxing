@@ -322,8 +322,9 @@ engine = create_backend_engine("sqlite://")
 upgrade(engine)
 app = create_app(BackendSettings(database_url="sqlite://", jwt_secret="s" * 40), engine=engine)
 with TestClient(app) as client:
-    client.post("/auth/register", json={"email": "a@example.com", "password": "long enough pw"})
-    token = client.post("/auth/login", json={"email": "a@example.com", "password": "long enough pw"}).json()
+    from tests.backend.conftest import register
+    register(client, "a@example.com", "a long enough passphrase")
+    token = client.post("/auth/login", json={"email": "a@example.com", "password": "a long enough passphrase"}).json()
     headers = {"Authorization": "Bearer " + token["access_token"]}
     client.post("/tasks", headers=headers, json={"name": "T", "category": "c", "estimated_duration_minutes": 30,
                                                  "priority": 5, "preferred_dates": ["2026-03-02"]})

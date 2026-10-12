@@ -147,4 +147,4 @@ def test_a_server_that_stays_silent_is_reported_with_the_stage_that_failed(sleep
     with pytest.raises(TransportError, match="no answer within 0.5 seconds"):
         HttpTransport(sleepy_backend, timeout=0.5, wake_timeout=0.5).health()
     with pytest.raises(TransportError, match="could not be resolved"):
-        HttpTransport("http://no-such-host.invalid", timeout=2).health()
+        HttpTransport("https://no-such-host.invalid", timeout=2).health()

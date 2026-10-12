@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from backend.app import create_app
 from backend.database import create_backend_engine
-from backend.migrate import head_revision, upgrade
+from backend.migrate import upgrade
 from backend.settings import BackendConfigError, load_settings, normalize_database_url
 from tests.backend.conftest import TEST_SECRET
 
@@ -35,7 +35,7 @@ def test_readiness_requires_a_fully_migrated_database(settings) -> None:
         assert pending.status_code == 503 and pending.json()["migrations"] == "pending"
         upgrade(engine)
         ready = client.get("/ready").json()
-        assert ready == {"status": "ready", "database": "reachable", "migrations": "current", "revision": head_revision()}
+        assert ready == {"status": "ready", "database": "reachable", "migrations": "current"}
 
 
 def test_missing_settings_fail_clearly_without_revealing_values() -> None:

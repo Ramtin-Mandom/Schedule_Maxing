@@ -9,7 +9,7 @@ import uuid
 
 import jwt
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from backend import models
 from backend.security import TOKEN_TYPE
@@ -34,16 +34,27 @@ def test_registration_stores_only_a_password_hash(client, engine, caplog) -> Non
 
 @pytest.mark.parametrize("variant", ["alice@example.com", "ALICE@example.com", "  alice@example.com ",
                                      "ａlice@example.com"])  # fullwidth "a" normalizes (NFKC) to "a"
-def test_duplicate_accounts_are_refused_after_normalization(client, variant) -> None:
+def test_an_existing_address_gets_no_second_account_after_normalization(client, variant) -> None:
+    from backend.accounts import check_email
+    from backend.verification import VerificationService
+
     register(client, "alice@example.com")
-    response = client.post("/auth/register", json={"email": variant, "password": PASSWORD})
-    assert response.status_code == 409 and response.json()["error"]["code"] == "account_exists"
+    with client.app.state.session_factory() as session:
+        service = VerificationService(session, client.app.state.clock)
+        assert check_email(variant) == "alice@example.com"
+        service.start_registration(check_email(variant), send=False)
+        assert service.mint_registration_token("alice@example.com") is None  # nothing is pending for an account
+        assert session.scalar(select(func.count()).select_from(models.User)) == 1
 
 
 def test_duplicate_usernames_are_refused(client) -> None:
+    from tests.backend.conftest import mint_verification_token
+
     register(client, "a@example.com", username="planner")
-    response = client.post("/auth/register", json={"email": "b@example.com", "password": PASSWORD, "username": "PLANNER"})
-    assert response.status_code == 409
+    token = mint_verification_token(client.app.state.session_factory, "b@example.com", client.app.state.clock)
+    response = client.post("/auth/verify/confirm", json={"token": token, "password": PASSWORD, "username": "PLANNER"})
+    assert response.status_code == 422
+    assert client.post("/auth/verify/confirm", json={"token": token, "password": PASSWORD}).status_code == 201
 
 
 def test_uniqueness_is_enforced_by_the_database_itself(client, engine) -> None:
@@ -60,13 +71,14 @@ def test_uniqueness_is_enforced_by_the_database_itself(client, engine) -> None:
         session.commit()
 
 
-@pytest.mark.parametrize("payload", [
-    {"email": "not-an-email", "password": PASSWORD},
-    {"email": "a@example.com", "password": "short"},
-    {"email": "a@example.com", "password": PASSWORD, "is_admin": True},
+@pytest.mark.parametrize("path, payload", [
+    ("/auth/register", {"email": "not-an-email", "password": PASSWORD}),
+    ("/auth/verify/confirm", {"token": "x" * 43, "password": "short"}),
+    ("/auth/register", {"email": "a@example.com", "password": PASSWORD, "is_admin": True}),
+    ("/auth/verify/confirm", {"token": "x" * 43, "password": PASSWORD, "email_verified": True}),
 ])
-def test_invalid_registrations_are_rejected_without_echoing_the_password(client, payload) -> None:
-    response = client.post("/auth/register", json=payload)
+def test_invalid_registrations_are_rejected_without_echoing_the_password(client, path, payload) -> None:
+    response = client.post(path, json=payload)
     assert response.status_code == 422
     assert PASSWORD not in response.text and "short" not in response.text.replace("too short", "")
 

@@ -27,6 +27,8 @@ checked separately by the operator.
 
 ## Development and operation
 
+- Security: [email verification and delivery](email.md), [passwords, sessions and two-step sign-in](account-security.md),
+  [authorization and API security](api-security.md), [operations, retention, backups and the staging checklist](security-operations.md)
 - [Testing commands and tiers](testing.md) (recorded timings are historical)
 - [CI/CD pipeline: CI, desktop releases and backend deployment](ci-cd.md)
 - [Desktop/web boundaries](desktop-web-boundaries.md)

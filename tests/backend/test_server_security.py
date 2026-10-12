@@ -99,7 +99,8 @@ def test_weak_remote_database_tls_is_rejected(mode):
 
 
 def test_openapi_requires_authentication_for_all_resource_routes(client):
-    public = {"/health", "/ready", "/auth/register", "/auth/login", "/auth/refresh", "/auth/logout",
+    public = {"/health", "/ready", "/auth/register", "/auth/verify/resend", "/auth/verify/confirm",
+              "/auth/mfa/verify", "/auth/browser/mfa", "/auth/login", "/auth/refresh", "/auth/logout",
               "/auth/browser/login", "/auth/browser/session", "/auth/browser/logout",
               "/auth/recovery/request", "/auth/recovery/reset", "/planning/capabilities"}
     schema = client.get("/openapi.json").json()

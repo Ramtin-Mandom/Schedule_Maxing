@@ -109,9 +109,12 @@ def downgrade(engine: Engine, revision: str) -> None:
 def _database_url(env_file: str | None) -> tuple[str | object, dict]:
     """The URL to migrate and the engine options: environment only, or --env-file with the direct TLS policy."""
     if env_file is None:
-        url = normalize_database_url(os.environ.get("DATABASE_URL", "").strip())
+        # MIGRATION_DATABASE_URL: a role that may change the schema. The server itself only ever reads
+        # DATABASE_URL, whose role then needs no right to create, alter or drop anything.
+        url = normalize_database_url((os.environ.get("MIGRATION_DATABASE_URL", "").strip()
+                                      or os.environ.get("DATABASE_URL", "").strip()))
         if not url:
-            raise BackendConfigError("DATABASE_URL is required to run migrations.")
+            raise BackendConfigError("MIGRATION_DATABASE_URL or DATABASE_URL is required to run migrations.")
         return url, {}
     from app.persistence.config import load_direct_settings
 

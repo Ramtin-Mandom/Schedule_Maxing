@@ -40,6 +40,33 @@ jobs:
       - name: Run Ruff
         run: python -m ruff check .
 
+  security-scan:
+    # Known vulnerabilities in the locked dependencies and committed secrets
+    # (docs/security-operations.md, "Dependencies": what to do with a finding).
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Known vulnerabilities in the locked dependencies
+        run: |
+          python -m pip install pip-audit
+          python -m pip_audit --requirement requirements.lock --no-deps --disable-pip
+
+      - name: Scan tracked files for credentials
+        # Every tracked file against the reviewed baseline: a secret-looking string that is not in
+        # secret-scan-baseline.json fails the job (docs/security-operations.md says what to do then).
+        run: |
+          python -m pip install detect-secrets==1.5.0
+          git ls-files -z | xargs -0 detect-secrets-hook --baseline secret-scan-baseline.json
+
   desktop-only:
     # The desktop app without any optional web/server package (docs/desktop-web-boundaries.md):
     # only requirements-desktop.txt is installed, and every suite that needs no backend runs.

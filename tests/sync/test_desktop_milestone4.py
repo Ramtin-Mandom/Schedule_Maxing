@@ -36,7 +36,9 @@ def test_complete_native_cloud_workflow(tmp_path, dialogs, server, make_device):
         account = app.account_controller
         ok(account.configure_backend("http://backend.test"))
         pump(app)
-        ok(account.register(email, PASSWORD, display_name="Milestone tester"))
+        ok(account.request_registration(email))
+        app.services.sync_service.confirm_registration(server.mail.token(email), PASSWORD,
+                                                       display_name="Milestone tester")
         pump(app)
         ok(account.sign_in(email, PASSWORD))
         pump(app)
