@@ -152,6 +152,13 @@ provider's current documentation during the staging test.
    # ... or the HTTPS API
    EMAIL_PROVIDER=resend
    RESEND_API_KEY=<secret>
+   # ... or Brevo's HTTPS API (no domain needed: Brevo verifies a single sender address;
+   #     works where the host blocks outgoing SMTP; acceptance only, no webhook)
+   EMAIL_PROVIDER=brevo
+   BREVO_API_KEY=<secret>
+   # ... or Mailjet's HTTPS API (same idea: one validated sender address, no domain)
+   EMAIL_PROVIDER=mailjet
+   MAILJET_API_KEY=<key>   MAILJET_SECRET_KEY=<secret>
    EMAIL_WEBHOOK_SECRET=<whsec_... from the provider's webhook settings>
    EMAIL_DIAGNOSTIC_RECIPIENT=<one inbox you control>
    ```
