@@ -12,7 +12,7 @@ in [email.md](email.md); request limits and proxies in
 One rule, applied wherever a password is *set* -- signup confirmation,
 recovery reset, password change (`accounts.check_password`):
 
-- 15 to 1024 characters. Any characters: spaces, Unicode, pasted
+- 8 to 1024 characters (longer is better: a few unrelated words). Any characters: spaces, Unicode, pasted
   password-manager output. No composition rules, no truncation, no forced
   periodic change.
 - Not trivially guessable although long: one character or a short unit
@@ -120,8 +120,8 @@ when -- never a credential, a code, a token or a sign-in link:
 
 ## Compatibility
 
-- New passwords need 15 characters; older desktop builds validate 8 locally
-  and will see the server's refusal instead.
+- New passwords need 8 characters, as before, but common, patterned and breached
+  ones are now refused.
 - A desktop build older than this change does not know the second step: an
   account that turns two-step sign-in on must use an updated app.
 - `POST /auth/login` may now answer `{mfa_required, mfa_token, expires_in}`

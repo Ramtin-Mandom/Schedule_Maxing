@@ -7,7 +7,7 @@ nothing else decides. Signing in applies no rule: an existing account's
 password keeps working whatever it is, until its owner changes it.
 
 Following NIST SP 800-63B for password-only authentication:
-    - at least MIN_PASSWORD_LENGTH (15) characters, at most
+    - at least MIN_PASSWORD_LENGTH (8) characters, at most
       MAX_PASSWORD_LENGTH (1024); counted in characters, never truncated;
     - any characters: spaces, Unicode, emoji, pasted password-manager output.
       No "one uppercase, one symbol" rules and no forced periodic change;
@@ -36,11 +36,19 @@ from collections.abc import Callable
 
 LOG = logging.getLogger("schedule_maxing.security")
 
-MIN_PASSWORD_LENGTH = 15
+MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 1024
 
-#: Long passwords that are guessed first anyway (lower case, without spaces).
+#: Passwords that are guessed first (lower case, without spaces): the usual short ones, and long ones that
+#: are common anyway. The breach lookup covers far more; this list works without it.
 COMMON = frozenset({
+    "password", "password1", "password12", "password123", "password1234", "passw0rd", "p@ssw0rd", "p@ssword",
+    "iloveyou", "iloveyou1", "sunshine", "princess", "football", "baseball", "welcome1", "welcome123", "letmein1",
+    "letmein123", "qwerty123", "qwerty1234", "1q2w3e4r", "1q2w3e4r5t", "1qaz2wsx", "admin123", "admin1234",
+    "abc12345", "abcd1234", "trustno1", "superman", "starwars", "whatever", "computer", "internet", "changeme",
+    "changeme1", "master123", "michelle", "jennifer", "jordan23", "liverpool", "asdfghjk", "asdfghjkl", "zxcvbnm1",
+    "zaq12wsx", "monkey123", "dragon123", "shadow123", "hello123", "test1234", "testtest", "secret123",
+    "schedule", "schedulemaxing", "maxing123",
     "passwordpassword", "passwordpassword1", "password123456789", "password1234567890", "mypasswordispassword",
     "thisismypassword", "thisisapassword", "iloveyouiloveyou", "letmeinletmeinletmein", "qwertyuiopasdfghjkl",
     "qwertyuiopasdfghjklzxcvbnm", "1q2w3e4r5t6y7u8i9o0p", "correcthorsebatterystaple", "schedulemaxingpassword",

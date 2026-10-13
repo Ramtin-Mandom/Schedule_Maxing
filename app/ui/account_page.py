@@ -310,7 +310,7 @@ class SecurityDialog(ModalDialog):
 
         heading("Password")
         self.current_field = LabeledEntry(self.body, "Current password (needed for every change here)")
-        self.new_field = LabeledEntry(self.body, "New password (15 characters or more; a few words work well)")
+        self.new_field = LabeledEntry(self.body, "New password (8 characters or more; a few words work well)")
         self.repeat_field = LabeledEntry(self.body, "Repeat the new password")
         for field_widget in (self.current_field, self.new_field, self.repeat_field):
             field_widget.entry.configure(show="•")
