@@ -84,7 +84,10 @@ Worth an alert: a sustained rise of `sign_in_failed` or
   reviewed baseline `secret-scan-baseline.json` (regenerate it with
   `detect-secrets scan > secret-scan-baseline.json` only after reading each new entry:
   the baseline lists test fixtures and placeholders, never a real secret). It
-  scans the working tree, not the history.
+  scans the working tree, not the history. On Windows set `PYTHONUTF8=1` for
+  the scan and write `/` in the recorded paths: without it every file with a
+  non-ASCII character is silently skipped, and CI (Linux) then reports its
+  entries as new.
 
 Handling policy:
 

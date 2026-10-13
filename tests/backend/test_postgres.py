@@ -89,10 +89,11 @@ def _column_types(connection, table: str) -> dict[str, str]:
 def test_concurrent_refresh_has_one_winner_and_replay_revokes_it(pg_engine):
     """Two workers cannot turn one credential into two live descendants."""
     from concurrent.futures import ThreadPoolExecutor
-    from tests.backend.conftest import PASSWORD
+    from tests.backend.conftest import PASSWORD, FakeClock
 
     settings = BackendSettings(database_url="sqlite://", jwt_secret=TEST_SECRET)
-    app = create_app(settings, engine=pg_engine)
+    clock = FakeClock()
+    app = create_app(settings, engine=pg_engine, clock=clock)
     with TestClient(app) as client:
         register(client, "refresh-race@example.com")
         pair = client.post("/auth/login", json={"email": "refresh-race@example.com", "password": PASSWORD}).json()
@@ -106,9 +107,15 @@ def test_concurrent_refresh_has_one_winner_and_replay_revokes_it(pg_engine):
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         outcomes = list(pool.map(lambda _: rotate(), range(2)))
-    assert sorted(status for status, _ in outcomes) == [200, 401]
+    # The loser is the same client racing itself: no credential, and the session lives on with the winner's pair.
+    assert sorted(status for status, _ in outcomes) == [200, 409]
     winner = next(body for status, body in outcomes if status == 200)
+    loser = next(body for status, body in outcomes if status == 409)
+    assert loser["error"]["code"] == "refresh_superseded" and "access_token" not in loser
     with TestClient(app) as client:
+        assert client.get("/auth/me", headers={"Authorization": "Bearer " + winner["access_token"]}).status_code == 200
+        clock.advance(seconds=11)  # past the grace: the consumed credential again is replay
+        assert client.post("/auth/refresh", json={"refresh_token": pair["refresh_token"]}).status_code == 401
         assert client.get("/auth/me", headers={"Authorization": "Bearer " + winner["access_token"]}).status_code == 401
         assert client.post("/auth/refresh", json={"refresh_token": winner["refresh_token"]}).status_code == 401
     with session_factory(pg_engine)() as session:
