@@ -45,10 +45,18 @@ from datetime import datetime, timezone
 from app.sync.engine import AssociationError, AssociationPreview, ConflictResolutionError
 from app.sync.service import AccountCreationError, SyncReport, SyncService, SyncStatus
 from app.sync.store import Conflict
-from app.sync.transport import AuthenticationError, HttpTransport, ProtocolError, SyncTransport, TransportError
+from app.sync.transport import (
+    AuthenticationError,
+    HttpTransport,
+    MfaRequired,
+    ProtocolError,
+    SyncTransport,
+    TransportError,
+)
 from app.ui.background import ControllerResult
 
 #: The backend's own rules (backend/security.py), checked here too so a typo never needs a round trip.
+#: For a new password (signup, reset, change); signing in accepts whatever the account has.
 MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 1024
 MAX_DISPLAY_NAME_LENGTH = 200
@@ -66,7 +74,10 @@ def profile_summary(profile: dict) -> str:
     """Only server-provided identity; a centralized plan fallback until plans exist."""
     name = profile.get("display_name") or "No display name set"
     plan = profile.get("plan") or DEFAULT_PLAN
-    return f"{name}\n{masked_email(profile.get('email'))}\nPlan: {plan}"
+    summary = f"{name}\n{masked_email(profile.get('email'))}\nPlan: {plan}"
+    if profile.get("email_verified") is False:
+        summary += "\nEmail address not confirmed yet"
+    return summary
 
 
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -100,6 +111,10 @@ _CANCEL_REASONS = {"user": "cancelled by you", "rescheduled": "its task was move
 RECOVERY_NEEDS_BACKEND = ("Password recovery is done by the backend you sign in to, and no backend is configured. "
                           "Enter its address first (a device that only works offline has no account password).")
 RECOVERY_SENT = "If an account matches, a recovery link has been sent to its email address."
+
+
+VERIFICATION_SENT = ("If this address can receive email, a message with a verification code is on its way. "
+                     "Paste the code (or the whole link) here.")
 
 
 def recovery_code(text: str) -> str:
@@ -151,6 +166,8 @@ def friendly_error(error: BaseException, *, signing_in: bool = False) -> str:
     """One readable, actionable sentence for a failure of an account or sync operation."""
     if isinstance(error, InvalidInput):
         return "Check the highlighted fields: " + str(error)
+    if isinstance(error, MfaRequired):
+        return str(error)
     if isinstance(error, AuthenticationError):
         if signing_in:
             return "The email or password is incorrect."
@@ -162,6 +179,16 @@ def friendly_error(error: BaseException, *, signing_in: bool = False) -> str:
         message = body.get("message") or str(error)
         if error.code == "account_exists":
             return "An account with this email already exists. Sign in instead."
+        if error.code == "reauthentication_failed":
+            return "The current password is incorrect."
+        if error.code == "invalid_mfa_code":
+            return "That code is not valid. Enter the current code from your authenticator app."
+        if error.code == "mfa_unavailable":
+            return "Two-step sign-in is not available on this backend. Ask its operator."
+        if error.code == "invalid_verification_token":
+            return "This verification code is invalid, already used or expired. Send a new email and use its code."
+        if error.code == "email_unavailable":
+            return "This backend cannot send email, so it cannot create or confirm accounts. Ask its operator."
         return f"The backend refused the request: {message}"
     if isinstance(error, AccountCreationError):
         return str(error) + (f" ({friendly_error(error.cause)})" if error.cause is not None else "")
@@ -480,34 +507,62 @@ class AccountController:
 
     # -- accounts ----------------------------------------------------------------------
 
-    def register(self, email: str, password: str, *, display_name: str | None = None) -> ControllerResult[dict]:
-        """Create an account on the backend (it does not sign in)."""
+    def request_registration(self, email: str) -> ControllerResult[str]:
+        """
+        Step 1 of creating an account: ask the backend to email a verification
+        code to `email` (also "send it again": earlier codes stay valid).
+        Nothing is created and no password is involved yet. The answer is the
+        backend's generic message -- it never says whether the address
+        already has an account.
+        """
 
-        def op() -> dict:
-            errors = validate_credentials(email, password, registering=True, display_name=display_name)
-            if errors:
-                raise InvalidInput(errors)
-            return self._sync.register(email.strip(), password, display_name=(display_name or "").strip() or None)
+        def op() -> str:
+            if not _EMAIL.match(email.strip()):
+                raise InvalidInput({"email": "Enter a valid email address."})
+            return self._sync.request_registration(email.strip()).get("message") or VERIFICATION_SENT
 
         return self._call(op)
 
-    def create_account(self, email: str, password: str, *, display_name: str | None = None,
+    def create_account(self, code: str, password: str, confirm: str, *, display_name: str | None = None,
                        keep: bool = False) -> ControllerResult[RegistrationResult]:
         """
-        Create an account and keep working in the same workspace: the new
-        account is signed in to and this device's guest records become its
-        own (SyncService.create_account), then upload in the background. On
-        any failure the guest workspace is exactly as it was.
+        Step 2: confirm the emailed code (the whole link may be pasted) and
+        choose the password. The account is created then, signed in to, and
+        this device's guest records become its own
+        (SyncService.create_account), then upload in the background. On any
+        failure the guest workspace is exactly as it was.
         """
 
         def op() -> RegistrationResult:
-            errors = validate_credentials(email, password, registering=True, display_name=display_name)
+            token = recovery_code(code)
+            errors: dict[str, str] = {}
+            if not token:
+                errors["code"] = "Paste the code or the whole link from the verification email."
+            if not MIN_PASSWORD_LENGTH <= len(password) <= MAX_PASSWORD_LENGTH:
+                errors["password"] = f"Use {MIN_PASSWORD_LENGTH} to {MAX_PASSWORD_LENGTH} characters."
+            elif password != confirm:
+                errors["confirm"] = "The two passwords are not the same."
+            if display_name and len(display_name.strip()) > MAX_DISPLAY_NAME_LENGTH:
+                errors["display_name"] = f"Use at most {MAX_DISPLAY_NAME_LENGTH} characters."
             if errors:
                 raise InvalidInput(errors)
-            created = self._sync.create_account(email.strip(), password,
-                                                display_name=(display_name or "").strip() or None,
+            created = self._sync.create_account(token, password, display_name=(display_name or "").strip() or None,
                                                 **({"keep": True} if keep else {}))
-            return RegistrationResult(email=created.account.email or email.strip(), adopted=created.adopted_total)
+            return RegistrationResult(email=created.account.email or "", adopted=created.adopted_total)
+
+        return self._call(op)
+
+    def request_email_verification(self) -> ControllerResult[str]:
+        """For a signed-in account whose address was never confirmed: email a code to that address."""
+        return self._call(lambda: self._sync.request_email_verification().get("message") or VERIFICATION_SENT)
+
+    def confirm_email_verification(self, code: str) -> ControllerResult[str]:
+        def op() -> str:
+            token = recovery_code(code)
+            if not token:
+                raise InvalidInput({"code": "Paste the code from the verification email."})
+            self._sync.confirm_email_verification(token)
+            return "Your email address is confirmed."
 
         return self._call(op)
 
@@ -542,13 +597,110 @@ class AccountController:
             errors = validate_credentials(email, password)
             if errors:
                 raise InvalidInput(errors)
-            account = self._sync.sign_in(email.strip(), password, **({"keep": True} if keep else {}))
-            unassociated = self._sync.association_preview().total
-            self._sync.wake()  # sync the account's own records; ownerless ones stay until associated
-            return SignInResult(email=account.email or email.strip(), unassociated=unassociated,
-                                associated_before=account.associated_at is not None)
+            return self._signed_in(self._sync.sign_in(email.strip(), password, **({"keep": True} if keep else {})))
 
         return self._call(op, signing_in=True)
+
+    def _signed_in(self, account) -> SignInResult:
+        unassociated = self._sync.association_preview().total
+        self._sync.wake()  # sync the account's own records; ownerless ones stay until associated
+        return SignInResult(email=account.email or "", unassociated=unassociated,
+                            associated_before=account.associated_at is not None)
+
+    def complete_sign_in(self, code: str) -> ControllerResult[SignInResult]:
+        """
+        The second step of signing in to an account with two-step sign-in (sign_in failed with MfaRequired):
+        the authenticator's code or a recovery code. A wrong code can be tried again.
+        """
+
+        def op() -> SignInResult:
+            if not code.strip():
+                raise InvalidInput({"code": "Enter the 6-digit code from your authenticator app, or a recovery code."})
+            return self._signed_in(self._sync.complete_sign_in(code.strip()))
+
+        result = self._call(op)
+        if not result.ok and isinstance(result.cause, AuthenticationError):
+            return ControllerResult.failure("That code is not valid (or signing in took too long). Try the "
+                                            "current code, or sign in again.", result.cause)
+        return result
+
+    # -- account security (docs/account-security.md) ----------------------------------------
+
+    def change_password(self, current: str, new: str, confirm: str) -> ControllerResult[SignInResult]:
+        """
+        Change the password: every device is signed out, and this one signs in again with the new password
+        (a second step follows if the account has two-step sign-in). Nothing on this device is lost.
+        """
+
+        def op() -> SignInResult:
+            errors: dict[str, str] = {}
+            if not current:
+                errors["current"] = "Enter your current password."
+            if not MIN_PASSWORD_LENGTH <= len(new) <= MAX_PASSWORD_LENGTH:
+                errors["password"] = f"Use {MIN_PASSWORD_LENGTH} to {MAX_PASSWORD_LENGTH} characters."
+            elif new != confirm:
+                errors["confirm"] = "The two passwords are not the same."
+            if errors:
+                raise InvalidInput(errors)
+            return self._signed_in(self._sync.change_password(current, new))
+
+        return self._call(op)
+
+    def list_sessions(self) -> ControllerResult[list[dict]]:
+        """The account's live sessions on the server: {id, kind, created_at, expires_at, client, current}."""
+        return self._call(lambda: self._sync.account_request("GET", "/auth/sessions")["sessions"])
+
+    def revoke_session(self, session_id: str) -> ControllerResult[dict]:
+        return self._call(lambda: self._sync.account_request("DELETE", f"/auth/sessions/{session_id}"))
+
+    def sign_out_everywhere(self) -> ControllerResult[ConnectionView]:
+        """End every session of the account on the server, then sign this device out as well."""
+
+        def op() -> ConnectionView:
+            self._sync.account_request("POST", "/auth/sessions/revoke-all", {})
+            self._sync.sign_out()
+            return self.view(self._sync.status())
+
+        return self._call(op)
+
+    def request_email_change(self, current_password: str, new_email: str) -> ControllerResult[str]:
+        """Ask to change the account's email address: a code is mailed to the new address; nothing changes yet."""
+
+        def op() -> str:
+            if not _EMAIL.match(new_email.strip()):
+                raise InvalidInput({"email": "Enter a valid email address."})
+            return self._sync.account_request("POST", "/auth/email/change/request", {
+                "current_password": current_password, "new_email": new_email.strip()})["message"]
+
+        return self._call(op)
+
+    def confirm_email_change(self, code: str) -> ControllerResult[ConnectionView]:
+        """Finish the change with the mailed code. Every device is signed out: sign in with the new address."""
+
+        def op() -> ConnectionView:
+            self._sync.account_request("POST", "/auth/email/change/confirm", {"token": recovery_code(code)})
+            self._sync.sign_out()
+            return self.view(self._sync.status())
+
+        return self._call(op)
+
+    def mfa_status(self) -> ControllerResult[dict]:
+        return self._call(lambda: self._sync.account_request("GET", "/auth/mfa"))
+
+    def mfa_begin(self, current_password: str) -> ControllerResult[dict]:
+        """Start setting up an authenticator: {secret, otpauth_uri}, to be shown once and never stored here."""
+        return self._call(lambda: self._sync.account_request(
+            "POST", "/auth/mfa/totp/enroll", {"current_password": current_password}))
+
+    def mfa_confirm(self, current_password: str, code: str) -> ControllerResult[list[str]]:
+        """Turn two-step sign-in on with a code from the authenticator; the recovery codes, to be shown once."""
+        return self._call(lambda: self._sync.account_request(
+            "POST", "/auth/mfa/totp/confirm", {"current_password": current_password, "code": code.strip()})[
+                "recovery_codes"])
+
+    def mfa_disable(self, current_password: str, code: str) -> ControllerResult[dict]:
+        return self._call(lambda: self._sync.account_request(
+            "POST", "/auth/mfa/totp/disable", {"current_password": current_password, "code": code.strip()}))
 
     def request_recovery(self, identifier: str) -> ControllerResult[str]:
         """

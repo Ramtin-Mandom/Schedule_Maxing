@@ -33,18 +33,25 @@ from app.sync.transport import (
     login_via,
     profile_via,
     pull_via,
-    register_via,
+    confirm_email_verification_via,
+    confirm_registration_via,
+    request_email_verification_via,
+    request_registration_via,
+    verify_mfa_via,
     request_recovery_via,
     reset_password_via,
     reset_task_data_via,
     update_profile_via,
 )
 from app.ui.planning_controller import PlanningController
+from cryptography.fernet import Fernet
+
 from backend.app import create_app
 from backend.database import create_backend_engine
 from backend.migrate import upgrade
 from backend.settings import BackendSettings
-from tests.backend.conftest import TEST_SECRET, _postgres_url
+from tests.backend.conftest import TEST_SECRET, FakeMail, _postgres_url
+from tests.backend.conftest import register as register_account
 from tests.db_template import clone_migrated
 
 PASSWORD = "correct horse battery"
@@ -65,10 +72,16 @@ class InProcessTransport:
         response = self.client.request(method, path, json=body, headers=headers)
         if response.status_code >= 400:
             raise _classify(response.status_code, response.json())
-        return response.json()
+        return response.json() if response.content else {}
 
     def login(self, email: str, password: str):
         return login_via(self._request, email, password)
+
+    def verify_mfa(self, mfa_token: str, code: str):
+        return verify_mfa_via(self._request, mfa_token, code)
+
+    def account_request(self, method: str, path: str, token: str, body: dict | None = None) -> dict:
+        return self._request(method, path, token, body)
 
     def push(self, token: str, operations: list[dict]) -> list[dict]:
         self.pushed.append(operations)
@@ -77,8 +90,17 @@ class InProcessTransport:
     def pull(self, token: str, after: int, limit: int) -> PullPage:
         return pull_via(self._request, token, after, limit)
 
-    def register(self, email: str, password: str, username=None, display_name=None) -> dict:
-        return register_via(self._request, email, password, username, display_name)
+    def request_registration(self, email: str) -> dict:
+        return request_registration_via(self._request, email)
+
+    def confirm_registration(self, code: str, password: str, username=None, display_name=None) -> dict:
+        return confirm_registration_via(self._request, code, password, username, display_name)
+
+    def request_email_verification(self, token: str) -> dict:
+        return request_email_verification_via(self._request, token)
+
+    def confirm_email_verification(self, token: str, code: str) -> dict:
+        return confirm_email_verification_via(self._request, token, code)
 
     def profile(self, token: str) -> dict:
         return profile_via(self._request, token)
@@ -135,14 +157,18 @@ class FlakyTransport(InProcessTransport):
 class Server:
     def __init__(self, engine) -> None:
         self.engine = engine
-        self.app = create_app(BackendSettings(database_url="sqlite://", jwt_secret=TEST_SECRET), engine=engine)
+        #: What the server "emailed" (verification links): nothing leaves the process.
+        self.mail = FakeMail()
+        self.app = create_app(BackendSettings(database_url="sqlite://", jwt_secret=TEST_SECRET,
+                                              app_public_url="https://backend.example",
+                                              mfa_encryption_key=Fernet.generate_key().decode()),
+                              engine=engine, mail=self.mail)
         self.client = TestClient(self.app)
         self._tokens: dict[str, str] = {}
 
     def register(self, email: str) -> dict:
-        response = self.client.post("/auth/register", json={"email": email, "password": PASSWORD})
-        assert response.status_code == 201, response.text
-        return response.json()
+        """A verified account with PASSWORD (the whole flow, without a desktop)."""
+        return register_account(self.client, email, PASSWORD)
 
     def headers(self, email: str, *, fresh: bool = False) -> dict:
         """A bearer header for `email`, reusing its token (signing in only when needed)."""

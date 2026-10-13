@@ -19,10 +19,13 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import make_url, text
 
+from backend.accounts import check_email
 from backend.app import create_app
 from backend.database import create_backend_engine
 from backend.migrate import upgrade
+from backend.mail import MailError
 from backend.settings import BackendSettings, normalize_database_url
+from backend.verification import VerificationService
 from tests.db_template import clone_migrated
 
 TEST_SECRET = "unit-test-secret-" + "x" * 32
@@ -103,8 +106,49 @@ def client(app) -> TestClient:
         yield test_client
 
 
+class FakeMail:
+    """The outbox's mail adapter for tests: keeps every message it "accepts"; nothing leaves the process."""
+
+    name = "fake"
+
+    def __init__(self) -> None:
+        self.sent: list = []
+        self.fail = False
+
+    def deliver(self, message) -> str:
+        if self.fail:
+            raise MailError("TimeoutError")
+        self.sent.append(message)
+        return f"fake-{len(self.sent)}"
+
+    def to(self, address: str) -> list:
+        return [message for message in self.sent if message.to == address]
+
+    def token(self, address: str | None = None) -> str:
+        """The token of the newest emailed link (to `address`, if given)."""
+        messages = self.sent if address is None else self.to(address)
+        return next(message.text.split("#token=", 1)[1].split()[0]
+                    for message in reversed(messages) if "#token=" in message.text)
+
+
+def mint_verification_token(factory, email: str, clock=None) -> str:
+    """What the verification email of a (new or existing) pending registration would carry."""
+    with factory() as session:
+        service = VerificationService(session, clock) if clock is not None else VerificationService(session)
+        address = check_email(email)
+        service.start_registration(address, send=False)
+        token = service.mint_registration_token(address)
+    assert token is not None, f"{email} already has an account"
+    return token
+
+
 def register(client: TestClient, email: str, password: str = PASSWORD, **extra) -> dict:
-    response = client.post("/auth/register", json={"email": email, "password": password, **extra})
+    """
+    A verified account through the real flow: a pending registration, the token its email carries, and the
+    confirmation that creates the account with `password`. Returns the account as the API reports it.
+    """
+    token = mint_verification_token(client.app.state.session_factory, email, client.app.state.clock)
+    response = client.post("/auth/verify/confirm", json={"token": token, "password": password, **extra})
     assert response.status_code == 201, response.text
     return response.json()
 

@@ -21,10 +21,21 @@ refresh credential (when the server issues them): refresh() exchanges it for
 a new pair, logout() revokes its session. SyncService holds it in memory and,
 only for "Keep me signed in", in the operating system's credential store
 (app/sync/credentials.py).
+
+Where credentials may be sent (validate_backend_url, applied to every address
+whatever its source -- the built-in one, SCHEDULE_MAXING_BACKEND_URL, a saved
+setting or the Account page): https:// to any host, http:// only to this
+computer (localhost or a loopback IP address, for a development server). An
+address with a user name or password, a query, a fragment or anything
+malformed is refused. TLS certificates are verified with the system's trust
+store (never disabled), and no redirect is ever followed: urllib would resend
+the Authorization header -- and re-issue the request -- to wherever a
+redirect points.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import socket
 import ssl
@@ -32,6 +43,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 
 class TransportError(Exception):
@@ -45,6 +57,17 @@ class TransportError(Exception):
 
 class AuthenticationError(Exception):
     """The server refused the credentials or token (401)."""
+
+
+class MfaRequired(Exception):
+    """
+    The password was right and the account has two-step sign-in: no session exists yet. `mfa_token` is good
+    only for the second step (verify_mfa) and only for a few minutes; it is held in memory, never stored.
+    """
+
+    def __init__(self, mfa_token: str) -> None:
+        super().__init__("Enter the code from your authenticator app to finish signing in.")
+        self.mfa_token = mfa_token
 
 
 class ProtocolError(Exception):
@@ -82,7 +105,13 @@ class PullPage:
 class SyncTransport(Protocol):
     base_url: str
 
+    #: MfaRequired when the account has two-step sign-in: finish with verify_mfa(its mfa_token, code).
     def login(self, email: str, password: str) -> LoginResult: ...
+
+    def verify_mfa(self, mfa_token: str, code: str) -> LoginResult: ...
+
+    #: One authenticated request to an account route (/auth/password/change, /auth/sessions, /auth/mfa/...).
+    def account_request(self, method: str, path: str, token: str, body: dict | None = None) -> dict: ...
 
     def push(self, token: str, operations: list[dict[str, Any]]) -> list[dict[str, Any]]: ...
 
@@ -91,7 +120,18 @@ class SyncTransport(Protocol):
     # Public account operations (the local web profile, app/web): registration, the profile, and a
     # reachability probe. Each returns the server's JSON document.
 
-    def register(self, email: str, password: str, username: str | None, display_name: str | None) -> dict: ...
+    #: Registration (backend/verification_api.py). Asking sends a verification email and creates nothing: the
+    #: answer is the same for every address, and no password is sent. The account is created by confirming the
+    #: emailed code, with the password chosen then; the answer is its profile.
+    def request_registration(self, email: str) -> dict: ...
+
+    def confirm_registration(self, code: str, password: str, username: str | None,
+                             display_name: str | None) -> dict: ...
+
+    #: For a signed-in account whose address was never confirmed: email a code to it, then confirm the code.
+    def request_email_verification(self, token: str) -> dict: ...
+
+    def confirm_email_verification(self, token: str, code: str) -> dict: ...
 
     def profile(self, token: str) -> dict: ...
 
@@ -132,6 +172,17 @@ def _classify(status: int, body: dict | None) -> Exception:
 def login_via(request, email: str, password: str) -> LoginResult:
     """The login exchange on top of any `request(method, path, token, body) -> dict` function."""
     answer = request("POST", "/auth/login", None, {"email": email, "password": password})
+    if answer.get("mfa_required"):
+        raise MfaRequired(answer["mfa_token"])
+    return _login_result(request, answer)
+
+
+def verify_mfa_via(request, mfa_token: str, code: str) -> LoginResult:
+    """The second step of signing in: the authenticator's code (or a recovery code) for a login's mfa_token."""
+    return _login_result(request, request("POST", "/auth/mfa/verify", None, {"mfa_token": mfa_token, "code": code}))
+
+
+def _login_result(request, answer: dict) -> LoginResult:
     token = answer["access_token"]
     profile = request("GET", "/me", token, None)
     return LoginResult(token=token, user_id=profile["id"], email=profile["email"],
@@ -147,13 +198,26 @@ def logout_via(request, refresh_token: str) -> None:
     request("POST", "/auth/logout", None, {"refresh_token": refresh_token})
 
 
-def register_via(request, email: str, password: str, username: str | None, display_name: str | None) -> dict:
-    body = {"email": email, "password": password}
+def request_registration_via(request, email: str) -> dict:
+    return request("POST", "/auth/register", None, {"email": email})
+
+
+def confirm_registration_via(request, code: str, password: str, username: str | None,
+                             display_name: str | None) -> dict:
+    body = {"token": code, "password": password}
     if username:
         body["username"] = username
     if display_name:
         body["display_name"] = display_name
-    return request("POST", "/auth/register", None, body)
+    return request("POST", "/auth/verify/confirm", None, body)
+
+
+def request_email_verification_via(request, token: str) -> dict:
+    return request("POST", "/auth/email/verification/request", token, {})
+
+
+def confirm_email_verification_via(request, token: str, code: str) -> dict:
+    return request("POST", "/auth/email/verification/confirm", token, {"token": code})
 
 
 def profile_via(request, token: str) -> dict:
@@ -222,6 +286,48 @@ def pull_via(request, token: str, after: int, limit: int) -> PullPage:
     return PullPage(changes=page["changes"], cursor=int(page["cursor"]), has_more=bool(page["has_more"]))
 
 
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def validate_backend_url(url: str) -> str:
+    """
+    The backend address to use (trimmed, no trailing slash), or ValueError
+    saying what is wrong with it -- never echoing the address, which may
+    hold a credential someone pasted by mistake.
+    """
+    url = (url or "").strip()
+    if not url or "\\" in url or any(character.isspace() or ord(character) < 32 for character in url):
+        raise ValueError("the backend URL is not a valid address")
+    try:
+        parts = urlsplit(url)
+        host, _port = parts.hostname, parts.port  # .port raises for a malformed one
+    except ValueError:
+        raise ValueError("the backend URL is not a valid address") from None
+    if parts.scheme not in ("https", "http") or not host:
+        raise ValueError("the backend URL must start with https:// (or http:// for a server on this computer)")
+    if "@" in parts.netloc:
+        raise ValueError("the backend URL must not contain a user name or password")
+    if parts.query or parts.fragment:
+        raise ValueError("the backend URL must not contain a query or a fragment")
+    if parts.scheme == "http" and not _is_loopback(host):
+        raise ValueError("the backend URL must use https://; http:// is accepted only for a server on this "
+                         "computer (localhost, 127.0.0.1 or [::1])")
+    return url.rstrip("/")
+
+
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """No redirect is followed: the 3xx answer surfaces as an HTTPError (see _send)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 class HttpTransport:
     """
     `wake_timeout`: a hosted server that was idle can be asleep and need most
@@ -232,9 +338,10 @@ class HttpTransport:
     """
 
     def __init__(self, base_url: str, *, timeout: float = 10.0, wake_timeout: float = 75.0) -> None:
-        if not base_url.startswith(("https://", "http://")):
-            raise ValueError("the backend URL must start with https:// (or http:// for a local server)")
-        self.base_url = base_url.rstrip("/")
+        self.base_url = validate_backend_url(base_url)
+        # Certificate and host name verification stay on (the default context); redirects are refused.
+        self._opener = urllib.request.build_opener(
+            _RefuseRedirects, urllib.request.HTTPSHandler(context=ssl.create_default_context()))
         self._timeout = timeout
         self._wake_timeout = max(timeout, wake_timeout)
         self._awake = False
@@ -260,9 +367,12 @@ class HttpTransport:
         if token is not None:
             request.add_header("Authorization", f"Bearer {token}")
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            with self._opener.open(request, timeout=timeout) as response:
                 return json.loads(response.read().decode("utf-8") or "{}")
         except urllib.error.HTTPError as error:
+            if 300 <= error.code < 400:
+                raise ProtocolError("The backend answered with a redirect, which is never followed. Check the "
+                                    "backend address.", status=error.code, code="redirect_refused") from None
             try:
                 payload = json.loads(error.read().decode("utf-8") or "{}")
             except (ValueError, UnicodeDecodeError):
@@ -276,6 +386,12 @@ class HttpTransport:
     def login(self, email: str, password: str) -> LoginResult:
         return login_via(self._request, email, password)
 
+    def verify_mfa(self, mfa_token: str, code: str) -> LoginResult:
+        return verify_mfa_via(self._request, mfa_token, code)
+
+    def account_request(self, method: str, path: str, token: str, body: dict | None = None) -> dict:
+        return self._request(method, path, token, body)
+
     def refresh(self, refresh_token: str) -> TokenPair:
         return refresh_via(self._request, refresh_token)
 
@@ -288,8 +404,18 @@ class HttpTransport:
     def pull(self, token: str, after: int, limit: int) -> PullPage:
         return pull_via(self._request, token, after, limit)
 
-    def register(self, email: str, password: str, username: str | None, display_name: str | None) -> dict:
-        return register_via(self._request, email, password, username, display_name)
+    def request_registration(self, email: str) -> dict:
+        return request_registration_via(self._request, email)
+
+    def confirm_registration(self, code: str, password: str, username: str | None,
+                             display_name: str | None) -> dict:
+        return confirm_registration_via(self._request, code, password, username, display_name)
+
+    def request_email_verification(self, token: str) -> dict:
+        return request_email_verification_via(self._request, token)
+
+    def confirm_email_verification(self, token: str, code: str) -> dict:
+        return confirm_email_verification_via(self._request, token, code)
 
     def profile(self, token: str) -> dict:
         return profile_via(self._request, token)

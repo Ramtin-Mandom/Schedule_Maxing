@@ -77,7 +77,9 @@ def test_guest_work_survives_a_restart_and_a_new_account_adopts_and_uploads_it(m
 
     desktop.connect()
     assert desktop.state().state == "signed_out" and desktop.state().headline.startswith("Guest mode")
-    created = desktop.ok(desktop.account.create_account("new@example.com", PASSWORD, display_name="New"))
+    desktop.ok(desktop.account.request_registration("new@example.com"))
+    created = desktop.ok(desktop.account.create_account(server.mail.token("new@example.com"), PASSWORD, PASSWORD,
+                                                        display_name="New"))
     desktop.services.switch_workspace()  # what the app does after the account changed
     assert created.adopted >= 4  # both tasks, their placements (and the schedule's own records)
 
@@ -113,9 +115,12 @@ def test_a_failed_registration_leaves_the_guest_workspace_exactly_as_it_was(make
     desktop.connect()
     before = records(desktop)
 
-    taken = desktop.account.create_account("alice@example.com", PASSWORD)  # the email already has an account
-    assert not taken.ok and "already exists" in taken.error
-    invalid = desktop.account.create_account("not-an-email", "short")
+    # The email already has an account: asking mails its owner a notice and no code, so nothing can be created.
+    desktop.ok(desktop.account.request_registration("alice@example.com"))
+    assert "#token=" not in alice_server.mail.to("alice@example.com")[-1].text
+    taken = desktop.account.create_account("a-guessed-code", PASSWORD, PASSWORD)
+    assert not taken.ok and "invalid, already used or expired" in taken.error
+    invalid = desktop.account.create_account("", "short", "short")
     assert not invalid.ok
     assert records(desktop) == before and desktop.state().state == "signed_out"
     assert desktop.names() == {"Essay", "Notes"}
@@ -127,7 +132,8 @@ def test_an_account_created_without_a_completed_sign_in_keeps_the_guest_data_for
     desktop.connect()
     before = records(desktop)
 
-    result = desktop.account.create_account("late@example.com", PASSWORD)
+    desktop.ok(desktop.account.request_registration("late@example.com"))
+    result = desktop.account.create_account(server.mail.token("late@example.com"), PASSWORD, PASSWORD)
     assert not result.ok and isinstance(result.cause, AccountCreationError) and result.cause.stage == "sign_in"
     assert "unchanged" in result.error
     assert records(desktop) == before and desktop.state().state == "signed_out"  # nothing assigned, nobody signed in
@@ -156,7 +162,8 @@ def test_a_failed_adoption_assigns_nothing_and_stays_in_the_guest_workspace(make
             raise RuntimeError("disk full (injected)")
 
     monkeypatch.setattr(engine, "associate_local_data", interrupted)
-    result = desktop.account.create_account("half@example.com", PASSWORD)
+    desktop.ok(desktop.account.request_registration("half@example.com"))
+    result = desktop.account.create_account(server.mail.token("half@example.com"), PASSWORD, PASSWORD)
     assert not result.ok and isinstance(result.cause, AccountCreationError) and result.cause.stage == "adoption"
     assert records(desktop) == before  # rolled back: not one record was assigned
     assert desktop.state().state == "signed_out" and desktop.names() == {"Essay", "Notes"}  # still visible as guest

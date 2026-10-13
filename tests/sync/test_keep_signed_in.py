@@ -79,7 +79,8 @@ def test_keep_me_signed_in_survives_a_restart_and_keeps_no_password(make_device,
     assert not sync.signed_in
     assert sync.sync_now().status == "ok" and sync.signed_in and sync.account.email == EMAIL
     rotated = vault.secrets[account.account_key]
-    assert rotated != kept and refresh_status(alice_server, kept) == 401  # single use: the old one is spent
+    # Single use: the old one is spent (409 within the grace for a client racing itself; it yields no credential).
+    assert rotated != kept and refresh_status(alice_server, kept) == 409
 
 
 def test_without_the_option_nothing_is_kept(make_device, alice_server) -> None:

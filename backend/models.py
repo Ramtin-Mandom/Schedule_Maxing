@@ -126,9 +126,16 @@ class User(Base):
     #: Raised by every credential change (a password reset): access tokens and browser sessions carry the epoch
     #: they were issued under, and one from an older epoch is refused (backend/recovery.py). Not the profile version.
     credential_epoch: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    #: When the owner of the mailbox proved it is theirs (backend/verification.py). NULL: never proved -- an
+    #: account from before verification existed, or one created directly in the database (direct mode).
+    email_verified_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    @property
+    def email_verified(self) -> bool:
+        return self.email_verified_at is not None
 
     __table_args__ = (
         CheckConstraint("length(email) > 0", name="ck_users_email_nonempty"),
@@ -1341,6 +1348,8 @@ class BrowserSession(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    #: The client's User-Agent, shortened: shown to the owner in the session list. Not used for authentication.
+    client_label: Mapped[str | None] = mapped_column(String(120), nullable=True)
     #: The user's credential epoch when the session started; a session from an older epoch is refused.
     credential_epoch: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
 
@@ -1384,6 +1393,8 @@ class NativeSession(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    #: The client's User-Agent, shortened: shown to the owner in the session list. Not used for authentication.
+    client_label: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
     __table_args__ = (
         Index("ix_native_sessions_user", "user_id"),
@@ -1402,6 +1413,147 @@ class RefreshCredential(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     consumed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     __table_args__ = (Index("ix_refresh_credentials_session", "session_id"),)
+
+
+class PendingRegistration(Base):
+    """
+    An email address someone asked to register, waiting for its owner to
+    confirm it (backend/verification.py). It holds no credentials -- the
+    password is chosen at confirmation, by whoever received the email -- and
+    reserves nothing: it expires, and anyone may ask again.
+    """
+
+    __tablename__ = "pending_registrations"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+
+    __table_args__ = (Index("ix_pending_registrations_expiry", "expires_at"),)
+
+
+class EmailVerificationToken(Base):
+    """
+    One emailed proof-of-mailbox credential. Only the SHA-256 digest of
+    "<purpose>:<token>" is stored, so a token of one purpose is unknown under
+    another. Bound to one pending registration or one account, and to the
+    address it was sent to; consumed or revoked at most once.
+    """
+
+    __tablename__ = "email_verification_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    purpose: Mapped[str] = mapped_column(String(24), nullable=False)
+    pending_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("pending_registrations.id", ondelete="CASCADE"), nullable=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"), nullable=True)
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("(pending_id IS NULL) <> (user_id IS NULL)", name="ck_email_verification_tokens_subject"),
+        Index("ix_email_verification_tokens_pending", "pending_id"),
+        Index("ix_email_verification_tokens_user", "user_id"),
+    )
+
+
+class EmailOutbox(Base):
+    """
+    A transactional email waiting to be sent, or its delivery record
+    (backend/outbox.py). The row names what to send (`kind`, `subject_id`),
+    never a link or token: those are made when the message is sent.
+    `accepted_at` is the provider taking the message; `delivered_at` /
+    `bounced_at` / `complained_at` come only from the provider's signed
+    webhook (backend/email_webhooks.py).
+    """
+
+    __tablename__ = "email_outbox"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    to_email: Mapped[str] = mapped_column(String(320), nullable=False)
+    subject_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    #: At most one row per key, ever (e.g. "welcome:<user id>"): the duplicate protection that survives restarts.
+    dedupe_key: Mapped[str | None] = mapped_column(String(160), nullable=True, unique=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    next_attempt_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    locked_until: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    provider_message_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    accepted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    bounced_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    complained_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    #: The class of the last failure only -- never a provider message, address or credential.
+    last_error: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("status IN ('pending', 'sending', 'sent', 'dead')", name="ck_email_outbox_status"),
+        Index("ix_email_outbox_due", "status", "next_attempt_at"),
+        Index("ix_email_outbox_provider_message", "provider_message_id"),
+    )
+
+
+class EmailWebhookEvent(Base):
+    """The id of a provider webhook event already processed: a replayed event changes nothing."""
+
+    __tablename__ = "email_webhook_events"
+
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    received_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+
+
+class MfaTotp(Base):
+    """
+    An account's TOTP second factor (backend/mfa.py). The shared secret is
+    stored only encrypted under MFA_ENCRYPTION_KEY. It counts once
+    `confirmed_at` is set (the owner proved the authenticator works);
+    `last_used_step` is the newest 30-second step a code was accepted for, so
+    a code -- or an older one -- is never accepted twice.
+    """
+
+    __tablename__ = "mfa_totp"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), primary_key=True)
+    secret_encrypted: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    last_used_step: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
+class MfaRecoveryCode(Base):
+    """A single-use recovery code of an account's second factor; only its SHA-256 digest is stored."""
+
+    __tablename__ = "mfa_recovery_codes"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False)
+    code_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    __table_args__ = (Index("ix_mfa_recovery_codes_user", "user_id"),)
+
+
+class SignInFingerprint(Base):
+    """
+    A place an account has signed in from, as a digest of (account, network,
+    client) -- neither the address nor the user agent is stored. A sign-in
+    whose digest is new is "newly recognized" and notified once
+    (backend/account_security.py).
+    """
+
+    __tablename__ = "sign_in_fingerprints"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), primary_key=True)
+    first_seen_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
 
 
 class RateLimitBucket(Base):

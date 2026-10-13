@@ -29,8 +29,8 @@ from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from backend import browser_sessions, models, snapshots
-from backend.accounts import AccountExistsError, AccountIdentity, AccountService, InvalidCredentialsError
+from backend import account_security, browser_sessions, models, security_events, snapshots
+from backend.accounts import AccountIdentity, AccountService, InvalidCredentialsError
 from backend.auth_schemas import RefreshIn, TokenPairOut
 from backend.native_sessions import NativeSessionService, require_live_session
 from backend.database import session_scope
@@ -42,15 +42,16 @@ from backend.days import DayOutcomeIn, DayOutcomeOut, day_summaries, set_day_out
 from backend.task_data_reset import ResetTaskDataIn, ResetTaskDataOut, reset_task_data
 from backend.outcomes import OutcomeIn, OutcomeOut, set_placement_outcome
 from backend.resources import CRUD_RESOURCES, ResourceSpec
+from backend.mfa import MfaService
 from backend.security import (
     MAX_PASSWORD_LENGTH,
-    MIN_PASSWORD_LENGTH,
+    MFA_TOKEN_TTL_SECONDS,
     TokenError,
-    normalize_identifier,
+    issue_mfa_token,
     verify_access_identity,
 )
-from backend.protection import client_address
-from backend.rate_limit import identifier_subject
+from backend.login_guard import LoginGuard
+from backend.protection import client_address, throttle_address
 from backend.recovery import credential_epoch
 from backend.settings import BackendSettings
 
@@ -82,9 +83,13 @@ def throttle(request: Request, scope: str, subject: str | None = None) -> None:
     limiter = request.app.state.rate_limiter
     if limiter is None:
         return
-    if subject is None:
-        subject = "ip:" + client_address(request, request.app.state.settings.trusted_proxies)
-    limiter.hit(scope, subject)
+    limiter.hit(scope, subject if subject is not None else address_subject(request))
+
+
+def address_subject(request: Request) -> str:
+    """The limiter subject of this request's client address (backend/protection.py decides the address)."""
+    settings = request.app.state.settings
+    return "ip:" + throttle_address(client_address(request, settings.trusted_proxies, settings.client_ip_header))
 
 
 def current_user_id(
@@ -96,6 +101,7 @@ def current_user_id(
         user_id = browser_sessions.authenticate(request, session, request.app.state.clock())
         if session.get(models.User, user_id) is None:
             raise unauthenticated("You are signed out. Sign in again.")
+        require_verified_email(request, session, user_id)
         return user_id
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise unauthenticated()
@@ -109,7 +115,24 @@ def current_user_id(
         raise unauthenticated("The access token is invalid or has expired.")
     if family_id is not None:
         require_live_session(session, family_id, user_id, epoch, request.app.state.clock())
+        request.state.session_ref = ("app", family_id)
+    require_verified_email(request, session, user_id)
     return user_id
+
+
+def require_verified_email(request: Request, session: Session, user_id: uuid.UUID) -> None:
+    """
+    With REQUIRE_VERIFIED_EMAIL, an account whose address was never verified reaches only its own account
+    routes (/me and /auth/...: enough to verify, sign out or reset) -- no records.
+    """
+    if not request.app.state.settings.require_verified_email:
+        return
+    path = request.url.path
+    if path == "/me" or path.startswith("/auth/"):
+        return
+    verified_at = session.scalar(select(models.User.email_verified_at).where(models.User.id == user_id))
+    if verified_at is None:
+        raise ApiError(403, "email_unverified", "Confirm your email address to use your records.")
 
 
 # -----------------------------------------------------------------------------
@@ -133,12 +156,12 @@ def readiness(request: Request, response: Response) -> dict:
     except Exception:  # noqa: BLE001 - any database failure means "not ready"; details are not exposed
         response.status_code = 503
         return {"status": "unavailable", "database": "unreachable"}
-    head = head_revision()
-    if current != head:
+    # Public, so minimal: whether it is ready and which stage is not -- never the schema revision or any
+    # other detail of the installation (`python -m backend.migrate check` reports those to the operator).
+    if current != head_revision():
         response.status_code = 503
-        return {"status": "unavailable", "database": "reachable", "migrations": "pending",
-                "current_revision": current, "head_revision": head}
-    return {"status": "ready", "database": "reachable", "migrations": "current", "revision": current}
+        return {"status": "unavailable", "database": "reachable", "migrations": "pending"}
+    return {"status": "ready", "database": "reachable", "migrations": "current"}
 
 
 # -----------------------------------------------------------------------------
@@ -146,22 +169,6 @@ def readiness(request: Request, response: Response) -> dict:
 # -----------------------------------------------------------------------------
 
 auth = APIRouter(tags=["accounts"])
-
-
-class RegisterIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    email: str = Field(min_length=3, max_length=320)
-    password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH)
-    username: str | None = Field(default=None, min_length=3, max_length=64, pattern=r"^[\w.\-]+$")
-    display_name: str | None = Field(default=None, max_length=200)
-
-    @model_validator(mode="after")
-    def _email_shape(self):
-        email = normalize_identifier(self.email)
-        local, _, domain = email.partition("@")
-        if not local or "." not in domain or " " in email:
-            raise ValueError("email must be an email address")
-        return self
 
 
 class LoginIn(BaseModel):
@@ -185,6 +192,8 @@ class UserOut(BaseModel):
     version: int
     created_at: datetime
     updated_at: datetime
+    #: False: the address was never proved to be the account owner's (docs/email.md, "Existing accounts").
+    email_verified: bool = False
 
 
 class ProfileUpdate(BaseModel):
@@ -197,31 +206,31 @@ def _user_out(user: models.User | AccountIdentity) -> dict:
     return UserOut.model_validate(user, from_attributes=True).model_dump(mode="json")
 
 
-@auth.post("/auth/register", status_code=201, response_model=UserOut, summary="Create an account.")
-def register(payload: RegisterIn, request: Request, session: Session = Depends(get_session),
-             now: datetime = Depends(server_now)) -> dict:
-    throttle(request, "register_ip")
-    try:
-        identity = AccountService(session, lambda: now).register(
-            email=payload.email, password=payload.password, username=payload.username,
-            display_name=payload.display_name,
-        )
-    except AccountExistsError as error:
-        raise ApiError(409, "account_exists", str(error)) from None
-    return _user_out(identity)
-
-
 def _check_credentials(payload: LoginIn, session: Session, request: Request) -> AccountIdentity:
-    throttle(request, "login_ip")
-    throttle(request, "login_identifier", identifier_subject(payload.email or payload.username))
+    throttle(request, "login_ip")  # the cheap request limit, before any lookup or hashing
+    service = AccountService(session)
+    account = service.account_subject(email=payload.email, username=payload.username)
+    session.rollback()  # the lookup was a read; the limiter works in transactions of its own
+    guard = LoginGuard(request.app.state.rate_limiter, address_subject(request), account)
+    guard.before()  # failures already used up: refused without verifying a password
     try:
-        return AccountService(session).authenticate(email=payload.email, username=payload.username,
-                                                    password=payload.password)
+        return service.authenticate(email=payload.email, username=payload.username, password=payload.password)
     except InvalidCredentialsError as error:
+        session.rollback()
+        security_events.record("sign_in_failed")
+        guard.failed()
         raise unauthenticated(str(error)) from None
 
 
-@auth.post("/auth/login", response_model=TokenPairOut, summary="Create a native session and rotating token pair.")
+class MfaChallengeOut(BaseModel):
+    #: The password was right and the account has two-step sign-in: finish with POST /auth/mfa/verify.
+    mfa_required: bool = True
+    mfa_token: str
+    expires_in: int
+
+
+@auth.post("/auth/login", response_model=TokenPairOut | MfaChallengeOut,
+           summary="Create a native session and rotating token pair (or ask for the second step).")
 def login(
     payload: LoginIn,
     request: Request,
@@ -229,7 +238,49 @@ def login(
     now: datetime = Depends(server_now),
 ) -> dict:
     user = _check_credentials(payload, session, request)
-    return NativeSessionService(session, request.app.state.settings, now).start(user.id, user.credential_epoch)
+    return mfa_challenge(request, session, user, now) or start_app_session(request, session, user, now)
+
+
+def mfa_service(request: Request, session: Session, now: datetime) -> MfaService:
+    settings = request.app.state.settings
+    return MfaService(session, lambda: now, request.app.state.mfa_cipher, settings.mfa_issuer)
+
+
+def mfa_challenge(request: Request, session: Session, user: AccountIdentity, now: datetime) -> dict | None:
+    """
+    For an account with two-step sign-in: the answer to a correct password -- a short-lived token good only for
+    the second step. No session, cookie or access token exists until that step succeeds.
+    """
+    enabled = mfa_service(request, session, now).enabled(user.id)
+    session.rollback()
+    if not enabled:
+        return None
+    return {"mfa_required": True, "expires_in": MFA_TOKEN_TTL_SECONDS,
+            "mfa_token": issue_mfa_token(user.id, request.app.state.settings, now, user.credential_epoch)}
+
+
+def signed_in(request: Request, session: Session, user: AccountIdentity, now: datetime) -> str | None:
+    """A sign-in completed (every step): remember where from, notify a newly recognized place; the client label."""
+    settings = request.app.state.settings
+    network = throttle_address(client_address(request, settings.trusted_proxies, settings.client_ip_header))
+    user_agent = request.headers.get("user-agent")
+    account_security.note_sign_in(session, user.id, user.email, network, user_agent, now)
+    return account_security.client_label(user_agent)
+
+
+def start_app_session(request: Request, session: Session, user: AccountIdentity, now: datetime) -> dict:
+    label = signed_in(request, session, user, now)
+    return NativeSessionService(session, request.app.state.settings, now).start(user.id, user.credential_epoch, label)
+
+
+def start_browser_session(request: Request, response: Response, session: Session, user: AccountIdentity,
+                          now: datetime) -> dict:
+    settings = request.app.state.settings
+    label = signed_in(request, session, user, now)
+    token, row = browser_sessions.start_session(session, user.id, settings, now, user.credential_epoch, label)
+    browser_sessions.set_cookie(response, token, row, settings, now)
+    return {"authenticated": True, "user": _user_out(user), "expires_at": row.expires_at,
+            "csrf_token": browser_sessions.csrf_token_for(token, settings)}
 
 
 @auth.post("/auth/refresh", response_model=TokenPairOut,
@@ -257,7 +308,13 @@ class BrowserSessionOut(BaseModel):
     expires_at: datetime | None = None
 
 
-@auth.post("/auth/browser/login", response_model=BrowserSessionOut,
+class BrowserLoginOut(BrowserSessionOut):
+    #: Two-step sign-in: finish with POST /auth/browser/mfa (no cookie was set yet).
+    mfa_required: bool = False
+    mfa_token: str | None = None
+
+
+@auth.post("/auth/browser/login", response_model=BrowserLoginOut,
            summary="Sign a browser in: sets the HttpOnly session cookie and returns the CSRF token.")
 def browser_login(
     payload: LoginIn,
@@ -266,12 +323,11 @@ def browser_login(
     session: Session = Depends(get_session),
     now: datetime = Depends(server_now),
 ) -> dict:
-    settings = request.app.state.settings
     user = _check_credentials(payload, session, request)
-    token, row = browser_sessions.start_session(session, user.id, settings, now, user.credential_epoch)
-    browser_sessions.set_cookie(response, token, row, settings, now)
-    return {"authenticated": True, "user": _user_out(user), "expires_at": row.expires_at,
-            "csrf_token": browser_sessions.csrf_token_for(token, settings)}
+    challenge = mfa_challenge(request, session, user, now)
+    if challenge is not None:
+        return {"authenticated": False, **challenge}
+    return start_browser_session(request, response, session, user, now)
 
 
 @auth.get("/auth/browser/session", response_model=BrowserSessionOut,

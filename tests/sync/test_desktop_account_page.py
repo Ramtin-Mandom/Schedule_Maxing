@@ -112,24 +112,43 @@ def test_connect_register_sign_in_associate_sync_and_sign_out(tmp_path: Path, di
         assert page.view.state == "signed_out" and "Guest mode" in app.shell.status_bar.label.cget("text")
 
         page.set_mode("register")
+        assert not page.password_field.winfo_manager()  # the password is chosen after the address is confirmed
         page.email_field.variable.set("alice")
-        page.password_field.variable.set("short")
         page.submit_button.invoke()
         pump(app, lambda: "account" not in page.busy)
-        assert page.email_field.error and page.password_field.error  # shown next to the fields
-        assert page.password_field.get() == ""  # never kept
+        assert page.email_field.error  # shown next to the field
         assert "keeps everything you have done on this device" in page.mode_note.cget("text")
 
-        # Creating the account signs in and keeps the same workspace: the guest plan becomes the account's.
+        # Step 1: a verification email; nothing is created and the page shows what is pending.
         old_day = app.pages["day"]
         page.email_field.variable.set("alice@example.com")
-        page.password_field.variable.set(PASSWORD)
         page.submit_button.invoke()
         page.submit_account()  # a double submission sends once
         pump(app, lambda: "account" not in page.busy)
+        assert len(server.mail.to("alice@example.com")) == 1 and backend.logins == 0
+        assert "Verification pending for alice@example.com" in page.account_notice.text
+        assert page.pending_button.winfo_manager()
+        dialog = page.verification_dialog
+        dialog.resend()  # an earlier code stays valid
+        pump(app, lambda: dialog.resend_button.cget("state") == "normal")
+        first_code = server.mail.sent[0].text.split("#token=", 1)[1].split()[0]
+        assert len(server.mail.to("alice@example.com")) == 2
+
+        # Step 2: the code and the password. A mismatch is shown in the dialog and creates nothing.
+        dialog.code_field.variable.set(first_code)
+        dialog.password_field.variable.set(PASSWORD)
+        dialog.confirm_field.variable.set("something else entirely")
+        dialog.confirm()
+        pump(app, lambda: dialog.primary_button.cget("state") == "normal")
+        assert dialog.confirm_field.error and dialog.password_field.get() == "" and backend.logins == 0  # never kept
+        # Creating the account signs in and keeps the same workspace: the guest plan becomes the account's.
+        dialog.password_field.variable.set(PASSWORD)
+        dialog.confirm_field.variable.set(PASSWORD)
+        dialog.confirm()
+        pump(app, lambda: page.view is not None and page.view.state == "signed_in")
         pump(app, lambda: "preview" not in page.busy and "conflicts" not in page.busy)
         assert backend.logins == 1
-        assert "Account created and signed in" in page.account_notice.text
+        assert "account created and signed in" in page.account_notice.text
         assert "1 record(s) already on this device are now part of this account" in page.account_notice.text
         assert page.signed_in_label.cget("text") == "Signed in as a***@e***"
         pump(app, lambda: "profile" not in page.busy)
@@ -147,6 +166,17 @@ def test_connect_register_sign_in_associate_sync_and_sign_out(tmp_path: Path, di
         page.refresh()
         assert "Changes waiting to be sent: 0" in page.sync_lines.cget("text")
         assert "last sync just now" in app.shell.status_bar.label.cget("text")
+
+        # Account security: the dialog loads the second-factor state and the sessions without blocking the page.
+        page.security_button.invoke()
+        security = page.security_dialog
+        pump(app, lambda: "This device" in security.sessions_label.cget("text"))
+        assert security.mfa_label.cget("text").startswith("Off.")
+        security.new_field.variable.set("short")
+        security.change_password()
+        pump(app, lambda: security.password_button.cget("state") == "normal")
+        assert security.current_field.error and security.new_field.error and security.new_field.get() == ""
+        security.close()
 
         page.sign_out_button.invoke()
         pump(app, lambda: "account" not in page.busy)

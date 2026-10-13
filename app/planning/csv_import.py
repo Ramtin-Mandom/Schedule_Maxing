@@ -118,7 +118,43 @@ class ParsedImport:
     lines_by_task_id: dict[uuid.UUID, int] = field(default_factory=dict)
 
 
+#: Bounds of one import, checked before any row is interpreted and long before anything is written.
+MAX_IMPORT_BYTES = 5 * 1024 * 1024
+MAX_IMPORT_ROWS = 20_000
+MAX_FIELD_CHARS = 10_000
+
+
+def _too_large(message: str) -> "CsvImportError":
+    return CsvImportError([ImportIssue(None, message)])
+
+
+def bounded_reader(text: str) -> csv.DictReader:
+    """
+    A DictReader over `text`, after refusing input that is too large to be a planning file: more than
+    MAX_IMPORT_BYTES, more than MAX_IMPORT_ROWS rows, or a cell over MAX_FIELD_CHARS. Nothing has been parsed
+    into records at that point and nothing is ever written from a refused file.
+    """
+    if len(text.encode("utf-8", "replace")) > MAX_IMPORT_BYTES:
+        raise _too_large(f"the file is larger than {MAX_IMPORT_BYTES // (1024 * 1024)} MiB")
+    rows = 0
+    try:
+        for rows, row in enumerate(csv.reader(io.StringIO(text))):
+            if rows > MAX_IMPORT_ROWS:
+                raise _too_large(f"the file has more than {MAX_IMPORT_ROWS} rows")
+            if any(len(cell) > MAX_FIELD_CHARS for cell in row):
+                raise CsvImportError([ImportIssue(rows + 1, f"a cell is longer than {MAX_FIELD_CHARS} characters")])
+    except csv.Error as error:
+        raise CsvImportError([ImportIssue(rows + 2, f"the file is not readable as CSV ({error})")]) from None
+    return csv.DictReader(io.StringIO(text))
+
+
 def read_csv_text(path: str | Path) -> str:
+    try:
+        size = Path(path).stat().st_size
+    except OSError:
+        size = 0  # reading it below reports the real problem
+    if size > MAX_IMPORT_BYTES:
+        raise _too_large(f"the file is larger than {MAX_IMPORT_BYTES // (1024 * 1024)} MiB")
     """Read a CSV file as text (a UTF-8 byte-order mark, as written by spreadsheet apps, is accepted)."""
     return Path(path).read_text(encoding="utf-8-sig")
 
@@ -130,7 +166,7 @@ def parse_legacy_csv(text: str, *, anchor_date: date_, timezone: str, source: st
     except ValueError as error:
         raise CsvImportError([ImportIssue(None, str(error))]) from error
 
-    reader = csv.DictReader(io.StringIO(text))
+    reader = bounded_reader(text)
     header = [name.strip() for name in (reader.fieldnames or [])]
     missing_columns = [column for column in REQUIRED_COLUMNS if column not in header]
     if missing_columns:

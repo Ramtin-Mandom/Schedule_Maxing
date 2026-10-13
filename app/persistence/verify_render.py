@@ -407,7 +407,9 @@ def _password_scope(backend, account, password: str, capture: _Capture, seeds: l
         raise VerificationError("The stored credential is not a valid Argon2id hash of the password.")
     credential_columns = {pair for pair in columns if any(word in pair[1] for word in ("password", "secret", "token"))}
     if credential_columns - {("users", "password_hash"), ("browser_sessions", "token_hash"),
-                             ("password_recovery_tokens", "token_hash"), ("refresh_credentials", "token_hash")}:
+                             ("password_recovery_tokens", "token_hash"), ("refresh_credentials", "token_hash"),
+                             ("email_verification_tokens", "token_hash"),  # a digest, like the others
+                             ("mfa_totp", "secret_encrypted")}:  # encrypted under a key the database never holds
         raise VerificationError("The schema has a credential column that is not a hash.")
     texts = [repr(record) for record in written] + [repr(record.model_dump()) for seed in seeds
                                                      for record in (*seed.tasks, *seed.fixed_blocks)]

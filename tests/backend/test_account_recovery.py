@@ -33,10 +33,16 @@ class FakeDelivery:
         self.sent: list[tuple[str, str]] = []
         self.fail = False
 
-    def send(self, delivery, link: str) -> None:
+    name = "fake"
+
+    def deliver(self, message) -> str:
+        """The outbox's mail adapter: keeps (recipient, emailed link) of every recovery email."""
         if self.fail:
             raise TimeoutError("smtp timed out (injected)")
-        self.sent.append((delivery.email, link))
+        link = next((word for word in message.text.split() if "#token=" in word), None)
+        if link is not None:
+            self.sent.append((message.to, link))
+        return f"fake-{len(self.sent)}"
 
     def token(self) -> str:
         return self.sent[-1][1].split("#token=", 1)[1]
@@ -88,19 +94,20 @@ def test_request_delivery_reset_and_a_new_login(recovery_client, delivery) -> No
     assert login_headers(recovery_client, "alice@example.com", NEW_PASSWORD)
 
 
-def test_tokens_are_single_use_bound_expiring_and_replaced(recovery_client, delivery, clock) -> None:
+def test_tokens_are_single_use_bound_expiring_and_survive_a_new_request(recovery_client, delivery, clock) -> None:
     register(recovery_client, "alice@example.com")
     ask(recovery_client, "alice@example.com")
     first = delivery.token()
-    ask(recovery_client, "alice@example.com")  # a new request replaces the earlier link
+    ask(recovery_client, "alice@example.com")  # a new request (anybody's) does not cancel the earlier link
     second = delivery.token()
-    assert reset(recovery_client, first).json()["error"]["code"] == "invalid_recovery_token"
-    assert reset(recovery_client, "not-a-token").status_code == 400
+    assert first != second
+    assert reset(recovery_client, "not-a-token").json()["error"]["code"] == "invalid_recovery_token"
     assert reset(recovery_client, "x" * 500).status_code == 422  # malformed: refused before any lookup
     assert reset(recovery_client, second, "short").status_code == 422  # the registration password rule
 
-    assert reset(recovery_client, second).status_code == 200
-    assert reset(recovery_client, second, "another new passphrase").status_code == 400  # used once only
+    assert reset(recovery_client, first).status_code == 200  # the earlier link still works
+    assert reset(recovery_client, first, "another new passphrase").status_code == 400  # used once only
+    assert reset(recovery_client, second, "another new passphrase").status_code == 400  # a reset ends the others
 
     ask(recovery_client, "alice@example.com")
     clock.now += timedelta(minutes=31)  # past RECOVERY_TOKEN_TTL_MINUTES (30)
@@ -169,7 +176,7 @@ def test_a_failed_delivery_is_invisible_and_leaves_recovery_working(recovery_cli
     with caplog.at_level(logging.WARNING):
         answer = ask(recovery_client, "alice@example.com")
     assert answer.status_code == 202 and answer.json() == ask(recovery_client, "nobody@example.com").json()
-    assert "delivery failed (TimeoutError)" in caplog.text
+    assert "was not accepted (TimeoutError)" in caplog.text
     assert "alice@example.com" not in caplog.text and "#token=" not in caplog.text
     delivery.fail = False
     ask(recovery_client, "alice@example.com")  # a retry is a new request
@@ -224,8 +231,9 @@ def test_rate_limits_are_shared_by_instances_and_ignore_forged_proxy_headers(eng
     statuses = [(first if index % 2 else second).post("/auth/login", json={
         "email": "nobody@example.com", "password": "wrong password"},
         headers={"X-Forwarded-For": f"203.0.113.{index}"}).status_code for index in range(12)]
-    # Not a trusted proxy: the forged addresses are ignored, and the two instances count together.
-    assert statuses[:10] == [401] * 10 and statuses[10:] == [429, 429]
+    # Not a trusted proxy: the forged addresses are ignored, and the two instances count together
+    # (five failures of one address against one account, backend/login_guard.py).
+    assert statuses[:5] == [401] * 5 and statuses[5:] == [429] * 7
     limited = first.post("/auth/login", json={"email": "nobody@example.com", "password": "x"})
     assert int(limited.headers["retry-after"]) > 0 and limited.json()["error"]["code"] == "rate_limited"
     clock.now += timedelta(minutes=16)

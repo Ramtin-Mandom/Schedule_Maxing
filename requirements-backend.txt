@@ -9,7 +9,10 @@ starlette
 uvicorn>=0.30,<1
 # The database packages shared with the direct desktop mode (SQLAlchemy, Alembic, psycopg, argon2-cffi).
 -r requirements-database.txt
-PyJWT>=2.9,<3
+PyJWT>=2.15,<3
+# Two-step sign-in (backend/mfa.py): TOTP codes, and encryption of their secrets at rest.
+pyotp>=2.9,<3
+cryptography>=43
 pydantic>=2.10.0
 # Server-side preference resolution (backend/preferences.py): the YAML template
 # layer is read with PyYAML, and IANA time zones need tzdata where the host has

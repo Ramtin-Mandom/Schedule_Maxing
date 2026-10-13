@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
+from app.csv_safety import safe_row
 from app.productivity.reporting import ProductivityReport
 from app.productivity.stats import SegmentStats
 
@@ -59,7 +60,7 @@ def export_report_to_csv(report: ProductivityReport, path: str | Path) -> None:
     with Path(path).open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=["grouping", "key", *_SEGMENT_FIELDS])
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(safe_row(row) for row in rows)  # opened in spreadsheets: no cell is a formula
 
 
 def _segment_row(grouping: str, key: str, segment: SegmentStats) -> dict[str, object]:
