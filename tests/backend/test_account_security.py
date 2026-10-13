@@ -77,10 +77,11 @@ def enable_mfa(client, headers: dict, clock) -> tuple[pyotp.TOTP, list[str]]:
 # -- the password policy ------------------------------------------------------------------------
 
 
-WEAK = ["short", "fourteen chars", "a" * 20, "abcabcabcabcabcabc", "12121212121212121212", "abcdefghijklmnopqrstuvwxyz",
+WEAK = ["short", "seven77", "password123", "Qwerty123", "12345678", "iloveyou",
+        "a" * 20, "abcabcabcabcabcabc", "12121212121212121212", "abcdefghijklmnopqrstuvwxyz",
         "0123456789012345", "qwertyuiopasdfghjkl", "PasswordPassword", "correct horse battery staple",
         "x" * 1025]
-STRONG = ["correct horse battery", "plum-otter visits 7 quiet lakes", "пароль из нескольких слов",
+STRONG = ["correct horse battery", "plum7otter", "plum-otter visits 7 quiet lakes", "пароль из нескольких слов",
           "🦊🦊 foxes jump over 9 lazy dogs",
           "  leading and trailing spaces  ", "Tr0ub4dor&3 is not required here", "y" * 5 + "Zq8#" * 4]
 
@@ -141,7 +142,7 @@ def test_one_policy_for_signup_reset_and_change_and_none_for_signing_in(api, mai
         session.commit()
     old = login(api, "old@example.com", "old-pass")
     assert old.status_code == 200  # existing users keep signing in
-    for weak in ("fourteen chars", "PasswordPassword", "a" * 20):
+    for weak in ("seven77", "PasswordPassword", "a" * 20):
         token = mint_verification_token(api.app.state.session_factory, "new@example.com", clock)
         signup = api.post("/auth/verify/confirm", json={"token": token, "password": weak})
         change = api.post("/auth/password/change", headers=bearer(old.json()),

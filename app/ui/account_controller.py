@@ -57,7 +57,7 @@ from app.ui.background import ControllerResult
 
 #: The backend's own rules (backend/security.py), checked here too so a typo never needs a round trip.
 #: For a new password (signup, reset, change); signing in accepts whatever the account has.
-MIN_PASSWORD_LENGTH = 15
+MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 1024
 MAX_DISPLAY_NAME_LENGTH = 200
 DEFAULT_PLAN = "Normal"

@@ -102,7 +102,7 @@ def make_desktop(tmp_path: Path):
 def test_credential_validation_happens_before_anything_is_sent() -> None:
     assert validate_credentials("", "")["email"] == "Enter your email address."
     assert "valid email" in validate_credentials("alice", "secret123")["email"]
-    assert validate_credentials("a@b.co", "short", registering=True) == {"password": "Use at least 15 characters."}
+    assert validate_credentials("a@b.co", "short", registering=True) == {"password": "Use at least 8 characters."}
     assert validate_credentials("a@b.co", "short") == {}  # signing in: the server judges an existing password
     assert "display_name" in validate_credentials("a@b.co", "long enough", registering=True, display_name="x" * 201)
 
@@ -396,7 +396,7 @@ def test_two_step_sign_in_password_change_and_sign_out_everywhere(make_desktop, 
     assert len(codes) == 10 and desktop.ok(account.mfa_status())["enabled"] is True
 
     # Changing the password: the same rule as everywhere, then every session ends and this device signs in again.
-    weak = account.change_password(PASSWORD, "too short", "too short")
+    weak = account.change_password(PASSWORD, "short", "short")
     assert not weak.ok and isinstance(weak.cause, InvalidInput) and set(weak.cause.errors) == {"password"}
     assert account.change_password("not the password", new_password, new_password).error == (
         "The current password is incorrect.")
