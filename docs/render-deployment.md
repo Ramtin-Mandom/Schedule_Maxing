@@ -174,6 +174,9 @@ guide.
    - Leave the optional variables at their defaults unless you need to
      change them.
 
+   - Client addresses: see [Client addresses behind Render's proxies](#client-addresses-behind-renders-proxies)
+     below. Until `TRUSTED_PROXIES` is set, per-address limits count Render's proxy, not each client.
+
 4. **Deploy.** Watch the logs: the build, then
    `Database is at revision …` from the migration, then Uvicorn listening on
    `0.0.0.0:$PORT`.
@@ -230,3 +233,57 @@ TEST_DATABASE_URL=postgresql://sm_test@127.0.0.1:55432/schedule_maxing_test pyth
 TEST_DATABASE_URL=postgresql://sm_test@127.0.0.1:55432/schedule_maxing_test BACKEND_TESTS_ON_POSTGRES=1 python -m pytest tests/backend tests/sync
 docker compose -f docker-compose.postgres-test.yml down -v
 ```
+
+## Client addresses behind Render's proxies
+
+Per-address rate limits (docs/backend.md, "Protections") need each client's
+address. On Render a request reaches the service through Cloudflare and then
+Render's own load balancer, so the socket peer the application sees is a
+Render proxy, never the client.
+
+What is known, and from where:
+
+- Render's articles say the application sees the proxy's address and that the
+  client is in forwarding headers; a Render community report says the proxy
+  *appends* to an incoming `X-Forwarded-For` instead of replacing it, so its
+  left-most entry is whatever the client sent. The application therefore never
+  uses the left-most entry.
+- A Render article says Cloudflare sets `CF-Connecting-IP` on every request to
+  a public web service, overwriting a value the client sent.
+- Render publishes no address range for the proxies that connect to a
+  service. **No range is written here, because none could be verified.**
+
+None of this was checked against the running service. Verify it before
+trusting any header:
+
+1. Deploy with `TRUSTED_PROXIES` unset (the safe default: forwarding headers
+   are ignored; every client shares the proxy's limits). The start command
+   should end with `--no-proxy-headers`:
+   `uvicorn --factory backend.app:create_app --host 0.0.0.0 --port $PORT --no-proxy-headers`
+   (prefix the migration as before on a free service). Do not set
+   `FORWARDED_ALLOW_IPS`.
+2. Make one request to the service, then read the service log for
+   `A request with X-Forwarded-For came from <address>, which is not in
+   TRUSTED_PROXIES`. That address is Render's proxy as the service sees it.
+   Repeat over a few days and deploys to learn whether it stays in one private
+   range.
+3. Confirm with Render (support or current documentation) the range those
+   proxy addresses come from, and that the service's port cannot be reached
+   from outside that range. Set `TRUSTED_PROXIES` to exactly that range.
+4. Choose how the client is read, and verify it with a request that carries
+   forged headers (`curl -H "X-Forwarded-For: 1.2.3.4" -H "CF-Connecting-IP: 1.2.3.4" ...`
+   from a known address, then compare which address was limited):
+   - `CLIENT_IP_HEADER=CF-Connecting-IP`, if the forged value never arrives
+     (Cloudflare overwrote it); or
+   - leave `CLIENT_IP_HEADER` unset and add Cloudflare's published ranges
+     (https://www.cloudflare.com/ips/) to `TRUSTED_PROXIES`, so the right-most
+     entry that is not a proxy is the client.
+5. Check the result without disrupting anyone: from one network make six
+   wrong-password sign-ins for a throwaway account (the sixth answers 429),
+   then one from a different network (it must answer 401, not 429).
+
+Memory: one password hash holds 64 MiB. The default bound is 2 at once in one
+worker (128 MiB). On an instance with more workers set `WEB_CONCURRENCY` to
+that number and `PASSWORD_HASH_MEMORY_BUDGET_MB` to what the instance can
+spare (for example 256 on a 512 MB instance); startup fails if the product
+does not fit.

@@ -163,12 +163,16 @@ def test_another_scopes_record_cannot_be_read_changed_or_deleted(make_local, tra
 # -----------------------------------------------------------------------------
 
 
-def test_register_sign_in_profile_expiry_and_sign_out(make_local, transport) -> None:
+def test_register_sign_in_profile_expiry_and_sign_out(make_local, transport, server) -> None:
     local = make_local(transport=transport)
-    created = local.ok(local.post("/local/account/register", {"email": "carol@example.com", "password": PASSWORD}), 201)
-    assert created["email"] == "carol@example.com" and "password" not in str(created)
-    duplicate = local.post("/local/account/register", {"email": "carol@example.com", "password": PASSWORD})
-    assert duplicate.status_code == 409 and duplicate.json()["error"]["code"] == "account_exists"
+    # Step 1 emails a code and creates nothing; step 2 creates the account with the password chosen then.
+    requested = local.ok(local.post("/local/account/register", {"email": "carol@example.com"}), 202)
+    assert requested["status"] == "pending_verification"
+    created = local.ok(local.post("/local/account/register/confirm", {
+        "code": server.mail.token("carol@example.com"), "password": PASSWORD}), 201)
+    assert created["email"] == "carol@example.com" and created["email_verified"] and "password" not in str(created)
+    again = local.post("/local/account/register", {"email": "carol@example.com"})  # the same answer; no new code
+    assert again.status_code == 202 and "#token=" not in server.mail.to("carol@example.com")[-1].text
     wrong = local.post("/local/account/sign-in", {"email": "carol@example.com", "password": "wrong password"})
     assert wrong.status_code == 401 and wrong.json()["error"]["code"] == "invalid_credentials"
 
@@ -193,7 +197,7 @@ def test_register_sign_in_profile_expiry_and_sign_out(make_local, transport) -> 
 
 def test_registration_needs_a_backend(make_local) -> None:
     local = make_local(backend_url=None)
-    response = local.post("/local/account/register", {"email": "x@example.com", "password": PASSWORD})
+    response = local.post("/local/account/register", {"email": "x@example.com"})
     assert response.status_code == 409 and response.json()["error"]["code"] == "backend_not_configured"
 
 

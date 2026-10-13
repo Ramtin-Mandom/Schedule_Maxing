@@ -101,6 +101,7 @@ from app.planning.scope import OwnerScope
 from app.sync.engine import AssociationPreview, PushOutcome, SyncEngine
 from app.sync.store import BACKEND_URL_SETTING, Account, Conflict
 from app.sync.credentials import CredentialVault
+from app.sync.transport import MfaRequired  # noqa: F401 - re-exported for callers
 from app.sync.transport import AuthenticationError, ProtocolError, SyncTransport, TransportError
 
 logger = logging.getLogger(__name__)
@@ -242,6 +243,8 @@ class SyncService:
         self._account_key: str | None = None
         #: The session's current refresh credential (memory; also in the vault while `_keep`).
         self._refresh_token: str | None = None
+        #: A passed password step waiting for its second step: (transport, mfa_token, keep). Memory only.
+        self._mfa_pending: tuple | None = None
         #: The access token the last renewal replaced: a second caller holding it gets the new one, not a refresh.
         self._replaced_token: str | None = None
         self._vault = vault
@@ -360,7 +363,28 @@ class SyncService:
         transport = self._transport
         if transport is None:
             raise RuntimeError("No backend is configured (set SCHEDULE_MAXING_BACKEND_URL).")
-        result = self._reaching(lambda: transport.login(email, password))  # the network call holds no lock
+        try:
+            result = self._reaching(lambda: transport.login(email, password))  # the network call holds no lock
+        except MfaRequired as challenge:
+            # Two-step sign-in: nobody is signed in yet. The short-lived challenge stays in memory only.
+            self._mfa_pending = (transport, challenge.mfa_token, keep)
+            raise
+        return self._establish(transport, result, keep)
+
+    def complete_sign_in(self, code: str) -> Account:
+        """
+        The second step after sign_in() raised MfaRequired: the authenticator's current code, or a recovery
+        code. A wrong code leaves the step open to try again until the challenge expires (a few minutes).
+        """
+        pending = self._mfa_pending
+        if pending is None:
+            raise RuntimeError("Sign in with your email and password first.")
+        transport, mfa_token, keep = pending
+        result = self._reaching(lambda: transport.verify_mfa(mfa_token, code))
+        self._mfa_pending = None
+        return self._establish(transport, result, keep)
+
+    def _establish(self, transport, result, keep: bool) -> Account:
         store = self._engine.store
         with self._sync_lock, self._state_lock:  # never switch accounts under a running sync
             if transport is not self._transport:
@@ -490,16 +514,36 @@ class SyncService:
     # Public account operations (through the transport; the token stays here)
     # ------------------------------------------------------------------
 
-    def register(self, email: str, password: str, *, username: str | None = None,
-                 display_name: str | None = None) -> dict:
+    def request_registration(self, email: str) -> dict:
+        """
+        Ask the backend to email a verification code to `email`. Nothing is created and no password is sent;
+        the answer is the same whether or not the address already has an account.
+        """
         transport = self._require_transport()
-        return self._reaching(lambda: transport.register(email, password, username, display_name))
+        return self._reaching(lambda: transport.request_registration(email))
 
-    def create_account(self, email: str, password: str, *, username: str | None = None,
+    def request_email_verification(self) -> dict:
+        """Email a code to the signed-in account's own address (for an account whose address was never confirmed)."""
+        transport, token = self._require_session()
+        return self._authorized(token, transport.request_email_verification)
+
+    def confirm_email_verification(self, code: str) -> dict:
+        transport, token = self._require_session()
+        return self._authorized(token, lambda fresh: transport.confirm_email_verification(fresh, code))
+
+    def confirm_registration(self, code: str, password: str, *, username: str | None = None,
+                             display_name: str | None = None) -> dict:
+        """Create the account a verification code was emailed for, with this password; its profile. No sign-in."""
+        transport = self._require_transport()
+        return self._reaching(lambda: transport.confirm_registration(code, password, username, display_name))
+
+    def create_account(self, code: str, password: str, *, username: str | None = None,
                        display_name: str | None = None, keep: bool = False) -> AccountCreation:
         """
-        Register a new account and make this device's guest workspace its
-        own: register, sign in, then adopt every ownerless record for the
+        Create the account of a verified email address and make this device's
+        guest workspace its own: confirm the emailed `code` with the password
+        chosen now (the server creates the account then, for the address the
+        code was mailed to), sign in, then adopt every ownerless record for the
         account in ONE local transaction (the same ids, relationships,
         schedules, preferences and history; each record is queued for upload
         by the change capture in that transaction). The next sync uploads
@@ -507,16 +551,17 @@ class SyncService:
         a duplicate.
 
         Failure never loses or half-assigns anything:
-            - registration refused or unreachable: the error is raised as it
-              is; nothing local changed and nobody is signed in;
+            - the code or password refused, or the backend unreachable: the
+              error is raised as it is; nothing local changed and nobody is
+              signed in (the code stays usable unless it was the problem);
             - the account was created but signing in failed, or the records
               could not be adopted: AccountCreationError. The guest
               workspace is exactly as before (still guest, still visible),
               and nobody is left signed in to an empty account.
         """
-        profile = self.register(email, password, username=username, display_name=display_name)
+        profile = self.confirm_registration(code, password, username=username, display_name=display_name)
         try:
-            account = self.sign_in(email, password, keep=keep)
+            account = self.sign_in(profile["email"], password, keep=keep)
         except (TransportError, AuthenticationError, ProtocolError, RuntimeError) as error:
             raise AccountCreationError(
                 "The account was created, but signing in to it did not succeed. Everything on this device is "
@@ -551,6 +596,23 @@ class SyncService:
     def profile(self) -> dict:
         transport, token = self._require_session()
         return self._authorized(token, transport.profile)
+
+    def account_request(self, method: str, path: str, body: dict | None = None) -> dict:
+        """One authenticated request to an account-security route of the backend (docs/account-security.md)."""
+        transport, token = self._require_session()
+        return self._authorized(token, lambda fresh: transport.account_request(method, path, fresh, body))
+
+    def change_password(self, current_password: str, new_password: str) -> Account:
+        """
+        Change the account's password. The server ends every session -- this device's too -- so this signs
+        in again with the new password (keeping "Keep me signed in" as it was). MfaRequired, as from sign_in(),
+        when the account has two-step sign-in: finish with complete_sign_in(). Local records are untouched.
+        """
+        account = self._require_account()
+        keep = self._keep
+        self.account_request("POST", "/auth/password/change",
+                             {"current_password": current_password, "new_password": new_password})
+        return self.sign_in(account.email, new_password, keep=keep)
 
     def update_profile(self, base_version: int, display_name: str | None) -> dict:
         transport, token = self._require_session()

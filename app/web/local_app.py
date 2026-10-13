@@ -285,6 +285,11 @@ class BackendStatusOut(BaseModel):
 
 class RegisterIn(Strict):
     email: str = Field(min_length=3, max_length=320)
+
+
+class ConfirmRegistrationIn(Strict):
+    #: The code from the verification email.
+    code: str = Field(min_length=1, max_length=128)
     password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH)
     username: str | None = Field(default=None, min_length=3, max_length=64)
     display_name: str | None = Field(default=None, max_length=200)
@@ -590,11 +595,17 @@ def _local_router(runtime: LocalRuntime, guard: LocalGuard, require_session) -> 
         _call(runtime.sync.check_connectivity)
         return _backend(runtime, runtime.sync.status())
 
-    @router.post("/account/register", response_model=UserOut, status_code=201, dependencies=protected,
-                 operation_id="local_register", summary="Create an account on the backend (does not sign in).")
+    @router.post("/account/register", status_code=202, dependencies=protected, operation_id="local_register",
+                 summary="Ask the backend to email a verification code (creates nothing; the same answer always).")
     def register(body: RegisterIn) -> dict:
-        return _call(lambda: runtime.sync.register(body.email, body.password, username=body.username,
-                                                   display_name=body.display_name))
+        return _call(lambda: runtime.sync.request_registration(body.email))
+
+    @router.post("/account/register/confirm", response_model=UserOut, status_code=201, dependencies=protected,
+                 operation_id="local_register_confirm",
+                 summary="Create the account with the emailed code and a password (does not sign in).")
+    def confirm_registration(body: ConfirmRegistrationIn) -> dict:
+        return _call(lambda: runtime.sync.confirm_registration(body.code, body.password, username=body.username,
+                                                               display_name=body.display_name))
 
     @router.post("/account/sign-in", response_model=SignInOut, dependencies=protected, operation_id="local_sign_in",
                  summary="Sign in. Never claims or uploads this device's ownerless records.")

@@ -23,8 +23,11 @@ frame denial. It reads the token from the URL fragment, removes it from the
 address bar at once, and posts it with the new password; it never redirects
 anywhere. After a reset, the user signs in again (no automatic sign-in).
 
-Throttling (backend/rate_limit.py): requests per client address and per
-identifier; resets per client address.
+Throttling (backend/rate_limit.py), three separate things: recovery requests
+per client address (recovery_ip); emails actually sent, per destination with
+a cooldown and for the whole service (email_*; over them nothing is queued
+and the answer is unchanged); and reset attempts -- token guessing -- per
+client address (reset_ip).
 """
 
 from __future__ import annotations
@@ -38,13 +41,14 @@ from fastapi.responses import HTMLResponse
 from pydantic import Field
 from sqlalchemy.orm import Session
 
+from backend import security_events
 from backend.accounts import AccountValidationError
 from backend.api import get_session, server_now, throttle
 from backend.errors import ApiError
 from backend.passwords import MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH
 from backend.rate_limit import identifier_subject
 from backend.recovery import MAX_TOKEN_LENGTH, InvalidRecoveryTokenError, RecoveryService
-from backend.recovery_delivery import deliver_quietly
+from backend.verification_api import email_allowed, send_queued
 from backend.resources import Strict
 
 GENERIC_ANSWER = ("If an account matches, a password recovery link has been sent to its email address. "
@@ -77,14 +81,19 @@ def request_recovery(
     session: Session = Depends(get_session),
     now: datetime = Depends(server_now),
 ) -> dict:
-    adapter = request.app.state.recovery_delivery
-    if adapter is None:
+    if request.app.state.mail is None:
         raise ApiError(503, "recovery_unavailable", "Password recovery is not configured on this server.")
     throttle(request, "recovery_ip")
-    throttle(request, "recovery_identifier", identifier_subject(payload.identifier))
-    delivery = _service(request, session, now).request(payload.identifier)
-    if delivery is not None:
-        background.add_task(deliver_quietly, adapter, request.app.state.settings, delivery)
+    service = _service(request, session, now)
+    account = service.account(payload.identifier)
+    session.rollback()
+    # What is *sent* is limited per destination (and for the whole service), never per typed identifier:
+    # somebody else's requests cannot use up the owner's ability to ask -- and the links those requests mail
+    # go to the owner and stay valid. The same limiter work runs for an unknown identifier.
+    destination = account[1] if account is not None else identifier_subject(payload.identifier)
+    if email_allowed(request, destination) and account is not None:
+        service.queue(*account)
+        send_queued(request, background)
     return {"status": "accepted", "message": GENERIC_ANSWER}
 
 
@@ -99,6 +108,7 @@ def reset_password(
     try:
         _service(request, session, now).reset(payload.token, payload.new_password)
     except InvalidRecoveryTokenError as error:
+        security_events.record("recovery_token_refused")
         raise ApiError(400, "invalid_recovery_token", str(error)) from None
     except AccountValidationError as error:
         raise ApiError(422, "validation_error", str(error)) from None

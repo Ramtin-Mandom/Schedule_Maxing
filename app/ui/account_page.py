@@ -48,6 +48,7 @@ from app.ui.account_controller import (
     ConflictView,
     ConnectionView,
     InvalidInput,
+    MfaRequired,
     masked_email,
     profile_summary,
 )
@@ -143,6 +144,327 @@ class RecoveryDialog(ModalDialog):
         self._background(lambda: self.controller.reset_password(code, password, confirm), done)
 
 
+class VerificationDialog(ModalDialog):
+    """
+    The second step of creating an account: paste the code (or link) from the
+    verification email and choose the password. "Send the email again" and
+    "Use a different email" are here too. With `account=True` it confirms the
+    address of the account that is signed in instead (no password). Network
+    work runs in the background; a result for a closed dialog is dropped, and
+    the password fields are cleared after each attempt.
+    """
+
+    def __init__(self, parent, controller, *, email: str, account: bool = False,
+                 on_created: Callable[[ControllerResult], None] | None = None,
+                 on_verified: Callable[[], None] | None = None,
+                 on_change_email: Callable[[], None] | None = None,
+                 display_name: str = "", keep: bool = False) -> None:
+        super().__init__(parent, "Confirm your email", width=480)
+        self.controller, self.email, self.account = controller, email, account
+        self._on_created, self._on_verified, self._on_change_email = on_created, on_verified, on_change_email
+        self._display_name, self._keep = display_name, keep
+        intro = (f"A code was emailed to {masked_email(email)}, if that address can receive email. Paste the code "
+                 "here to confirm the address." if account else
+                 f"An email is on its way to {email}, if that address can receive email. Paste its code (or the "
+                 "whole link) here and choose your password. The account is created only then, so nobody else "
+                 "can have set its password.")
+        ctk.CTkLabel(self.body, text=intro, anchor="w", justify="left", wraplength=460, font=font(theme.SIZE_BODY),
+                     text_color=theme.TEXT_PRIMARY).grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        self.code_field = LabeledEntry(self.body, "Verification code or link")
+        self.code_field.grid(row=1, column=0, sticky="ew", pady=4)
+        self.password_field = LabeledEntry(self.body, "Password")
+        self.password_field.entry.configure(show="•")
+        self.confirm_field = LabeledEntry(self.body, "Repeat the password")
+        self.confirm_field.entry.configure(show="•")
+        if not account:
+            self.password_field.grid(row=2, column=0, sticky="ew", pady=4)
+            self.confirm_field.grid(row=3, column=0, sticky="ew", pady=4)
+        links = ctk.CTkFrame(self.body, fg_color="transparent")
+        links.grid(row=4, column=0, sticky="w", pady=(6, 0))
+        self.resend_button = AppButton(links, "Send the email again", self.resend, variant="ghost")
+        self.resend_button.grid(row=0, column=0, padx=(0, 8))
+        if not account:
+            AppButton(links, "Use a different email", self.change_email, variant="ghost").grid(row=0, column=1)
+        self.notice = Notice(self.body, wraplength=460)
+        self.notice.grid(row=5, column=0, sticky="ew", pady=(8, 0))
+        self.notice.hide()
+        self.add_buttons("Confirm email" if account else "Create account", self.confirm, cancel_text="Close")
+        self.initial_focus = self.code_field.entry
+
+    def _background(self, work, done) -> None:
+        run_in_background(self, work, done, still_current=lambda: not self._closed)
+
+    def resend(self) -> None:
+        self.resend_button.configure(state="disabled")
+
+        def done(result: ControllerResult) -> None:
+            self.resend_button.configure(state="normal")
+            self.notice.show("success" if result.ok else "error", result.value if result.ok else result.error)
+
+        work = (self.controller.request_email_verification if self.account
+                else lambda: self.controller.request_registration(self.email))
+        self._background(work, done)
+
+    def change_email(self) -> None:
+        self.close()
+        if self._on_change_email is not None:
+            self._on_change_email()
+
+    def confirm(self) -> None:
+        code, password, confirm = self.code_field.get(), self.password_field.get(), self.confirm_field.get()
+        for field_widget in (self.code_field, self.password_field, self.confirm_field):
+            field_widget.set_error(None)
+        self.password_field.variable.set("")  # never kept, whatever happens next
+        self.confirm_field.variable.set("")
+        self.primary_button.configure(state="disabled")
+
+        def done(result: ControllerResult) -> None:
+            self.primary_button.configure(state="normal")
+            if not result.ok:
+                if isinstance(result.cause, InvalidInput):
+                    fields = {"code": self.code_field, "password": self.password_field,
+                              "confirm": self.confirm_field}
+                    for name, message in result.cause.errors.items():
+                        if name in fields:
+                            fields[name].set_error(message)
+                self.notice.show("error", result.error)
+                if isinstance(result.cause, AccountCreationError):
+                    self.close()  # the account exists: the page explains how to finish
+                    self._on_created(result)
+                return
+            self.close()
+            if self.account:
+                if self._on_verified is not None:
+                    self._on_verified()
+            elif self._on_created is not None:
+                self._on_created(result)
+
+        if self.account:
+            self._background(lambda: self.controller.confirm_email_verification(code), done)
+        else:
+            keep = {"keep": True} if self._keep else {}
+            self._background(lambda: self.controller.create_account(
+                code, password, confirm, display_name=self._display_name, **keep), done)
+
+
+class CodeDialog(ModalDialog):
+    """The second step of signing in: the authenticator's code (or a recovery code). Runs in the background."""
+
+    def __init__(self, parent, controller, *, on_done: Callable[[ControllerResult], None]) -> None:
+        super().__init__(parent, "Two-step sign-in", width=440)
+        self.controller, self._on_done = controller, on_done
+        ctk.CTkLabel(self.body, anchor="w", justify="left", wraplength=420, font=font(theme.SIZE_BODY),
+                     text_color=theme.TEXT_PRIMARY,
+                     text="Your password was right. Enter the 6-digit code from your authenticator app to finish "
+                          "signing in. If you lost the authenticator, enter one of your recovery codes instead."
+                     ).grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        self.code_field = LabeledEntry(self.body, "Code")
+        self.code_field.grid(row=1, column=0, sticky="ew", pady=4)
+        self.notice = Notice(self.body, wraplength=420)
+        self.notice.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        self.notice.hide()
+        self.add_buttons("Sign in", self.submit, cancel_text="Cancel")
+        self.initial_focus = self.code_field.entry
+
+    def submit(self) -> None:
+        code = self.code_field.get()
+        self.code_field.variable.set("")
+        self.primary_button.configure(state="disabled")
+
+        def done(result: ControllerResult) -> None:
+            self.primary_button.configure(state="normal")
+            if not result.ok:
+                self.notice.show("error", result.error)
+                return
+            self.close()
+            self._on_done(result)
+
+        run_in_background(self, lambda: self.controller.complete_sign_in(code), done,
+                          still_current=lambda: not self._closed)
+
+
+class SecurityDialog(ModalDialog):
+    """
+    The signed-in account's security: change the password, turn two-step sign-in on or off, and see or end
+    its sessions. Every request runs in the background; passwords and codes are cleared after each attempt,
+    and the authenticator secret and the recovery codes are shown once and kept nowhere on this device.
+    """
+
+    def __init__(self, parent, controller, *, on_signed_in: Callable[[ControllerResult], None],
+                 on_signed_out: Callable[[], None]) -> None:
+        super().__init__(parent, "Account security", width=520)
+        self.controller, self._on_signed_in, self._on_signed_out = controller, on_signed_in, on_signed_out
+        self.mfa_enabled: bool | None = None
+        row = 0
+
+        def heading(text: str) -> None:
+            nonlocal row
+            ctk.CTkLabel(self.body, text=text, anchor="w", font=font(theme.SIZE_BODY, "bold"),
+                         text_color=theme.TEXT_PRIMARY).grid(row=row, column=0, sticky="ew", pady=(10, 2))
+            row += 1
+
+        def place(widget, **options) -> None:
+            nonlocal row
+            widget.grid(row=row, column=0, sticky=options.pop("sticky", "ew"), pady=options.pop("pady", 3))
+            row += 1
+
+        heading("Password")
+        self.current_field = LabeledEntry(self.body, "Current password (needed for every change here)")
+        self.new_field = LabeledEntry(self.body, "New password (8 characters or more; a few words work well)")
+        self.repeat_field = LabeledEntry(self.body, "Repeat the new password")
+        for field_widget in (self.current_field, self.new_field, self.repeat_field):
+            field_widget.entry.configure(show="•")
+            place(field_widget)
+        self.password_button = AppButton(self.body, "Change password", self.change_password, variant="secondary")
+        place(self.password_button, sticky="w")
+
+        heading("Two-step sign-in")
+        self.mfa_label = ctk.CTkLabel(self.body, text="Checking...", anchor="w", justify="left", wraplength=500,
+                                      font=font(theme.SIZE_SMALL), text_color=theme.TEXT_MUTED)
+        place(self.mfa_label)
+        self.code_field = LabeledEntry(self.body, "Code from the authenticator app")
+        place(self.code_field)
+        self.mfa_button = AppButton(self.body, "Set up an authenticator app", self.mfa_action, variant="secondary")
+        place(self.mfa_button, sticky="w")
+        self.secret_box = ctk.CTkTextbox(self.body, height=96, wrap="word", font=font(theme.SIZE_SMALL))
+        place(self.secret_box)
+        self.secret_box.grid_remove()
+
+        heading("Sessions")
+        self.sessions_label = ctk.CTkLabel(self.body, text="Loading...", anchor="w", justify="left", wraplength=500,
+                                           font=font(theme.SIZE_SMALL), text_color=theme.TEXT_MUTED)
+        place(self.sessions_label)
+        self.everywhere_button = AppButton(self.body, "Sign out everywhere", self.sign_out_everywhere,
+                                           variant="secondary")
+        place(self.everywhere_button, sticky="w")
+        self.notice = Notice(self.body, wraplength=500)
+        place(self.notice, pady=(8, 0))
+        self.notice.hide()
+        self.add_buttons("Done", self.close, cancel_text="Close")
+        self._pending_setup = False
+        self.reload()
+
+    def _background(self, work, done) -> None:
+        run_in_background(self, work, done, still_current=lambda: not self._closed)
+
+    def _show(self, text: str) -> None:
+        """Show a one-time secret (authenticator key, recovery codes) for the user to copy."""
+        self.secret_box.grid()
+        self.secret_box.configure(state="normal")
+        self.secret_box.delete("1.0", "end")
+        self.secret_box.insert("1.0", text)
+        self.secret_box.configure(state="disabled")
+
+    def reload(self) -> None:
+        def status(result: ControllerResult) -> None:
+            if not result.ok:
+                self.mfa_label.configure(text=result.error)
+                return
+            self.mfa_enabled = bool(result.value.get("enabled"))
+            if not result.value.get("available") and not self.mfa_enabled:
+                self.mfa_label.configure(text="Two-step sign-in is not available on this backend.")
+                self.mfa_button.configure(state="disabled")
+            elif self.mfa_enabled:
+                self.mfa_label.configure(text="On. Signing in needs your password and a code from your authenticator "
+                                              f"app. Unused recovery codes: {result.value.get('recovery_codes_left', 0)}.")
+                self.mfa_button.configure(text="Turn two-step sign-in off")
+            else:
+                self.mfa_label.configure(text="Off. Signing in needs only your password.")
+                self.mfa_button.configure(text="Set up an authenticator app")
+
+        def listed(result: ControllerResult) -> None:
+            if not result.ok:
+                self.sessions_label.configure(text=result.error)
+                return
+            lines = [f"{'This device' if item['current'] else 'Another ' + item['kind'] + ' session'}"
+                     f" - {item.get('client') or 'unknown client'} - since {str(item['created_at'])[:16]}"
+                     for item in result.value]
+            self.sessions_label.configure(text="\n".join(lines) or "No live sessions.")
+
+        self._background(self.controller.mfa_status, status)
+        self._background(self.controller.list_sessions, listed)
+
+    def change_password(self) -> None:
+        current, new, repeat = self.current_field.get(), self.new_field.get(), self.repeat_field.get()
+        for field_widget in (self.current_field, self.new_field, self.repeat_field):
+            field_widget.set_error(None)
+            field_widget.variable.set("")  # never kept, whatever happens next
+        self.password_button.configure(state="disabled")
+
+        def done(result: ControllerResult) -> None:
+            self.password_button.configure(state="normal")
+            if isinstance(result.cause, InvalidInput):
+                fields = {"current": self.current_field, "password": self.new_field, "confirm": self.repeat_field}
+                for name, message in result.cause.errors.items():
+                    fields[name].set_error(message)
+            if result.ok or isinstance(result.cause, MfaRequired):
+                self.close()
+                self._on_signed_in(result)  # signed in again, or the second step is asked for
+            else:
+                self.notice.show("error", result.error)
+
+        self._background(lambda: self.controller.change_password(current, new, repeat), done)
+
+    def mfa_action(self) -> None:
+        password, code = self.current_field.get(), self.code_field.get()
+        self.current_field.set_error(None)
+        if not password:
+            self.current_field.set_error("Enter your current password first.")
+            return
+        self.code_field.variable.set("")
+        self.mfa_button.configure(state="disabled")
+
+        def finish(result: ControllerResult, shown: str | None = None) -> None:
+            self.mfa_button.configure(state="normal")
+            if not result.ok:
+                self.notice.show("error", result.error)
+                return
+            self.current_field.variable.set("")
+            if shown:
+                self._show(shown)
+            self.reload()
+
+        if self.mfa_enabled:
+            self._background(lambda: self.controller.mfa_disable(password, code), lambda result: (
+                finish(result), result.ok and self.notice.show("success", "Two-step sign-in is off.")))
+        elif self._pending_setup:
+            def confirmed(result: ControllerResult) -> None:
+                if result.ok:
+                    self._pending_setup = False
+                    self.notice.show("success", "Two-step sign-in is on. Save these recovery codes now: each "
+                                                "works once, and they are not shown again.")
+                finish(result, "Recovery codes:\n" + "\n".join(result.value) if result.ok else None)
+
+            self._background(lambda: self.controller.mfa_confirm(password, code), confirmed)
+        else:
+            def begun(result: ControllerResult) -> None:
+                self.mfa_button.configure(state="normal")
+                if not result.ok:
+                    self.notice.show("error", result.error)
+                    return
+                self._pending_setup = True
+                self.mfa_button.configure(text="Turn on with this code")
+                self._show("Add an account in your authenticator app with this key (time-based, 6 digits):\n"
+                           f"{result.value['secret']}\n\nThen enter your current password again and the code the "
+                           "app shows, and press \"Turn on with this code\".")
+                self.notice.show("info", "Nothing changes until you confirm a code from the app.")
+
+            self._background(lambda: self.controller.mfa_begin(password), begun)
+
+    def sign_out_everywhere(self) -> None:
+        self.everywhere_button.configure(state="disabled")
+
+        def done(result: ControllerResult) -> None:
+            if not result.ok:
+                self.everywhere_button.configure(state="normal")
+                self.notice.show("error", result.error)
+                return
+            self.close()
+            self._on_signed_out()
+
+        self._background(self.controller.sign_out_everywhere, done)
+
+
 def _always() -> bool:
     return True
 
@@ -226,6 +548,13 @@ class AccountPage(ctk.CTkFrame):
         self.profile_label.grid(row=1, column=0, sticky="ew", pady=(2, 8))
         self.sign_out_button = AppButton(self.signed_in_frame, "Sign out", self.sign_out, variant="secondary")
         self.sign_out_button.grid(row=2, column=0, sticky="w")
+        self.security_button = AppButton(self.signed_in_frame, "Password, two-step sign-in, sessions...",
+                                         self.open_security, variant="ghost")
+        if not getattr(self, "direct", False):
+            self.security_button.grid(row=5, column=0, sticky="w", pady=(6, 0))
+        #: Shown only for an account whose address was never confirmed (an account from before verification).
+        self.verify_email_button = AppButton(self.signed_in_frame, "Confirm email address...",
+                                             self.open_account_verification, variant="ghost")
         sign_out_note = ("Signing out closes access to your records on this computer until you sign in again. They "
                          "stay in the database." if getattr(self, "direct", False) else
                          "Signing out hides this account's records on this device and opens a separate guest "
@@ -265,6 +594,10 @@ class AccountPage(ctk.CTkFrame):
         self.mode_note.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         self.forgot_button = AppButton(self.form_frame, "Forgot password?", self.open_recovery, variant="ghost")
         self.forgot_button.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        #: The address a verification email was last requested for: its code can still be entered.
+        self.pending_email: str | None = None
+        self.pending_button = AppButton(self.form_frame, "Enter verification code...",
+                                        lambda: self.open_verification(self.pending_email or ""), variant="ghost")
         for entry in (self.email_field.entry, self.password_field.entry, self.name_field.entry):
             entry.bind("<Return>", lambda _e: self.submit_account(), add="+")
         self.account_notice = Notice(card, wraplength=440)
@@ -474,11 +807,18 @@ class AccountPage(ctk.CTkFrame):
             self.name_field.grid(row=3, column=0, columnspan=2, sticky="ew", pady=4)
         else:
             self.name_field.grid_remove()
+        # A new account's password is chosen after its email address is confirmed (not in direct mode).
+        if mode == "register" and not getattr(self, "direct", False):
+            self.password_field.grid_remove()
+        else:
+            self.password_field.grid(row=2, column=0, columnspan=2, sticky="ew", pady=4)
+        self._render_pending()
         if getattr(self, "direct", False):
             note = ""
         elif mode == "register":
-            note = ("Creating an account keeps everything you have done on this device: it becomes the new "
-                    "account's and is uploaded automatically. Nothing is cleared or replaced.")
+            note = ("First your email address is confirmed: a code is emailed to it, and you choose your password "
+                    "when you enter the code. Creating an account keeps everything you have done on this device: "
+                    "it becomes the new account's and is uploaded automatically. Nothing is cleared or replaced.")
         else:
             note = ("Signing in to an existing account never changes the work done here without an account. You "
                     "are asked whether to add it to the account or keep it separate.")
@@ -500,8 +840,8 @@ class AccountPage(ctk.CTkFrame):
         self.password_field.variable.set("")  # never kept, whatever happens next
         keep = {"keep": True} if not self.direct and self.keep_variable.get() else {}
         if self.mode == "register" and not self.direct:
-            self._run("account", lambda: self.controller.create_account(email, password, display_name=name, **keep),
-                      lambda result: self._account_created(result, email), (self.submit_button,))
+            self._run("account", lambda: self.controller.request_registration(email),
+                      lambda result: self._verification_requested(result, email), (self.submit_button,))
         elif self.mode == "register":
             self._run("account", lambda: self.controller.register(email, password, display_name=name),
                       lambda result: self._registered(result, email), (self.submit_button,))
@@ -515,6 +855,54 @@ class AccountPage(ctk.CTkFrame):
             for name, message in result.cause.errors.items():
                 fields[name].set_error(message)
         self.account_notice.show("error", result.error)
+
+    def _render_pending(self) -> None:
+        if self.pending_email and self.mode == "register" and not getattr(self, "direct", False):
+            self.pending_button.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        else:
+            self.pending_button.grid_remove()
+
+    def _verification_requested(self, result: ControllerResult, email: str) -> None:
+        if not result.ok:
+            self._field_errors(result)
+            return
+        self.pending_email = email.strip()
+        self._render_pending()
+        self.account_notice.show("info", f"Verification pending for {self.pending_email}. " + result.value)
+        self.open_verification(self.pending_email)
+
+    def open_verification(self, email: str) -> None:
+        """The dialog for a pending registration: enter the code, choose the password; resend; change the email."""
+        keep = bool(not self.direct and self.keep_variable.get())
+        self.verification_dialog = VerificationDialog(
+            self, self.controller, email=email, display_name=self.name_field.get(), keep=keep,
+            on_created=lambda result: self._account_created(result, email), on_change_email=self._change_email)
+        self.verification_dialog.present()
+
+    def _change_email(self) -> None:
+        """A mistyped address: nothing was created for it, so another one is simply asked for."""
+        self.pending_email = None
+        self.set_mode("register")
+        self.account_notice.show("info", "Enter the right email address and send the verification email again. "
+                                         "The earlier request creates nothing and expires on its own.")
+        self.email_field.entry.focus_set()
+
+    def open_account_verification(self) -> None:
+        email = self.view.signed_in_email if self.view is not None else ""
+
+        def requested(result: ControllerResult) -> None:
+            if not result.ok:
+                self.account_notice.show("error", result.error)
+                return
+            self.verification_dialog = VerificationDialog(self, self.controller, email=email or "", account=True,
+                                                          on_verified=self._email_verified)
+            self.verification_dialog.present()
+
+        self._run("verify", self.controller.request_email_verification, requested, (self.verify_email_button,))
+
+    def _email_verified(self) -> None:
+        self.account_notice.show("success", "Your email address is confirmed.")
+        self._load_profile()
 
     def _registered(self, result: ControllerResult, email: str) -> None:
         if not result.ok:
@@ -535,8 +923,9 @@ class AccountPage(ctk.CTkFrame):
             self.refresh()
             return
         outcome = result.value
+        self.pending_email = None
         self.set_mode("sign_in")  # the form's next use (after signing out) is signing in to this account
-        note = "Account created and signed in."
+        note = "Email confirmed, account created and signed in."
         if outcome.adopted:
             note += (f" The {outcome.adopted} record(s) already on this device are now part of this account and "
                      "are being uploaded.")
@@ -547,7 +936,24 @@ class AccountPage(ctk.CTkFrame):
         self.refresh()
         self._load_profile()
 
+    def open_security(self) -> None:
+        def signed_out() -> None:
+            self.account_notice.show("info", "Signed out everywhere. This account's records are hidden on this "
+                                             "device until you sign in again; unsent changes are kept.")
+            self._on_workspace_changed()
+            self.refresh()
+
+        self.security_dialog = SecurityDialog(self, self.controller, on_signed_in=self._signed_in,
+                                              on_signed_out=signed_out)
+        self.security_dialog.present()
+
     def _signed_in(self, result: ControllerResult) -> None:
+        if not result.ok and isinstance(result.cause, MfaRequired):
+            # The password was right; the account has two-step sign-in. Nobody is signed in until the code.
+            self.account_notice.show("info", result.error)
+            self.code_dialog = CodeDialog(self, self.controller, on_done=self._signed_in)
+            self.code_dialog.present()
+            return
         if not result.ok:
             self._field_errors(result)
             return
@@ -603,6 +1009,10 @@ class AccountPage(ctk.CTkFrame):
                 return
             if result.ok:
                 self.profile_label.configure(text=profile_summary(result.value))
+                if result.value.get("email_verified") is False and not self.direct:
+                    self.verify_email_button.grid(row=4, column=0, sticky="w", pady=(6, 0))
+                else:
+                    self.verify_email_button.grid_remove()
             else:
                 self.profile_label.configure(text=f"Profile unavailable: {result.error}")
 

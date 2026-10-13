@@ -116,6 +116,16 @@ class RewardSettings:
     short_gap_bonus_cap: float = 10.0
 
     def __post_init__(self) -> None:
+        import dataclasses
+        import math
+
+        # NaN and infinity pass every comparison below and then poison every score they touch.
+        for item in dataclasses.fields(self):
+            value = getattr(self, item.name)
+            numbers = value.values() if isinstance(value, dict) else (value,)
+            for number in numbers:
+                if isinstance(number, float) and not math.isfinite(number):
+                    raise ValueError(f"{item.name} must be a finite number, got {number!r}.")
         # _time_preference_score divides by max_time_distance_minutes whenever
         # a placement is not fully inside its preferred window, so a
         # nonpositive value would raise ZeroDivisionError deep inside scoring
@@ -146,6 +156,8 @@ class RewardSettings:
 
 #: The canonical, auto-discovered template filename (see module docstring).
 CANONICAL_CONFIG_FILENAME = "task_preference.yaml"
+#: A preference file is small; anything larger is not one (and deeply nested YAML is slow to load).
+MAX_CONFIG_BYTES = 256 * 1024
 
 #: Recognized legacy filenames, checked in this fixed order (first match
 #: wins) only after the canonical filename is confirmed absent. Do not add
@@ -191,8 +203,11 @@ def load_reward_settings(
             "Install it with: pip install PyYAML"
         ) from exc
 
+    if path.stat().st_size > MAX_CONFIG_BYTES:
+        raise ValueError(f"{path.name} is larger than {MAX_CONFIG_BYTES // 1024} KiB; a preference file is a few "
+                         "hundred lines at most.")
     with path.open("r", encoding="utf-8") as file:
-        raw_data = yaml.safe_load(file) or {}
+        raw_data = yaml.safe_load(file) or {}  # safe_load: plain data only, never arbitrary objects
 
     if not isinstance(raw_data, dict):
         raise ValueError(f"{path.name} must contain a YAML dictionary at the top level.")

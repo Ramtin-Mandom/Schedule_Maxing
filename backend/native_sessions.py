@@ -5,8 +5,14 @@ Only SHA-256 digests of random 256-bit refresh tokens are stored. Consumed
 digests remain until the family expires so reuse revokes the entire family.
 An UPDATE locks the family on both SQLite and PostgreSQL before rotation or
 logout; simultaneous refreshes cannot create two live descendants. Clients
-must serialize refresh requests: replay (including a duplicate retry) ends
-the session and requires a new password login.
+should serialize refresh requests. A credential presented again within
+REUSE_GRACE_SECONDS of being consumed is taken for the same client racing
+itself (two requests in flight, a retry of a slow answer): it is refused
+with 409 refresh_superseded and the session lives on with the pair the first
+request received. Presented later than that, it is replay: the whole family
+is revoked and a new password login is needed -- for the thief and the owner
+alike, which is the point. The grace gives a thief nothing: inside it they
+get no credential, outside it the reuse ends the session.
 
 Access tokens carry the family UUID (sid); API authentication checks the
 family on every request, so logout/replay revoke its access tokens as well.
@@ -23,10 +29,14 @@ from datetime import datetime, timedelta
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from backend import models
-from backend.errors import unauthenticated
+from backend import models, security_events
+from backend.errors import ApiError, unauthenticated
 from backend.security import issue_access_token
 from backend.settings import BackendSettings
+
+
+#: A consumed credential presented again this soon is a concurrent request of the same client, not theft.
+REUSE_GRACE_SECONDS = 10
 
 
 def _digest(token: str) -> str:
@@ -48,9 +58,9 @@ class NativeSessionService:
     def __init__(self, session: Session, settings: BackendSettings, now: datetime):
         self.session, self.settings, self.now = session, settings, now
 
-    def start(self, user_id: uuid.UUID, epoch: int) -> dict:
+    def start(self, user_id: uuid.UUID, epoch: int, client_label: str | None = None) -> dict:
         family = models.NativeSession(
-            id=uuid.uuid4(), user_id=user_id, credential_epoch=epoch,
+            id=uuid.uuid4(), user_id=user_id, credential_epoch=epoch, client_label=client_label,
             created_at=self.now, expires_at=self.now + timedelta(days=self.settings.refresh_token_expire_days),
         )
         self.session.add(family)
@@ -90,7 +100,14 @@ class NativeSessionService:
         if family is None or family.revoked_at is not None or family.expires_at <= self.now:
             raise unauthenticated("The refresh credential is invalid or has expired.")
         epoch = self.session.scalar(select(models.User.credential_epoch).where(models.User.id == family.user_id))
+        if (epoch == family.credential_epoch and credential.consumed_at is not None
+                and (self.now - credential.consumed_at).total_seconds() <= REUSE_GRACE_SECONDS):
+            self.session.rollback()
+            raise ApiError(409, "refresh_superseded",
+                           "This credential was just exchanged by another request; use the pair it received.")
         if epoch != family.credential_epoch or credential.consumed_at is not None:
+            if credential.consumed_at is not None:
+                security_events.record("refresh_replay")
             family.revoked_at = self.now
             self.session.commit()  # revocation must survive the 401 response
             raise unauthenticated("The session has ended. Sign in again.")
