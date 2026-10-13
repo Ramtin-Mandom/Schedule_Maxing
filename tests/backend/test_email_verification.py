@@ -517,3 +517,81 @@ def test_the_diagnostic_mails_only_the_configured_recipient_and_never_claims_del
     mail.fail = True
     assert email_diagnostic.send(settings, adapter=mail, factory=factory, out=lines.append) == 1
     assert "accepted by the provider: NO" in "\n".join(lines)
+
+
+def test_the_brevo_adapter_sends_over_https_with_the_key_in_a_header_and_reports_failures_by_class(monkeypatch) -> None:
+    import io
+    import urllib.error
+
+    from backend import mail as mail_module
+    from backend.mail import BrevoMail, MailError, OutboundEmail, mail_for
+
+    settings = mail_settings(email_provider="brevo", brevo_api_key="xkeysib-test", smtp_host="",
+                             smtp_sender="Schedule Maxing <sender@example.com>")
+    assert isinstance(mail_for(settings), BrevoMail)
+    assert mail_for(mail_settings(email_provider="brevo", smtp_host="")) is None  # no key: not configured
+    sent = {}
+
+    class Answer(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    def accept(request, timeout):
+        sent.update(url=request.full_url, headers=dict(request.header_items()), body=json.loads(request.data))
+        return Answer(b'{"messageId": "<abc@smtp-relay.mailin.fr>"}')
+
+    monkeypatch.setattr(mail_module.urllib.request, "urlopen", accept)
+    message = OutboundEmail(to="alice@example.com", subject="Hello", text="Body", idempotency_key="k")
+    assert BrevoMail(settings).deliver(message) == "<abc@smtp-relay.mailin.fr>"
+    assert sent["url"] == "https://api.brevo.com/v3/smtp/email" and sent["headers"]["Api-key"] == "xkeysib-test"
+    assert sent["body"] == {"sender": {"email": "sender@example.com", "name": "Schedule Maxing"},
+                            "to": [{"email": "alice@example.com"}], "subject": "Hello", "textContent": "Body"}
+
+    def refuse(request, timeout):
+        raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {}, io.BytesIO(b'{"message": "Key not found"}'))
+
+    monkeypatch.setattr(mail_module.urllib.request, "urlopen", refuse)
+    with pytest.raises(MailError, match="HTTP 401") as refused:
+        BrevoMail(settings).deliver(message)
+    assert "xkeysib" not in str(refused.value) and "Key not found" not in str(refused.value)
+
+
+def test_the_mailjet_adapter_uses_basic_auth_over_https_and_a_refused_message_is_not_accepted(monkeypatch) -> None:
+    import base64
+    import io
+
+    from backend import mail as mail_module
+    from backend.mail import MailError, MailjetMail, OutboundEmail, mail_for
+
+    settings = mail_settings(email_provider="mailjet", mailjet_api_key="public-key", mailjet_secret_key="secret-key",
+                             smtp_host="", smtp_sender="Schedule Maxing <sender@example.com>")
+    assert isinstance(mail_for(settings), MailjetMail)
+    assert mail_for(mail_settings(email_provider="mailjet", mailjet_api_key="only-one", smtp_host="")) is None
+    sent, answer = {}, {"Messages": [{"Status": "success", "To": [{"Email": "alice@example.com", "MessageID": 4711}]}]}
+
+    class Answer(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    def respond(request, timeout):
+        sent.update(url=request.full_url, headers=dict(request.header_items()), body=json.loads(request.data))
+        return Answer(json.dumps(answer).encode())
+
+    monkeypatch.setattr(mail_module.urllib.request, "urlopen", respond)
+    message = OutboundEmail(to="alice@example.com", subject="Hello", text="Body", idempotency_key="row-1")
+    assert MailjetMail(settings).deliver(message) == "4711"
+    assert sent["url"] == "https://api.mailjet.com/v3.1/send"
+    assert sent["headers"]["Authorization"] == "Basic " + base64.b64encode(b"public-key:secret-key").decode()
+    assert sent["body"] == {"Messages": [{
+        "From": {"Email": "sender@example.com", "Name": "Schedule Maxing"}, "To": [{"Email": "alice@example.com"}],
+        "Subject": "Hello", "TextPart": "Body", "CustomID": "row-1"}]}
+    answer["Messages"][0]["Status"] = "error"  # e.g. the sender address was never validated
+    with pytest.raises(MailError, match="refused"):
+        MailjetMail(settings).deliver(message)
+

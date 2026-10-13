@@ -65,8 +65,11 @@ Email verification and transactional email (docs/email.md). Without APP_PUBLIC_U
     APP_PUBLIC_URL                  the server's own public origin, https (http only for localhost), no
                                     path -- e.g. https://api.example.com. Emailed links are built from
                                     it, never from a request's Host or forwarded headers
-    EMAIL_PROVIDER                  "smtp" (default; the SMTP_* settings above) or "resend"
+    EMAIL_PROVIDER                  "smtp" (default; the SMTP_* settings above), "resend", "brevo" or
+                                    "mailjet" (these send over HTTPS: for hosts that block outgoing SMTP)
+    MAILJET_API_KEY, MAILJET_SECRET_KEY   both, for EMAIL_PROVIDER=mailjet (never logged or echoed)
     RESEND_API_KEY                  the provider API key for EMAIL_PROVIDER=resend (never logged or echoed)
+    BREVO_API_KEY                   the provider API key for EMAIL_PROVIDER=brevo (never logged or echoed)
     EMAIL_WEBHOOK_SECRET            the provider's webhook signing secret ("whsec_..."); without it
                                     POST /webhooks/email answers 404 and no delivery evidence is recorded
     EMAIL_DIAGNOSTIC_RECIPIENT      the only address `python -m backend.email_diagnostic` ever mails
@@ -159,6 +162,9 @@ class BackendSettings:
     app_public_url: str = ""
     email_provider: str = "smtp"
     resend_api_key: str = field(default="", repr=False)
+    brevo_api_key: str = field(default="", repr=False)
+    mailjet_api_key: str = field(default="", repr=False)
+    mailjet_secret_key: str = field(default="", repr=False)
     email_webhook_secret: str = field(default="", repr=False)
     email_diagnostic_recipient: str = ""
     verification_token_ttl_minutes: int = 1440
@@ -177,7 +183,9 @@ class BackendSettings:
     @property
     def mail_configured(self) -> bool:
         """Whether transactional email can be composed and sent (else registration answers 503)."""
-        provider = bool(self.resend_api_key) if self.email_provider == "resend" else bool(self.smtp_host)
+        provider = bool({"resend": self.resend_api_key, "brevo": self.brevo_api_key,
+                         "mailjet": self.mailjet_api_key and self.mailjet_secret_key}.get(
+            self.email_provider, self.smtp_host))
         return bool((self.app_public_url or self.recovery_public_url) and self.smtp_sender and provider)
 
     @property
@@ -267,8 +275,8 @@ class BackendSettings:
                 problems.append(f"{name} must be a Fernet key (32 random bytes, URL-safe base64)")
         if self.mfa_encryption_key_previous and not self.mfa_encryption_key:
             problems.append("MFA_ENCRYPTION_KEY_PREVIOUS needs MFA_ENCRYPTION_KEY (the new key)")
-        if self.email_provider not in ("smtp", "resend"):
-            problems.append("EMAIL_PROVIDER must be smtp or resend")
+        if self.email_provider not in ("smtp", "resend", "brevo", "mailjet"):
+            problems.append("EMAIL_PROVIDER must be smtp, resend, brevo or mailjet")
         if not 15 <= self.verification_token_ttl_minutes <= 10080:
             problems.append("VERIFICATION_TOKEN_TTL_MINUTES must be between 15 and 10080")
         if not 1 <= self.pending_registration_ttl_hours <= 720:
@@ -383,6 +391,9 @@ def load_settings(environ: Mapping[str, str] | None = None) -> BackendSettings:
         app_public_url=environ.get("APP_PUBLIC_URL", "").strip().rstrip("/"),
         email_provider=environ.get("EMAIL_PROVIDER", "").strip().lower() or "smtp",
         resend_api_key=environ.get("RESEND_API_KEY", "").strip(),
+        brevo_api_key=environ.get("BREVO_API_KEY", "").strip(),
+        mailjet_api_key=environ.get("MAILJET_API_KEY", "").strip(),
+        mailjet_secret_key=environ.get("MAILJET_SECRET_KEY", "").strip(),
         email_webhook_secret=environ.get("EMAIL_WEBHOOK_SECRET", "").strip(),
         email_diagnostic_recipient=environ.get("EMAIL_DIAGNOSTIC_RECIPIENT", "").strip(),
         verification_token_ttl_minutes=integer("VERIFICATION_TOKEN_TTL_MINUTES", 1440),
