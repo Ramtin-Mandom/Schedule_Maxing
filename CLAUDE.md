@@ -41,7 +41,8 @@ While building:
 - do not rerun checks that already passed unless later changes affect them
 Testing Workflow
 - Development suite: `pytest -m dev` (~1,600 fast tests, ~2 minutes). Full suite: `pytest` (~1,900 tests, all tiers).
-- Default to focused tests while implementing (`pytest tests/path/test_x.py -k name`); never run the full suite after each step.
+- Default to focused tests through the dev filter while implementing (`pytest -m dev tests/path/test_x.py -k name`), so the real-window, system and slow tests in those files are skipped; never run the full suite after each step.
+- Drop `-m dev` only when the change is in sync, web or direct mode (`tests/sync`, `tests/web` and `tests/direct` are all system tier, so the dev filter selects nothing there) or needs real-window coverage.
 - Before considering an implementation batch complete, run `pytest -m dev` once (plus `ruff check .`).
 - Reserve the full suite (`pytest`, `python -m compileall .`, `ruff check .`) for the end of a milestone, major
   cross-cutting changes (storage, sync, migrations, desktop UI framework), an explicit request, or final
@@ -60,3 +61,18 @@ After the whole batch is complete, give one concise summary containing:
 - final tests/checks run and whether they passed
 - important remaining limitations
 Avoid verbose per-task summaries unless requested.
+Project Knowledge Base (documentation navigation)
+Five root documents describe the repository. Load only the document -- and only the section -- the current task needs; never read all five by default.
+- CODEBASE_MAP.md: where a feature lives, what a change affects, which tests to run. Start with its "If You Need to Change X, Look Here" table.
+- ARCHITECTURE.md: system design, boundaries and major data flows.
+- CURRENT_STATE.md: what currently works, is partial or broken (a dated snapshot).
+- ROADMAP.md: planned and unfinished work, when planning development.
+- DECISIONS.md: established architectural decisions; read the relevant record before changing one.
+Keep them accurate in the same change that makes them wrong:
+- module responsibilities, important paths or dependencies changed -> update CODEBASE_MAP.md
+- architectural boundaries or major data flows changed -> update ARCHITECTURE.md
+- a feature's state or a known limitation changed -> update CURRENT_STATE.md
+- a milestone or deliverable status changed -> update ROADMAP.md
+- a consequential decision made or superseded -> add or amend a record in DECISIONS.md
+Do not rewrite unchanged documentation just to refresh dates or commit hashes.
+At the end of a session the user can run /wrap (.claude/skills/wrap/SKILL.md), which detects changes since the last wrap and applies these updates incrementally.

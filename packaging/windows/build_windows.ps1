@@ -25,9 +25,10 @@
 .PARAMETER Clean
     Delete build\, dist\ and the build environment first.
 .PARAMETER Python
-    The Python used to create the build environment (default: the "python" on PATH; Python 3.10+ x64).
+    The Python used to create the build environment (default: the "python" on PATH when it is 3.10, otherwise
+    "py -3.10"). It must be 64-bit Python 3.10, the version CI tests and releases with.
 .PARAMETER TestPython
-    The Python that has the test tools installed (default: .venv\Scripts\python.exe if present).
+    The Python that has the test tools installed (default: .venv\Scripts\python.exe if present; also 3.10).
 .PARAMETER InnoSetupPath
     ISCC.exe, when it is neither on PATH nor in a default install folder.
 .PARAMETER SignThumbprint
@@ -42,7 +43,7 @@ param(
     [switch]$SkipTests,
     [switch]$SkipInstaller,
     [switch]$Clean,
-    [string]$Python = "python",
+    [string]$Python = "",
     [string]$TestPython = "",
     [string]$InnoSetupPath = "",
     [string]$SignThumbprint = $env:SM_SIGN_THUMBPRINT,
@@ -63,11 +64,47 @@ $AppDir = Join-Path $DistDir "ScheduleMaxing"
 $AppExe = Join-Path $AppDir "ScheduleMaxing.exe"
 $InstallerDir = Join-Path $DistDir "installer"
 
+# The Python that CI tests with and the release workflow builds with (.github/workflows/*.yml, python-version).
+# A local build must use the same one, or the installer holds a different program from the one the tests checked.
+$PythonVersion = "3.10"
+
 function Step([string]$Message) { Write-Host ""; Write-Host "==> $Message" -ForegroundColor Cyan }
 
 function Invoke-Checked([string]$Program, [string[]]$Arguments) {
     & $Program @Arguments
     if ($LASTEXITCODE -ne 0) { throw "Failed (exit code $LASTEXITCODE): $Program $($Arguments -join ' ')" }
+}
+
+# "major.minor" of a Python, or "" when it cannot be run.
+function Get-PythonVersion([string]$Program) {
+    try {
+        $found = & $Program -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null
+        if ($LASTEXITCODE -eq 0 -and $found) { return "$found".Trim() }
+    } catch {}
+    return ""
+}
+
+function Assert-PythonVersion([string]$Program, [string]$Role, [string]$Remedy) {
+    $found = Get-PythonVersion $Program
+    if ($found -ne $PythonVersion) {
+        if (-not $found) { $found = "not runnable" }
+        throw "$Role must be Python $PythonVersion, the version CI tests and releases with (found $found`: $Program). $Remedy"
+    }
+}
+
+# The Python that creates the build environment: -Python, else "python" on PATH when it is the right version
+# (in the release workflow: the one actions/setup-python installed), else the Python launcher's "py -3.10".
+function Find-BasePython {
+    if ($Python) { return $Python }
+    if ((Get-PythonVersion "python") -eq $PythonVersion) { return "python" }
+    $launcher = Get-Command py.exe -ErrorAction SilentlyContinue
+    if ($launcher) {
+        try {
+            $exe = & $launcher.Source "-$PythonVersion" -c "import sys; print(sys.executable)" 2>$null
+            if ($LASTEXITCODE -eq 0 -and $exe) { return "$exe".Trim() }
+        } catch {}
+    }
+    return "python"
 }
 
 function Find-SignTool {
@@ -133,7 +170,12 @@ try {
     }
 
     Step "Build environment ($BuildEnv)"
-    if (-not (Test-Path $BuildPython)) { Invoke-Checked $Python @("-m", "venv", $BuildEnv) }
+    if (-not (Test-Path $BuildPython)) {
+        $BasePython = Find-BasePython
+        Assert-PythonVersion $BasePython "The build Python" "Install 64-bit Python $PythonVersion or pass -Python <path to it>."
+        Invoke-Checked $BasePython @("-m", "venv", $BuildEnv)
+    }
+    Assert-PythonVersion $BuildPython "The build environment" "Rebuild it with -Clean (and -Python <Python $PythonVersion> if needed)."
     Invoke-Checked $BuildPython @("-m", "pip", "install", "--disable-pip-version-check", "--quiet", "--upgrade", "pip")
     Invoke-Checked $BuildPython @("-m", "pip", "install", "--disable-pip-version-check", "--quiet", "-r", "requirements-build.txt")
     $bits = (& $BuildPython -c "import struct; print(struct.calcsize('P') * 8)").Trim()
@@ -149,6 +191,7 @@ try {
         if (-not (Test-Path $TestPython)) {
             throw "No test environment at $TestPython. Pass -TestPython <python with requirements.txt installed> or -SkipTests."
         }
+        Assert-PythonVersion $TestPython "The test Python" "Pass -TestPython <a Python $PythonVersion environment> or -SkipTests."
         Invoke-Checked $TestPython @("-m", "pytest", "-m", "dev", "-q")
     }
 
