@@ -258,3 +258,14 @@ def test_build_script_stops_on_errors_and_checks_before_packaging():
                                                            "Smoke test", "Inno Setup installer", "Checksums")]
     assert order == sorted(order)
     assert sys.platform != "win32" or (PACKAGING / "build_windows.ps1").is_file()
+
+
+def test_build_script_requires_the_python_that_ci_tests_with():
+    # A local build with another Python would ship a program the tests never checked.
+    required = re.search(r'^\$PythonVersion = "(\d+\.\d+)"$', BUILD, re.MULTILINE).group(1)
+    workflows = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
+    versions = {match for workflow in workflows
+                for match in re.findall(r'python-version:\s*"([^"]+)"', workflow.read_text(encoding="utf-8"))}
+    assert versions == {required}
+    assert BUILD.count("Assert-PythonVersion $") == 3  # the base Python, the build environment, the test Python
+    assert 'Invoke-Checked $Python @("-m", "venv"' not in BUILD  # never an unchecked Python
