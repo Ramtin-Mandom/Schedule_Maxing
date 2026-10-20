@@ -62,6 +62,7 @@ from app.execution.db import (
     IntegrityCheckError,
     MigrationError,
     NewerSchemaError,
+    data_version,
     get_connection,
     resolve_db_path,
     transaction_state_for,
@@ -175,6 +176,15 @@ class AppServices:
             )
             self.workspace = Workspace(scope=scope, epoch=self.workspace.epoch + 1)
             return self.workspace
+
+    def data_version(self) -> tuple[int, int] | None:
+        """
+        Changes whenever stored data may have changed (any commit or write on the shared connection: local
+        edits, a sync's applies, imports) or the workspace switched. Cheap: no query, no lock
+        (app/ui/page_freshness.py). None once closed.
+        """
+        version = None if self.closed else data_version(self.connection)
+        return None if version is None else (version, self.workspace.epoch)
 
     def workspace_guard(self) -> Callable[[], bool]:
         """For run_in_background(still_current=...): true while the workspace is the one current now."""

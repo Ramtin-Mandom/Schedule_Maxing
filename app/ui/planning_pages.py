@@ -21,6 +21,7 @@ import customtkinter as ctk
 from app.planning.models import MAX_MILESTONE_SCORE, MIN_MILESTONE_SCORE
 from app.ui import theme
 from app.ui.background import WRITE_LANE, run_in_background
+from app.ui.page_freshness import data_key, unchanged
 from app.ui.components import (
     AppButton,
     Card,
@@ -228,6 +229,8 @@ class ProjectsPage(ctk.CTkFrame):
         self.snapshot: ProjectsSnapshot | None = None
         #: The project whose detail view is open (None: the overview).
         self.selected: uuid.UUID | None = None
+        #: The data key (app/ui/page_freshness.py) the shown snapshot was read with.
+        self._read_with = None
         self._busy = False
         self._options_token = 0
         self.layout: LayoutMode | None = None
@@ -394,8 +397,20 @@ class ProjectsPage(ctk.CTkFrame):
             self.detail.grid(row=0, column=0, sticky="nsew")
 
     def on_show(self) -> None:
-        selected = self.selected
-        self.work(lambda: self.controller.load(selected), self.render)
+        """Re-read the projects, unless nothing was written since they were read (app/ui/page_freshness.py)."""
+        selected, key = self.selected, self._data_key()
+        if unchanged(key, self._read_with):
+            return
+
+        def shown(snapshot: ProjectsSnapshot) -> None:
+            self._read_with = key if self.selected == selected else None
+            self.render(snapshot)
+
+        self.work(lambda: self.controller.load(selected), shown)
+
+    def _data_key(self):
+        defaults = self.task_defaults.value if self.task_defaults is not None else None
+        return data_key(self, self.selected, self.controller.today(), defaults)
 
     # ------------------------------------------------------------------ rendering
 

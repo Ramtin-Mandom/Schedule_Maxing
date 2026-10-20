@@ -234,7 +234,9 @@ def test_only_an_outermost_commit_counts_and_notifies(tmp_path) -> None:
         start = state.commits  # the migrations of a new database committed already
         before = data_version(connection)
         connection.execute("SELECT COUNT(*) FROM local_settings").fetchone()
-        assert data_version(connection) == before  # reading changes nothing
+        with transaction(connection):  # a unit of work that only reads (as some loads are)
+            connection.execute("SELECT COUNT(*) FROM local_settings").fetchone()
+        assert data_version(connection) == before and heard == []  # reading changes nothing
         with transaction(connection):
             with transaction(connection):  # a savepoint: not a commit
                 connection.execute("INSERT INTO local_settings (name, value) VALUES ('a', '1')")

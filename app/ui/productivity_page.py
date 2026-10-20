@@ -25,12 +25,16 @@ tracker report and are worded by app/ui/tracker_view.py. Every read runs off
 the Tk main thread (app/ui/background.py, which also drops a result of a
 previous account or a destroyed page); each section's request carries a
 number, so an answer to an older filter selection never replaces a newer
-one. A section re-reads the persisted records when it is next shown.
+one. A section re-reads the persisted records when it is next shown, unless
+nothing was written since (app/ui/page_freshness.py); the last few reports are
+kept per data version and filters, so going back to a filter needs no new read.
 """
 
 from __future__ import annotations
 
 import tkinter as tk
+from collections import OrderedDict
+from datetime import date
 
 import customtkinter as ctk
 
@@ -40,6 +44,7 @@ from app.productivity.tracker import WEEKDAYS, TrackerFilters, TrackerReport
 from app.ui import theme, tracker_view
 from app.ui.background import ControllerResult, run_in_background
 from app.ui.components import AppButton
+from app.ui.page_freshness import data_key, unchanged
 from app.ui.paint_widgets import AppOptionMenu
 from app.ui.productivity_charts import CompletionRateByBucketChart, PlannedVsActualChart
 from app.ui.productivity_controller import ProductivityController
@@ -61,6 +66,8 @@ _SECTION_PARTS = {_GENERAL: (_GENERAL,), _SPECIFIC: (_TASKS, _TIME), _PROJECT: (
 _NO_PROJECT_TITLE = "Select a project"
 _TYPE_PAGE_SIZE = 8
 _PAGE_WIDTH = 880
+#: Reports kept for (data version, section, date range, filters); a workspace switch rebuilds the page.
+_REPORT_CACHE_SIZE = 16
 
 
 class _StatTile(ctk.CTkFrame):
@@ -139,10 +146,14 @@ class ProductivityPage(ctk.CTkFrame):
         self._type_keys: dict[str, str] = {}
         #: Every tag seen so far in this workspace; a tag stays offered once it has been used.
         self._known_tags: set[str] = set()
+        #: Recent reports by (data version, section, date range, filters): _REPORT_CACHE_SIZE at most.
+        self._report_cache: OrderedDict = OrderedDict()
 
         self.columnconfigure(0, weight=1)
         self._build()
         self.show_section(self.section)
+        #: The data key (app/ui/page_freshness.py) the shown reports were read with.
+        self._read_with = data_key(self, date.today())
         self.refresh()
 
     # ------------------------------------------------------------------
@@ -442,7 +453,14 @@ class ProductivityPage(ctk.CTkFrame):
         self._mark(self.section_buttons, self.section, _SECTION_LABELS)
 
     def on_show(self) -> None:
-        """Re-read persisted records each time the page is shown (after actions, a sync or direct writes)."""
+        """
+        Re-read persisted records when the page is shown (after actions, a sync or direct writes) -- unless
+        nothing was written since they were read (app/ui/page_freshness.py): then nothing is re-read or redrawn.
+        """
+        key = data_key(self, date.today())
+        if unchanged(key, self._read_with):
+            return
+        self._read_with = key
         self.refresh()
 
     def refresh(self) -> None:
@@ -472,8 +490,20 @@ class ProductivityPage(ctk.CTkFrame):
         range_days, filters = self._selection(section)
         self._requests[section] += 1
         number = self._requests[section]
+        version = data_key(self)
+        cache_key = None if version is None else (version, section, range_days,
+                                                  tuple(sorted(filters.model_dump().items())))
+        cached = self._report_cache.get(cache_key) if cache_key is not None else None
+        if cached is not None:  # the same report for the same data and filters: no worker, no re-computation
+            self._report_cache.move_to_end(cache_key)
+            self._on_loaded(section, *cached)
+            return
 
         def done(loaded: tuple[ControllerResult[TrackerReport], list[str]]) -> None:
+            if cache_key is not None and loaded[0].ok:
+                self._report_cache[cache_key] = loaded
+                while len(self._report_cache) > _REPORT_CACHE_SIZE:
+                    self._report_cache.popitem(last=False)
             if number == self._requests[section]:
                 self._on_loaded(section, *loaded)
 
@@ -482,6 +512,7 @@ class ProductivityPage(ctk.CTkFrame):
 
     def _on_loaded(self, section: str, result: ControllerResult[TrackerReport], used_tags: list[str]) -> None:
         if not result.ok:
+            self._read_with = None  # the next show tries again
             if isinstance(result.cause, NotSignedInError):
                 return  # direct storage before sign-in: the Account page says so
             self.status_label.configure(text=f"Productivity data is unavailable: {result.error}")
