@@ -17,7 +17,8 @@ work:
   approved plans; ask the owner before starting one.
 
 Already done; do not re-plan these: recurrence series, manual placements and explicit rescheduling,
-the five scheduling modes, task types and points, the productivity tracker redesign, email verification,
+the five scheduling modes, task types and points, the productivity tracker redesign, desktop budgeting
+(balance, income/expenses, stats and forecast, future items), email verification,
 MFA, password recovery, session management, database-backed rate limits, the Windows installer and
 updater, and the CI, release and deploy workflows.
 
@@ -28,7 +29,9 @@ updater, and the CI, release and deploy workflows.
 ### M1. Make the in-progress 1.2.0 debug branch releasable
 
 - **Priority:** High
-- **Status:** In progress. Branch `codex/debug-1.2.0-update` has uncommitted changes in 11 files.
+- **Status:** In progress. Pull request #21 merged the branch into `main` (including the build script's
+  Python 3.10 check), but the updater edits in the modules below are still uncommitted on `main`, and the
+  Ruff error is still there (verified 2026-10-19).
 - **Objective:** Commit a green change through a pull request so that CI, and then a release, can use it.
 - **Dependencies:** None.
 - **Modules:** `app/ui/update_view.py`, `app/ui/update_controller.py`, `app/sync/transport.py`, `app/app.py`,
@@ -183,6 +186,18 @@ Items the repository names as future work or as "not yet" limitations, in priori
   - opt-in use of predicted durations;
   - showing ML predictions in the UI once the evidence gate passes.
 - **Complexity:** Varies.
+
+### M10. Budgeting beyond the desktop
+
+- **Priority:** Low
+- **Status:** Budgeting is implemented end to end on the desktop (General, Stats, Future, the Day page money
+  widgets), with local, direct and synchronized storage. Only the local web profile lacks it.
+- **Deliverables:**
+  - [x] Desktop Budgeting page and Day page integration.
+  - [ ] Budget routes in the local web profile, if wanted.
+  - [ ] Optional: "this and following" series edits, moving an occurrence from the forms.
+- **Testing:** `tests/budget/*`, `tests/ui/test_budget_*.py`.
+- **Complexity:** Small to Medium.
 
 ---
 

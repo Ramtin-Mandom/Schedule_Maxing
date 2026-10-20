@@ -281,8 +281,10 @@ def capabilities_via(request, token: str) -> dict:
 
 
 def pull_via(request, token: str, after: int, limit: int) -> PullPage:
-    # include_task_types: this client stores task-type records; an older server ignores the parameter.
-    page = request("GET", f"/changes?after={int(after)}&limit={int(limit)}&include_task_types=true", token, None)
+    # include_task_types / include_budget: this client stores task-type and budget records; an older server
+    # ignores the parameters.
+    page = request("GET", f"/changes?after={int(after)}&limit={int(limit)}&include_task_types=true"
+                          "&include_budget=true", token, None)
     return PullPage(changes=page["changes"], cursor=int(page["cursor"]), has_more=bool(page["has_more"]))
 
 
@@ -339,9 +341,9 @@ class HttpTransport:
 
     def __init__(self, base_url: str, *, timeout: float = 10.0, wake_timeout: float = 75.0) -> None:
         self.base_url = validate_backend_url(base_url)
-        # Certificate and host name verification stay on (the default context); redirects are refused.
-        self._opener = urllib.request.build_opener(
-            _RefuseRedirects, urllib.request.HTTPSHandler(context=ssl.create_default_context()))
+        # Set up TLS on the first network request, not while the local database is opening.
+        # A machine with a broken certificate store must still be able to work offline.
+        self._opener = None
         self._timeout = timeout
         self._wake_timeout = max(timeout, wake_timeout)
         self._awake = False
@@ -367,6 +369,10 @@ class HttpTransport:
         if token is not None:
             request.add_header("Authorization", f"Bearer {token}")
         try:
+            if self._opener is None:
+                # Certificate and host name verification stay on; redirects are refused.
+                self._opener = urllib.request.build_opener(
+                    _RefuseRedirects, urllib.request.HTTPSHandler(context=ssl.create_default_context()))
             with self._opener.open(request, timeout=timeout) as response:
                 return json.loads(response.read().decode("utf-8") or "{}")
         except urllib.error.HTTPError as error:
@@ -380,6 +386,8 @@ class HttpTransport:
             raise _classify(error.code, payload) from None
         except (urllib.error.URLError, socket.timeout, TimeoutError, ConnectionError) as error:
             raise TransportError(f"Could not reach the backend: {_describe(error, timeout)}.") from None
+        except OSError:
+            raise TransportError("Could not set up a secure connection to the backend on this computer.") from None
         except ValueError:
             raise TransportError("The backend returned an unreadable response.") from None
 

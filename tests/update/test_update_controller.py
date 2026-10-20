@@ -134,13 +134,14 @@ def test_a_source_checkout_is_told_why_it_is_not_installed(github, tmp_path):
 # -----------------------------------------------------------------------------
 
 
-def test_the_automatic_check_runs_once_a_day_and_only_when_enabled():
+def test_the_automatic_check_runs_on_every_launch_when_enabled():
     fresh = UISettings()
     assert automatic_check_due(fresh, NOW)
     checked = with_check_recorded(fresh, NOW)
-    assert not automatic_check_due(checked, NOW + timedelta(hours=23))
+    assert automatic_check_due(checked, NOW + timedelta(hours=23))
     assert automatic_check_due(checked, NOW + timedelta(hours=24))
-    assert automatic_check_due(checked, NOW - timedelta(days=2))  # the clock was set back: do not stay silent forever
+    assert automatic_check_due(checked, NOW - timedelta(days=2))
+    assert automatic_check_due(with_skipped_version(checked, "1.4.0"), NOW)
     assert not automatic_check_due(with_automatic_checks(fresh, False), NOW)
     assert not automatic_check_due(fresh, NOW, enabled=False)  # no repository configured
     assert automatic_check_due(UISettings(last_update_check="not a date"), NOW)

@@ -41,7 +41,7 @@ from backend.mutations import mutation
 from backend.days import DayOutcomeIn, DayOutcomeOut, day_summaries, set_day_outcome
 from backend.task_data_reset import ResetTaskDataIn, ResetTaskDataOut, reset_task_data
 from backend.outcomes import OutcomeIn, OutcomeOut, set_placement_outcome
-from backend.resources import CRUD_RESOURCES, ResourceSpec
+from backend.resources import BUDGET_RESOURCES, CRUD_RESOURCES, ResourceSpec
 from backend.mfa import MfaService
 from backend.security import (
     MAX_PASSWORD_LENGTH,
@@ -659,6 +659,7 @@ def delete_execution(
 # -----------------------------------------------------------------------------
 
 changes = APIRouter(tags=["changes"])
+BUDGET_ENTITY_TYPES = tuple(spec.entity_type for spec in BUDGET_RESOURCES)
 
 
 class ChangeOut(BaseModel):
@@ -688,6 +689,11 @@ def list_changes(
         description="Also return task-type changes. Off by default: a client that predates task types does not "
                     "know the record type, and its cursor still advances past them.",
     ),
+    include_budget: bool = Query(
+        default=False,
+        description="Also return budget changes (balances, entries, occurrence edits). Off by default, like "
+                    "include_task_types: a client that predates budgets does not know the record types.",
+    ),
     user_id: uuid.UUID = Depends(current_user_id),
     session: Session = Depends(get_session),
 ) -> dict:
@@ -695,6 +701,8 @@ def list_changes(
     conditions = [models.ChangeLogEntry.user_id == user_id, models.ChangeLogEntry.seq > after]
     if not include_task_types:
         conditions.append(models.ChangeLogEntry.entity_type != "task_type")
+    if not include_budget:
+        conditions.append(models.ChangeLogEntry.entity_type.not_in(BUDGET_ENTITY_TYPES))
     # Each entry's snapshot, its typed row and its child rows load for the whole page (a few queries per page).
     rows = list(session.scalars(
         select(models.ChangeLogEntry).where(*conditions).order_by(models.ChangeLogEntry.seq).limit(size + 1)

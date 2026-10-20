@@ -122,6 +122,13 @@ _V14_STATEMENTS.
 
 Version 15: the defaults a project gives its new tasks. See _V15_STATEMENTS.
 
+Version 17 (app/budget): budget balances, income/expense entries and
+per-occurrence edits, synchronizable like the planning records. See
+_V17_STATEMENTS.
+
+Version 18 (app/budget, Budgeting > Future): income ideas and wishlist
+items. See _V18_STATEMENTS.
+
 Execution <-> planning links (the legacy compatibility strategy):
     executions.task_id / scheduled_task_id are *historical identity*: they
     record which task/placement an execution was created for, alongside the
@@ -781,8 +788,23 @@ _V5_SYNC_TABLES: tuple[tuple[str, str], ...] = (
     ("execution", "executions"),
 )
 
-#: (entity type on the wire, local table) for every synchronizable table (task types since schema v13).
-SYNC_TABLES: tuple[tuple[str, str], ...] = (*_V5_SYNC_TABLES, ("task_type", "task_types"))
+#: (entity type on the wire, local table) of the budget records of schema v17. Frozen: v17 creates their triggers.
+_V17_BUDGET_TABLES: tuple[tuple[str, str], ...] = (
+    ("budget_balance", "budget_balances"),
+    ("budget_entry", "budget_entries"),
+    ("budget_override", "budget_overrides"),
+)
+#: The Future records (income ideas, wishlist items) of schema v18. Frozen: v18 creates their triggers.
+_V18_BUDGET_TABLES: tuple[tuple[str, str], ...] = (
+    ("budget_idea", "budget_ideas"),
+    ("budget_wish", "budget_wishes"),
+)
+#: (entity type on the wire, local table) of every budget table (app/budget): v17 and v18.
+BUDGET_SYNC_TABLES: tuple[tuple[str, str], ...] = (*_V17_BUDGET_TABLES, *_V18_BUDGET_TABLES)
+
+#: (entity type on the wire, local table) for every synchronizable table (task types since schema v13, budget
+#: records since v17).
+SYNC_TABLES: tuple[tuple[str, str], ...] = (*_V5_SYNC_TABLES, ("task_type", "task_types"), *BUDGET_SYNC_TABLES)
 
 #: True while synchronization applies pulled records (app/sync): change
 #: capture is suppressed (no outbound echo) and link checks are left to the
@@ -1176,6 +1198,112 @@ _V16_STATEMENTS: tuple[str, ...] = (
 )
 
 
+#: app.budget.models enumerations and bounds, for the v17 CHECKs.
+BUDGET_KINDS = ("income", "expense")
+BUDGET_RECURRENCES = ("none", "daily", "weekly", "biweekly", "monthly")
+BUDGET_OVERRIDE_STATES = ("modified", "skipped")
+BUDGET_MAX_AMOUNT_MINOR = 10 ** 13 - 1
+
+
+def _sql_in(column: str, values: tuple[str, ...]) -> str:
+    return f"{column} IN ({', '.join(repr(value) for value in values)})"
+
+
+_BUDGET_META = """
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        version INTEGER NOT NULL CHECK (version > 0),
+        deleted_at TEXT
+"""
+
+# Version 17 (app/budget): budgeting -- a user-entered balance with its as-of date, income/expense entries
+# (amounts in integer minor units, a recurrence and an optional end date and project link) and per-occurrence
+# edits keyed by the occurrence's scheduled date (one live edit per occurrence). Owner-scoped, sync-ready
+# records with the standard capture and owner triggers. project_id / entry_id are deliberately not foreign
+# keys (like tasks.task_type_id): a pulled record may name one this device has not received yet; the service
+# and the server check them. Additive only: no existing table changes.
+_V17_STATEMENTS: tuple[str, ...] = (
+    f"""
+    CREATE TABLE IF NOT EXISTS budget_balances (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        amount_minor INTEGER NOT NULL CHECK (amount_minor BETWEEN -{BUDGET_MAX_AMOUNT_MINOR} AND
+            {BUDGET_MAX_AMOUNT_MINOR}),
+        as_of TEXT NOT NULL,{_BUDGET_META}    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_budget_balances_user_id ON budget_balances(user_id)",
+    f"""
+    CREATE TABLE IF NOT EXISTS budget_entries (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        kind TEXT NOT NULL CHECK ({_sql_in("kind", BUDGET_KINDS)}),
+        name TEXT NOT NULL CHECK (length(name) > 0),
+        amount_minor INTEGER NOT NULL CHECK (amount_minor BETWEEN 1 AND {BUDGET_MAX_AMOUNT_MINOR}),
+        category TEXT NOT NULL CHECK (length(category) > 0),
+        start_date TEXT NOT NULL,
+        recurrence TEXT NOT NULL CHECK ({_sql_in("recurrence", BUDGET_RECURRENCES)}),
+        end_date TEXT CHECK (end_date IS NULL OR (recurrence <> 'none' AND end_date >= start_date)),
+        project_id TEXT,{_BUDGET_META}    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_budget_entries_user_id ON budget_entries(user_id)",
+    f"""
+    CREATE TABLE IF NOT EXISTS budget_overrides (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        entry_id TEXT NOT NULL,
+        occurrence_date TEXT NOT NULL,
+        state TEXT NOT NULL CHECK ({_sql_in("state", BUDGET_OVERRIDE_STATES)}),
+        name TEXT CHECK (name IS NULL OR length(name) > 0),
+        amount_minor INTEGER CHECK (amount_minor IS NULL OR amount_minor BETWEEN 1 AND {BUDGET_MAX_AMOUNT_MINOR}),
+        date TEXT,
+        category TEXT CHECK (category IS NULL OR length(category) > 0),
+        project_id TEXT,{_BUDGET_META},
+        CHECK (state = 'modified' OR (name IS NULL AND amount_minor IS NULL AND date IS NULL AND category IS NULL
+               AND project_id IS NULL))
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_budget_overrides_user_id ON budget_overrides(user_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_budget_overrides_live_slot "
+    "ON budget_overrides(entry_id, occurrence_date) WHERE deleted_at IS NULL",
+    *_capture_triggers(_V17_BUDGET_TABLES, work_sessions=False),
+)
+
+
+# Version 18 (app/budget, Budgeting > Future): income ideas (an expected amount and the amount received or
+# secured so far) and wishlist items (no date; converting one records the expense it became and that expense's
+# date, together). Neither is a transaction. Owner-scoped, sync-ready, with the standard capture and owner
+# triggers; project_id / converted_entry_id are not foreign keys (see v17). Additive only.
+_V18_STATEMENTS: tuple[str, ...] = (
+    f"""
+    CREATE TABLE IF NOT EXISTS budget_ideas (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        name TEXT NOT NULL CHECK (length(name) > 0),
+        expected_amount_minor INTEGER NOT NULL CHECK (expected_amount_minor BETWEEN 1 AND {BUDGET_MAX_AMOUNT_MINOR}),
+        secured_amount_minor INTEGER NOT NULL DEFAULT 0 CHECK (secured_amount_minor BETWEEN 0 AND
+            {BUDGET_MAX_AMOUNT_MINOR}),
+        description TEXT,{_BUDGET_META}    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_budget_ideas_user_id ON budget_ideas(user_id)",
+    f"""
+    CREATE TABLE IF NOT EXISTS budget_wishes (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        name TEXT NOT NULL CHECK (length(name) > 0),
+        amount_minor INTEGER NOT NULL CHECK (amount_minor BETWEEN 1 AND {BUDGET_MAX_AMOUNT_MINOR}),
+        category TEXT NOT NULL CHECK (length(category) > 0),
+        project_id TEXT,
+        description TEXT,
+        converted_entry_id TEXT,
+        converted_on TEXT,{_BUDGET_META},
+        CHECK ((converted_entry_id IS NULL) = (converted_on IS NULL))
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_budget_wishes_user_id ON budget_wishes(user_id)",
+    *_capture_triggers(_V18_BUDGET_TABLES, work_sessions=False),
+)
+
+
 def backfill_fixed_block_completions(connection: sqlite3.Connection) -> int:
     """
     Give every live fixed block that has no execution yet a completed one worth
@@ -1375,6 +1503,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     (14, _V14_STATEMENTS),
     (15, _V15_STATEMENTS),
     (16, _migrate_v15_to_v16),
+    (17, _V17_STATEMENTS),
+    (18, _V18_STATEMENTS),
 )
 
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1][0]

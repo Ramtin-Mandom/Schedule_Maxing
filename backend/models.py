@@ -73,7 +73,12 @@ OCCURRENCE_STATES = ("modified", "skipped", "deleted", "superseded")
 TASK_KINDS = ("flexible", "todo")
 PREFERRED_TIMES = ("early", "mid", "late")
 ENTITY_TYPES = ("project", "task", "fixed_block", "placement", "preference", "schedule_generation", "execution",
-                "task_type")
+                "task_type", "budget_balance", "budget_entry", "budget_override", "budget_idea", "budget_wish")
+#: app.budget.models enumerations (the budget records, revision 0019).
+BUDGET_KINDS = ("income", "expense")
+BUDGET_RECURRENCES = ("none", "daily", "weekly", "biweekly", "monthly")
+BUDGET_OVERRIDE_STATES = ("modified", "skipped")
+BUDGET_MAX_AMOUNT_MINOR = 10 ** 13 - 1
 SYNC_STATUSES = ("applied", "conflict", "rejected")
 #: app.planning.models.PlacementRemovalReason (docs/execution-rescheduling.md).
 PLACEMENT_REMOVAL_REASONS = ("rescheduled", "regenerated", "deleted", "task_deleted", "reset")
@@ -869,6 +874,153 @@ class ScheduleGeneration(_Record, _GenerationContent, Base):
 
 
 # -----------------------------------------------------------------------------
+# Budget records (app/budget): not planning data -- no engine, constraint or
+# reward reads them. Amounts are integer minor units.
+# -----------------------------------------------------------------------------
+
+
+class _BudgetBalanceContent:
+    amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    as_of: Mapped[date] = mapped_column(Date, nullable=False)
+
+
+def _budget_balance_checks(table: str) -> tuple:
+    return (CheckConstraint(f"amount_minor BETWEEN -{BUDGET_MAX_AMOUNT_MINOR} AND {BUDGET_MAX_AMOUNT_MINOR}",
+                            name=f"ck_{table}_amount"),)
+
+
+class _BudgetEntryContent:
+    kind: Mapped[str] = mapped_column(String(10), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    category: Mapped[str] = mapped_column(String(100), nullable=False)
+    start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    recurrence: Mapped[str] = mapped_column(String(10), nullable=False)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+
+
+def _budget_entry_checks(table: str) -> tuple:
+    return (
+        CheckConstraint(_in("kind", BUDGET_KINDS), name=f"ck_{table}_kind"),
+        CheckConstraint(_in("recurrence", BUDGET_RECURRENCES), name=f"ck_{table}_recurrence"),
+        CheckConstraint("length(name) > 0 AND length(category) > 0", name=f"ck_{table}_text"),
+        CheckConstraint(f"amount_minor BETWEEN 1 AND {BUDGET_MAX_AMOUNT_MINOR}", name=f"ck_{table}_amount"),
+        CheckConstraint("end_date IS NULL OR (recurrence <> 'none' AND end_date >= start_date)",
+                        name=f"ck_{table}_end_date"),
+    )
+
+
+class _BudgetOverrideContent:
+    entry_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    #: The occurrence's scheduled date (its identity within the entry).
+    occurrence_date: Mapped[date] = mapped_column(Date, nullable=False)
+    state: Mapped[str] = mapped_column(String(10), nullable=False)
+    name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    amount_minor: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+
+
+def _budget_override_checks(table: str) -> tuple:
+    return (
+        CheckConstraint(_in("state", BUDGET_OVERRIDE_STATES), name=f"ck_{table}_state"),
+        CheckConstraint(f"amount_minor IS NULL OR amount_minor BETWEEN 1 AND {BUDGET_MAX_AMOUNT_MINOR}",
+                        name=f"ck_{table}_amount"),
+        CheckConstraint("state = 'modified' OR (name IS NULL AND amount_minor IS NULL AND date IS NULL "
+                        "AND category IS NULL AND project_id IS NULL)", name=f"ck_{table}_skipped"),
+    )
+
+
+class _BudgetIdeaContent:
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    expected_amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    #: Received or firmly secured so far (the idea's progress).
+    secured_amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    description: Mapped[str | None] = mapped_column(String(4000), nullable=True)
+
+
+def _budget_idea_checks(table: str) -> tuple:
+    return (
+        CheckConstraint("length(name) > 0", name=f"ck_{table}_name"),
+        CheckConstraint(f"expected_amount_minor BETWEEN 1 AND {BUDGET_MAX_AMOUNT_MINOR}", name=f"ck_{table}_expected"),
+        CheckConstraint(f"secured_amount_minor BETWEEN 0 AND {BUDGET_MAX_AMOUNT_MINOR}", name=f"ck_{table}_secured"),
+    )
+
+
+class _BudgetWishContent:
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    category: Mapped[str] = mapped_column(String(100), nullable=False)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    description: Mapped[str | None] = mapped_column(String(4000), nullable=True)
+    #: The expense the item was turned into, and its date (set together, once).
+    converted_entry_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    converted_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+
+def _budget_wish_checks(table: str) -> tuple:
+    return (
+        CheckConstraint("length(name) > 0 AND length(category) > 0", name=f"ck_{table}_text"),
+        CheckConstraint(f"amount_minor BETWEEN 1 AND {BUDGET_MAX_AMOUNT_MINOR}", name=f"ck_{table}_amount"),
+        CheckConstraint("(converted_entry_id IS NULL) = (converted_on IS NULL)", name=f"ck_{table}_converted"),
+    )
+
+
+class BudgetBalance(_Record, _BudgetBalanceContent, Base):
+    __tablename__ = "budget_balances"
+
+    __table_args__ = (*_record_checks("budget_balances"), *_budget_balance_checks("budget_balances"))
+
+
+class BudgetEntry(_Record, _BudgetEntryContent, Base):
+    __tablename__ = "budget_entries"
+
+    __table_args__ = (
+        *_record_checks("budget_entries"),
+        *_budget_entry_checks("budget_entries"),
+        ForeignKeyConstraint(["user_id", "project_id"], ["projects.user_id", "projects.id"],
+                             name="fk_budget_entries_project"),
+    )
+
+
+class BudgetOverride(_Record, _BudgetOverrideContent, Base):
+    __tablename__ = "budget_overrides"
+
+    __table_args__ = (
+        *_record_checks("budget_overrides"),
+        *_budget_override_checks("budget_overrides"),
+        ForeignKeyConstraint(["user_id", "entry_id"], ["budget_entries.user_id", "budget_entries.id"],
+                             name="fk_budget_overrides_entry"),
+        ForeignKeyConstraint(["user_id", "project_id"], ["projects.user_id", "projects.id"],
+                             name="fk_budget_overrides_project"),
+        # One live edit per occurrence.
+        Index("uq_budget_overrides_live_slot", "user_id", "entry_id", "occurrence_date", unique=True,
+              sqlite_where=text("deleted_at IS NULL"), postgresql_where=text("deleted_at IS NULL")),
+    )
+
+
+class BudgetIdea(_Record, _BudgetIdeaContent, Base):
+    __tablename__ = "budget_ideas"
+
+    __table_args__ = (*_record_checks("budget_ideas"), *_budget_idea_checks("budget_ideas"))
+
+
+class BudgetWish(_Record, _BudgetWishContent, Base):
+    __tablename__ = "budget_wishes"
+
+    __table_args__ = (
+        *_record_checks("budget_wishes"),
+        *_budget_wish_checks("budget_wishes"),
+        ForeignKeyConstraint(["user_id", "project_id"], ["projects.user_id", "projects.id"],
+                             name="fk_budget_wishes_project"),
+        ForeignKeyConstraint(["user_id", "converted_entry_id"], ["budget_entries.user_id", "budget_entries.id"],
+                             name="fk_budget_wishes_entry"),
+    )
+
+
+# -----------------------------------------------------------------------------
 # Immutable record revisions: the historical snapshots the change log and the
 # recorded sync outcomes return (the record exactly as the API returned it
 # then). One header row per snapshot plus one typed row (joined-table
@@ -1119,6 +1271,36 @@ class ScheduleGenerationRevision(_RevisionKey, _GenerationContent, RecordRevisio
     __tablename__ = "schedule_generation_revisions"
     __table_args__ = (_revision_of("schedule_generation_revisions"), *_generation_checks("schedule_generation_revisions"))
     __mapper_args__ = {"polymorphic_identity": "schedule_generation", "polymorphic_load": "selectin"}
+
+
+class BudgetBalanceRevision(_RevisionKey, _BudgetBalanceContent, RecordRevision):
+    __tablename__ = "budget_balance_revisions"
+    __table_args__ = (_revision_of("budget_balance_revisions"), *_budget_balance_checks("budget_balance_revisions"))
+    __mapper_args__ = {"polymorphic_identity": "budget_balance", "polymorphic_load": "selectin"}
+
+
+class BudgetEntryRevision(_RevisionKey, _BudgetEntryContent, RecordRevision):
+    __tablename__ = "budget_entry_revisions"
+    __table_args__ = (_revision_of("budget_entry_revisions"), *_budget_entry_checks("budget_entry_revisions"))
+    __mapper_args__ = {"polymorphic_identity": "budget_entry", "polymorphic_load": "selectin"}
+
+
+class BudgetOverrideRevision(_RevisionKey, _BudgetOverrideContent, RecordRevision):
+    __tablename__ = "budget_override_revisions"
+    __table_args__ = (_revision_of("budget_override_revisions"), *_budget_override_checks("budget_override_revisions"))
+    __mapper_args__ = {"polymorphic_identity": "budget_override", "polymorphic_load": "selectin"}
+
+
+class BudgetIdeaRevision(_RevisionKey, _BudgetIdeaContent, RecordRevision):
+    __tablename__ = "budget_idea_revisions"
+    __table_args__ = (_revision_of("budget_idea_revisions"), *_budget_idea_checks("budget_idea_revisions"))
+    __mapper_args__ = {"polymorphic_identity": "budget_idea", "polymorphic_load": "selectin"}
+
+
+class BudgetWishRevision(_RevisionKey, _BudgetWishContent, RecordRevision):
+    __tablename__ = "budget_wish_revisions"
+    __table_args__ = (_revision_of("budget_wish_revisions"), *_budget_wish_checks("budget_wish_revisions"))
+    __mapper_args__ = {"polymorphic_identity": "budget_wish", "polymorphic_load": "selectin"}
 
 
 class ExecutionRevision(_RevisionKey, _ExecutionContent, RecordRevision):

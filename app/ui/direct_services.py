@@ -37,7 +37,7 @@ import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from app.persistence import errors as direct_errors
 from app.persistence import load_direct_settings, open_direct_backend
@@ -52,6 +52,7 @@ from app.ui.account_controller import (
 )
 from app.ui.app_services import Workspace, assign_todo_dates
 from app.ui.background import ControllerResult, WorkerRegistry, install_registry
+from app.ui.budget_controller import BudgetController
 from app.ui.execution_controller import ExecutionController
 from app.ui.planning_controller import PlanningController
 from app.ui.productivity_controller import ProductivityController, task_tags
@@ -126,6 +127,24 @@ class DirectAppServices:
         if account is None:
             raise direct_errors.NotSignedInError()
         return account.reset_task_data()
+
+    def budget_service(self):
+        """Budgeting of the signed-in account (the same contract as AppServices.budget_service)."""
+        account = self.account
+        if account is None:
+            raise direct_errors.NotSignedInError()
+        return account.budget_service()
+
+    def budget_controller(self, today: Callable[[], date]) -> BudgetController:
+        """The pages' controller for the account signed in now (signed out: every call says to sign in)."""
+        account = self.account
+        if account is None:
+            def unavailable():
+                raise direct_errors.NotSignedInError()
+
+            return BudgetController(unavailable, today=today)
+        service = account.budget_service()
+        return BudgetController(lambda: service, projects=account.planning_service().list_projects, today=today)
 
     # ------------------------------------------------------------------
     # Workspace (the same contract as AppServices)

@@ -5,7 +5,7 @@ System-level view of Schedule Maxing. For file-level navigation and change impac
 reasons behind the structure see [DECISIONS.md](DECISIONS.md). Detailed contracts live in `docs/` and are
 linked where relevant rather than repeated.
 
-Verified against commit `6cc8855` (app version 1.2.0) on 2026-10-19.
+Verified against commit `f20cf0b` plus the uncommitted budgeting work (app version 1.2.0) on 2026-10-19.
 
 ## 1. What the system is
 
@@ -120,6 +120,7 @@ so the same rules run on both sides.
 | Application | Persisted planning (CRUD, ranges, rescheduling, resets, CSV), the scheduling workflow, recurrence, freshness | `app/planning/application.py`, `workflow.py`, `service.py`, `allocation.py`, `series.py`, `provenance.py`, `csv_*.py` |
 | Execution | Lifecycle rules (shared with the server), execution persistence, fixed-block and direct completions | `app/execution/` |
 | Analytics | Statistics, tracker (awards, points), schedule cohort, day summaries, median predictor, gated ML | `app/productivity/` |
+| Budget | Balance, income/expense entries with recurrence, occurrence edits, range expansion and totals in integer minor units, history statistics and the 90-day forecast (`stats.py`), income ideas and the wishlist; never read by constraints, reward or engines (a project link is a reference only) | `app/budget/` (storage: `repository.py` local, `app/persistence/budget.py` direct) |
 | Sync client | Dirty tracking, outbox, shadows, conflicts, push/pull, credentials | `app/sync/` |
 | UI | Pages/views draw; controllers/models hold UI logic and call services | `app/ui/`, `app/app.py` |
 | Runtime | Source vs packaged paths, data/log/backup/update folders, logging, self-test | `app/runtime.py`, `config/settings.py`, `app/logging_setup.py`, `app/selftest.py` |
@@ -130,12 +131,17 @@ so the same rules run on both sides.
 - **Shell.** `ScheduleOptimizerApp` (`app/app.py`, a `ctk.CTk`) builds an `AppShell` (`app/ui/shell.py`)
   with a collapsible sidebar and a page host; navigation state is the Tk-free `ShellState`
   (`app/ui/shell_state.py`). Pages: Day, Week, Month (`CalendarPage`), Project Schedule (`ProjectsPage`),
-  Productivity, Settings, Account, How to Use (`GuidePage`) and About (a `PlaceholderPage`).
+  Productivity, Budgeting (`BudgetingPage`: General / Stats / Future), Settings and About (a
+  `PlaceholderPage`). Settings is one sidebar item whose top bar (`GroupBar`, `shell_state.PAGE_GROUPS`)
+  switches between the Settings, Account and How to Use (`GuidePage`) pages, which keep their own keys. The Day page also shows the date's budget transactions and
+  income/expense totals (`app/ui/day_money.py`), read through the same `BudgetController` as Budgeting.
 - **View/controller split.** `*_page.py`/`*_view.py` create widgets; `*_controller.py`/`*_model.py` are
   Tk-free, unit-tested, and return `ControllerResult` (`.ok`, `.value`, `.error`) instead of raising.
 - **Composition.** `open_app_services` (`app/ui/app_services.py`) takes the database's single-process lock,
   opens the one SQLite connection (migrating and backing up first) and builds Planning, Execution and
-  Productivity controllers plus a `SyncService` for one **workspace** (owner scope). `DirectAppServices`
+  Productivity controllers plus a `SyncService` for one **workspace** (owner scope);
+  `budget_controller()` builds the Budgeting/Day `BudgetController` bound to that workspace when its pages are
+  built. `DirectAppServices`
   (`app/ui/direct_services.py`) offers the same surface over PostgreSQL for the dev-only direct mode.
 - **Threading.** All storage and computation runs off the Tk thread through `WorkerRegistry`
   (`app/ui/background.py`): at most 4 worker threads, a serial `WRITE_LANE` so mutations never interleave,
@@ -152,7 +158,7 @@ so the same rules run on both sides.
 
 One file, `executions.db`, under the per-user data folder (`%LOCALAPPDATA%\ScheduleMaxing` on Windows;
 `SCHEDULE_MAXING_DATA_DIR` overrides). `app/execution/db.py` owns the connection, the transaction/lock
-helpers and 16 ordered schema migrations (`MIGRATIONS`, `LATEST_SCHEMA_VERSION`). Before migrating, the
+helpers and 18 ordered schema migrations (`MIGRATIONS`, `LATEST_SCHEMA_VERSION`). Before migrating, the
 file is copied by `app/execution/backup.py`; a newer schema than the code knows is refused
 (`NewerSchemaError`). A pre-Milestone-2 `data/` folder in a source checkout is adopted once.
 
@@ -160,11 +166,15 @@ Tables: planning (`projects`, `task_types`, `tasks` + `task_tags`/`task_preferre
 `task_dependencies`/`task_recurrence_weekdays`, `fixed_blocks`, `scheduled_tasks` (placements),
 `preference_overrides`, `schedule_generations`), execution (`executions`, `work_sessions`), sync
 (`sync_accounts`, `sync_dirty`, `sync_shadows`, `sync_outbox`, `sync_conflicts`, `sync_control`,
-`execution_wire_ids`) and `local_settings`. Every synchronizable record carries an owner (`user_id`,
+`execution_wire_ids`), budget (`budget_balances`, `budget_entries`, `budget_overrides`; v17;
+`budget_ideas`, `budget_wishes`; v18) and
+`local_settings`. Every synchronizable record carries an owner (`user_id`,
 NULL = guest workspace), a `version` and a deletion marker (tombstone).
 
-Repositories: `app/planning/repository.py` (`PlanningRepository`) and `app/execution/repository.py`
-(`ExecutionRepository`) are the only SQL writers; services above them hold the rules. One process per
+Repositories: `app/planning/repository.py` (`PlanningRepository`), `app/execution/repository.py`
+(`ExecutionRepository`) and `app/budget/repository.py` (`BudgetRepository`) are the only SQL writers;
+services above them hold the rules. Recurring budget entries are expanded per query; only the entry and
+its per-occurrence edits are stored. One process per
 database file is enforced by `app/execution/instance_lock.py`.
 
 ### 5.2 Server PostgreSQL
@@ -172,13 +182,14 @@ database file is enforced by `app/execution/instance_lock.py`.
 `backend/models.py` (SQLAlchemy ORM) is normalized: live tables, typed immutable **revision** tables
 (`record_revisions` + `*_revisions`) referenced by recorded sync outcomes, a commit-ordered `change_log`,
 `sync_operations` for idempotency, and account/security tables (sessions, refresh credentials, tokens,
-MFA, rate-limit buckets, email outbox). 18 Alembic revisions in `backend/migrations/versions/`;
+MFA, rate-limit buckets, email outbox). 20 Alembic revisions in `backend/migrations/versions/`;
 `backend/migrate.py` applies them; a test compares the migrated schema with the ORM.
 
 ### 5.3 Direct PostgreSQL mode (development only)
 
 `python -m app.app --storage postgres --env-file .env` composes `app/persistence/` over the backend's own
-schema, account rules and mutation path. No local replica, no sync. The production entry point
+schema, account rules and mutation path (budget records included, through
+`app/persistence/budget.py`). No local replica, no sync. The production entry point
 `app/desktop.py` ignores it because a distributed client must never hold database credentials.
 
 ## 6. Scheduling engine
@@ -271,6 +282,10 @@ sequenceDiagram
   counters.
 - **Ownership.** Records belong to a workspace; signing in does not claim guest records until the explicit
   association step; account creation adopts the guest workspace.
+- **Optional record types.** Task types and budget records are synchronized only when the server lists the
+  feature (`task_types`, `budget`); otherwise they stay queued locally. `GET /changes` returns them only with
+  `include_task_types` / `include_budget`, so older clients never receive unknown types. A client that first
+  sees `budget` replays the change feed once from the start to pick up budget changes it skipped before.
 - **Server side.** Every write (REST CRUD, planning API, sync push) goes through one `Mutator`
   (`backend/mutations.py`): user scoping, preconditions, versions, change log. Access is derived only from a
   verified bearer token or a browser session cookie with CSRF (`backend/api.py: current_user_id`).
