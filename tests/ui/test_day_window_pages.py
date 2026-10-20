@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 from app.ui.clock_input import ClockInput
 from app.ui.guide_content import GUIDE_SECTIONS
-from app.ui.shell_state import NAV_KEYS
+from app.ui.shell_state import NAV_KEYS, PAGE_GROUPS
 from tests.ui.test_desktop_app import WEDNESDAY, close_app, open_app, pump
 from tests.ui.test_desktop_app import dialogs as dialogs  # noqa: F401 - the dialog-recorder fixture
 from tests.ui.test_desktop_app import pytestmark as pytestmark  # noqa: F401 - skip without a display
@@ -200,14 +200,20 @@ def test_the_hour_moves_on_from_the_keysym_as_x11_leaves_a_key_release_char_empt
         close_app(app)
 
 
-def test_how_to_use_sits_before_about_and_renders_every_section(tmp_path: Path, dialogs) -> None:
-    assert NAV_KEYS.index("guide") == NAV_KEYS.index("about") - 1
+def test_how_to_use_is_in_the_settings_section_and_renders_every_section(tmp_path: Path, dialogs) -> None:
+    assert NAV_KEYS.index("settings") == NAV_KEYS.index("about") - 1
+    assert [key for key, _ in PAGE_GROUPS["settings"]] == ["settings", "account", "guide"]
     app = shown(open_app(tmp_path / "guide.db", tmp_path), tmp_path)
     try:
-        app.shell.sidebar.buttons["guide"].invoke()
+        app.shell.sidebar.buttons["settings"].invoke()
+        pump(app)
+        assert app.shell.current == "settings" and app.shell.group_bar.winfo_ismapped()
+        app.shell.group_bar.buttons["guide"].invoke()
         pump(app)
         guide = app.pages["guide"]
         assert app.shell.current == "guide" and list(guide.cards) == [item.key for item in GUIDE_SECTIONS]
+        assert app.shell.sidebar._active_key == "settings"  # the sidebar keeps marking the section
+        assert app.shell.group_bar.buttons["guide"].cget("text") == "● How to Use"
         guide.contents_buttons["day_status_colours"].invoke()
         settle(app, 0.2)
         assert guide.body._parent_canvas.yview()[0] > 0.5  # the contents jump to the section

@@ -298,6 +298,31 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
             "View performance inside a project opens this Project section with that project already selected.",
         ),
     )),
+    GuideSection("budgeting", "Budgeting", (
+        "The Budgeting page keeps your money apart from your schedule: nothing here changes how tasks are "
+        "scheduled. Amounts are exact to the cent. The bar at the top chooses General, Stats or Future.",
+        (
+            "General: enter your current balance; it is saved as today's, and every change is kept (see History "
+            "in Stats). Add income on the left and expenses "
+            "on the right with a name, amount, date, category and optional project; tick Repeats to choose daily, "
+            "weekly, every 2 weeks or monthly. A monthly item on the 29th to 31st falls on the last day of a "
+            "shorter month.",
+            "Editing or deleting a repeating item asks whether you mean only one occurrence (on a date you give) or "
+            "the entire series. A changed occurrence keeps its own values when you later edit the series.",
+            "Stats: your highest income and expense days, expenses by week, month and day, a 90-day balance "
+            "forecast, and History: every transaction and every manual balance change, with the balance after "
+            "each, filtered by period, type, category and project. The forecast starts from your balance on its "
+            "date, subtracts your average everyday "
+            "(non-repeating) spending of the last 15 days and every scheduled expense, adds scheduled income, and "
+            "says when the balance would first reach zero.",
+            "Future: income ideas with their progress -- the amount already received or firmly secured against "
+            "the amount you expect -- and a wishlist. Wishlist items have no date and count nowhere until you "
+            "choose Turn into expense, which asks for a date and creates exactly one expense.",
+            "On the Day page, the day's income and expenses appear under To Do, and its totals (↑ income, ↓ "
+            "expense) beside the points. Double-click a total to change that day's amounts; a repeating item "
+            "changes for that day only.",
+        ),
+    )),
     GuideSection("day_window", "Changing the day start and end", (
         "The Day Window above the Day, Week and Month schedules sets when the usable day starts and ends for "
         "the selected date. Enter a new Start and End and choose Apply to this date: only that date changes, "

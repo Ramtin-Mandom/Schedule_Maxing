@@ -24,6 +24,12 @@ on wide and medium windows, one on narrow ones):
   Done box and a small remove button each. A To Do is never scheduled or on the timeline;
   ticking it is a completion like any other (it awards its points and shows
   in Completed on the day it was ticked).
+- Money (with a budget controller; app/ui/day_money.py): the date's income
+  and expense transactions as narrow green/red cards side by side under the
+  To Do notes (scrolling sideways when they are wider than the section), and
+  "↑ income ↓ expense" totals left of the points total. Double-clicking a
+  total (or a card) opens that kind's transactions to change their amounts;
+  a recurring item changes for that occurrence only. Hidden without data.
 - Available tasks: the date's tasks (and undated ones) that are not on the
   schedule, as fixed-width buttons that open them for editing, with genuine
   reasons, each with a small remove button. The area keeps its size: more
@@ -62,7 +68,9 @@ from app.planning.workflow import Freshness
 from app.ui import theme
 from app.ui.background import WRITE_LANE, ControllerResult, run_in_background
 from app.ui.components import AppButton, Card, ChoiceDialog, LabeledSelect, Notice, SectionTitle, ask_confirm, font, focus_target
+from app.budget.models import BudgetKind
 from app.ui.day_controller import DayRun, DayScheduleController, DaySnapshot, TimelineItem, engine_label
+from app.ui.day_money import DayMoneyDialog, MoneyStrip, MoneyTotals
 from app.ui.day_timeline import DayTimeline
 from app.ui.day_window import DayWindowController
 from app.ui.day_window_bar import DayWindowActions, DayWindowBar
@@ -125,9 +133,15 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         return_context: tuple[str, date] | None = None,
         background_io: bool = False,
         task_defaults=None,
+        budget_controller=None,
     ) -> None:
         super().__init__(parent, fg_color=theme.APP_BG, corner_radius=0)
         self.page_controller = page_controller
+        #: app/ui/budget_controller.BudgetController, or None (no money widgets).
+        self.budget_controller = budget_controller
+        self.money_view = None
+        self.money_dialog: DayMoneyDialog | None = None
+        self._money_token = 0
         self.background_io = background_io
         self.number_of_days = 1
         self.execution_controller = execution_controller
@@ -192,11 +206,17 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         self.back_button = AppButton(top, "Back", self.go_back, variant="ghost", height=30)
         self.back_button.grid(row=0, column=2, sticky="e")
         self.back_button.grid_remove()
-        # Completed / Possible points of the date shown (task_status.day_points).
-        self.points_label = ctk.CTkLabel(top, text="0 / 0 pts", font=font(theme.SIZE_HEADING, "bold"),
+        # The date's income/expense totals (with budgeting) immediately left of its Completed / Possible points.
+        self.score_box = ctk.CTkFrame(top, fg_color="transparent")
+        self.score_box.grid(row=0, column=3, sticky="e", padx=(12, 0))
+        self.money_totals = MoneyTotals(self.score_box, on_open=self.open_money)
+        self.money_totals.grid(row=0, column=0, sticky="e")
+        if self.budget_controller is None:
+            self.money_totals.grid_remove()
+        self.points_label = ctk.CTkLabel(self.score_box, text="0 / 0 pts", font=font(theme.SIZE_HEADING, "bold"),
                                          text_color=theme.TEXT_PRIMARY, fg_color=theme.SECONDARY_BG, corner_radius=10,
                                          padx=12, height=30)
-        self.points_label.grid(row=0, column=3, sticky="e", padx=(12, 0))
+        self.points_label.grid(row=0, column=1, sticky="e")
         self.day_points = DayPoints()
         self._points_board = StatusBoard()
         self._points_todos: dict = {}
@@ -251,6 +271,10 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         self._todo_width = 0
         self._todo_sizing = Coalescer(self.todo_area, self._size_todos, delay_ms=60)
         self.todo_area._parent_canvas.bind("<Configure>", self._todo_resized, add="+")
+        # The date's transactions, directly below the To Do notes (shown only when there are any).
+        self.money_strip = MoneyStrip(parent, on_open=self.open_money)
+        self.money_strip.grid(row=3, column=0, sticky="ew", padx=theme.SPACE_S, pady=(0, theme.SPACE_S))
+        self.money_strip.grid_remove()
 
     def _todo_resized(self, event) -> None:
         # Only a real change of width changes the notes' size; nothing is laid out here.
@@ -400,6 +424,11 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         self.workspace.grid_configure(padx=theme.SPACE_M)
         self.window_bar.set_layout(mode)
         self.status_label.configure(wraplength=_HEADER_WRAP[mode])
+        # A narrow header puts the money and points totals on their own line under the title.
+        if mode == LayoutMode.NARROW:
+            self.score_box.grid_configure(row=1, column=0, columnspan=4, sticky="w", padx=0, pady=(6, 0))
+        else:
+            self.score_box.grid_configure(row=0, column=3, columnspan=1, sticky="e", padx=(12, 0), pady=0)
         self.status_board.set_layout(mode)
         if mode == LayoutMode.NARROW:
             lower.columnconfigure(0, weight=1)
@@ -754,6 +783,7 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
             state="normal" if snapshot.freshness != Freshness.NONE and not self._busy else "disabled")
         self._refresh_status_board(snapshot)
         self._refresh_day_window()
+        self._show_money(snapshot.start_date)
 
     # ----------------------------- Scheduled-task board -----------------------------
 
@@ -779,6 +809,55 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         todos = list(snapshot.todos)
         self._io(lambda: controller.board(day, executables, direct, blocks, todos), done, blocking=False,
                  newest="board")
+
+    # ----------------------------- Money -----------------------------
+
+    def _show_money(self, day) -> None:
+        """Read the date's transactions and totals (only the newest read is shown)."""
+        controller = self.budget_controller
+        if controller is None:
+            return
+        self._money_token += 1
+        token = self._money_token
+
+        def done(result) -> None:
+            if token != self._money_token:
+                return
+            self.money_view = result.value if result.ok else None
+            self.money_totals.show(self.money_view)
+            self.money_strip.show(self.money_view)
+
+        self._io(lambda: controller.day(day), done, blocking=False, newest="money")
+
+    def open_money(self, kind: BudgetKind) -> None:
+        """The date's income (or expenses), to change their amounts."""
+        view = self.money_view
+        if view is None or self.budget_controller is None or self._busy:
+            return
+        if self.money_dialog is not None and self.money_dialog.winfo_exists():
+            self.money_dialog.cancel()
+        self.money_dialog = DayMoneyDialog(self, view, BudgetKind(kind), on_save=self._save_money)
+
+    def _save_money(self, dialog: DayMoneyDialog, amounts: dict) -> None:
+        if not amounts:
+            dialog.close(None)
+            return
+        controller, day = self.budget_controller, self.money_view.day
+
+        def done(result) -> None:
+            if not result.ok:
+                if dialog.winfo_exists():
+                    dialog.show_error(result.error or "The amounts could not be saved.")
+                return
+            if dialog.winfo_exists():
+                dialog.close(True)
+            if self.snapshot is not None and self.snapshot.start_date == day:
+                self._money_token += 1  # an older read of this day must not replace what was just saved
+                self.money_view = result.value
+                self.money_totals.show(result.value)
+                self.money_strip.show(result.value)
+
+        self._io(lambda: controller.set_day_amounts(day, amounts), done)
 
     # ----------------------------- To Do -----------------------------
 

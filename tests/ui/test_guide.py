@@ -5,7 +5,7 @@ feature, and the page describes the date and time entry the forms really use."""
 from __future__ import annotations
 
 from app.ui.guide_content import GUIDE_SECTIONS, section
-from app.ui.shell_state import NAV_ITEMS
+from app.ui.shell_state import NAV_ITEMS, NAV_PARENT, PAGE_GROUPS
 
 
 def _text(key: str) -> str:
@@ -17,7 +17,8 @@ def test_every_topic_is_documented_once_in_reading_order() -> None:
     assert keys == [
         "overview", "day_view", "week_view", "month_view", "projects", "project_tasks", "adding_tasks",
         "fixed_blocks", "flexible_tasks", "preferred_times", "todos", "categories", "priority_points", "dependencies",
-        "make_schedule", "scheduled_unscheduled", "task_workflow", "productivity", "day_window", "settings",
+        "make_schedule", "scheduled_unscheduled", "task_workflow", "productivity", "budgeting", "day_window",
+        "settings",
         "synchronization", "reset", "day_status_colours",
     ]
     assert len(set(keys)) == len(keys) and all(item.title and item.blocks for item in GUIDE_SECTIONS)
@@ -63,8 +64,8 @@ def test_points_are_explained_apart_from_the_schedulers_score() -> None:
     assert "its score is never your points" in _text("priority_points")
 
 
-def test_how_to_use_is_in_the_navigation_right_before_about() -> None:
+def test_how_to_use_is_part_of_the_settings_section_right_before_about() -> None:
     labels = [item.label for item in NAV_ITEMS]
-    assert labels[-2:] == ["How to Use", "About"]
-    guide = next(item for item in NAV_ITEMS if item.key == "guide")
-    assert not guide.placeholder
+    assert labels[-2:] == ["Settings", "About"]
+    assert dict(PAGE_GROUPS["settings"]) == {"settings": "Settings", "account": "Account", "guide": "How to Use"}
+    assert NAV_PARENT["guide"] == NAV_PARENT["account"] == "settings"

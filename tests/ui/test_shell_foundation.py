@@ -154,7 +154,7 @@ def test_navigation_starts_on_day_with_a_collapsed_sidebar() -> None:
     assert DEFAULT_PAGE == "day" and state.page == "day" and state.sidebar_open is False
     assert [item.label for item in NAV_ITEMS] == [
         "Day Schedule", "Week Schedule", "Month Schedule", "Project Schedule",
-        "Productivity", "Settings", "Account", "How to Use", "About",
+        "Productivity", "Budgeting", "Settings", "About",
     ]
     assert len({item.glyph for item in NAV_ITEMS}) == len(NAV_ITEMS)  # every collapsed item is distinguishable
     with pytest.raises(ValueError):
