@@ -41,8 +41,38 @@ from app.ui import theme
 
 
 def font(size: int = theme.SIZE_BODY, weight: str = "normal") -> ctk.CTkFont:
-    """A font that follows CustomTkinter's widget scaling (the interface scale)."""
-    return ctk.CTkFont(size=size, weight=weight)
+    """
+    A font that follows CustomTkinter's widget scaling (the interface scale), shared per (size, weight):
+    creating a Tk named font costs about a millisecond, and pages ask for the same few hundreds of times.
+    Widgets only read it (each draws a scaled copy); a caller that would change one needs its own CTkFont.
+    The cache belongs to the Tk interpreter the fonts are made in (tkinter's default root, as for any
+    CTkFont), so it ends with that window.
+    """
+    root = tk._default_root
+    if root is None:
+        return ctk.CTkFont(size=size, weight=weight)
+    cache = root.__dict__.setdefault("_app_font_cache", {})
+    shared = cache.get((size, weight))
+    if shared is None:
+        shared = cache[(size, weight)] = _SharedFont(size=size, weight=weight)
+    return shared
+
+
+class _SharedFont(ctk.CTkFont):
+    """
+    A CTkFont used by many widgets: each registers a size callback and removes it when destroyed, so
+    they are kept in a dict (insertion-ordered, O(1) removal) instead of CTk's list (O(n) per removal).
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._size_configure_callback_list = {}  # iterated by CTkFont.configure: the callbacks, in order
+
+    def add_size_configure_callback(self, callback: Callable) -> None:
+        self._size_configure_callback_list[callback] = None
+
+    def remove_size_configure_callback(self, callback: Callable) -> None:
+        self._size_configure_callback_list.pop(callback, None)
 
 
 def focus_target(widget) -> tk.Misc:

@@ -225,10 +225,12 @@ class LegacyAdoptionError(StorageError):
 class TransactionState:
     """
     Per-connection lock plus SAVEPOINT nesting depth (see module docstring),
-    and `commits`: how many outermost transaction() blocks committed -- local
-    edits, sync applies, imports. Commit listeners are called after each such
-    COMMIT, on the committing thread, outside nothing but the lock it held:
-    they must be quick and must not touch Tk (SyncService only sets an event).
+    and `commits`: how many outermost transaction() blocks committed a change
+    -- local edits, sync applies, imports (a block that wrote no row, such as
+    a load that only reads inside a transaction, does not count). Commit
+    listeners are called after each such COMMIT, on the committing thread,
+    still holding the connection's lock: they must be quick and must not
+    touch Tk (SyncService only sets an event).
     """
 
     def __init__(self) -> None:
@@ -316,6 +318,7 @@ def transaction(connection: sqlite3.Connection, state: TransactionState | None =
     state = _resolve_state(connection, state)
     with state.lock:
         if not connection.in_transaction:
+            changes = connection.total_changes
             connection.execute("BEGIN IMMEDIATE")
             try:
                 yield connection
@@ -324,7 +327,8 @@ def transaction(connection: sqlite3.Connection, state: TransactionState | None =
                 if connection.in_transaction:
                     connection.execute("ROLLBACK")
                 raise
-            state._committed()
+            if connection.total_changes != changes:  # a read-only unit of work (e.g. a load) is not a change
+                state._committed()
             return
 
         state.savepoint_depth += 1

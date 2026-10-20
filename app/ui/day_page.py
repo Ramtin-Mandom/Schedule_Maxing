@@ -67,6 +67,7 @@ from app.planning.csv_import import ImportMode
 from app.planning.workflow import Freshness
 from app.ui import theme
 from app.ui.background import WRITE_LANE, ControllerResult, run_in_background
+from app.ui.page_freshness import data_key, unchanged
 from app.ui.components import AppButton, Card, ChoiceDialog, LabeledSelect, Notice, SectionTitle, ask_confirm, font, focus_target
 from app.budget.models import BudgetKind
 from app.ui.day_controller import DayRun, DayScheduleController, DaySnapshot, TimelineItem, engine_label
@@ -151,6 +152,8 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         self._on_return = on_return
         self.return_context = return_context
         self.snapshot: DaySnapshot | None = None
+        #: The data key (app/ui/page_freshness.py) the shown snapshot was read with, and that of a read running now.
+        self._read_with = self._reading_with = None
         self.last_run: DayRun | None = None
         self._editing = None
         self._busy = False
@@ -463,23 +466,36 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
     # ----------------------------- Loading and dates -----------------------------
 
     def reload(self) -> None:
-        """Re-read this date from storage (startup, page switch, after any failure)."""
-        token = self._next_load()
+        """Re-read this date from storage (startup, after any failure; also the way to force a re-read)."""
+        token, key = self._next_load(), self._data_key()
+        self._reading_with = key
 
         def done(result) -> None:
             if token != self._load_token:
                 return  # a newer load (another date) was started meanwhile
+            self._reading_with = None
             if result.ok:
+                self._read_with = key
                 self._render(result.value)
             else:
                 self._load_failed(result)
 
         self._io(self.page_controller.detached().load, done, blocking=False, newest="load")
 
+    def _data_key(self):
+        """What the shown date's view was read from (app/ui/page_freshness.py); the task form's categories too."""
+        defaults = self.task_defaults.value if self.task_defaults is not None else None
+        return data_key(self, self.page_controller.anchor_date, self.page_controller.today(), defaults)
+
     def on_show(self) -> None:
-        """Called when the page is shown: other pages, imports or a sync may have changed shared data."""
-        if not self._busy:
-            self.reload()
+        """
+        Called when the page is shown: other pages, imports or a sync may have changed shared data, so it is
+        re-read -- unless nothing was written since this date was read (then nothing is queried or redrawn).
+        """
+        key = self._data_key()
+        if self._busy or unchanged(key, self._read_with) or unchanged(key, self._reading_with):
+            return  # (or the same read is still running, e.g. the one started when the page was built)
+        self.reload()
 
     def apply_start_date(self) -> None:
         self._go_to(self.start_date_var.get())
@@ -522,10 +538,14 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         if not moved.ok:
             self._went_to(moved)
             return
-        token = self._next_load()
+        token, key = self._next_load(), self._data_key()
+        self._reading_with = key
 
         def done(result) -> None:
             if token == self._load_token:
+                self._reading_with = None
+                if result.ok:
+                    self._read_with = key
                 self._went_to(result)
 
         self._io(self.page_controller.detached().load, done, blocking=False, newest="load")

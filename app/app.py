@@ -374,8 +374,9 @@ class ScheduleOptimizerApp(ctk.CTk):
         resumed = self._status_poll is None and policy.status_poll_ms is not None
         self._cancel_status_poll()
         if policy.status_poll_ms is not None:
-            if resumed:  # back from minimized: one read now (it reloads the visible page if a sync pulled changes)
+            if resumed:  # back from minimized: one status read now, and the visible page re-reads if data changed
                 self.refresh_status()
+                self._reload_current_page()
             self._status_poll = self.after(policy.status_poll_ms, self._poll_status)
 
     def _cancel_status_poll(self) -> None:
