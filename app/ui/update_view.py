@@ -127,7 +127,6 @@ class UpdateFlow:
     # -- offering and installing ---------------------------------------------------------------
 
     def offer(self, view: UpdateView) -> None:
-        release = view.release
         actions = [("Later", self.banner.hide, "secondary")]
         if self.controller.can_install:
             actions.insert(0, ("Update now", lambda: self.update_now(view), "primary"))
