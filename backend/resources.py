@@ -57,6 +57,17 @@ the caller's user scope only:
                  it -- a move's destination is created preserved
     preference   one live layer per scope ("user" or one date); scope is fixed
     generation   one live record per date; the date is fixed
+    budget       content validated by app.budget.models (exact minor-unit amounts,
+                 dates, a category of the entry's kind, recurrence, end date);
+                 project_id must be a live project of the user when it is set or
+                 changed; an occurrence edit names a live recurring entry of the
+                 user and one of its scheduled dates, both fixed afterwards, with
+                 at most one live edit per occurrence (else 409 already_exists
+                 with the `current` edit); deleting an entry tombstones its live
+                 occurrence edits (each logged); a wishlist item's category is an
+                 expense category, and its conversion (converted_entry_id with
+                 converted_on) names one of the user's budget entries and, once
+                 recorded, never changes (409 already_converted with `current`)
 """
 
 from __future__ import annotations
@@ -66,12 +77,27 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date as date_
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Annotated, Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import inspect, select
 from sqlalchemy.orm import Session
 
+from app.budget.models import BudgetEntry as CanonicalBudgetEntry
+from app.budget.models import IncomeIdea as CanonicalIncomeIdea
+from app.budget.models import WishlistItem as CanonicalWishlistItem
+from app.budget.models import BudgetOverride as CanonicalBudgetOverride
+from app.budget.models import (
+    MAX_BUDGET_DATE,
+    MIN_BUDGET_DATE,
+    BudgetKind,
+    BudgetOverrideState,
+    BudgetRecurrence,
+    category_problem,
+)
+from app.budget.money import MAX_AMOUNT_MINOR
+from app.budget.recurrence import is_occurrence_date
 from app.planning import fixed_block_rules
 from app.planning.models import FixedBlock as CanonicalFixedBlock
 from app.planning.models import (
@@ -893,6 +919,215 @@ def _generation_validate(session, user_id, payload: GenerationFields, existing) 
                        current=GENERATIONS.serialize(session, user_id, current))
 
 
+# -- budget records (app/budget) -------------------------------------------------
+
+BudgetDate = Annotated[date_, Field(ge=MIN_BUDGET_DATE, le=MAX_BUDGET_DATE)]
+
+
+class BudgetBalanceFields(Strict):
+    amount_minor: int = Field(strict=True, ge=-MAX_AMOUNT_MINOR, le=MAX_AMOUNT_MINOR)
+    as_of: BudgetDate
+
+
+class BudgetBalanceCreate(BudgetBalanceFields):
+    id: uuid.UUID | None = None
+
+
+class BudgetBalanceUpdate(BudgetBalanceFields, BaseVersion):
+    pass
+
+
+class BudgetBalanceOut(BudgetBalanceFields, RecordMeta):
+    pass
+
+
+class BudgetEntryFields(Strict):
+    kind: BudgetKind
+    name: str = Field(min_length=1, max_length=200)
+    amount_minor: int = Field(strict=True, ge=1, le=MAX_AMOUNT_MINOR)
+    category: str = Field(min_length=1, max_length=100)
+    start_date: BudgetDate
+    recurrence: BudgetRecurrence
+    end_date: BudgetDate | None = None
+    project_id: uuid.UUID | None = None
+
+    @model_validator(mode="after")
+    def _entry_valid(self):
+        _validated(lambda: CanonicalBudgetEntry.model_validate(
+            self.model_dump(include=set(BudgetEntryFields.model_fields))))
+        return self
+
+
+class BudgetEntryCreate(BudgetEntryFields):
+    id: uuid.UUID | None = None
+
+
+class BudgetEntryUpdate(BudgetEntryFields, BaseVersion):
+    pass
+
+
+class BudgetEntryOut(BudgetEntryFields, RecordMeta):
+    pass
+
+
+class BudgetOverrideFields(Strict):
+    entry_id: uuid.UUID
+    occurrence_date: BudgetDate
+    state: BudgetOverrideState
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    amount_minor: int | None = Field(default=None, strict=True, ge=1, le=MAX_AMOUNT_MINOR)
+    date: BudgetDate | None = None
+    category: str | None = Field(default=None, min_length=1, max_length=100)
+    project_id: uuid.UUID | None = None
+
+    @model_validator(mode="after")
+    def _override_valid(self):
+        _validated(lambda: CanonicalBudgetOverride.model_validate(
+            self.model_dump(include=set(BudgetOverrideFields.model_fields))))
+        return self
+
+
+class BudgetOverrideCreate(BudgetOverrideFields):
+    id: uuid.UUID | None = None
+
+
+class BudgetOverrideUpdate(BudgetOverrideFields, BaseVersion):
+    pass
+
+
+class BudgetOverrideOut(BudgetOverrideFields, RecordMeta):
+    pass
+
+
+class BudgetIdeaFields(Strict):
+    name: str = Field(min_length=1, max_length=200)
+    expected_amount_minor: int = Field(strict=True, ge=1, le=MAX_AMOUNT_MINOR)
+    secured_amount_minor: int = Field(strict=True, ge=0, le=MAX_AMOUNT_MINOR)
+    description: str | None = Field(default=None, max_length=4000)
+
+    @model_validator(mode="after")
+    def _idea_valid(self):
+        _validated(lambda: CanonicalIncomeIdea.model_validate(
+            self.model_dump(include=set(BudgetIdeaFields.model_fields))))
+        return self
+
+
+class BudgetIdeaCreate(BudgetIdeaFields):
+    id: uuid.UUID | None = None
+
+
+class BudgetIdeaUpdate(BudgetIdeaFields, BaseVersion):
+    pass
+
+
+class BudgetIdeaOut(BudgetIdeaFields, RecordMeta):
+    pass
+
+
+class BudgetWishFields(Strict):
+    name: str = Field(min_length=1, max_length=200)
+    amount_minor: int = Field(strict=True, ge=1, le=MAX_AMOUNT_MINOR)
+    category: str = Field(min_length=1, max_length=100)
+    project_id: uuid.UUID | None = None
+    description: str | None = Field(default=None, max_length=4000)
+    converted_entry_id: uuid.UUID | None = None
+    converted_on: BudgetDate | None = None
+
+    @model_validator(mode="after")
+    def _wish_valid(self):
+        _validated(lambda: CanonicalWishlistItem.model_validate(
+            self.model_dump(include=set(BudgetWishFields.model_fields))))
+        return self
+
+
+class BudgetWishCreate(BudgetWishFields):
+    id: uuid.UUID | None = None
+
+
+class BudgetWishUpdate(BudgetWishFields, BaseVersion):
+    pass
+
+
+class BudgetWishOut(BudgetWishFields, RecordMeta):
+    pass
+
+
+def _columns_content(schema: type[BaseModel]):
+    def content(_session, _user_id, row) -> dict:
+        return {name: getattr(row, name) for name in schema.model_fields}
+
+    return content
+
+
+def _enum_assign(schema: type[BaseModel]):
+    def assign(_session, _user_id, row, payload) -> None:
+        for name, value in _fields(payload, schema).items():
+            setattr(row, name, value.value if isinstance(value, Enum) else value)
+
+    return assign
+
+
+def _check_budget_project(session, user_id, project_id, existing) -> None:
+    if (project_id is not None and (existing is None or existing.project_id != project_id)
+            and live(session, models.Project, user_id, project_id) is None):
+        raise invalid_reference("project_id does not name one of your projects.")
+
+
+def _budget_entry_validate(session, user_id, payload: BudgetEntryFields, existing) -> None:
+    _check_budget_project(session, user_id, payload.project_id, existing)
+
+
+def _budget_entry_before_delete(mutator, row) -> None:
+    edits = mutator.session.scalars(
+        select(models.BudgetOverride).where(
+            models.BudgetOverride.user_id == mutator.user_id, models.BudgetOverride.entry_id == row.id,
+            models.BudgetOverride.deleted_at.is_(None),
+        ).order_by(models.BudgetOverride.occurrence_date)
+    ).all()
+    for edit in edits:  # an entry's occurrence edits go with it
+        mutator.tombstone(BUDGET_OVERRIDES, edit)
+
+
+def _budget_wish_validate(session, user_id, payload: BudgetWishFields, existing) -> None:
+    _check_budget_project(session, user_id, payload.project_id, existing)
+    conversion = (payload.converted_entry_id, payload.converted_on)
+    if existing is not None and existing.converted_entry_id is not None:
+        if conversion != (existing.converted_entry_id, existing.converted_on):
+            raise ApiError(409, "already_converted", "This wishlist item was already turned into an expense.",
+                           current=BUDGET_WISHES.serialize(session, user_id, existing))
+        return
+    if payload.converted_entry_id is not None and session.get(
+            models.BudgetEntry, (user_id, payload.converted_entry_id)) is None:
+        raise invalid_reference("converted_entry_id does not name one of your budget entries.")
+
+
+def _budget_override_validate(session, user_id, payload: BudgetOverrideFields, existing) -> None:
+    if existing is not None and (existing.entry_id, existing.occurrence_date) != (payload.entry_id,
+                                                                                 payload.occurrence_date):
+        raise ApiError(422, "validation_error", "An occurrence edit's entry and occurrence date cannot be changed.")
+    entry = live(session, models.BudgetEntry, user_id, payload.entry_id)
+    if entry is None:
+        raise invalid_reference("entry_id does not name one of your budget entries.")
+    canonical = CanonicalBudgetEntry.model_validate(BUDGET_ENTRIES.content(session, user_id, entry))
+    if existing is None and not (canonical.is_recurring
+                                 and is_occurrence_date(canonical, payload.occurrence_date)):
+        raise ApiError(422, "validation_error", "occurrence_date is not a scheduled date of this recurring entry.")
+    if payload.category is not None and (problem := category_problem(canonical.kind, payload.category)):
+        raise ApiError(422, "validation_error", problem)
+    _check_budget_project(session, user_id, payload.project_id, existing)
+    if existing is None:
+        current = session.scalars(
+            select(models.BudgetOverride).where(
+                models.BudgetOverride.user_id == user_id, models.BudgetOverride.entry_id == payload.entry_id,
+                models.BudgetOverride.occurrence_date == payload.occurrence_date,
+                models.BudgetOverride.deleted_at.is_(None),
+            )
+        ).first()
+        if current is not None:
+            raise ApiError(409, "already_exists", "This occurrence already has an edit.",
+                           current=BUDGET_OVERRIDES.serialize(session, user_id, current))
+
+
 PROJECTS = ResourceSpec(
     "projects", "project", "project", models.Project, ProjectCreate, ProjectUpdate, ProjectOut,
     content=_project_content, assign=_project_assign, before_delete=_project_before_delete,
@@ -923,4 +1158,31 @@ GENERATIONS = ResourceSpec(
     validate=_generation_validate,
 )
 
-CRUD_RESOURCES = (PROJECTS, TASK_TYPES, TASKS, FIXED_BLOCKS, PLACEMENTS, PREFERENCES, GENERATIONS)
+BUDGET_BALANCES = ResourceSpec(
+    "budget-balances", "budget_balance", "budget balance", models.BudgetBalance, BudgetBalanceCreate,
+    BudgetBalanceUpdate, BudgetBalanceOut, content=_columns_content(BudgetBalanceFields),
+    assign=_enum_assign(BudgetBalanceFields),
+)
+BUDGET_ENTRIES = ResourceSpec(
+    "budget-entries", "budget_entry", "budget entry", models.BudgetEntry, BudgetEntryCreate, BudgetEntryUpdate,
+    BudgetEntryOut, content=_columns_content(BudgetEntryFields), assign=_enum_assign(BudgetEntryFields),
+    validate=_budget_entry_validate, before_delete=_budget_entry_before_delete,
+)
+BUDGET_OVERRIDES = ResourceSpec(
+    "budget-overrides", "budget_override", "occurrence edit", models.BudgetOverride, BudgetOverrideCreate,
+    BudgetOverrideUpdate, BudgetOverrideOut, content=_columns_content(BudgetOverrideFields),
+    assign=_enum_assign(BudgetOverrideFields), validate=_budget_override_validate,
+)
+BUDGET_IDEAS = ResourceSpec(
+    "budget-ideas", "budget_idea", "income idea", models.BudgetIdea, BudgetIdeaCreate, BudgetIdeaUpdate,
+    BudgetIdeaOut, content=_columns_content(BudgetIdeaFields), assign=_enum_assign(BudgetIdeaFields),
+)
+BUDGET_WISHES = ResourceSpec(
+    "budget-wishes", "budget_wish", "wishlist item", models.BudgetWish, BudgetWishCreate, BudgetWishUpdate,
+    BudgetWishOut, content=_columns_content(BudgetWishFields), assign=_enum_assign(BudgetWishFields),
+    validate=_budget_wish_validate,
+)
+#: The budget records' specs (synchronized only with a client that has the "budget" feature).
+BUDGET_RESOURCES = (BUDGET_BALANCES, BUDGET_ENTRIES, BUDGET_OVERRIDES, BUDGET_IDEAS, BUDGET_WISHES)
+
+CRUD_RESOURCES = (PROJECTS, TASK_TYPES, TASKS, FIXED_BLOCKS, PLACEMENTS, PREFERENCES, GENERATIONS, *BUDGET_RESOURCES)

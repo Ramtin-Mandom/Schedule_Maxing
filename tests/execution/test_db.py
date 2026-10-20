@@ -37,6 +37,13 @@ EXPECTED_TABLES = {
     "sync_conflicts",
     # v6 (local web profile)
     "local_settings",
+    # v17 (budget)
+    "budget_balances",
+    "budget_entries",
+    "budget_overrides",
+    # v18 (budget Future items)
+    "budget_ideas",
+    "budget_wishes",
 }
 
 

@@ -108,6 +108,7 @@ from backend.mutations import Mutator, mutation
 from backend.planning_api import RescheduleIn, reschedule
 from backend.planning_repository import ServerPlanningRepository
 from backend.resources import (
+    BUDGET_RESOURCES,
     FIXED_BLOCKS,
     GENERATIONS,
     MAX_TAGS,
@@ -127,11 +128,15 @@ SYNC_PROTOCOL_VERSION = 2
 #: (docs/productivity-redesign-plan.md). A client holds its type records back from a server without it.
 #: "project_details": a project carries its planned dates, completion and milestones.
 #: "task_kinds": a task carries its kind (flexible / todo) and preferred third of the day, a fixed block its points.
+#: "budget": budget balances, entries, occurrence edits, income ideas and wishlist items synchronize (app/budget);
+#: GET /changes returns them only
+#: with include_budget=true, so an older client never receives a record type it does not know.
 SYNC_FEATURES = ("placement_reschedule", "recurrence_occurrences", "manual_placements", "scheduling_modes",
-                 "task_types", "project_details", "task_kinds")
+                 "task_types", "project_details", "task_kinds", "budget")
 
 SPECS = {spec.entity_type: spec
-         for spec in (PROJECTS, TASK_TYPES, TASKS, FIXED_BLOCKS, PLACEMENTS, PREFERENCES, GENERATIONS)}
+         for spec in (PROJECTS, TASK_TYPES, TASKS, FIXED_BLOCKS, PLACEMENTS, PREFERENCES, GENERATIONS,
+                      *BUDGET_RESOURCES)}
 ENTITY_TYPES = (*SPECS, "execution")
 
 
@@ -140,7 +145,8 @@ class SyncOperationIn(BaseModel):
 
     op_id: uuid.UUID
     entity_type: Literal["project", "task_type", "task", "fixed_block", "placement", "preference",
-                         "schedule_generation", "execution"]
+                         "schedule_generation", "execution", "budget_balance", "budget_entry", "budget_override",
+                         "budget_idea", "budget_wish"]
     entity_id: uuid.UUID
     kind: Literal["create", "update", "delete", "action", "feedback"]
     base_version: int | None = Field(default=None, gt=0)

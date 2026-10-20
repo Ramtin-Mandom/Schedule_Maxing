@@ -113,6 +113,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from app.budget.repository import BudgetRepository
 from app.execution.db import SYNC_TABLES
 from app.execution.models import ExecutionStatus
 from app.execution.repository import ExecutionRepository
@@ -121,6 +122,7 @@ from app.planning.recurrence import RecurrenceError, SeriesRule
 from app.planning.repository import PlanningRepository
 from app.planning.series import SERIES_CONTENT_FIELDS
 from app.sync.mapping import (
+    BUDGET_TYPES,
     ENTITY_ORDER,
     PLACEMENT_HISTORY_FIELDS,
     TASK_TYPE_FIELDS,
@@ -227,7 +229,8 @@ def _moment(value) -> datetime:
 class SyncEngine:
     def __init__(self, connection, clock: Callable[[], datetime] = _utcnow) -> None:
         self.store = SyncStore(connection)
-        self.records = LocalRecords(PlanningRepository(connection), ExecutionRepository(connection))
+        self.records = LocalRecords(PlanningRepository(connection), ExecutionRepository(connection),
+                                    BudgetRepository(connection))
         self._connection = connection
         self._clock = clock
         #: Records the last prepare() held back for a server without recurrence support.
@@ -314,7 +317,7 @@ class SyncEngine:
 
     def prepare(self, account: Account, *, recurrence: bool = True, manual_placements: bool = True,
                 scheduling_modes: bool = True, task_types: bool = True, project_details: bool = True,
-                task_kinds: bool = True) -> int:
+                task_kinds: bool = True, budget: bool = True) -> int:
         """
         Materialize operations for the account's dirty records (see the module
         docstring). Returns how many. recurrence=False (a server without the
@@ -329,7 +332,9 @@ class SyncEngine:
         recorded here and are uploaded once the server supports them
         (_requeue_history_fields). project_details=False (a server without
         "project_details") likewise leaves a project's dates, completion and
-        milestones out of its payload (_requeue_project_details).
+        milestones out of its payload (_requeue_project_details). budget=False (a
+        server without "budget") holds the budget records back: they stay queued
+        here and are uploaded once the server supports them.
         """
         key = account.account_key
         self.held = 0
@@ -374,6 +379,9 @@ class SyncEngine:
                     continue
                 if not task_types and entity_type == "task_type":
                     self.held += 1  # an older server does not know the record type: it stays queued here
+                    continue
+                if not budget and entity_type in BUDGET_TYPES:
+                    self.held += 1  # likewise for budget records
                     continue
                 if self._part_of_pending_reschedule(key, local):
                     continue
@@ -753,6 +761,22 @@ class SyncEngine:
                 self.store.ensure_dirty(row["entity_type"], row["entity_id"])
         self.store.set_setting(flag, self._clock().isoformat())
 
+    def pull_budget_history(self, account: Account) -> None:
+        """
+        Once per account, when its server first supports "budget": start the
+        change feed over from the beginning. An earlier version of this client
+        pulled without budget records, so its cursor may already be past budget
+        changes another device made; replaying the feed is harmless (every
+        change not newer than its shadow is skipped) and brings them here.
+        """
+        flag = f"budget_history_pulled:{account.account_key}"
+        if self.store.setting(flag) is not None:
+            return
+        with self.store.transaction():
+            if account.pull_cursor > 0:
+                self.store.set_cursor(account.account_key, 0)
+            self.store.set_setting(flag, self._clock().isoformat())
+
     def _requeue_project_details(self, account: Account) -> None:
         """
         Once per account, when its server first supports "project_details": mark
@@ -1033,6 +1057,10 @@ class SyncEngine:
         elif entity_type == "execution" and record["scheduled_task_id"]:
             sql = "SELECT id FROM executions WHERE scheduled_task_id = ? AND deleted_at IS NULL AND id <> ?"
             params = (record["scheduled_task_id"], local_id)
+        elif entity_type == "budget_override":  # one live edit per occurrence
+            sql = ("SELECT id FROM budget_overrides WHERE entry_id = ? AND occurrence_date = ? "
+                   "AND deleted_at IS NULL AND id <> ?")
+            params = (record["entry_id"], record["occurrence_date"], local_id)
         else:
             return None
         row = self._connection.execute(sql, params).fetchone()
@@ -1296,4 +1324,4 @@ class SyncEngine:
             self.records.executions.store_synced(execution, local.sessions or [])
             return
         model = local.model.model_copy(update={"deleted_at": now, "updated_at": now, "version": local.model.version + 1})
-        self.records.planning.store_synced(local.entity_type, model)
+        self.records.store_model(local.entity_type, model)
