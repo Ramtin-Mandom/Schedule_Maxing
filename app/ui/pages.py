@@ -446,11 +446,13 @@ class SettingsPage(ctk.CTkFrame):
             self.render_defaults(result.value)
             self.preference_notice.show("success", "Defaults saved. Date overrides were kept; no schedule was generated.")
         else:
+            self.editor.finish()
             pending = {name: self.editor.value_of(name) for name in self.editor.inputs}
 
             def reloaded(latest):
                 if latest.ok:
                     self.render_defaults(latest.value)
+                    self.editor.finish()  # every row exists before the typed values go back in
                     for name, value in pending.items():
                         if name in self.editor.inputs:
                             self.editor.set_input(name, value)
