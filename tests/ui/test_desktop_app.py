@@ -99,7 +99,9 @@ def pump(app, until=lambda: True, timeout: float = 10.0) -> None:
     deadline = time.monotonic() + timeout
     while True:
         app.update()
-        if until() and background.current_registry().outstanding == 0:
+        # (The shown page takes a new window size once the resize settled: app/ui/shell.py PAGE_SETTLE_MS.)
+        resizing = getattr(getattr(app, "shell", None), "page_sizes", None)
+        if until() and background.current_registry().outstanding == 0 and not (resizing and resizing.pending):
             app.update()
             return
         if time.monotonic() > deadline:

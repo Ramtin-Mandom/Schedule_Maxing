@@ -239,6 +239,18 @@ def test_the_coalescer_turns_a_burst_of_requests_into_one_call_and_stops_when_de
     assert widget.scheduled == []  # nothing is scheduled on a destroyed widget
 
 
+def test_a_debounced_coalescer_runs_once_the_requests_stopped() -> None:
+    widget, calls = LoopWidget(), []
+    coalescer = Coalescer(widget, lambda: calls.append(1), delay_ms=120, debounce=True)
+    for _ in range(50):  # a drag-resize: each request restarts the delay
+        coalescer.request()
+    assert len(widget.scheduled) == 1 and len(widget.cancelled) == 49
+    widget.run_pending()
+    assert calls == [1] and not coalescer.pending
+    with pytest.raises(ValueError):
+        Coalescer(widget, lambda: None, debounce=True)  # a debounce needs a delay
+
+
 def test_the_bounded_animation_never_schedules_more_than_its_steps_and_stops_on_destroy() -> None:
     widget, fractions, done = LoopWidget(), [], []
     animation = BoundedAnimation(widget, fractions.append, steps=5, on_done=lambda: done.append(True))

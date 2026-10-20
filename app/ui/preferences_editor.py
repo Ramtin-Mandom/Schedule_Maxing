@@ -15,6 +15,7 @@ the same editor for the default (user) layer.
 
 from __future__ import annotations
 
+import time
 import tkinter as tk
 from collections.abc import Callable
 
@@ -50,6 +51,12 @@ class PreferencesEditor(AppScrollableFrame):
         self._grid_rows: dict[str, int] = {}
         #: How many rows the last render() had to build (the rest were kept).
         self.rows_built = 0
+        #: A full build still adding rows (in BUILD_SLICE_SECONDS slices): its pending timer and what is left.
+        self._build_timer = None
+        self._build_rest: tuple[list, int] | None = None
+
+    #: A full build adds rows for at most this long per Tk callback, then lets input and painting run.
+    BUILD_SLICE_SECONDS = 0.008
 
     def render(self, rows: list[PreferenceRow]) -> None:
         """
@@ -58,11 +65,14 @@ class PreferencesEditor(AppScrollableFrame):
         again -- the page is revisited, or one value was saved -- only rows
         whose content changed are rebuilt; an unchanged row just gets its
         stored value back in its inputs and its error cleared, exactly what a
-        rebuild would show.
+        rebuild would show. A full build adds its rows in short slices on the
+        Tk thread (first rows first), so the page stays responsive meanwhile;
+        a newer render() replaces an unfinished one.
         """
         previous = self.rows
-        same_layout = bool(previous) and [(row.spec.key, row.spec.group) for row in rows] == [
-            (row.spec.key, row.spec.group) for row in previous.values()]
+        same_layout = (bool(previous) and self._build_timer is None
+                       and [(row.spec.key, row.spec.group) for row in rows]
+                       == [(row.spec.key, row.spec.group) for row in previous.values()])
         if not same_layout:
             self._build_all(rows)
             return
@@ -78,6 +88,7 @@ class PreferencesEditor(AppScrollableFrame):
             self._place(row, self._grid_rows[key])
 
     def _build_all(self, rows: list[PreferenceRow]) -> None:
+        self._cancel_build()
         for child in self.winfo_children():
             child.destroy()
         self.rows = {row.spec.key: row for row in rows}
@@ -88,15 +99,56 @@ class PreferencesEditor(AppScrollableFrame):
         self._frames.clear()
         self._grid_rows.clear()
         self.rows_built = 0
-        grid_row, group = 0, None
+        plan, grid_row, group = [], 0, None
         for row in rows:
             if row.spec.group != group:
                 group = row.spec.group
-                ctk.CTkLabel(self, text=group, font=font(theme.SIZE_BODY, "bold"), text_color=theme.TEXT_PRIMARY,
-                             anchor="w").grid(row=grid_row, column=0, sticky="ew", padx=4, pady=(12, 2))
+                plan.append((grid_row, group))
                 grid_row += 1
-            self._place(row, grid_row)
+            plan.append((grid_row, row))
             grid_row += 1
+        self._build_slice(plan)
+
+    def _build_slice(self, plan: list, start: int = 0, *, budget: float | None = None) -> None:
+        self._build_timer = self._build_rest = None
+        deadline = time.perf_counter() + (self.BUILD_SLICE_SECONDS if budget is None else budget)
+        index = start
+        while index < len(plan):
+            grid_row, item = plan[index]
+            if isinstance(item, str):  # a group heading
+                ctk.CTkLabel(self, text=item, font=font(theme.SIZE_BODY, "bold"), text_color=theme.TEXT_PRIMARY,
+                             anchor="w").grid(row=grid_row, column=0, sticky="ew", padx=4, pady=(12, 2))
+            else:
+                self._place(item, grid_row)
+            index += 1
+            if time.perf_counter() >= deadline and index < len(plan):
+                self._build_rest = (plan, index)
+                self._build_timer = self.after_idle(lambda: self._build_slice(plan, index))
+                return
+
+    def finish(self) -> None:
+        """Build the rows still missing now (before reading or restoring every row's input)."""
+        rest = self._build_rest
+        if rest is not None:
+            self._cancel_build()
+            self._build_slice(*rest, budget=float("inf"))
+
+    def _cancel_build(self) -> None:
+        timer, self._build_timer, self._build_rest = self._build_timer, None, None
+        if timer is not None:
+            try:
+                self.after_cancel(timer)
+            except tk.TclError:
+                pass
+
+    @property
+    def building(self) -> bool:
+        """True while a full build is still adding rows."""
+        return self._build_timer is not None
+
+    def destroy(self) -> None:
+        self._cancel_build()
+        super().destroy()
 
     def _place(self, row: PreferenceRow, grid_row: int) -> None:
         frame = self._row(row)
@@ -250,9 +302,11 @@ class DayPreferencesDialog(ModalDialog):
             self.editor.show_error(key, result.error or "Not saved.")
             self.notice.show("error", f"Not saved: {result.error}")
             return
+        self.editor.finish()
         pending = {name: self.editor.value_of(name) for name in self.editor.inputs}
 
         def restore() -> None:
+            self.editor.finish()  # every row exists before the typed values go back in
             for name, value in pending.items():
                 if name in self.editor.inputs:
                     self.editor.set_input(name, value)

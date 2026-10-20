@@ -42,6 +42,8 @@ from app.ui.shell_state import NAV_ITEMS, PAGE_KEYS, LayoutMode, ShellState, nav
 
 COLLAPSED_WIDTH = 64
 EXPANDED_WIDTH = 236
+#: How long the page area must keep its size before the shown page is laid out at it (a trailing debounce).
+PAGE_SETTLE_MS = 120
 
 _SIDEBAR_BUTTON = dict(fg_color="transparent", hover_color=theme.SIDEBAR_HOVER, text_color=theme.SIDEBAR_TEXT,
                        border_color=theme.SIDEBAR_BG)
@@ -233,6 +235,15 @@ class AppShell(ctk.CTkFrame):
         self.group_bar = GroupBar(self.host, on_select=self.navigate)
         self.group_bar.grid(row=1, column=0, sticky="ew", padx=theme.SPACE_L, pady=(theme.SPACE_M, 0))
         self.group_bar.grid_remove()
+        # The shown page is placed in this area at a fixed pixel size, applied only once the area kept its size
+        # for PAGE_SETTLE_MS (a trailing debounce): while the window is being resized -- or the sidebar slides --
+        # the page is not laid out and redrawn on every step, only once at the end.
+        self.page_area = ctk.CTkFrame(self.host, fg_color=theme.APP_BG, corner_radius=0)
+        self.page_area.grid(row=2, column=0, sticky="nsew")
+        self.page_sizes = Coalescer(self, self._apply_page_size, delay_ms=PAGE_SETTLE_MS, debounce=True)
+        self.page_area.bind("<Configure>", self._page_area_resized, add="+")
+        #: The pixel size the shown page is placed at (None: it follows the area, whose size is not known yet).
+        self._page_size: tuple[int, int] | None = None
         self.pages: dict[str, ctk.CTkFrame] = {}
         self.current: str | None = None
         self.layout_checks = Coalescer(self, self._check_layout)
@@ -272,9 +283,9 @@ class AppShell(ctk.CTkFrame):
         else:
             self.group_bar.grid_remove()
         if self.current is not None and self.current != key:
-            self.pages[self.current].grid_remove()
+            self.pages[self.current].place_forget()
         page = self.pages[key]
-        page.grid(row=2, column=0, sticky="nsew")
+        self._place(page)
         self.current = key
         if self.state.layout is not None and hasattr(page, "set_layout"):
             page.set_layout(self.state.layout)
@@ -288,11 +299,44 @@ class AppShell(ctk.CTkFrame):
         old = self.pages.get(key)
         self.pages[key] = page
         if self.current == key and old is not None:
-            old.grid_remove()
+            old.place_forget()
             self.current = None
             self.show_page(key)
         if old is not None:
             old.destroy()
+
+    # -- page size (resizing) ------------------------------------------------------------
+
+    def _place(self, page) -> None:
+        """Place `page` over the page area: at the settled pixel size, or following the area until it is known."""
+        if self._page_size is None:
+            # Tk's own command: CustomTkinter's place() refuses sizes (and would scale them).
+            page.tk.call("place", "configure", page._w, "-in", self.page_area._w, "-x", 0, "-y", 0,
+                         "-relwidth", 1, "-relheight", 1, "-width", 0, "-height", 0)
+        else:
+            width, height = self._page_size
+            page.tk.call("place", "configure", page._w, "-in", self.page_area._w, "-x", 0, "-y", 0,
+                         "-relwidth", 0, "-relheight", 0, "-width", width, "-height", height)
+
+    def _page_area_resized(self, event) -> None:
+        if event.width <= 1 or event.height <= 1:  # not mapped yet, or minimized: nothing to fit
+            return
+        if self._page_size is None:  # the first real size: apply it now (start-up must not wait)
+            self._page_size = (event.width, event.height)
+            if self.current is not None:
+                self._place(self.pages[self.current])
+            return
+        if (event.width, event.height) != self._page_size:
+            self.page_sizes.request()
+
+    def _apply_page_size(self) -> None:
+        width, height = self.page_area.winfo_width(), self.page_area.winfo_height()
+        if width <= 1 or height <= 1 or (width, height) == self._page_size:
+            return
+        self._page_size = (width, height)
+        if self.current is not None:
+            with diagnostics.span("shell.page_resize"):
+                self._place(self.pages[self.current])
 
     @staticmethod
     def state_keys() -> set[str]:

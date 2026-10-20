@@ -7,7 +7,10 @@ moved, resized, minimized or restored (Milestone 4 desktop shell):
 - Coalescer: many requests (e.g. one per <Configure> event) become one call
   on the Tk event loop -- after the pending events are handled
   (after_idle), or after a short delay. A newer request never adds a second
-  pending call, and nothing runs once the widget is gone.
+  pending call, and nothing runs once the widget is gone. With
+  debounce=True every request restarts the delay (a trailing debounce): the
+  call runs once the requests have stopped for delay_ms, e.g. once a window
+  being resized has kept its size for a moment.
 
 - BoundedAnimation: a fixed number of steps, each scheduled with after();
   starting it again cancels the previous run, and it stops as soon as the
@@ -32,10 +35,13 @@ def _alive(widget) -> bool:
 
 
 class Coalescer:
-    def __init__(self, widget, callback: Callable[[], None], *, delay_ms: int = 0) -> None:
+    def __init__(self, widget, callback: Callable[[], None], *, delay_ms: int = 0, debounce: bool = False) -> None:
+        if debounce and delay_ms <= 0:
+            raise ValueError("a debounce needs a delay")
         self._widget = widget
         self._callback = callback
         self._delay_ms = delay_ms
+        self._debounce = debounce
         self._pending = None
         self.runs = 0
 
@@ -44,7 +50,9 @@ class Coalescer:
         return self._pending is not None
 
     def request(self) -> None:
-        """Run the callback once, soon; further requests before it runs change nothing."""
+        """Run the callback once, soon; further requests before it runs change nothing (or, debounced, delay it)."""
+        if self._pending is not None and self._debounce:
+            self.cancel()
         if self._pending is not None or not _alive(self._widget):
             return
         if self._delay_ms:
