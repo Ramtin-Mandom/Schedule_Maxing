@@ -35,8 +35,8 @@ class UISettings:
     appearance: str = "light"
     ui_scale: float = 1.0
     language: str = "en"
-    #: Updates (app/ui/update_controller.py): look for a new version automatically; a version the user chose
-    #: to skip; and when the last automatic check ran (ISO 8601, UTC), so it runs at most once a day.
+    #: Updates (app/ui/update_controller.py): automatic checks run on every launch. The other two fields
+    #: are kept so settings written by older versions remain readable; they no longer suppress notices.
     check_for_updates: bool = True
     skipped_version: str | None = None
     last_update_check: str | None = None
