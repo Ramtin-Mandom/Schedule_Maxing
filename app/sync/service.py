@@ -61,9 +61,15 @@ backoff delay) on a daemon thread; wake() triggers a run early; stop()
 ends it and waits for an in-progress run, and is called by
 AppServices.close() before the database is closed. While idle the loop also
 looks, every `pending_poll` seconds, at the durable count of pending
-records -- a local query, never a request -- and runs early when it changed
-since the last sync, so an edit is uploaded within seconds without any
-manual action. After a failure only the backoff decides the next attempt.
+records -- a local query, never a request, and skipped when nothing was
+written since the last look -- and runs early when it changed since the
+last sync; a local commit is looked at `edit_debounce` seconds after the
+last one, so an edit is uploaded within seconds without any manual action.
+After a failure only the backoff decides the next attempt. The desktop
+reports its window's activity (set_activity): while it is not focused the
+interval is `background_interval`, while minimized the pending count is not
+looked at, and regaining focus syncs at once when the last success is older
+than `interval` (ADR in DECISIONS.md). Sync now is never delayed.
 
 Account switches never interleave with a sync (Milestone 4, the local web
 profile): sign_in, sign_out, set_transport and association wait for a
@@ -92,11 +98,13 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from app.execution.db import data_version, transaction_state_for
 from app.planning.scope import OwnerScope
 from app.sync.engine import AssociationPreview, PushOutcome, SyncEngine
 from app.sync.store import BACKEND_URL_SETTING, Account, Conflict
@@ -223,7 +231,9 @@ class SyncService:
         *,
         clock: Callable[[], datetime] = _utcnow,
         interval: float = 60.0,
+        background_interval: float = 300.0,
         pending_poll: float = 5.0,
+        edit_debounce: float = 2.5,
         backoff_base: float = 5.0,
         backoff_max: float = 600.0,
         push_batch_size: int = 100,
@@ -234,9 +244,21 @@ class SyncService:
         self._connection = connection
         self._transport = transport
         self._interval = interval
+        self._background_interval = max(interval, background_interval)
         self._pending_poll = pending_poll
+        self._edit_debounce = edit_debounce
         #: The pending count seen when the last sync ended (None: none ended yet): a different count is new work.
         self._pending_seen: int | None = None
+        #: ((data version (app/execution/db.data_version), account key), count) of the last pending count.
+        self._pending_counted: tuple[tuple[int, str], int | None] | None = None
+        #: focused | unfocused | minimized (set_activity, from the desktop's Tk thread).
+        self._activity = "focused"
+        #: time.monotonic() of the last successful sync (None: none in this session).
+        self._last_success: float | None = None
+        #: time.monotonic() of the last commit seen by the listener (None: none since the last sync).
+        self._edited_at: float | None = None
+        #: Set by wake(), set_activity() and local commits: the idle loop looks again at once.
+        self._nudge = threading.Event()
         self._backoff_base = backoff_base
         self._backoff_max = backoff_max
         self._push_batch_size = push_batch_size
@@ -944,16 +966,29 @@ class SyncService:
         )
 
     def _pending_now(self) -> int | None:
-        """The signed-in account's pending records right now (a local count; None: nobody is signed in)."""
+        """
+        The signed-in account's pending records right now (a local count;
+        None: nobody is signed in). The count is one indexed query, and it is
+        not even run when nothing was written since the last one (data_version).
+        """
         with self._state_lock:
             token, key = self._token, self._account_key
         if self._transport is None or token is None or key is None:
             return None
+        version = data_version(self._connection)
+        counted = self._pending_counted
+        if version is not None and counted is not None and counted[0] == (version, key):
+            return counted[1]
         account = self._engine.store.account(key)
-        return self._engine.store.pending_count(account.account_key, account.user_id) if account else None
+        pending = self._engine.store.pending_count(account.account_key, account.user_id) if account else None
+        if version is not None:
+            self._pending_counted = ((version, key), pending)
+        return pending
 
     def _finish(self, report: SyncReport) -> SyncReport:
         self.last_report = report
+        if report.status == "ok":
+            self._last_success = time.monotonic()
         try:
             self._pending_seen = self._pending_now()
         except Exception:  # noqa: BLE001 - only a hint for the idle loop
@@ -963,10 +998,51 @@ class SyncService:
         return report
 
     def next_delay(self) -> float:
-        """Seconds until the next background run: the interval, or bounded exponential backoff after failures."""
+        """
+        Seconds until the next background run: the interval for the current
+        activity (set_activity: `interval` while the window is focused,
+        `background_interval` otherwise), or bounded exponential backoff
+        after failures (unchanged by the activity).
+        """
         if self.consecutive_failures == 0:
-            return self._interval
+            return self._interval if self._activity == "focused" else self._background_interval
         return min(self._backoff_max, self._backoff_base * (2 ** (self.consecutive_failures - 1)))
+
+    # ------------------------------------------------------------------
+    # Activity (the desktop window: app/ui/activity.py)
+    # ------------------------------------------------------------------
+
+    ACTIVITIES = ("focused", "unfocused", "minimized")
+
+    @property
+    def activity(self) -> str:
+        return self._activity
+
+    def set_activity(self, activity: str) -> None:
+        """
+        How the desktop window is used now: "focused", "unfocused" (visible,
+        another application in front) or "minimized". Thread-safe; the
+        background loop re-plans its wait at once. Focused uses `interval`,
+        the others `background_interval`; minimized also stops looking at the
+        pending count. Gaining focus syncs now when the last successful sync
+        is older than `interval` (or there was none yet). Nothing here delays
+        Sync now, and pending records are always pushed by the next run.
+        """
+        if activity not in self.ACTIVITIES:
+            raise ValueError(f"unknown activity: {activity!r}")
+        with self._state_lock:
+            previous, self._activity = self._activity, activity
+        if previous == activity:
+            return
+        if activity == "focused" and (self._last_success is None
+                                      or time.monotonic() - self._last_success >= self._interval):
+            self._wake.set()
+        self._nudge.set()
+
+    def _local_commit(self) -> None:
+        """A commit on this connection (commit listener, any thread): maybe a local edit to push soon."""
+        self._edited_at = time.monotonic()
+        self._nudge.set()
 
     # ------------------------------------------------------------------
     # Background loop
@@ -982,38 +1058,77 @@ class SyncService:
         if self._thread is not None or self._transport is None:
             return
         self._stop.clear()
+        state = transaction_state_for(self._connection)
+        if state is not None:  # a local edit is pushed edit_debounce seconds after it, not at the next poll
+            state.add_commit_listener(self._local_commit)
         self._thread = threading.Thread(target=self._run, args=(initial_delay,), name="schedule-maxing-sync",
                                         daemon=True)
         self._thread.start()
 
     def wake(self) -> None:
         self._wake.set()
+        self._nudge.set()
 
     def _run(self, initial_delay: float = 0.0) -> None:
         if initial_delay > 0:
             self._idle(initial_delay)
         while not self._stop.is_set():
+            self._edited_at = None  # commits made by this run (or before it) are its own
             try:
                 self.sync_now()
             except Exception:  # noqa: BLE001 - the loop must survive; details are logged, not raised into Tk
                 logger.exception("Unexpected synchronization failure")
                 self.consecutive_failures += 1
-            self._idle(self.next_delay())
+            self._idle(self.next_delay(), replan=True)
 
-    def _idle(self, delay: float) -> None:
+    def _idle(self, delay: float, *, replan: bool = False) -> None:
         """
         Wait for the next run: `delay` seconds, a wake(), or -- only while the
-        last sync succeeded -- new pending work (the durable count differs
-        from what that sync left). Held or conflicting records that every
-        sync leaves pending therefore never cause a run of their own.
+        last sync succeeded and the window is not minimized -- new pending
+        work: the durable count differs from what that sync left. It is
+        looked at every `pending_poll` seconds, and after a local commit once
+        no further commit came for `edit_debounce` seconds (so a burst of
+        edits is pushed together, a few seconds after the last one). Held or
+        conflicting records that every sync leaves pending therefore never
+        cause a run of their own. replan (the loop's own wait): a change of
+        activity changes the wait to that activity's interval, counted from
+        the start of the wait; a backoff is never shortened or lengthened.
         """
-        remaining = delay
-        while remaining > 0 and not self._stop.is_set():
-            step = min(remaining, self._pending_poll) if self._pending_poll > 0 else remaining
-            if self._wake.wait(step):
+        started = time.monotonic()
+        failing = self.consecutive_failures > 0
+        deadline = started + delay
+        planned_for = self._activity
+        next_look = started + self._pending_poll if self._pending_poll > 0 else None
+        while not self._stop.is_set():
+            looking = not failing and self._activity != "minimized"
+            edited_at = self._edited_at if looking else None
+            due = [deadline]
+            if looking and next_look is not None:
+                due.append(next_look)
+            if edited_at is not None:
+                due.append(edited_at + self._edit_debounce)
+            wait = min(due) - time.monotonic()
+            if wait > 0 and self._nudge.wait(wait):
+                self._nudge.clear()
+                if self._wake.is_set():
+                    break
+                if replan and not failing and self._activity != planned_for:
+                    planned_for = self._activity
+                    deadline = started + self.next_delay()
+                continue
+            now = time.monotonic()
+            if now >= deadline:
                 break
-            remaining -= step
-            if self.consecutive_failures == 0 and remaining > 0:
+            if not looking:
+                continue
+            settled = edited_at is not None and now >= edited_at + self._edit_debounce
+            polled = next_look is not None and now >= next_look
+            if polled:
+                next_look = now + self._pending_poll
+            # A poll right after an edit waits for the edit's debounce instead (one push for a burst of edits).
+            if settled or (polled and edited_at is None):
+                if settled and self._edited_at == edited_at:  # (a newer commit keeps its own debounce)
+                    self._edited_at = None
                 try:
                     pending = self._pending_now()
                 except Exception:  # noqa: BLE001 - e.g. the database is closing; the timer still applies
@@ -1021,6 +1136,7 @@ class SyncService:
                 if pending is not None and pending != self._pending_seen:
                     break
         self._wake.clear()
+        self._nudge.clear()
 
     def stop(self, timeout: float = 10.0) -> bool:
         """
@@ -1028,8 +1144,12 @@ class SyncService:
         if it has stopped. Safe to call again (e.g. polling with timeout=0): it
         keeps answering False until the loop thread has really ended.
         """
+        state = transaction_state_for(self._connection)
+        if state is not None:
+            state.remove_commit_listener(self._local_commit)
         self._stop.set()
         self._wake.set()
+        self._nudge.set()
         thread, self._thread = self._thread or self._stopping, None
         if thread is None:
             return True

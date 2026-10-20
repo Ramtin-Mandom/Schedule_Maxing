@@ -95,7 +95,8 @@ from app.ui.ui_settings import UISettings, UISettingsStore, settings_path_for
 from app.ui.update_controller import UpdateController
 from app.ui.update_view import UpdateFlow
 from app.ui.settings_controller import SettingsController, TaskDataResetController
-from app.ui.tk_lifecycle import DesktopCollection, release_resources
+from app.ui.activity import Activity, ActivityState, policy_for
+from app.ui.tk_lifecycle import DesktopCollection, release_resources, tune_customtkinter_loops
 from app.version import APP_NAME, __version__
 from config import settings
 
@@ -253,8 +254,11 @@ class ScheduleOptimizerApp(ctk.CTk):
         self.task_defaults = TaskDefaultsStore(self.ui_store.path.with_name(TASK_DEFAULTS_FILENAME))
         ctk.set_appearance_mode(self.ui_settings.appearance)
         ctk.set_widget_scaling(self.ui_settings.ui_scale)
+        tune_customtkinter_loops()  # before the first window starts CustomTkinter's tracker loops
         super().__init__()
         self._collection = DesktopCollection(self)
+        #: Focused / unfocused / minimized (app/ui/activity.py): how often periodic work runs.
+        self.activity = ActivityState()
         # Opt-in (SCHEDULE_MAXING_UI_DIAGNOSTICS): event-loop lateness and callback timings, app/ui/diagnostics.py.
         self._diagnostics = diagnostics.install_from_env(self, jobs=lambda: current_registry().active)
         ctk.set_default_color_theme("blue")
@@ -290,6 +294,8 @@ class ScheduleOptimizerApp(ctk.CTk):
         self._conflicts_reading = False
         self.conflict_dialog: ConflictDialog | None = None
         self._closing = False
+        #: A pending look at whether this application still has the focus (_focus_out).
+        self._focus_check = None
         #: True once the window is destroyed and its storage closed (the end of _on_close's polling).
         self._closed = False
 
@@ -322,6 +328,63 @@ class ScheduleOptimizerApp(ctk.CTk):
                 self._check_direct_database()
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        # On the root only: its descendants' focus/map events reach these bindings too, and are filtered there.
+        self.bind("<FocusIn>", self._focus_in, add="+")
+        self.bind("<FocusOut>", self._focus_out, add="+")
+        self.bind("<Map>", self._mapped, add="+")
+        self.bind("<Unmap>", self._unmapped, add="+")
+
+    # -- activity (app/ui/activity.py) ------------------------------------------------------
+
+    def _focus_in(self, _event=None) -> None:
+        self._activity_changed(self.activity.set_focused(True))
+
+    def _focus_out(self, _event=None) -> None:
+        # Focus moving between this window's own widgets also sends FocusOut: look once it has settled.
+        if self._focus_check is None and not self._closing:
+            self._focus_check = self.after(50, self._check_focus)
+
+    def _check_focus(self) -> None:
+        self._focus_check = None
+        try:
+            focused = self.focus_get() is not None  # None: no window of this application has the focus
+        except (KeyError, tk.TclError):  # e.g. a combobox popdown has it
+            focused = True
+        self._activity_changed(self.activity.set_focused(focused))
+
+    def _mapped(self, event) -> None:
+        if event.widget is self:
+            self._activity_changed(self.activity.set_shown(True))
+
+    def _unmapped(self, event) -> None:
+        # Iconified only: the app itself withdraws the window while closing and while setting its title bar.
+        if event.widget is self and not self._closing and self.state() == "iconic":
+            self._activity_changed(self.activity.set_shown(False))
+
+    def _activity_changed(self, activity: Activity | None) -> None:
+        """Apply the policy of a new activity: status polling, the GC timer and the sync interval."""
+        if activity is None or self._closing:
+            return
+        policy = policy_for(activity)
+        self._collection.set_interval(policy.gc_interval_ms)
+        if self.services is not None and not self.direct:
+            self.services.sync_service.set_activity(activity.value)
+        if self.shell is None:
+            return
+        resumed = self._status_poll is None and policy.status_poll_ms is not None
+        self._cancel_status_poll()
+        if policy.status_poll_ms is not None:
+            if resumed:  # back from minimized: one read now (it reloads the visible page if a sync pulled changes)
+                self.refresh_status()
+            self._status_poll = self.after(policy.status_poll_ms, self._poll_status)
+
+    def _cancel_status_poll(self) -> None:
+        if self._status_poll is not None:
+            try:
+                self.after_cancel(self._status_poll)
+            except tk.TclError:
+                pass
+            self._status_poll = None
 
     def _set_window_icon(self) -> None:
         """The application's own icon (assets/, bundled with the packaged app); the default one if it is unavailable."""
@@ -437,12 +500,13 @@ class ScheduleOptimizerApp(ctk.CTk):
         if self._closing:
             return
         self._closing = True
-        if self._status_poll is not None:
+        self._cancel_status_poll()
+        if self._focus_check is not None:
             try:
-                self.after_cancel(self._status_poll)
+                self.after_cancel(self._focus_check)
             except tk.TclError:
                 pass
-            self._status_poll = None
+            self._focus_check = None
         self._finish_close()
 
     def _finish_close(self, timeout: float = 0.0) -> None:
@@ -462,8 +526,9 @@ class ScheduleOptimizerApp(ctk.CTk):
 
     # -- workspace and synchronization --------------------------------------------------
 
-    #: How often the status bar re-reads the (local, durable) sync status.
-    STATUS_POLL_MS = 4000
+    #: How often the status bar re-reads the (local, durable) sync status while focused (app/ui/activity.py
+    #: ACTIVITY_POLICIES: slower while another application is in front, paused while minimized).
+    STATUS_POLL_MS = policy_for(Activity.FOCUSED).status_poll_ms
     #: The background sync's first run waits this long, so it does not compete with building the window.
     STARTUP_SYNC_DELAY_S = 3.0
     #: After this, once the window is up, the credential store is looked up in the background (_warm_up).
@@ -602,7 +667,9 @@ class ScheduleOptimizerApp(ctk.CTk):
             return
         with diagnostics.span("app.poll_status"):
             self.refresh_status()
-        self._status_poll = self.after(self.STATUS_POLL_MS, self._poll_status)
+        interval = policy_for(self.activity.activity).status_poll_ms
+        if interval is not None:  # paused while minimized (_activity_changed starts it again)
+            self._status_poll = self.after(interval, self._poll_status)
 
     def sync_now(self) -> None:
         """The status bar's Sync now (the same SyncService.sync_now the Account page uses; one at a time)."""

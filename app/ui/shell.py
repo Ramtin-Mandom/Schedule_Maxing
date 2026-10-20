@@ -169,11 +169,16 @@ class StatusBar(ctk.CTkFrame):
         self.account_button = AppButton(self, "Account", None, variant="ghost", height=28, width=84,
                                         font=font(theme.SIZE_SMALL, "bold"))
         self.account_button.grid(row=0, column=2, padx=(0, 6), pady=4)
+        #: What is drawn now: the status poll asks every few seconds, and a CTk configure redraws the control.
+        self._shown: tuple[str, str, str] | None = None
 
     def show(self, text: str, *, can_sync: bool, syncing: bool) -> None:
-        self.label.configure(text=text)
-        self.sync_button.configure(state="normal" if can_sync and not syncing else "disabled",
-                                   text="Syncing..." if syncing else "Sync now")
+        state, label = ("normal" if can_sync and not syncing else "disabled"), ("Syncing..." if syncing else "Sync now")
+        previous, self._shown = self._shown, (text, state, label)
+        if previous is None or previous[0] != text:
+            self.label.configure(text=text)
+        if previous is None or previous[1:] != (state, label):
+            self.sync_button.configure(state=state, text=label)
 
 
 class GroupBar(ctk.CTkFrame):
