@@ -4,7 +4,7 @@ A navigation and change-impact guide. Use section D first: find the change you n
 "Start here" files, follow only the listed dependencies, run the listed tests. System design is in
 [ARCHITECTURE.md](ARCHITECTURE.md); feature status in [CURRENT_STATE.md](CURRENT_STATE.md).
 
-Paths verified against commit `6cc8855` on 2026-10-19. Dependencies marked **(import)** were checked in
+Paths verified against commit `f20cf0b` plus the uncommitted budgeting work on 2026-10-19. Dependencies marked **(import)** were checked in
 the source; others are call-level or conceptual relationships.
 
 ## A. Repository structure
@@ -29,12 +29,13 @@ app/                    desktop application and the shared domain layer (also im
   planning/             canonical planning domain + application services (see C.2)
   execution/            local SQLite infrastructure + execution tracking (see C.3)
   productivity/         analytics, tracker, cohort, predictors, ML experiment (see C.4)
+  budget/               budgeting domain: money, models, recurrence, BudgetService, stats/forecast, SQLite repository (see C.3a)
   sync/                 offline-first sync client (see C.5)
   persistence/          optional direct-PostgreSQL desktop storage (dev only)
   ui/                   CustomTkinter pages/views + Tk-free controllers/models (see C.6)
   update/               GitHub-release updater (feed, download, verify, install)
   web/                  optional loopback FastAPI "local web profile"
-backend/                FastAPI server (see C.7); migrations/ = Alembic env + 18 versions
+backend/                FastAPI server (see C.7); migrations/ = Alembic env + 20 versions
 config/                 settings.py (env-driven desktop settings) + task_preference.yaml (reward defaults)
 packaging/windows/      build_windows.ps1, ScheduleMaxing.spec, .iss, check_bundle, smoke_test, test_installer
 .github/                workflows ci.yml, release.yml, deploy-backend.yml; scripts/pr_tests_passed.sh
@@ -68,10 +69,13 @@ Ignore: `.venv*`, `__pycache__`, `.pytest_cache`, `.ruff_cache`, `build/`, `dist
 | Day board / outcomes | `app/ui/day_page.py`, `app/ui/day_controller.py` | `day_timeline.py`, `day_outcomes.py`, `task_status_board.py`, `task_status.py`, `task_actions.py`, `day_window*.py` | `tests/ui/test_day_*.py`, `test_task_status.py` | `app/productivity/day_summary.py` |
 | Week/Month calendars | `app/ui/calendar_page.py`, `calendar_controller.py` | `calendar_model.py`, `calendar_view.py`, `selected_day_panel.py` | `tests/ui/test_calendar_*.py` | Day summaries |
 | Projects | `app/ui/planning_pages.py` (`ProjectsPage`), `app/ui/projects_controller.py` | `Project`/`ProjectMilestone` in `models.py`, `app/productivity/project_stats.py` | `tests/ui/test_projects_allocation.py`, `test_project_details.py`, `test_planning_pages.py` | Productivity Project section |
+| Budget (balance, income/expenses, recurrence, Future items) | `app/budget/service.py` (`BudgetService`) | `app/budget/models.py`, `money.py`, `recurrence.py`, `stats.py`, `repository.py`; direct `app/persistence/budget.py`; server `BUDGET_*` specs in `backend/resources.py`; sync `app/sync/mapping.py` (`BUDGET_FIELDS`) | `tests/budget/*`, `tests/execution/test_migration_v17.py`, `test_migration_v18.py`, `tests/backend/test_budget_api.py`, `tests/sync/test_budget_sync.py`, `tests/direct/test_direct_budget.py` | Budgeting page, Day money widgets |
+| Budgeting page (General / Stats / Future) | `app/ui/budget_page.py` (`BudgetingPage`), `app/ui/budget_controller.py` (`BudgetController`) | `budget_future.py`, `budget_charts.py`; composition `AppServices.budget_controller()` / `DirectAppServices.budget_controller()`; wiring `app/app.py: _build_workspace_pages`, nav `shell_state.py` | `tests/ui/test_budget_controller.py`; real-window `tests/ui/test_budget_page.py` | `app/budget/stats.py` |
+| Day page money widgets | `app/ui/day_money.py` (`MoneyTotals`, `MoneyStrip`, `DayMoneyDialog`) | `app/ui/day_page.py` (`_show_money`, `open_money`, `_save_money`), `BudgetController.day` / `set_day_amounts` | `tests/ui/test_budget_controller.py`; real-window `tests/ui/test_budget_page.py` | Budgeting page |
 | Productivity analytics | `app/productivity/reporting.py`, `tracker.py` | `stats.py`, `segments.py`, `day_summary.py`, `schedule_cohort.py`, `app/planning/history.py`, `app/ui/productivity_controller.py`, `productivity_page.py`, `tracker_view.py`, `productivity_charts.py` | `tests/productivity/test_tracker*.py`, `test_reporting.py`, `test_schedule_cohort*.py`, `tests/ui/test_productivity_*.py`, `test_tracker_view.py` | `docs/analytics.md` |
 | Duration prediction / ML | `app/productivity/prediction.py`, `ml_*.py` | `predictor_comparison_cli.py`, `app/ui/duration_suggestion.py` (not wired) | `tests/productivity/test_prediction.py`, `test_ml_*.py` | CLI only |
 | Settings / preferences UI | `app/ui/pages.py` (`SettingsPage`), `app/ui/settings_controller.py` | `preferences_editor.py`, `preferences_model.py`, `ui_settings.py`, `task_defaults.py` | `tests/ui/test_settings_page.py`, `test_settings_controller.py` | Reward/preferences |
-| Desktop shell / navigation | `app/ui/shell.py`, `shell_state.py` | `layout.py`, `components.py`, `paint_widgets.py`, `theme.py`, `guide_page.py`, `guide_content.py` | `tests/ui/test_desktop_shell.py`, `test_shell_foundation.py`, `test_guide.py` | All pages |
+| Desktop shell / navigation (page groups: Settings / Account / How to Use) | `app/ui/shell.py`, `shell_state.py` | `layout.py`, `components.py`, `paint_widgets.py`, `theme.py`, `guide_page.py`, `guide_content.py` | `tests/ui/test_desktop_shell.py`, `test_shell_foundation.py`, `test_guide.py` | All pages |
 | UI responsiveness | `app/ui/background.py` | `tk_lifecycle.py`, `diagnostics.py`, `layout.py`, `paint_widgets.py` | `tests/ui/test_background_executor.py`, `test_async_storage.py`, `test_responsiveness_regressions.py`, `test_bounded_rendering.py` (helper: `tests/tk_cleanup.py`) | `benchmarks/desktop_responsiveness.py`, `docs/desktop-responsiveness-*.md` |
 | Local persistence (SQLite) | `app/execution/db.py` | `app/planning/repository.py`, `app/execution/repository.py`, `backup.py`, `instance_lock.py` | `tests/execution/test_db.py`, `test_migration_v*.py`, `test_backup.py`, `test_transactions.py`, `tests/ui/test_data_compatibility.py` | Sync triggers |
 | Synchronization (client) | `app/sync/service.py`, `engine.py` | `store.py`, `mapping.py`, `transport.py`, `credentials.py` | `tests/sync/*` (system tier), `tests/test_transport_security.py`, `tests/test_sync_status_counts.py` | `docs/sync-protocol.md` |
@@ -129,7 +133,7 @@ Grouped by package. Short paths inside a table are relative to that section's pa
 
 | File | Responsibility | Notes |
 |---|---|---|
-| `db.py` | Connection (`AppConnection`), `transaction`/`locked`, `MIGRATIONS` v1→v16, integrity/foreign-key checks, legacy adoption, `resolve_db_path` | Owns **all** local tables, including planning and sync (historical location). Sync capture triggers are created here |
+| `db.py` | Connection (`AppConnection`), `transaction`/`locked`, `MIGRATIONS` v1→v18, integrity/foreign-key checks, legacy adoption, `resolve_db_path` | Owns **all** local tables, including planning and sync (historical location). Sync capture triggers are created here |
 | `service.py` | `ExecutionService`: start/pause/resume/complete/skip/cancel/reopen, sessions, feedback, deletion; `open_execution_service` | Applies `lifecycle.py` rules |
 | `lifecycle.py` | Pure transition table, `TaskOutcome`, `outcome_of`, duration/delay metrics | Shared with `backend/mutations.py`, `backend/executions.py` |
 | `repository.py` | `ExecutionRepository` — the only execution SQL | Parameterized queries only |
@@ -137,6 +141,19 @@ Grouped by package. Short paths inside a table are relative to that section's pa
 | `fixed_block_completion.py`, `direct_completion.py` | Completing fixed blocks; completing a task with no placement (Projects panel) | |
 | `backup.py`, `instance_lock.py` | Copy before migration (+ pruning); one process per database file | |
 | `exporters.py`, `errors.py` | Raw execution CSV/JSON export; typed errors | |
+
+### C.3a Budget (`app/budget/`)
+
+`service.py` (`BudgetService`: validation, CRUD, occurrence edits, range expansion, totals, projected
+balance) over a repository with one generic interface (`get`/`list`/`insert`/`update`/`soft_delete`/
+`project_exists`/`transaction`): `repository.py` (`BudgetRepository`, SQLite tables of schemas v17-v18) or
+`app/persistence/budget.py` (`DirectBudgetRepository`, through the server's `Mutator`). `models.py`
+(`BudgetBalance`, `BudgetEntry`, `BudgetOverride`, `IncomeIdea`, `WishlistItem`, categories), `money.py`
+(integer minor units; floats refused), `recurrence.py` (occurrence dates; monthly clamps to the month's last
+day), `stats.py` (`budget_statistics`, `balance_history`, `balance_forecast`: history figures, the ledger of
+transactions and manual balance changes with running balances, and the 90-day forecast, exact
+`Fraction` arithmetic). The UI reaches it only through `app/ui/budget_controller.py`. Nothing in the
+scheduling stack imports this package (`tests/budget/test_budget_service.py` checks it).
 
 ### C.4 Productivity (`app/productivity/`)
 
@@ -164,12 +181,13 @@ Grouped by package. Short paths inside a table are relative to that section's pa
 | Group | Files |
 |---|---|
 | Composition and threading | `app_services.py`, `direct_services.py`, `background.py` (`ControllerResult`, `WorkerRegistry`, `run_io`, `run_in_background`, `WRITE_LANE`), `tk_lifecycle.py`, `diagnostics.py` |
-| Shell and shared widgets | `shell.py`, `shell_state.py`, `layout.py`, `components.py`, `paint_widgets.py`, `theme.py`, `pages.py` (`PageHeader`, `ScrollPage`, `PlaceholderPage`, `SettingsPage`) |
+| Shell and shared widgets | `shell.py`, `shell_state.py`, `layout.py`, `components.py`, `paint_widgets.py`, `theme.py`, `pages.py` (`PageHeader`, `ScrollPage`, `DeferredPage` (built on first show; Budgeting), `PlaceholderPage`, `SettingsPage`) |
 | Planning controllers | `planning_controller.py` (Tk-free facade over workflow/services; CSV), `schedule_page_controller.py`, `day_controller.py`, `calendar_controller.py`, `projects_controller.py` |
 | Pages and views | `day_page.py`, `day_timeline.py`, `day_window.py`, `day_window_bar.py`, `day_outcomes.py`, `task_status_board.py`, `calendar_page.py`, `calendar_view.py`, `calendar_model.py`, `selected_day_panel.py`, `planning_pages.py` |
 | Task form | `task_editor.py`, `task_form_model.py`, `task_defaults.py`, `time_fields.py`, `clock_input.py`, `task_actions.py`, `task_status.py` |
 | Execution | `execution_controller.py`, `execution_workflow.py` |
 | Productivity | `productivity_controller.py`, `productivity_page.py`, `tracker_view.py`, `productivity_charts.py`, `history_model.py` |
+| Budgeting | `budget_controller.py` (Tk-free; view rows, stats wording), `budget_page.py` (General, Stats), `budget_future.py` (Future), `budget_charts.py`, `day_money.py` (Day page strip, totals, amounts dialog) |
 | Settings | `settings_controller.py`, `preferences_editor.py`, `preferences_model.py`, `ui_settings.py` |
 | Account and sync | `account_controller.py`, `account_page.py`, `conflict_view.py` |
 | Updates and guide | `update_controller.py`, `update_view.py`, `guide_page.py`, `guide_content.py` |
@@ -220,7 +238,7 @@ files and keeps the fast ones. Two exceptions:
   - *real-window only* (`tests/ui/`): `test_day_page.py`, `test_day_status_board.py`, `test_day_window_pages.py`,
     `test_calendar_pages.py`, `test_calendar_outcomes.py`, `test_planning_pages.py`, `test_settings_page.py`,
     `test_task_editor_widgets.py`, `test_desktop_app.py`, `test_desktop_shell.py`, `test_async_storage.py`,
-    `test_bounded_rendering.py`, `test_responsiveness_regressions.py`;
+    `test_bounded_rendering.py`, `test_responsiveness_regressions.py`, `test_budget_page.py`;
   - *slow only*: `tests/backend/test_migrations.py`, `tests/backend/test_normalized_migration.py`,
     `tests/backend/test_live_server.py`, `tests/test_desktop_isolation.py`.
 
@@ -244,6 +262,9 @@ files and keeps the fast ones. Two exceptions:
 | Update authentication behavior | `backend/accounts.py`, `backend/api.py` (auth routes) | `security.py`, `native_sessions.py`, `browser_sessions.py`, `login_guard.py`, `mfa.py`, the policy for new passwords in `password_policy.py`; client `app/sync/transport.py`, `service.py`, `credentials.py`, `app/ui/account_controller.py`; direct `app/persistence/direct.py` | `tests/backend/test_auth.py`, `test_auth_protection.py`, `test_native_sessions.py`, `test_account_security.py`, `tests/sync/test_keep_signed_in.py`, `tests/direct/test_direct_accounts.py` |
 | Change the task form | `app/ui/task_form_model.py` | `task_editor.py`, `task_defaults.py`, `planning_controller.py`, `fixed_block_rules.py`; `docs/desktop-task-form.md` | `tests/ui/test_task_form_model.py`, `test_task_editor_widgets.py` |
 | Change the Day page | `app/ui/day_controller.py` (logic) / `day_page.py` (widgets) | `day_timeline.py`, `task_status_board.py`, `day_outcomes.py`, `app/productivity/day_summary.py` | `tests/ui/test_day_controller.py`, `test_day_page.py`, `test_day_status_board.py`, `test_day_outcomes.py` |
+| Budget behavior (money, recurrence, occurrence edits, Future items) | `app/budget/service.py` | `models.py`, `money.py`, `recurrence.py`; storage `repository.py` + `app/execution/db.py` (v17, v18), `app/persistence/budget.py`; server `backend/resources.py` (`BUDGET_*`), `backend/models.py` (`Budget*`); sync `app/sync/mapping.py`, `engine.py` (`budget` feature) | `tests/budget/*`, `tests/execution/test_migration_v17.py`, `test_migration_v18.py`, `tests/backend/test_budget_api.py`; system tier: `tests/sync/test_budget_sync.py`, `tests/direct/test_direct_budget.py` |
+| Budget statistics / history / forecast | `app/budget/stats.py` | `BudgetController.stats_view`, `history` (wording, filters), `app/ui/budget_charts.py` | `tests/budget/test_budget_stats.py`, `tests/ui/test_budget_controller.py` |
+| Budgeting UI or Day money widgets | `app/ui/budget_controller.py` | `budget_page.py`, `budget_future.py`, `day_money.py`, `day_page.py` (money section); storage calls via `run_io` / `WRITE_LANE` | `tests/ui/test_budget_controller.py`; real-window `tests/ui/test_budget_page.py`, `test_day_page.py` |
 | Recurrence behavior | `app/planning/series.py`, `recurrence.py` | `occurrence.py`, `workflow.py` (expansion before generation), `app/sync/engine.py` (`_SeriesGroup`) | `tests/planning/test_recurrence_*.py`, `tests/sync/test_recurrence_sync.py` |
 | CSV formats | `app/planning/csv_import.py` (legacy) / `csv_canonical.py` + `csv_export.py` (v2) | `compat.py`, `app/csv_safety.py`, `backend/planning_api.py` CSV routes | `tests/planning/test_csv_*.py`, `tests/test_import_safety.py` |
 | Desktop config / paths | `config/settings.py`, `app/runtime.py` | `app/execution/db.py: resolve_db_path`, packaging spec | `tests/test_runtime.py`, `tests/execution/test_storage_location.py` |
@@ -310,6 +331,7 @@ flowchart LR
 | `app/execution/db.py` | Every local read/write; migration of user files | Sync triggers, backups, packaged app upgrades |
 | `backend/models.py` | Server repositories, mutations, snapshots | Direct mode (same schema), deployment (migration must run first) |
 | `app/sync/mapping.py` / wire schemas in `backend/resources.py` | Client and server together | Older installed clients (use `GET /sync/capabilities`) |
+| `app/budget/` | `BudgetService` callers (`app/ui/budget_controller.py` via `AppServices`/`DirectAppServices.budget_controller()`, direct `AccountSession.budget_service()`), sync mapping, server validation (`backend/resources.py` reuses the models) | Stored data (v17-v18 tables, revisions 0019-0020), Budgeting page, Day money widgets |
 | `app/ui/background.py` | Every page's storage call | Responsiveness, shutdown safety |
 | `config/settings.py` / `app/runtime.py` | Paths, timezone, backend URL, updater | Packaged build, tests that inject paths |
 

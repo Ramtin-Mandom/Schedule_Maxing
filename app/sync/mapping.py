@@ -30,6 +30,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from app.budget.models import BudgetBalance, BudgetEntry, BudgetOverride, IncomeIdea, WishlistItem
+from app.budget.repository import BudgetRepository
 from app.execution.errors import ExecutionNotFoundError
 from app.execution.lifecycle import TRANSITIONS, reopen_target
 from app.execution.models import TERMINAL_STATUSES, ExecutionStatus, TaskExecution
@@ -49,7 +51,21 @@ from app.planning.repository import PlanningRepository
 
 #: Creates/updates are sent in this order (a record after what it references); deletes in reverse.
 ENTITY_ORDER = ("project", "task_type", "task", "fixed_block", "placement", "preference", "schedule_generation",
-                "execution")
+                "execution", "budget_balance", "budget_entry", "budget_override", "budget_idea", "budget_wish")
+
+#: The budget records (app/budget): their wire fields, and their models. Sent only to a server with "budget".
+BUDGET_FIELDS = {
+    "budget_balance": ("amount_minor", "as_of"),
+    "budget_entry": ("kind", "name", "amount_minor", "category", "start_date", "recurrence", "end_date", "project_id"),
+    "budget_override": ("entry_id", "occurrence_date", "state", "name", "amount_minor", "date", "category",
+                        "project_id"),
+    "budget_idea": ("name", "expected_amount_minor", "secured_amount_minor", "description"),
+    "budget_wish": ("name", "amount_minor", "category", "project_id", "description", "converted_entry_id",
+                    "converted_on"),
+}
+BUDGET_TYPES = tuple(BUDGET_FIELDS)
+_BUDGET_MODELS = {"budget_balance": BudgetBalance, "budget_entry": BudgetEntry, "budget_override": BudgetOverride,
+                  "budget_idea": IncomeIdea, "budget_wish": WishlistItem}
 
 #: Sent only to a server with "task_types": a task's type, and the planning snapshot of a placement beyond
 #: task_category (which older servers already know).
@@ -124,7 +140,8 @@ def _dump(model, fields) -> dict:
 class LocalRecords:
     """Reads local records (tombstones included) in wire form, and writes pulled ones."""
 
-    def __init__(self, planning: PlanningRepository, executions: ExecutionRepository) -> None:
+    def __init__(self, planning: PlanningRepository, executions: ExecutionRepository,
+                 budget: BudgetRepository | None = None) -> None:
         #: Whether the server knows placement origin/manual intent and cancel reasons ("manual_placements"):
         #: without it they are left out of payloads (an older server rejects unknown fields).
         self.manual_placements = True
@@ -139,6 +156,8 @@ class LocalRecords:
         self.task_kinds = True
         self.planning = planning
         self.executions = executions
+        #: The device-wide budget repository (app/budget), on the same connection.
+        self.budget = budget
 
     # -- reading ----------------------------------------------------------
 
@@ -176,6 +195,9 @@ class LocalRecords:
         elif entity_type == "schedule_generation":
             model = self.planning.get_generation_by_id(record_id, include_deleted=True)
             payload = model and _dump(model, _GENERATION_FIELDS)
+        elif entity_type in BUDGET_FIELDS:
+            model = self.budget.get(entity_type, record_id, include_deleted=True)
+            payload = model and _dump(model, BUDGET_FIELDS[entity_type])
         if model is None:
             return None
         return LocalRecord(entity_type, local_id, local_id, str(model.user_id) if model.user_id else None,
@@ -315,9 +337,19 @@ class LocalRecords:
                 **meta, "scope": PreferenceScope(record["scope"]), "date": record["date"],
                 "overrides": PreferenceOverrides.model_validate(record["overrides"]),
             })
+        elif entity_type in BUDGET_FIELDS:
+            model = _BUDGET_MODELS[entity_type].model_validate(
+                {**meta, **{name: record[name] for name in BUDGET_FIELDS[entity_type]}})
         else:
             model = GenerationRecord.model_validate({**meta, **{name: record[name] for name in _GENERATION_FIELDS}})
-        self.planning.store_synced(entity_type, model)
+        self.store_model(entity_type, model)
+
+    def store_model(self, entity_type: str, model) -> None:
+        """Write one planning or budget model exactly as given (see PlanningRepository.store_synced)."""
+        if entity_type in BUDGET_FIELDS:
+            self.budget.store_synced(entity_type, model)
+        else:
+            self.planning.store_synced(entity_type, model)
 
     def _store_execution(self, record: dict, owner: str, local_version: int) -> None:
         local_id = self.local_id_for("execution", record)

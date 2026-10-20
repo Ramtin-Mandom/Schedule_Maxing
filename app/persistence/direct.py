@@ -11,6 +11,7 @@ framework, no JWT and no server.
     backend.register(email=..., password=...)       # -> AccountIdentity (no password, no hash)
     account = backend.sign_in(email=..., password=...)
     planning = account.planning_service()           # app.planning.application.PlanningService
+    budget = account.budget_service()               # app.budget.service.BudgetService
     executions = account.execution_service()        # the ExecutionService API, server rules
     productivity = account.productivity_service()   # app.productivity.reporting.ProductivityService
     account.sign_out(); backend.close()             # after background workers finished
@@ -260,6 +261,13 @@ class _Services:
         from app.persistence.executions import DirectExecutionService
 
         return DirectExecutionService(self)
+
+    def budget_service(self):
+        """Budgeting of the account (app.budget.service.BudgetService) through the server's mutation path."""
+        from app.budget.service import BudgetService
+        from app.persistence.budget import DirectBudgetRepository
+
+        return BudgetService(DirectBudgetRepository(self), self.clock)
 
     def productivity_service(self, timezone_name: str | None = None):
         """Productivity analysis of the account; the schedule cohort reads its planning history (one session)."""

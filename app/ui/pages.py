@@ -86,6 +86,45 @@ class ScrollPage(AppScrollableFrame):
             self.content.on_appearance_changed()
 
 
+class DeferredPage(ctk.CTkFrame):
+    """
+    A page built the first time it is shown, so start-up lays out only the
+    pages opened first (every scrollable area costs a full layout pass when it
+    is created). build(parent) makes the page; `content` is its content (a
+    ScrollPage's), and on_show/set_layout/on_appearance_changed are passed on.
+    """
+
+    def __init__(self, parent, build: Callable[[ctk.CTkFrame], ctk.CTkFrame]) -> None:
+        super().__init__(parent, fg_color=theme.APP_BG, corner_radius=0)
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        self._build = build
+        self.page: ctk.CTkFrame | None = None
+
+    @property
+    def content(self):
+        return getattr(self.page, "content", self.page)
+
+    def ensure(self) -> ctk.CTkFrame:
+        if self.page is None:
+            self.page = self._build(self)
+            self.page.grid(row=0, column=0, sticky="nsew")
+        return self.page
+
+    def on_show(self) -> None:
+        page = self.ensure()
+        if hasattr(page, "on_show"):
+            page.on_show()
+
+    def set_layout(self, mode) -> None:
+        if self.page is not None and hasattr(self.page, "set_layout"):
+            self.page.set_layout(mode)
+
+    def on_appearance_changed(self) -> None:
+        if self.page is not None and hasattr(self.page, "on_appearance_changed"):
+            self.page.on_appearance_changed()
+
+
 class PlaceholderPage(ctk.CTkFrame):
     def __init__(self, parent, title: str, message: str, links: list[tuple[str, Callable[[], None]]] = ()) -> None:
         super().__init__(parent, fg_color=theme.APP_BG, corner_radius=0)

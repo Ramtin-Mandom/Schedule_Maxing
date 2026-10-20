@@ -8,8 +8,8 @@ to the window. Nothing here blocks the interface: checking, downloading and
 starting the installer run in worker threads (app.ui.background), and their
 results come back on the Tk thread.
 
-    automatic check (a few seconds after start, at most once a day)
-        newer version -> UpdateBanner: "Update now" / "Later" / "Skip this version"
+    automatic check (a few seconds after each start)
+        newer version -> UpdateBanner: "Update now" / "Later"
         anything else -> nothing is shown (failures are only logged)
     "Update now" -> download with progress (can be cancelled) -> verify
                  -> start the installer -> close the application normally
@@ -36,8 +36,6 @@ from app.ui.update_controller import (
     automatic_check_due,
     megabytes,
     with_automatic_checks,
-    with_check_recorded,
-    with_skipped_version,
 )
 
 #: How long after the window opens the automatic check starts (the first paint and first sync come first).
@@ -111,19 +109,16 @@ class UpdateFlow:
         if self.checking or self.updating:
             return False
         self.checking = True
-        skipped = None if manual else self._get().skipped_version
 
         def finished(result) -> None:
             self.checking = False
             view = result.value if result.ok else None
-            if not manual and view is not None and view.state != "unavailable":
-                self._save(with_check_recorded(self._get(), self._now()))  # a failed check is tried again next start
             if view is not None and view.offer:
                 self.offer(view)
             if done is not None:
                 done(view)
 
-        if not run_in_background(self.root, lambda: self.controller.check(skipped_version=skipped), finished,
+        if not run_in_background(self.root, self.controller.check, finished,
                                  still_current=lambda: True):
             self.checking = False
             return False
@@ -132,19 +127,13 @@ class UpdateFlow:
     # -- offering and installing ---------------------------------------------------------------
 
     def offer(self, view: UpdateView) -> None:
-        release = view.release
-        actions = [("Later", self.banner.hide, "secondary"),
-                   ("Skip this version", lambda: self.skip(release.version), "ghost")]
+        actions = [("Later", self.banner.hide, "secondary")]
         if self.controller.can_install:
             actions.insert(0, ("Update now", lambda: self.update_now(view), "primary"))
             note = "\nUpdating closes the app, installs the new version and opens it again. Windows may ask for permission."
         else:
             note = "\nThis copy runs from source code; update it with git."
         self.banner.show(view.message + note, actions)
-
-    def skip(self, version: str) -> None:
-        self._save(with_skipped_version(self._get(), version))
-        self.banner.hide()
 
     def update_now(self, view: UpdateView) -> None:
         if self.updating:

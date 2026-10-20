@@ -132,6 +132,8 @@ TASK_TYPES_FEATURE = "task_types"
 PROJECT_DETAILS_FEATURE = "project_details"
 #: A task's kind (flexible / todo) and preferred third of the day, and a fixed block's points.
 TASK_KINDS_FEATURE = "task_kinds"
+#: Budget balances, entries and occurrence edits (app/budget).
+BUDGET_FEATURE = "budget"
 
 
 @dataclass(frozen=True)
@@ -792,10 +794,11 @@ class SyncService:
                 types = TASK_TYPES_FEATURE in features
                 details = PROJECT_DETAILS_FEATURE in features
                 kinds = TASK_KINDS_FEATURE in features
+                budget = BUDGET_FEATURE in features
                 for _ in range(MAX_PUSH_ROUNDS):
                     self._engine.prepare(account, recurrence=recurrence, manual_placements=manual,
                                          scheduling_modes=modes, task_types=types, project_details=details,
-                                         task_kinds=kinds)
+                                         task_kinds=kinds, budget=budget)
                     batch = self._engine.next_batch(account, self._push_batch_size)
                     if not batch:
                         break
@@ -803,6 +806,8 @@ class SyncService:
                     pushed += outcome.applied
                     conflicts += outcome.conflicts
                 batch = []
+                if budget:
+                    self._engine.pull_budget_history(account)
                 for _ in range(MAX_PULL_PAGES):
                     account = self._engine.store.account(key)
                     page = self._transport.pull(token, account.pull_cursor, self._pull_page_size)
@@ -839,7 +844,8 @@ class SyncService:
                 self._engine.store.set_last_synced(key, self._clock().isoformat())
                 held = self._engine.held
                 message = (f"{held} record(s) wait here: the server does not support them yet (recurring series, "
-                           "the newer scheduling modes or task types; update the server).") if held else ""
+                           "the newer scheduling modes, task types or budget records; update the server)."
+                           ) if held else ""
                 return self._finish(SyncReport("ok", pushed, pulled, conflicts, message, held=held))
         return self.sync_now(_renewed=True)  # the session was renewed: once more with the new token
 

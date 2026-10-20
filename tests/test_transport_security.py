@@ -10,8 +10,22 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from app.sync.transport import HttpTransport, ProtocolError, validate_backend_url
-from app.ui.app_services import _sync_transport
+from app.sync.transport import HttpTransport, ProtocolError, TransportError, validate_backend_url
+from app.ui.app_services import _sync_transport, open_app_services
+
+
+def test_broken_windows_trust_store_does_not_block_local_database(monkeypatch, tmp_path) -> None:
+    def fail_context():
+        raise OSError("certificate store unavailable")
+
+    monkeypatch.setattr("app.sync.transport.ssl.create_default_context", fail_context)
+    services = open_app_services(tmp_path / "local.db", backend_url="https://example.com", background_sync=False)
+    try:
+        assert services.connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        with pytest.raises(TransportError, match="secure connection"):
+            services.sync_service._transport.health()
+    finally:
+        services.close()
 
 
 @pytest.mark.parametrize("url", [

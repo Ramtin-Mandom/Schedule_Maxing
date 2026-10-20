@@ -85,6 +85,8 @@ _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 ENTITY_LABELS = {
     "project": "Project", "task": "Task", "fixed_block": "Fixed block", "placement": "Scheduled placement",
     "preference": "Preferences", "generation": "Schedule record", "execution": "Execution",
+    "budget_balance": "Budget balance", "budget_entry": "Budget entry", "budget_override": "Budget occurrence edit",
+    "budget_idea": "Income idea", "budget_wish": "Wishlist item",
 }
 CONFLICT_KINDS = {
     "push_conflict": "Changed on this device and on the server",
