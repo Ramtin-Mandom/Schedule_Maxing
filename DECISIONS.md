@@ -56,6 +56,8 @@ decision was made.
 | ADR-036 | Analytics are recomputed from records; executions snapshot task fields | Accepted |
 | ADR-037 | The ML duration predictor is evidence-gated and kept out of the UI | Accepted |
 | ADR-038 | The local web profile listens on loopback only, behind a session guard | Accepted |
+| ADR-039 | Budget records: a separate domain, integer minor units, expanded recurrence, optional sync feature | Accepted |
+| ADR-040 | Budget forecast: a balance snapshot plus a 15-day one-time spending average; future items are not transactions | Accepted |
 
 ---
 
@@ -495,3 +497,33 @@ decision was made.
 - **Consequences:** It cannot run at the same time as the desktop on one database (ADR-010).
 - **Relevant files:** `app/web/`.
 - **Evidence:** Docstrings of `app/web/local_session.py` and `local_app.py`; `docs/web-api.md`.
+
+### ADR-039 — Budget records: a separate domain, integer minor units, expanded recurrence, optional sync feature
+
+- **Status:** Accepted
+- **Context:** Users track a balance and recurring income and expenses next to their plans; money must be exact, and budget data must never influence scheduling.
+- **Decision:**
+  - `app/budget/` is its own domain; the scheduling stack (constraints, PERT, reward, engines, `app/planning/`) never imports it. A budget record may only reference a project.
+  - Amounts are integer minor units (2 decimals); floats are refused.
+  - Recurring entries are expanded per query; only the entry and per-occurrence edits (keyed by the scheduled date, one live edit each) are stored. A monthly item falls on the month's last day when the month is shorter.
+  - Records are sync-ready (ADR-013) in local schema v17 (and v18 for Future items) and server revisions 0019-0020, written on the server through the Mutator (ADR-016). They synchronize only with a server that lists the `budget` feature, and `GET /changes` returns them only with `include_budget=true`; a client that first sees the feature replays the change feed once.
+- **Rationale:** Recorded in the docstrings of `app/budget/money.py`, `service.py` and `backend/sync.py` (`SYNC_FEATURES`).
+- **Alternatives:** Materializing future occurrences (unbounded rows); float or Decimal-text storage; storing budget entries as tasks (would leak into scheduling).
+- **Consequences:** One currency per workspace. Concurrent edits of one occurrence on two devices are an explicit conflict (ADR-014). Wire changes to budget records must be made in client and server together.
+- **Relevant files:** `app/budget/`, `app/persistence/budget.py`, `app/execution/db.py` (v17, v18), `backend/resources.py`, `backend/models.py`, `backend/migrations/versions/0019_budget_records.py`, `0020_budget_future_items.py`, `app/sync/mapping.py`, `app/sync/engine.py`.
+- **Evidence:** The module docstrings above; `tests/budget/test_budget_service.py` (import separation).
+
+### ADR-040 — Budget forecast: a balance snapshot plus a 15-day one-time spending average; future items are not transactions
+
+- **Status:** Accepted
+- **Context:** Budgeting > Stats forecasts the balance for 90 days; Budgeting > Future holds income ideas and wishlist items that must not disturb any figure.
+- **Decision:**
+  - The entered balance is a snapshot at the end of its as-of date (the desktop saves it as today's); only transactions after it are applied. Every manual change is a new record, so Stats > History can list each one with the balance calculated just before it.
+  - Everyday spending is the one-time (non-recurring) expenses of the last 15 calendar days, today included, divided by 15 (days without spending count as zero), subtracted every forecast day; recurring expenses, future one-time expenses and all future income are applied on their own dates. The running balance is an exact `Fraction`; display values round half to even to the cent.
+  - Statistics report only the history from the first entry's date to today, never padded or extrapolated.
+  - Income ideas and wishlist items are separate record types, never read by occurrences, totals, statistics or the forecast. An idea's progress is the amount received or firmly secured against the expected amount. Turning a wishlist item into an expense creates one one-time expense whose id is derived from the item (`wish_expense_id`) and records it on the item, which then refuses another conversion.
+- **Rationale:** Recorded in the docstrings of `app/budget/stats.py`, `app/budget/service.py` and `app/budget/models.py`.
+- **Alternatives:** A long-run or weighted spending average; counting recurring expenses in the average (double counting them); treating wishlist items as undated expenses.
+- **Consequences:** The forecast has no seasonality. Two devices converting the same wishlist item offline produce one expense record and an explicit conflict (ADR-014), never two expenses.
+- **Relevant files:** `app/budget/stats.py`, `app/budget/service.py`, `app/budget/models.py`, `app/ui/budget_controller.py`.
+- **Evidence:** `tests/budget/test_budget_stats.py`, `tests/budget/test_budget_future.py`, `tests/sync/test_budget_sync.py`.
