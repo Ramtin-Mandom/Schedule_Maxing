@@ -74,9 +74,8 @@ from app.ui.paint_widgets import AppScrollableFrame
 
 GENERAL, STATS, FUTURE = "General", "Stats", "Future"
 SECTIONS = (GENERAL, STATS, FUTURE)
-#: Income is green, expenses are red (the words "Income"/"Expense" always say it too).
-INCOME_COLOR = ("#15803D", "#4ADE80")
-EXPENSE_COLOR = ("#B91C1C", "#F87171")
+#: Income is green, expenses are red (theme.py; the Day page's money widgets use them without this module).
+INCOME_COLOR, EXPENSE_COLOR = theme.INCOME_COLOR, theme.EXPENSE_COLOR
 KIND_COLORS = {BudgetKind.INCOME: INCOME_COLOR, BudgetKind.EXPENSE: EXPENSE_COLOR}
 #: Below this page width (logical px) Income and Expenses are stacked instead of side by side.
 STACK_BELOW = 760

@@ -23,7 +23,7 @@ import customtkinter as ctk
 from app.ui.paint_widgets import AppScrollableFrame
 
 from app.persistence.errors import NotSignedInError
-from app.ui import theme
+from app.ui import diagnostics, theme
 from app.ui.background import WRITE_LANE, run_io
 from app.ui.components import AppButton, Card, LabeledEntry, LabeledSelect, Notice, SectionTitle, ask_confirm, font
 from app.planning.preferences import ENGINE_LABELS
@@ -86,12 +86,24 @@ class ScrollPage(AppScrollableFrame):
             self.content.on_appearance_changed()
 
 
+def _own_attribute(widget, name: str) -> bool:
+    """`name` is set on `widget` itself or defined by one of the application's classes (not by Tk/CTk)."""
+    return name in vars(widget) or any(name in vars(cls) for cls in type(widget).__mro__
+                                       if cls.__module__.startswith("app."))
+
+
 class DeferredPage(ctk.CTkFrame):
     """
-    A page built the first time it is shown, so start-up lays out only the
-    pages opened first (every scrollable area costs a full layout pass when it
-    is created). build(parent) makes the page; `content` is its content (a
-    ScrollPage's), and on_show/set_layout/on_appearance_changed are passed on.
+    A page built the first time it is shown, so start-up builds and lays out
+    only the Day page. build(parent) makes the page; `content` is its content
+    (a ScrollPage's), and on_show/set_layout/on_appearance_changed are passed
+    on -- the last layout mode given before the build is applied right after it.
+
+    Callers may use the page as if it were the built one: an attribute the
+    wrapper lacks is the page's (or its content's), and asking for a public one
+    builds the page first. A private name (`_busy`) never builds it, so
+    "is it busy?" checks on a page nobody opened stay free. `built` tells
+    whether it exists yet (app code skips refreshing pages that do not).
     """
 
     def __init__(self, parent, build: Callable[[ctk.CTkFrame], ctk.CTkFrame]) -> None:
@@ -99,16 +111,55 @@ class DeferredPage(ctk.CTkFrame):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
         self._build = build
+        self._layout = None
         self.page: ctk.CTkFrame | None = None
+
+    def __getattr__(self, name: str):
+        # Only reached for names the wrapper itself does not have (Tk/CTk attributes are all its own).
+        state = self.__dict__
+        if name.startswith("__") or "_build" not in state:
+            raise AttributeError(name)
+        page = state.get("page")
+        if page is None:
+            if name.startswith("_"):
+                raise AttributeError(name)
+            page = self.ensure()
+        content = getattr(page, "content", None)
+        for target in (page, content):
+            if target is not None:
+                try:
+                    return getattr(target, name)
+                except AttributeError:
+                    continue
+        raise AttributeError(name)
+
+    def __setattr__(self, name: str, value) -> None:
+        # Assigning one of the built page's own attributes (e.g. replacing one of its methods) sets it there.
+        state = self.__dict__
+        page = state.get("page")
+        if page is not None and name not in state and not hasattr(type(self), name):
+            for target in (page, getattr(page, "content", None)):
+                if target is not None and _own_attribute(target, name):
+                    setattr(target, name, value)
+                    return
+        super().__setattr__(name, value)
+
+    @property
+    def built(self) -> bool:
+        return self.page is not None
 
     @property
     def content(self):
-        return getattr(self.page, "content", self.page)
+        page = self.ensure()
+        return getattr(page, "content", page)
 
     def ensure(self) -> ctk.CTkFrame:
         if self.page is None:
-            self.page = self._build(self)
-            self.page.grid(row=0, column=0, sticky="nsew")
+            with diagnostics.span("deferred_page.build"):
+                self.page = self._build(self)
+                self.page.grid(row=0, column=0, sticky="nsew")
+                if self._layout is not None and hasattr(self.page, "set_layout"):
+                    self.page.set_layout(self._layout)
         return self.page
 
     def on_show(self) -> None:
@@ -117,6 +168,7 @@ class DeferredPage(ctk.CTkFrame):
             page.on_show()
 
     def set_layout(self, mode) -> None:
+        self._layout = mode
         if self.page is not None and hasattr(self.page, "set_layout"):
             self.page.set_layout(mode)
 

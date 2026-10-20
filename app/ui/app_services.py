@@ -285,9 +285,12 @@ def open_app_services(
     backend_url: str | None = None,
     background_sync: bool = True,
     transport_factory: Callable[[str], SyncTransport] = HttpTransport,
+    sync_start_delay: float = 0.0,
 ) -> AppServices:
     """
     Open the application database and build the shared controllers.
+    sync_start_delay: seconds before the background sync's first run (the
+    desktop lets its window appear first; Sync now does not wait).
 
     Raises (after closing anything it opened) if the database is in use by
     another Schedule Maxing process (DatabaseInUseError), cannot be
@@ -308,7 +311,8 @@ def open_app_services(
         # SCHEDULE_MAXING_BACKEND_URL names another or turns it off), else one saved by an older version.
         backend_url = backend_url or settings.BACKEND_URL or SyncStore(connection).setting(BACKEND_URL_SETTING)
         # "Keep me signed in" lives in the system credential store; never with an injected test transport.
-        vault = credentials.system_vault() if transport_factory is HttpTransport else None
+        # Found on first use (or by AppServices.prefetch_credentials), not while the window is being built.
+        vault = credentials.LazyVault() if transport_factory is HttpTransport else None
         sync_service = SyncService(connection, _sync_transport(backend_url, transport_factory), vault=vault)
         scope = sync_service.workspace_scope()
         planning_controller, execution_controller, productivity_controller = _build_controllers(
@@ -340,7 +344,7 @@ def open_app_services(
     )
     registry.result_guard = services.workspace_guard  # background results never cross a workspace switch
     if background_sync:
-        services.sync_service.start()  # a no-op without a configured backend
+        services.sync_service.start(initial_delay=sync_start_delay)  # a no-op without a configured backend
     return services
 
 
