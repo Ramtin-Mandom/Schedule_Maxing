@@ -238,12 +238,23 @@ def main():
     parser.add_argument("--fixed-work", action="store_true", help="Deliver 80 moves, 24 resizes, and all seven pages")
     parser.add_argument("--reference-behavior", action="store_true",
                         help="Compare this current UI with only the responsiveness fixes disabled in this process.")
+    parser.add_argument("--minimized-seconds", type=float, default=0,
+                        help="Add a 'minimized' phase of this length (iconified window; CPU, polls and syncs counted)")
     args = parser.parse_args()
     import faulthandler
-    faulthandler.dump_traceback_later(180, repeat=True)
+    faulthandler.dump_traceback_later(180 + args.minimized_seconds, repeat=True)
+    # Test windows go on the monitor left of the primary one when there is one (tests/window_placement.py).
+    try:
+        from tests import window_placement
+        origin = window_placement.install() or (0, 0)
+    except ImportError:
+        origin = (0, 0)
     # Import before instrumentation so import costs do not masquerade as Tk callbacks.
     hashes_before = source_hashes()
+    import_started = time.perf_counter()
     from app.app import ScheduleOptimizerApp
+    import_ms = (time.perf_counter() - import_started) * 1000
+    heavy_modules = sorted(name for name in ("sklearn", "scipy", "pandas", "joblib") if name in __import__("sys").modules)
     from app.planning.models import Task
     from app.ui.app_services import open_app_services
     from app.ui.layout import Coalescer
@@ -313,6 +324,28 @@ def main():
             tk_patchlevel = root.tk.call("info", "patchlevel")
             display = display_info(root)
             print("Window ready", flush=True)
+            milestones = {}
+
+            def painted():
+                # After the first timer event, idle handlers queued before (map, geometry, redraw) have run.
+                if "first_paint_ms" not in milestones and root.winfo_viewable():
+                    milestones["first_paint_ms"] = (time.perf_counter() - started) * 1000
+                elif "first_paint_ms" not in milestones:
+                    root.after(5, lambda: root.after_idle(painted))
+
+            def interactive():
+                # Shown, and the Day page rendered its snapshot, its board and every read it started (no worker).
+                day_page = root.pages.get("day")
+                if (root.winfo_viewable() and day_page is not None and day_page.snapshot is not None
+                        and not root.services.registry.active
+                        and getattr(day_page.status_board, "_render_timer", None) is None
+                        and day_page._points_board.day == day_page.snapshot.day):
+                    milestones["interactive_ms"] = (time.perf_counter() - started) * 1000
+                else:
+                    root.after(5, interactive)
+
+            root.after(0, lambda: root.after_idle(painted))
+            root.after(0, interactive)
             probe.attach(root)
             if args.experiment == "light":
                 root.shell.add_page("probe", customtkinter.CTkFrame(root.shell.host))
@@ -322,7 +355,11 @@ def main():
                 import cProfile
                 profiler = cProfile.Profile()
                 profiler.enable()
-            phases = ["idle", "move", "resize", "pages", "generate", "sync_unconfigured", "sync_latency", "idle_after"]
+            # pages_revisit: the same switches again, every page already built (pages also builds deferred ones).
+            phases = ["idle", "move", "resize", "pages", "pages_revisit", "generate", "sync_unconfigured",
+                      "sync_latency", "idle_after"]
+            if args.minimized_seconds:
+                phases.append("minimized")
             if args.only:
                 phases = args.only.split(",")
 
@@ -335,13 +372,24 @@ def main():
                     return
                 probe.phase = phases[index]
                 print(probe.phase, flush=True)
-                deadline = time.perf_counter() + args.seconds
+                seconds = args.minimized_seconds if probe.phase == "minimized" else args.seconds
+                deadline = time.perf_counter() + seconds
+                if probe.phase == "minimized":
+                    probe.minimized_cpu = time.process_time()
+                    probe.minimized_wall = time.perf_counter()
+                    root.iconify()
 
                 def step(n=0):
                     phase = phases[index]
-                    count = {"move": 80, "resize": 24, "pages": 61}.get(phase) if args.fixed_work else None
+                    count = ({"move": 80, "resize": 24, "pages": 61, "pages_revisit": 61}.get(phase)
+                             if args.fixed_work else None)
                     finished = n >= count if count is not None else time.perf_counter() >= deadline
                     board_pending = getattr(root.pages["day"].status_board, "_render_timer", None)
+                    if finished and phase == "minimized" and root.state() == "iconic":
+                        # Process CPU over the whole phase (time-weighted, unlike the heartbeat samples).
+                        probe.counts[phase]["cpu_seconds"] = round(time.process_time() - probe.minimized_cpu, 3)
+                        probe.counts[phase]["wall_seconds"] = round(time.perf_counter() - probe.minimized_wall, 3)
+                        root.deiconify()
                     if finished:
                         if not root.services.registry.active and board_pending is None:
                             begin(index + 1)
@@ -350,11 +398,11 @@ def main():
                         return
                     if phase == "move":
                         probe.counts[phase]["input_operations"] += 1
-                        root.geometry(f"+{80 + n % 30 * 3}+{60 + n % 20 * 2}")
+                        root.geometry(f"+{origin[0] + 80 + n % 30 * 3}+{origin[1] + 60 + n % 20 * 2}")
                     elif phase == "resize":
                         probe.counts[phase]["input_operations"] += 1
                         root.geometry(f"{1000 + n % 30 * 10}x{700 + n % 15 * 5}")
-                    elif phase == "pages" and n % 10 == 0:
+                    elif phase in ("pages", "pages_revisit") and n % 10 == 0:
                         probe.counts[phase]["input_operations"] += 1
                         pages = ["day", "week", "month", "productivity", "settings", "projects"]
                         root.show_page(pages[n // 10 % len(pages)])
@@ -383,6 +431,7 @@ def main():
             output = {"environment": {"python": platform.python_version(), "os": platform.platform(),
                                        "tk": tk_patchlevel, "customtkinter": customtkinter.__version__},
                       "tasks": args.tasks, "seconds": args.seconds, "startup_ms": startup_ms,
+                      "import_ms": import_ms, "heavy_modules_after_import": heavy_modules, **milestones,
                       "display": display,
                       "physical_drag_performed": False, "reference_behavior": args.reference_behavior,
                       "experiment": args.experiment,
