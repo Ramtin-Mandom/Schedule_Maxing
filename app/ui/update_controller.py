@@ -8,9 +8,8 @@ widgets in app/ui/update_view.py only show what they return. The
 preferences (app/ui/ui_settings.py) are read and written by the caller on
 the Tk thread, through the pure helpers at the end.
 
-- An automatic check runs at most once a day, only while "Automatically
-  check for updates" is on, and says nothing unless a newer version that the
-  user has not skipped exists.
+- An automatic check runs on every launch while "Automatically check for
+  updates" is on, and says nothing unless a newer version exists.
 - A manual check ("Check now") always runs and always answers, including a
   version that was skipped.
 - Downloading and installing happen only after the user chose "Update now".
@@ -21,7 +20,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from app.ui.background import ControllerResult
 from app.ui.ui_settings import UISettings
@@ -30,9 +29,6 @@ from app.update.release_feed import ReleaseInfo
 from app.update.service import AVAILABLE, DISABLED, UP_TO_DATE, UpdateInstallError, UpdateService
 from app.update.transport import DownloadCancelled, UpdateTransportError
 from app.update.versioning import parse_version
-
-AUTOMATIC_INTERVAL = timedelta(hours=24)
-
 
 @dataclass(frozen=True)
 class UpdateView:
@@ -73,7 +69,7 @@ class UpdateController:
     # -- worker-thread operations -----------------------------------------------------------
 
     def check(self, *, skipped_version: str | None = None) -> ControllerResult[UpdateView]:
-        """Look for a newer version. Pass the skipped version for an automatic check; None for "Check now"."""
+        """Look for a newer version; legacy callers may still pass a skipped version."""
         result = self.service.check()
         installed = result.installed_version
         if result.status == AVAILABLE:
@@ -122,18 +118,8 @@ class UpdateController:
 
 
 def automatic_check_due(settings: UISettings, now: datetime, *, enabled: bool = True) -> bool:
-    """Whether an automatic check should run now: the option is on and the last one was a day or more ago."""
-    if not enabled or not settings.check_for_updates:
-        return False
-    try:
-        last = datetime.fromisoformat(settings.last_update_check) if settings.last_update_check else None
-    except ValueError:
-        last = None
-    if last is None:
-        return True
-    if last.tzinfo is None:
-        last = last.replace(tzinfo=timezone.utc)
-    return now - last >= AUTOMATIC_INTERVAL or last > now  # a clock set back never silences checks for good
+    """Each launch checks the installed version, even if an earlier installer failed."""
+    return enabled and settings.check_for_updates
 
 
 def with_check_recorded(settings: UISettings, now: datetime) -> UISettings:
