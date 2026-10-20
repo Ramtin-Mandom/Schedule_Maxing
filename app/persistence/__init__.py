@@ -20,7 +20,8 @@ raises DirectModeUnavailableError naming the missing package.
 Modules: config.py (settings, env file, TLS), errors.py (safe errors),
 direct.py (engine, units of work, accounts, AccountSession), planning.py
 (DirectPlanningRepository for PlanningService), executions.py
-(DirectExecutionService, DirectExecutionReader).
+(DirectExecutionService, DirectExecutionReader), budget.py
+(DirectBudgetRepository for BudgetService).
 """
 
 from __future__ import annotations

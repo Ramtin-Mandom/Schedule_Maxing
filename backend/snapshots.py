@@ -46,6 +46,11 @@ REVISION_MODELS: dict[str, type[models.RecordRevision]] = {
     "preference": models.PreferenceRevision,
     "schedule_generation": models.ScheduleGenerationRevision,
     "execution": models.ExecutionRevision,
+    "budget_balance": models.BudgetBalanceRevision,
+    "budget_entry": models.BudgetEntryRevision,
+    "budget_override": models.BudgetOverrideRevision,
+    "budget_idea": models.BudgetIdeaRevision,
+    "budget_wish": models.BudgetWishRevision,
 }
 
 #: Revisions written in the current transaction, by (entity_type, entity_id, version) -- reused by a sync
