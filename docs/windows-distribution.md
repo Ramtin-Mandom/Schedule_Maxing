@@ -37,8 +37,9 @@ and cannot be selected in the packaged program.
 
 ## Building
 
-Prerequisites on the build computer: 64-bit Python 3.10+, and [Inno Setup 6](https://jrsoftware.org/isdl.php) for the
-installer step. The user's computer needs none of this.
+Prerequisites on the build computer: 64-bit Python 3.10 (exactly the version CI tests and releases with; the script
+refuses any other, including an older `.venv-build` -- rebuild it with `-Clean`), and
+[Inno Setup 6](https://jrsoftware.org/isdl.php) for the installer step. The user's computer needs none of this.
 
 ```powershell
 packaging\windows\build_windows.ps1
@@ -46,7 +47,7 @@ packaging\windows\build_windows.ps1
 
 | Step | What happens | Stops the build when |
 |---|---|---|
-| Build environment | `.venv-build` from `requirements-build.txt`: the desktop runtime and PyInstaller only | install fails, Python is 32-bit |
+| Build environment | `.venv-build` from `requirements-build.txt`: the desktop runtime and PyInstaller only | install fails, Python is not 3.10 or is 32-bit |
 | Tests | `python -m pytest -m dev` in `.venv` (`-SkipTests` to skip) | any test fails |
 | PyInstaller | `packaging/windows/ScheduleMaxing.spec` → `dist\ScheduleMaxing\` (a folder build, windowed, no UPX) | the build fails |
 | Bundle check | `check_bundle.py`: no `.env`, server package, database driver, key or log; resources present | anything forbidden or missing |
@@ -169,10 +170,10 @@ Never commit a certificate. When releases are signed, add the signature check to
 
 ## Updates
 
-1. A few seconds after the window opens — never before, and never blocking it — the app asks GitHub for the latest
-   stable release of `Ramtin-Mandom/Schedule_Maxing`. At most once a day, in a background thread.
-2. If that version is newer than the installed one (compared as numbers) and was not skipped, a notice offers
-   **Update now**, **Later** or **Skip this version**. Nothing is downloaded before "Update now".
+1. A few seconds after each launch — never before, and never blocking the window — the app asks GitHub for the latest
+   stable release of `Ramtin-Mandom/Schedule_Maxing` in a background thread, even if local storage could not open.
+2. If that version is newer than the installed one (compared as numbers), a notice offers
+   **Update now** or **Later**. Nothing is downloaded before "Update now".
 3. The installer is downloaded to `updates\`, checked against the release's `SHA256SUMS.txt` and its announced size,
    and deleted if anything differs.
 4. The verified installer is started, the app closes normally, the installer replaces the program and starts the new

@@ -8,10 +8,10 @@ feature's state changes, and do not rewrite the file only to move the date. Arch
 | | |
 |---|---|
 | Generated | 2026-10-19 |
-| Commit | `6cc8855b2ca423a0b1f092f515dcb243f9276f4e` ("Release 1.2.0") |
-| Branch | `codex/debug-1.2.0-update`, with uncommitted changes in 11 tracked files (updater UI, sync transport, UI settings, the build script's Python check, and their tests) |
+| Commit | `f20cf0be3954` ("Merge pull request #21 from Ramtin-Mandom/codex/debug-1.2.0-update") |
+| Branch | `main`, with uncommitted work: the budgeting feature (new `app/budget/`, `app/ui/budget_*.py`, `app/ui/day_money.py`, local schema v17-v18, server revisions 0019-0020, and edits across sync, backend, direct mode and the Day page) and updater edits not in the merged pull request (`app/ui/update_controller.py`, `update_view.py`, `ui_settings.py`, the lazy TLS setup in `app/sync/transport.py`, `app/app.py`, `docs/windows-distribution.md`, and their tests). The build script's Python 3.10 check is committed (`0ec34de`) |
 | App version | 1.2.0 (`app/version.py`); backend API version 1.0.0 (`backend/app.py`) |
-| Local schema | SQLite v16 (`app/execution/db.py`); server Alembic head `0018_account_security` |
+| Local schema | SQLite v18 (`app/execution/db.py`, uncommitted; v16 at the commit); server Alembic head `0020_budget_future_items` (uncommitted; `0018_account_security` at the commit) |
 
 **How to read the evidence.** *Verified* means a test or check was run in this session and passed.
 *Verified failure* means a check was run and failed. *Code-inspected* means the implementation was read
@@ -58,8 +58,9 @@ FastAPI/PostgreSQL account server.
 | Historical duration suggestion (median) | Partially Implemented | `app/productivity/prediction.py`, `app/ui/duration_suggestion.py` | `tests/productivity/test_prediction.py`, `tests/ui/test_task_editor_widgets.py` | The widget is not used by the task form; the README still lists it as a feature |
 | ML duration predictor | Implemented (CLI only, gated) | `app/productivity/ml_*.py`, `predictor_comparison_cli.py` | `tests/productivity/test_ml_*.py` | Kept out of the UI by design |
 | Settings, preferences and task-data reset | Implemented | `app/ui/pages.py: SettingsPage`, `settings_controller.py`, `app/planning/task_data_reset.py` | `tests/ui/test_settings_*.py`, `tests/planning/test_reset.py` | |
-| How to Use guide and About | Implemented | `app/ui/guide_page.py`; About is a `PlaceholderPage` holding the version text | `tests/ui/test_guide.py` | |
-| Local SQLite storage, migrations v1→v16, backups, instance lock | Implemented | `app/execution/db.py`, `backup.py`, `instance_lock.py` | `tests/execution/test_db.py`, `test_migration_v*.py`, `test_backup.py` | |
+| How to Use guide and About | Implemented | `app/ui/guide_page.py`; About is a `PlaceholderPage` holding the version text | `tests/ui/test_guide.py` | Settings, Account and How to Use share one sidebar item with a top bar (`app/ui/shell.py: GroupBar`) |
+| Budgeting: balance (saved as today's; every manual change kept), income/expense entries, recurrence, occurrence edits, Stats with History and the 90-day forecast, Future (income ideas, wishlist) | Implemented (desktop) | `app/budget/`, `app/ui/budget_*.py`, `app/ui/day_money.py`, `app/persistence/budget.py`, `backend/resources.py` (`BUDGET_*`), local schema v17-v18, server revisions 0019-0020 | `tests/budget/*`, `tests/execution/test_migration_v17.py`, `test_migration_v18.py`, `tests/backend/test_budget_api.py`, `tests/sync/test_budget_sync.py`, `tests/direct/test_direct_budget.py`, `tests/ui/test_budget_controller.py`, `tests/ui/test_budget_page.py` | Local, direct and synced storage, REST CRUD; the local web profile has no budget routes |
+| Local SQLite storage, migrations v1→v18, backups, instance lock | Implemented | `app/execution/db.py`, `backup.py`, `instance_lock.py` | `tests/execution/test_db.py`, `test_migration_v*.py`, `test_backup.py` | |
 | Offline-first sync client | Implemented | `app/sync/` | `tests/sync/*` (full suite) | Live server Unverified |
 | Conflict review and association UI | Implemented | `app/ui/account_page.py`, `conflict_view.py` | `tests/sync/test_desktop_account_*.py` | `keep_local` cannot be used on a record deleted on the server |
 | Backend REST, planning API and sync push | Implemented | `backend/api.py`, `planning_api.py`, `sync.py` | `tests/backend/*` (full suite, SQLite) | PostgreSQL runs: CI `postgres` job only |
@@ -74,7 +75,7 @@ FastAPI/PostgreSQL account server.
 | Local web profile (loopback API) | Implemented | `app/web/` | `tests/web/*` | |
 | Browser web UI | Not Implemented in this repository | — | No frontend sources; `docs/web-api.md` is its API contract | |
 | Android client | Not Implemented | — | No Android sources | Mentioned only in the README author note and the skill |
-| In-app updater | Implemented | `app/update/`, `app/ui/update_*.py` | `tests/update/*` | Live GitHub feed Unverified; the debug branch is changing it |
+| In-app updater | Implemented | `app/update/`, `app/ui/update_*.py` | `tests/update/*` | Live GitHub feed Unverified. Uncommitted edits change it: the automatic check runs on every launch (no once-a-day limit), "Skip this version" is gone, and the update flow is built even when local storage cannot open; HTTPS setup for sync moves to the first request (Code-inspected) |
 | Windows installer build and release workflow | Implemented | `packaging/windows/`, `.github/workflows/release.yml` | `tests/test_packaging_config.py`, `test_release_workflow.py` | No build was run here |
 | Code signing | Not Implemented | Hooks in `build_windows.ps1` and `downloader.verify_signature` | `docs/windows-distribution.md` | Releases are unsigned |
 | Backend continuous deployment | Unverified | `.github/workflows/deploy-backend.yml` | `tests/test_deploy_workflow.py` (configuration only) | Never run against Render (`docs/ci-cd.md`) |
@@ -96,11 +97,16 @@ FastAPI/PostgreSQL account server.
 | On DST days, timeline positions are elapsed minutes while labels show wall-clock times | Low | Day and Week views | `docs/desktop-day.md`, `docs/desktop-calendar.md` |
 | `keep_local` is not possible for a record deleted on the server; diverged execution history must be resolved with `accept_remote` | Low (by design) | Sync | README "Current Limitations" |
 | Desktop dependencies have lower bounds only, so a fresh install can get a newer CustomTkinter than the one tested | Low | `requirements-desktop.txt` | `docs/desktop-web-boundaries.md` §8 |
+| Budget: one currency with 2 decimal places (not recorded per record); a series edit applies to the whole series (no "this and following" split); an occurrence can be moved only through the service (the forms change name, amount, category and project); a REST client's schedule edit leaves orphaned occurrence edits on the server (the expansion ignores them; the desktop service removes them) | Low (by design for now) | `app/budget/`, `app/ui/budget_page.py` | Module docstrings of `money.py`, `service.py`, `budget_controller.py` |
+| Budget statistics read at most the last 3,660 days of history; the forecast's everyday spending is a flat 15-day average of one-time expenses (no seasonality) | Low (by design) | `app/budget/stats.py` | Module docstring |
+| The Day page draws at most 40 money cards; more are reachable through the totals' dialogs | Low (by design) | `app/ui/day_money.py` | `MONEY_CARD_LIMIT` |
+| The first sync of an account with a server that offers `budget` replays the whole change feed once (to pick up budget changes an older client version skipped) | Low (one-time cost) | Sync | `SyncEngine.pull_budget_history` |
+| `tests/test_desktop_isolation.py::test_python_m_app_app_launches_offline_and_closes_cleanly` fails when start-up is slow: its probe closes the app 1.5 s after the main loop starts, and the first layout pass then ends inside CustomTkinter's title-bar update (`TclError: application has been destroyed`) | Low (test timing) | Launch probe (`tests/isolation_probe.py`) | **Verified failure** on 2026-10-20 on the clean commit `f20cf0b` as well (start-up took 10-18 s on this machine); it passed in the run of 2026-10-19 |
 | Python 3.10, pinned everywhere, reaches upstream end of security support in October 2026 | Medium (suspected risk) | Toolchain | PEP 619 schedule; see ROADMAP R2 |
 
 ## D. Testing and quality
 
-Test layout: 201 `test_*.py` modules under `tests/` (about 2,460 collected tests), with tiers assigned automatically (`tests/test_tiers.py`).
+Test layout: 213 `test_*.py` modules under `tests/` (about 2,580 collected tests), with tiers assigned automatically (`tests/test_tiers.py`).
 
 | Command | Purpose |
 |---|---|
@@ -112,17 +118,16 @@ Test layout: 201 `test_*.py` modules under `tests/` (about 2,460 collected tests
 | `ruff check .` | Lint |
 | `python -m benchmarks.scheduling_mode_baseline --check` | Engine baseline drift (not run by CI) |
 
-Results in this session (Windows 10, `.venv` with Python 3.10.11, working tree including the uncommitted
-changes):
+Results of the latest session (Windows 10, `.venv` with Python 3.10.11, working tree including the
+uncommitted budgeting and updater changes):
 
 | Check | Result |
 |---|---|
-| `pytest -m dev` | **Passed:** 2103 passed, 2 skipped, 358 deselected (189 s) |
-| `pytest` (full suite, every tier, real windows included) | **Passed:** 2461 passed, 2 skipped, 5 warnings (dependency deprecations and a JWT key-length warning in a test) in 1161 s. The documented `tcl_findLibrary` failure did not occur in this run |
-| `python -m compileall` (app, backend, config, packaging, tests, benchmarks) | **Passed** |
+| `pytest -m dev` | **Passed:** 2204 passed, 2 skipped, 371 deselected (204 s) |
+| `pytest -m "not dev"` (system, slow and real-window tiers; with the above, the whole suite) | 370 passed, 1 skipped, 1 failed in 899 s: `tests/test_desktop_isolation.py` pinned the page list without Budgeting. After that expectation was updated the module **passed** (6 tests) |
+| `python -m compileall` (app, backend, config, tests) | **Passed** |
 | `ruff check .` | **Failed:** 1 error, F841 at `app/ui/update_view.py:130` |
-| Focused: `tests/test_packaging_config.py`, `tests/test_release_workflow.py` | **Passed:** 47 |
-| detect-secrets on the new documentation files, against `secret-scan-baseline.json` | **Passed** |
+| Earlier session: `tests/test_packaging_config.py`, `tests/test_release_workflow.py`; detect-secrets on the documentation | **Passed** (not re-run) |
 
 Not run: the PostgreSQL-marked tests (no disposable database was available), the benchmarks, a Windows
 installer build, and anything against live Render, GitHub or mail services.
@@ -145,7 +150,8 @@ checklist is in `docs/windows-distribution.md`).
 
 ## F. Immediate technical priorities
 
-1. Fix the Ruff error and get the debug branch green through a pull request ([ROADMAP](ROADMAP.md) M1).
+1. Fix the Ruff error and commit the remaining updater edits through a pull request ([ROADMAP](ROADMAP.md) M1);
+   commit the budgeting feature through its own pull request.
 2. Run and confirm the first real backend deployment, then the smoke check (M4).
 3. Correct the documentation that contradicts the code (M2), and decide what happens to the unreachable UI
    modules (R3).
