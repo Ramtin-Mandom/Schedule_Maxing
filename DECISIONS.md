@@ -81,7 +81,7 @@ decision was made.
 - **Alternatives:** Not documented.
 - **Consequences:** Moving to a newer Python means changing every workflow and the build script together.
 - **Relevant files:** `.github/workflows/*.yml`, `packaging/windows/build_windows.ps1`, `tests/test_packaging_config.py`.
-- **Evidence:** `test_build_script_requires_the_python_that_ci_tests_with`; the skill note in `.claude/skills/schedule-maxing-debugging/SKILL.md`. The build-script change is uncommitted at this snapshot.
+- **Evidence:** `test_build_script_requires_the_python_that_ci_tests_with`; the skill note in `.claude/skills/schedule-maxing-debugging/SKILL.md`. The build-script change is committed in `0ec34de`.
 
 ### ADR-003 — Hard constraints decide validity; reward only ranks valid placements
 

@@ -7,11 +7,11 @@ feature's state changes, and do not rewrite the file only to move the date. Arch
 
 | | |
 |---|---|
-| Generated | 2026-10-19 |
-| Commit | `f20cf0be3954` ("Merge pull request #21 from Ramtin-Mandom/codex/debug-1.2.0-update") |
-| Branch | `main`, with uncommitted work: the budgeting feature (new `app/budget/`, `app/ui/budget_*.py`, `app/ui/day_money.py`, local schema v17-v18, server revisions 0019-0020, and edits across sync, backend, direct mode and the Day page) and updater edits not in the merged pull request (`app/ui/update_controller.py`, `update_view.py`, `ui_settings.py`, the lazy TLS setup in `app/sync/transport.py`, `app/app.py`, `docs/windows-distribution.md`, and their tests). The build script's Python 3.10 check is committed (`0ec34de`) |
+| Generated | 2026-10-20 |
+| Commit | `664de0ecf039` ("Merge pull request #22 from Ramtin-Mandom/feat/budgeting") |
+| Branch | `optimization`, clean, at the merge commit. Pull request #22 merged the budgeting feature (`app/budget/`, `app/ui/budget_*.py`, `app/ui/day_money.py`, local schema v17-v18, server revisions 0019-0020), the updater edits (check on every launch, lazy TLS setup in `app/sync/transport.py`), the Ruff fix and the certifi 2026.10.19 bump in `requirements.lock` |
 | App version | 1.2.0 (`app/version.py`); backend API version 1.0.0 (`backend/app.py`) |
-| Local schema | SQLite v18 (`app/execution/db.py`, uncommitted; v16 at the commit); server Alembic head `0020_budget_future_items` (uncommitted; `0018_account_security` at the commit) |
+| Local schema | SQLite v18 (`app/execution/db.py`); server Alembic head `0020_budget_future_items` |
 
 **How to read the evidence.** *Verified* means a test or check was run in this session and passed.
 *Verified failure* means a check was run and failed. *Code-inspected* means the implementation was read
@@ -75,7 +75,7 @@ FastAPI/PostgreSQL account server.
 | Local web profile (loopback API) | Implemented | `app/web/` | `tests/web/*` | |
 | Browser web UI | Not Implemented in this repository | — | No frontend sources; `docs/web-api.md` is its API contract | |
 | Android client | Not Implemented | — | No Android sources | Mentioned only in the README author note and the skill |
-| In-app updater | Implemented | `app/update/`, `app/ui/update_*.py` | `tests/update/*` | Live GitHub feed Unverified. Uncommitted edits change it: the automatic check runs on every launch (no once-a-day limit), "Skip this version" is gone, and the update flow is built even when local storage cannot open; HTTPS setup for sync moves to the first request (Code-inspected) |
+| In-app updater | Implemented | `app/update/`, `app/ui/update_*.py` | `tests/update/*` | Live GitHub feed Unverified. Since pull request #22 the automatic check runs on every launch (no once-a-day limit), "Skip this version" is gone, and the update flow is built even when local storage cannot open; HTTPS setup for sync moves to the first request (Code-inspected) |
 | Windows installer build and release workflow | Implemented | `packaging/windows/`, `.github/workflows/release.yml` | `tests/test_packaging_config.py`, `test_release_workflow.py` | No build was run here |
 | Code signing | Not Implemented | Hooks in `build_windows.ps1` and `downloader.verify_signature` | `docs/windows-distribution.md` | Releases are unsigned |
 | Backend continuous deployment | Unverified | `.github/workflows/deploy-backend.yml` | `tests/test_deploy_workflow.py` (configuration only) | Never run against Render (`docs/ci-cd.md`) |
@@ -85,7 +85,6 @@ FastAPI/PostgreSQL account server.
 
 | Issue | Severity | Affected | Evidence |
 |---|---|---|---|
-| Ruff fails on the working tree: F841, `release` assigned but unused | Medium (fails the CI `test` job) | `app/ui/update_view.py:130` (uncommitted edit) | **Verified failure:** `ruff check .` reported 1 error |
 | An intermittent `TclError: invalid command name "tcl_findLibrary"` in one real-window test per run | Medium | Real-window test tier | Documented in `docs/testing.md` "Known flaky test"; cause unknown |
 | UI modules that nothing reaches: `feedback_dialog.py`, `cohort_view.py`, `duration_suggestion.py`, and the `RewardConfigPage` class in `app/app.py` | Low (dead code and missing UI for supported features) | `app/ui/`, `app/app.py` | **Verified:** no production module imports or instantiates them (repository search) |
 | Documentation contradicts the code: README says email verification is not provided; `docs/ci-cd.md` and README say CI runs on every push with four jobs; `docs/desktop-day.md` describes removed Productivity sections; the skill mentions Android | Low | Docs | **Verified** against `backend/verification*.py`, `ci.yml` (5 jobs, `pull_request` and `workflow_dispatch` only), `app/ui/productivity_page.py` |
@@ -126,7 +125,8 @@ uncommitted budgeting and updater changes):
 | `pytest -m dev` | **Passed:** 2204 passed, 2 skipped, 371 deselected (204 s) |
 | `pytest -m "not dev"` (system, slow and real-window tiers; with the above, the whole suite) | 370 passed, 1 skipped, 1 failed in 899 s: `tests/test_desktop_isolation.py` pinned the page list without Budgeting. After that expectation was updated the module **passed** (6 tests) |
 | `python -m compileall` (app, backend, config, tests) | **Passed** |
-| `ruff check .` | **Failed:** 1 error, F841 at `app/ui/update_view.py:130` |
+| `ruff check .` | **Failed** on that tree (F841 at `app/ui/update_view.py:130`); fixed in `800996f`, and **passed** on `664de0e` (2026-10-20) |
+| 2026-10-20 on `664de0e`: `pytest -m dev tests/update tests/budget tests/ui/test_budget_controller.py test_shell_foundation.py test_guide.py` | **Passed:** 188 |
 | Earlier session: `tests/test_packaging_config.py`, `tests/test_release_workflow.py`; detect-secrets on the documentation | **Passed** (not re-run) |
 
 Not run: the PostgreSQL-marked tests (no disposable database was available), the benchmarks, a Windows
@@ -141,7 +141,7 @@ checklist is in `docs/windows-distribution.md`).
 | Area | State |
 |---|---|
 | Backend configuration | Environment variables only (`backend/settings.py`; names in [CODEBASE_MAP.md](CODEBASE_MAP.md#backend-configuration-names)). `.env.example` has placeholders. A local `.env` exists, is gitignored, and was not read |
-| Databases | The desktop uses SQLite (`%LOCALAPPDATA%\ScheduleMaxing\executions.db`). The server uses PostgreSQL through 18 Alembic revisions. The ordinary test suite runs the server on SQLite |
+| Databases | The desktop uses SQLite (`%LOCALAPPDATA%\ScheduleMaxing\executions.db`). The server uses PostgreSQL through 20 Alembic revisions. The ordinary test suite runs the server on SQLite |
 | Default backend URL | `config.settings.DEFAULT_BACKEND_URL` points at a Render host. Availability was not checked |
 | Deployment | Desktop: tag, then `release.yml`, then a GitHub Release, then the updater. Backend: `deploy-backend.yml` to Render, gated by `BACKEND_DEPLOY_ENABLED`; never run for real according to the docs |
 | CI | `ci.yml`: `test`, `security-scan`, `desktop-only`, `direct-desktop`, `postgres`. Runs on pull requests and by hand. Results on GitHub were not checked in this session |
@@ -150,8 +150,7 @@ checklist is in `docs/windows-distribution.md`).
 
 ## F. Immediate technical priorities
 
-1. Fix the Ruff error and commit the remaining updater edits through a pull request ([ROADMAP](ROADMAP.md) M1);
-   commit the budgeting feature through its own pull request.
+1. Confirm the CI result of pull request #22 on GitHub, then release (bump `app/version.py`, tag) ([ROADMAP](ROADMAP.md) M1).
 2. Run and confirm the first real backend deployment, then the smoke check (M4).
 3. Correct the documentation that contradicts the code (M2), and decide what happens to the unreachable UI
    modules (R3).
