@@ -30,15 +30,16 @@ updater, and the CI, release and deploy workflows.
 
 - **Priority:** High
 - **Status:** In progress. Pull request #21 merged the branch into `main` (including the build script's
-  Python 3.10 check), but the updater edits in the modules below are still uncommitted on `main`, and the
-  Ruff error is still there (verified 2026-10-19).
+  Python 3.10 check); pull request #22 merged the remaining updater edits and the Ruff fix. `ruff check .`
+  is clean on `664de0e` (verified 2026-10-20); the pull request's CI results were not checked here.
 - **Objective:** Commit a green change through a pull request so that CI, and then a release, can use it.
 - **Dependencies:** None.
 - **Modules:** `app/ui/update_view.py`, `app/ui/update_controller.py`, `app/sync/transport.py`, `app/app.py`,
   `app/ui/ui_settings.py`, `packaging/windows/build_windows.ps1`, and their tests.
 - **Deliverables:**
-  - [ ] Fix Ruff F841 at `app/ui/update_view.py:130`: `release` is assigned but never used.
+  - [x] Fix Ruff F841 at `app/ui/update_view.py:130`: `release` is assigned but never used (`800996f`).
   - [ ] Run `pytest -m dev` and `ruff check .`, then open a pull request (CI runs only on pull requests).
+    Pull request #22 is merged; confirm its five CI jobs passed.
   - [ ] When releasing: bump `app/version.py` and tag `v<version>`.
 - **Acceptance criteria:** All five CI jobs pass on the pull request; `ruff check .` is clean.
 - **Testing:** `pytest -m dev`, `ruff check .`, `tests/update/`, `tests/test_transport_security.py`,
