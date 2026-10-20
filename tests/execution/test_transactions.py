@@ -216,3 +216,55 @@ def test_other_threads_cannot_interleave_with_an_open_transaction(connection, se
     reader_thread.join(timeout=10)
 
     assert seen == [1]
+
+
+# -----------------------------------------------------------------------------
+# Data version and commit listeners (pages re-read only after a change; sync pushes edits soon)
+# -----------------------------------------------------------------------------
+
+
+def test_only_an_outermost_commit_counts_and_notifies(tmp_path) -> None:
+    from app.execution.db import data_version, get_connection, transaction_state_for
+
+    connection = get_connection(tmp_path / "version.db")
+    try:
+        state = transaction_state_for(connection)
+        heard: list[int] = []
+        state.add_commit_listener(lambda: heard.append(state.commits))
+        start = state.commits  # the migrations of a new database committed already
+        before = data_version(connection)
+        connection.execute("SELECT COUNT(*) FROM local_settings").fetchone()
+        assert data_version(connection) == before  # reading changes nothing
+        with transaction(connection):
+            with transaction(connection):  # a savepoint: not a commit
+                connection.execute("INSERT INTO local_settings (name, value) VALUES ('a', '1')")
+        assert heard == [start + 1] and data_version(connection) != before
+        with pytest.raises(InjectedFailure):
+            with transaction(connection):
+                connection.execute("INSERT INTO local_settings (name, value) VALUES ('b', '2')")
+                raise InjectedFailure()
+        assert heard == [start + 1]  # a rollback notifies nobody
+        after = data_version(connection)
+        connection.execute("UPDATE local_settings SET value = '3' WHERE name = 'a'")  # outside transaction()
+        assert data_version(connection) != after  # still seen: total_changes counts every write
+    finally:
+        connection.close()
+    assert data_version(connection) is None  # closed
+
+
+def test_a_failing_commit_listener_never_fails_the_commit(tmp_path) -> None:
+    from app.execution.db import get_connection, transaction_state_for
+
+    connection = get_connection(tmp_path / "listener.db")
+    try:
+        def broken() -> None:
+            raise RuntimeError("listener bug")
+
+        transaction_state_for(connection).add_commit_listener(broken)
+        with transaction(connection):
+            connection.execute("INSERT INTO local_settings (name, value) VALUES ('a', '1')")
+        assert connection.execute("SELECT value FROM local_settings WHERE name = 'a'").fetchone()[0] == "1"
+        transaction_state_for(connection).remove_commit_listener(broken)
+        transaction_state_for(connection).remove_commit_listener(broken)  # already gone: no error
+    finally:
+        connection.close()
