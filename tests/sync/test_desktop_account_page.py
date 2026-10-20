@@ -22,7 +22,7 @@ from app.ui import background
 from tests.tk_cleanup import cancel_stale_after_jobs
 from tests.sync.conftest import PASSWORD, InProcessTransport, make_device as make_device  # noqa: F401
 from tests.sync.conftest import project_root as project_root  # noqa: F401 - used by make_device
-from tests.ui.test_desktop_app import Dialogs, fill_form, tree_names
+from tests.ui.test_desktop_app import Dialogs, build_all_pages, fill_form, tree_names
 from tests.ui.test_desktop_app import pytestmark as pytestmark  # noqa: F401 - skip without a display
 
 WEDNESDAY = date(2024, 6, 5)
@@ -62,6 +62,7 @@ def open_app(db_path: Path, tmp_path: Path, backend: Backend):
     app = ScheduleOptimizerApp(db_path=str(db_path), timezone="UTC", project_root=str(tmp_path), today=WEDNESDAY,
                                transport_factory=backend.factory, background_sync=False)
     app.geometry("1440x880+30+30")
+    build_all_pages(app)  # pages are built on first show; these tests use them at once
     pump(app)
     return app
 

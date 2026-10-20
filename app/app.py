@@ -68,7 +68,6 @@ from app.execution.db import resolve_db_path
 from app.sync.transport import HttpTransport, SyncTransport
 from app.ui import diagnostics, theme
 from app.ui.account_controller import AccountController, ConnectionView
-from app.ui.account_page import AccountPage
 from app.ui.app_services import AppServices, describe_startup_failure, open_app_services
 from app.ui.direct_services import (
     DirectAccountController,
@@ -78,10 +77,6 @@ from app.ui.direct_services import (
 )
 from app.ui.background import current_registry, run_in_background
 from app.ui.day_controller import DayScheduleController
-from app.ui.calendar_controller import CalendarController
-from app.ui.calendar_page import CalendarPage
-from app.ui.projects_controller import ProjectsController
-from app.ui.planning_pages import ProjectsPage
 from app.ui.day_page import DaySchedulePage
 from app.ui.components import (
     AppButton,
@@ -91,11 +86,8 @@ from app.ui.components import (
 )
 from app.ui.conflict_view import ConflictDialog
 from app.ui.execution_controller import ExecutionController
-from app.ui.guide_page import GuidePage
 from app.ui.pages import DeferredPage, PageHeader, PlaceholderPage, ScrollPage, SettingsPage
 from app.ui.productivity_controller import ProductivityController
-from app.ui.productivity_page import ProductivityPage
-from app.ui.budget_page import BudgetingPage
 from app.ui.shell import AppShell
 from app.ui.shell_state import ShellState
 from app.ui.task_defaults import FILENAME as TASK_DEFAULTS_FILENAME, TaskDefaultsStore
@@ -225,6 +217,11 @@ class RewardConfigPage(ctk.CTkFrame):
 # Application Shell
 # -----------------------------------------------------------------------------
 
+def _built(page) -> bool:
+    """Whether `page` exists and has been built (a DeferredPage is built the first time it is shown)."""
+    return page is not None and getattr(page, "built", True)
+
+
 _PLACEHOLDERS = {
     "about": ("About", f"{APP_NAME} {__version__}\n\n"
                         "Schedule Maxing is a personal scheduling and productivity project created by Ramtin Rezaei "
@@ -307,7 +304,8 @@ class ScheduleOptimizerApp(ctk.CTk):
                                                          project_root=project_root, backend=direct_backend)
             else:
                 self.services = open_app_services(db_path, timezone=timezone, project_root=project_root,
-                                                  transport_factory=transport_factory, background_sync=background_sync)
+                                                  transport_factory=transport_factory, background_sync=background_sync,
+                                                  sync_start_delay=self.STARTUP_SYNC_DELAY_S)
         except Exception as error:  # noqa: BLE001 - reported to the user; no scheduler without storage
             logger.error("The application's storage could not be opened.", exc_info=error)
             self.startup_error = (describe_direct_startup_failure(error) if self.direct
@@ -413,11 +411,12 @@ class ScheduleOptimizerApp(ctk.CTk):
     def _task_data_was_reset(self) -> None:
         self.task_defaults.reset()  # added categories and changed default values go with the data
         settings_page = self.pages.get("settings")
-        if settings_page is not None:
+        if _built(settings_page):
             settings_page.render_task_defaults()
         for key in ("day", "week", "month", "projects", "productivity"):
             page = self.pages.get(key)
-            if page is not None and hasattr(page, "on_show") and not getattr(page, "_busy", False):
+            # A page not built yet reads the (now empty) data when it is first shown.
+            if _built(page) and hasattr(page, "on_show") and not getattr(page, "_busy", False):
                 page.on_show()  # re-read now: nothing stale stays on any page
         self.refresh_status()
 
@@ -465,6 +464,16 @@ class ScheduleOptimizerApp(ctk.CTk):
 
     #: How often the status bar re-reads the (local, durable) sync status.
     STATUS_POLL_MS = 4000
+    #: The background sync's first run waits this long, so it does not compete with building the window.
+    STARTUP_SYNC_DELAY_S = 3.0
+    #: After this, once the window is up, the credential store is looked up in the background (_warm_up).
+    WARM_UP_MS = 1500
+
+    def _warm_up(self) -> None:
+        """Work the window does not need in order to appear, done once it has (never touches widgets off Tk)."""
+        if self._closing or self.services is None or self.direct:
+            return
+        self.services.sync_service.prefetch_credentials()
 
     def apply_workspace(self, *, reload_only: bool = False) -> None:
         """
@@ -624,7 +633,7 @@ class ScheduleOptimizerApp(ctk.CTk):
         """Switch light/dark now and remember it; False if it could not be saved (it still applies)."""
         self.ui_settings = self.ui_settings.with_appearance(appearance)
         ctk.set_appearance_mode(appearance)
-        if self.shell is not None and "settings" in self.pages:
+        if self.shell is not None and _built(self.pages.get("settings")):  # built later, it reads ui_settings
             self.pages["settings"].appearance_select.variable.set(appearance.title())
         self._configure_treeview_style()
         if self.shell is not None:
@@ -685,16 +694,31 @@ class ScheduleOptimizerApp(ctk.CTk):
         else:
             self.account_controller = AccountController(services.sync_service, transport_factory=self._transport_factory,
                                                         background_sync=self._background_sync)
-        shell.add_page("account", AccountPage(host, self.account_controller, on_workspace_changed=self.apply_workspace))
+        controller = self.account_controller
+
+        def account(parent):
+            from app.ui.account_page import AccountPage
+
+            return AccountPage(parent, controller, on_workspace_changed=self.apply_workspace)
+
+        def guide(parent):
+            from app.ui.guide_page import GuidePage
+
+            return GuidePage(parent)
+
+        # Built on first show, like the workspace pages (the status bar's Account button shows it, which builds it).
+        shell.add_page("account", DeferredPage(host, account))
         shell.status_bar.sync_button.configure(command=self.sync_now)
         shell.status_bar.account_button.configure(command=lambda: self.show_page("account"))
         links = [("Open Day Schedule", lambda: self.show_page("day")),
                  ("Open Productivity", lambda: self.show_page("productivity"))]
-        shell.add_page("guide", GuidePage(host))
+        shell.add_page("guide", DeferredPage(host, guide))
         for key, (title, message) in _PLACEHOLDERS.items():
-            shell.add_page(key, PlaceholderPage(host, title, message, links))
+            shell.add_page(key, DeferredPage(host, lambda parent, title=title, message=message:
+                                             PlaceholderPage(parent, title, message, links)))
         self.refresh_status()
         self._status_poll = self.after(self.STATUS_POLL_MS, self._poll_status)
+        self.after(self.WARM_UP_MS, self._warm_up)
 
     def _check_direct_database(self) -> None:
         """Check the direct database's connection and schema revision in a worker; show the outcome."""
@@ -708,46 +732,74 @@ class ScheduleOptimizerApp(ctk.CTk):
         run_in_background(self, self.account_controller.check_backend, done, still_current=lambda: True)
 
     def _build_workspace_pages(self, *, replace: bool) -> None:
-        """The pages bound to the workspace's controllers (each schedule page keeps its remembered date)."""
+        """
+        The pages bound to the workspace's controllers (each schedule page keeps its remembered date).
+        Only Day is built now; every other page is a DeferredPage built the first time it is shown,
+        with its module imported then, so start-up builds, lays out and paints one page.
+        """
         services, shell = self.services, self.shell
         add = shell.replace_page if replace else shell.add_page
         today = self.today()
         # One budget controller per workspace, shared by the Budgeting page and the Day page's money widgets.
         budget = services.budget_controller(self.today)
-        for mode_name in SCHEDULE_PAGES:
-            remembered = self.shell_state.selection(mode_name)
-            if mode_name == "day":
-                add(mode_name, DaySchedulePage(
-                    shell.host, DayScheduleController(services.planning_controller, anchor_date=remembered or today,
-                                                      timezone=services.timezone, today=self.today),
-                    services.execution_controller, services.productivity_controller,
-                    on_anchor_changed=self.shell_state.remember, on_return=self.show_page,
-                    return_context=self.shell_state.selection("day_return"), background_io=True,
-                    task_defaults=self.task_defaults, budget_controller=budget,
-                ))
-                continue
-            add(mode_name, CalendarPage(
-                shell.host, mode_name,
-                CalendarController(services.planning_controller, mode=mode_name, selected=remembered or today,
+        add("day", DaySchedulePage(
+            shell.host, DayScheduleController(services.planning_controller,
+                                              anchor_date=self.shell_state.selection("day") or today,
+                                              timezone=services.timezone, today=self.today),
+            services.execution_controller, services.productivity_controller,
+            on_anchor_changed=self.shell_state.remember, on_return=self.show_page,
+            return_context=self.shell_state.selection("day_return"), background_io=True,
+            task_defaults=self.task_defaults, budget_controller=budget,
+        ))
+
+        def calendar(host, mode_name: str):
+            from app.ui.calendar_controller import CalendarController
+            from app.ui.calendar_page import CalendarPage
+
+            # The remembered date is read when the page is built: Day may have moved it meanwhile.
+            return CalendarPage(
+                host, mode_name,
+                CalendarController(services.planning_controller, mode=mode_name,
+                                   selected=self.shell_state.selection(mode_name) or self.today(),
                                    timezone=services.timezone, today=self.today,
                                    executions=services.execution_controller),
                 services.productivity_controller, on_anchor_changed=self.shell_state.remember,
-                on_open_day=lambda day, mode_name=mode_name: self.open_day(day, return_to=mode_name),
+                on_open_day=lambda day: self.open_day(day, return_to=mode_name),
                 background_io=True, task_defaults=self.task_defaults,
-            ))
-        add("productivity", ScrollPage(
-            shell.host, lambda parent: ProductivityPage(parent, services.productivity_controller)))
-        add("budget", DeferredPage(shell.host, lambda host: ScrollPage(
-            host, lambda parent: BudgetingPage(parent, budget, background_io=True))))
-        add("projects", ProjectsPage(
-            shell.host, ProjectsController(services.planning_controller, timezone=services.timezone,
-                                           executions=services.execution_controller),
-            on_open_day=lambda day: self.open_day(day, return_to="projects"), task_defaults=self.task_defaults,
-            on_open_performance=self.open_project_performance))
-        add("settings", SettingsPage(
-            shell.host, self.ui_settings, on_appearance=self.set_appearance, on_scale=self.set_ui_scale,
-            controller=SettingsController(services.planning_controller, today=self.today), background_io=True,
-            on_reset_task_data=self.reset_task_data, task_defaults=self.task_defaults, updates=self.updates))
+            )
+
+        def productivity(host):
+            from app.ui.productivity_page import ProductivityPage
+
+            return ScrollPage(host, lambda parent: ProductivityPage(parent, services.productivity_controller))
+
+        def budgeting(host):
+            from app.ui.budget_page import BudgetingPage
+
+            return ScrollPage(host, lambda parent: BudgetingPage(parent, budget, background_io=True))
+
+        def projects(host):
+            from app.ui.planning_pages import ProjectsPage
+            from app.ui.projects_controller import ProjectsController
+
+            return ProjectsPage(
+                host, ProjectsController(services.planning_controller, timezone=services.timezone,
+                                         executions=services.execution_controller),
+                on_open_day=lambda day: self.open_day(day, return_to="projects"), task_defaults=self.task_defaults,
+                on_open_performance=self.open_project_performance)
+
+        def settings_page(host):
+            return SettingsPage(
+                host, self.ui_settings, on_appearance=self.set_appearance, on_scale=self.set_ui_scale,
+                controller=SettingsController(services.planning_controller, today=self.today), background_io=True,
+                on_reset_task_data=self.reset_task_data, task_defaults=self.task_defaults, updates=self.updates)
+
+        for mode_name in SCHEDULE_PAGES[1:]:
+            add(mode_name, DeferredPage(shell.host, lambda host, mode_name=mode_name: calendar(host, mode_name)))
+        add("productivity", DeferredPage(shell.host, productivity))
+        add("budget", DeferredPage(shell.host, budgeting))
+        add("projects", DeferredPage(shell.host, projects))
+        add("settings", DeferredPage(shell.host, settings_page))
 
 
 def main(argv: list[str] | None = None) -> None:

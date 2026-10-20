@@ -72,13 +72,27 @@ def dialogs(monkeypatch) -> Dialogs:
     background.install_registry(previous)
 
 
-def open_app(db_path: Path, project_root: Path):
+def open_app(db_path: Path, project_root: Path, *, build_pages: bool = True):
+    """
+    The app, withdrawn and settled. build_pages: also build every page that is built on first show
+    (app/ui/pages.py DeferredPage), so a test can use any page at once, as if it had been opened
+    (tests/ui/test_deferred_pages.py covers the start-up without them).
+    """
     from app.app import ScheduleOptimizerApp
 
     app = ScheduleOptimizerApp(db_path=str(db_path), timezone="UTC", project_root=str(project_root), today=WEDNESDAY)
     app.withdraw()
+    if build_pages:
+        build_all_pages(app)
     pump(app)
     return app
+
+
+def build_all_pages(app) -> None:
+    for page in app.pages.values():
+        ensure = getattr(page, "ensure", None)
+        if ensure is not None:
+            ensure()
 
 
 def pump(app, until=lambda: True, timeout: float = 10.0) -> None:

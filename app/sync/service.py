@@ -358,7 +358,14 @@ class SyncService:
     @property
     def can_keep_signed_in(self) -> bool:
         """Whether this computer has a credential store for "Keep me signed in"."""
-        return self._vault is not None
+        # A LazyVault (app/sync/credentials.py) finds the store on first use; others are there or not.
+        return self._vault is not None and getattr(self._vault, "available", True)
+
+    def prefetch_credentials(self) -> None:
+        """Find the credential store now, in the background (a LazyVault), so no later step waits for it."""
+        prefetch = getattr(self._vault, "prefetch", None)
+        if prefetch is not None:
+            prefetch()
 
     def sign_in(self, email: str, password: str, *, keep: bool = False) -> Account:
         """keep: also keep the session in the system credential store, so a restart signs in again by itself."""
@@ -965,17 +972,26 @@ class SyncService:
     # Background loop
     # ------------------------------------------------------------------
 
-    def start(self) -> None:
+    def start(self, *, initial_delay: float = 0.0) -> None:
+        """
+        Run the background loop. initial_delay: wait this long before the first
+        run (wake() or Sync now ends the wait), e.g. so that a desktop's first
+        sync -- and the credential-store lookup it may need -- does not compete
+        with building the window.
+        """
         if self._thread is not None or self._transport is None:
             return
         self._stop.clear()
-        self._thread = threading.Thread(target=self._run, name="schedule-maxing-sync", daemon=True)
+        self._thread = threading.Thread(target=self._run, args=(initial_delay,), name="schedule-maxing-sync",
+                                        daemon=True)
         self._thread.start()
 
     def wake(self) -> None:
         self._wake.set()
 
-    def _run(self) -> None:
+    def _run(self, initial_delay: float = 0.0) -> None:
+        if initial_delay > 0:
+            self._idle(initial_delay)
         while not self._stop.is_set():
             try:
                 self.sync_now()

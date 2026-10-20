@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import statistics
 
-import pandas as pd
 from pydantic import BaseModel
 
 from app.productivity.buckets import TimeBucket
@@ -76,6 +75,8 @@ def predict_duration_with_ml(
             "day_of_week": day_of_week,
             **aggregates,
         }
+        import pandas as pd  # only with an active model: pandas never loads at desktop start-up
+
         frame = pd.DataFrame([feature_row])[NUMERIC_COLUMNS + CATEGORICAL_COLUMNS]
 
         predicted_minutes = round(float(pipeline.predict(frame)[0]), 2)

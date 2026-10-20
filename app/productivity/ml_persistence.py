@@ -29,16 +29,17 @@ writable), falls back to reading the old location in place.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import joblib
-import sklearn
 from pydantic import BaseModel
-from sklearn.pipeline import Pipeline
 
 from app.productivity.ml_artifact_migration import migrate_default_ml_artifact
 from app.productivity.ml_evaluation import MLActivationDecision
 from app.productivity.ml_features import CATEGORICAL_COLUMNS, FEATURE_SCHEMA_VERSION, NUMERIC_COLUMNS
 from config import settings
+
+if TYPE_CHECKING:  # joblib/scikit-learn load only when an artifact is saved or actually loaded
+    from sklearn.pipeline import Pipeline
 
 
 class MLModelMetadata(BaseModel):
@@ -65,6 +66,9 @@ def save_model_artifact(
     data_dir: Path | str | None = None,
 ) -> None:
     """Persist the fitted pipeline plus its metadata sidecar, overwriting any existing artifact."""
+    import joblib
+    import sklearn
+
     target_dir = Path(data_dir or settings.DATA_DIR)
     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -119,6 +123,9 @@ def _load_from(target_dir: Path) -> tuple[Pipeline, MLModelMetadata] | None:
     try:
         if not model_file.exists():
             return None
+        import joblib
+        from sklearn.pipeline import Pipeline
+
         pipeline = joblib.load(model_file)
     except Exception:
         return None

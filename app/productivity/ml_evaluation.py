@@ -27,16 +27,18 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
-from sklearn.pipeline import Pipeline
 
 from app.productivity.buckets import TimeBucket
 from app.productivity.data_prep import Observation
 from app.productivity.ml_features import MLFeatureRow, build_feature_rows, sort_eligible_observations
 from app.productivity.ml_metrics import mean_absolute_error, median_absolute_error, within_tolerance_rate
-from app.productivity.ml_model import predict_rows, train_ml_pipeline
 from app.productivity.ml_split import chronological_split
+
+if TYPE_CHECKING:  # scikit-learn and pandas load only when a model is trained (never at desktop start-up)
+    from sklearn.pipeline import Pipeline
 from app.productivity.prediction import predict_duration
 from app.productivity.stats import ProductivityThresholds
 
@@ -206,6 +208,8 @@ def evaluate_predictors(
             "train and evaluate the ML model."
         )
     else:
+        from app.productivity.ml_model import predict_rows, train_ml_pipeline
+
         pipeline = train_ml_pipeline(split.train_rows, random_state=model_random_state)
         ml_predicted = predict_rows(pipeline, split.test_rows)
         ml_metrics = _metrics_for(ml_predicted, actual)
