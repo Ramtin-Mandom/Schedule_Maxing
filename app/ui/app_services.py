@@ -52,6 +52,7 @@ import os
 import sqlite3
 import threading
 from collections.abc import Callable
+from datetime import date
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -69,6 +70,9 @@ from app.logging_setup import log_path
 from app.execution.instance_lock import DatabaseInUseError, InstanceLock, acquire_instance_lock
 from app.execution.repository import ExecutionRepository
 from app.execution.service import ExecutionService
+from app.budget.repository import BudgetRepository
+from app.budget.service import BudgetService
+from app.ui.budget_controller import BudgetController
 from app.planning.application import PlanningService
 from app.planning.repository import PlanningRepository
 from app.planning.scope import OwnerScope
@@ -132,6 +136,20 @@ class AppServices:
         it uses the network. Rebuild the workspace's pages afterwards.
         """
         return self.sync_service.reset_task_data()
+
+    # ------------------------------------------------------------------
+    # Budget (app/budget)
+    # ------------------------------------------------------------------
+
+    def budget_service(self) -> BudgetService:
+        """Budgeting in the current workspace (call from a worker, like every storage call)."""
+        return BudgetService(BudgetRepository(self.connection).scoped(self.workspace.scope))
+
+    def budget_controller(self, today: Callable[[], date]) -> BudgetController:
+        """The Budgeting/Day pages' controller, bound to the workspace current now (rebuilt on a switch)."""
+        service = self.budget_service()
+        planning = self.planning_service.scoped(self.workspace.scope)
+        return BudgetController(lambda: service, projects=planning.list_projects, today=today)
 
     # ------------------------------------------------------------------
     # Workspace

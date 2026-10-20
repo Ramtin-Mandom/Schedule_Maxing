@@ -19,6 +19,9 @@ Stable layout while moving/resizing/minimizing:
 - The sidebar animation has a fixed number of steps and stops when the
   sidebar is destroyed.
 
+Pages of a group (shell_state.PAGE_GROUPS: Settings, Account, How to Use)
+share one sidebar item; the shell shows the group's top bar above them.
+
 Pages may implement on_show(), set_layout(mode) and on_appearance_changed();
 the host calls them when relevant. A page chosen by the user from the
 navigation (sidebar or Ctrl+number) also goes to `on_navigate(key)` after it
@@ -35,7 +38,7 @@ import customtkinter as ctk
 from app.ui import diagnostics, theme
 from app.ui.components import AppButton, Tooltip, font, focus_target
 from app.ui.layout import BoundedAnimation, Coalescer
-from app.ui.shell_state import NAV_ITEMS, LayoutMode, ShellState
+from app.ui.shell_state import NAV_ITEMS, PAGE_KEYS, LayoutMode, ShellState, nav_key, page_group
 
 COLLAPSED_WIDTH = 64
 EXPANDED_WIDTH = 236
@@ -173,6 +176,35 @@ class StatusBar(ctk.CTkFrame):
                                    text="Syncing..." if syncing else "Sync now")
 
 
+class GroupBar(ctk.CTkFrame):
+    """The top bar of a page group: one button per page; the shown one is marked by colour and a dot."""
+
+    def __init__(self, parent, *, on_select: Callable[[str], None]) -> None:
+        super().__init__(parent, fg_color="transparent")
+        self._on_select = on_select
+        self.group: tuple[tuple[str, str], ...] = ()
+        self.buttons: dict[str, AppButton] = {}
+        self.labels: dict[str, str] = {}
+
+    def show(self, group: tuple[tuple[str, str], ...], current: str) -> None:
+        if group != self.group:
+            for button in self.buttons.values():
+                button.destroy()
+            self.group, self.buttons, self.labels = group, {}, dict(group)
+            for column, (key, label) in enumerate(group):
+                self.columnconfigure(column, weight=1, uniform="group")
+                button = AppButton(self, label, lambda key=key: self._on_select(key), variant="secondary",
+                                   height=40)
+                button.grid(row=0, column=column, sticky="ew", padx=4)
+                self.buttons[key] = button
+        for key, button in self.buttons.items():
+            chosen = key == current
+            button.configure(fg_color=theme.ACCENT if chosen else theme.SECONDARY_BG,
+                             hover_color=theme.ACCENT_HOVER if chosen else theme.SECONDARY_HOVER,
+                             text_color=theme.TEXT_ON_ACCENT if chosen else theme.TEXT_PRIMARY,
+                             text=("● " if chosen else "") + self.labels[key])
+
+
 class AppShell(ctk.CTkFrame):
     """Sidebar + page host. `pages` maps a navigation key (or an extra key such as "reward") to its frame."""
 
@@ -188,10 +220,14 @@ class AppShell(ctk.CTkFrame):
         self.sidebar.grid(row=0, column=0, sticky="ns")
         self.host = ctk.CTkFrame(self, fg_color=theme.APP_BG, corner_radius=0)
         self.host.grid(row=0, column=1, sticky="nsew")
-        self.host.rowconfigure(1, weight=1)
+        self.host.rowconfigure(2, weight=1)
         self.host.columnconfigure(0, weight=1)
         self.status_bar = StatusBar(self.host)
         self.status_bar.grid(row=0, column=0, sticky="ew", padx=theme.SPACE_M, pady=(theme.SPACE_S, 0))
+        # The top bar of a page group (Settings | Account | How to Use), shown above those pages only.
+        self.group_bar = GroupBar(self.host, on_select=self.navigate)
+        self.group_bar.grid(row=1, column=0, sticky="ew", padx=theme.SPACE_L, pady=(theme.SPACE_M, 0))
+        self.group_bar.grid_remove()
         self.pages: dict[str, ctk.CTkFrame] = {}
         self.current: str | None = None
         self.layout_checks = Coalescer(self, self._check_layout)
@@ -223,11 +259,17 @@ class AppShell(ctk.CTkFrame):
     def _show_page(self, key: str) -> None:
         if key in self.state_keys():
             self.state.select(key)
-            self.sidebar.set_active(key)
+            self.sidebar.set_active(nav_key(key))
+        group = page_group(key)
+        if group:
+            self.group_bar.show(group, key)
+            self.group_bar.grid()
+        else:
+            self.group_bar.grid_remove()
         if self.current is not None and self.current != key:
             self.pages[self.current].grid_remove()
         page = self.pages[key]
-        page.grid(row=1, column=0, sticky="nsew")
+        page.grid(row=2, column=0, sticky="nsew")
         self.current = key
         if self.state.layout is not None and hasattr(page, "set_layout"):
             page.set_layout(self.state.layout)
@@ -249,7 +291,7 @@ class AppShell(ctk.CTkFrame):
 
     @staticmethod
     def state_keys() -> set[str]:
-        return {item.key for item in NAV_ITEMS}
+        return set(PAGE_KEYS)
 
     # -- sidebar ----------------------------------------------------------------------
 
@@ -257,7 +299,7 @@ class AppShell(ctk.CTkFrame):
         opened = self.state.toggle_sidebar()
         self.sidebar.show_open(opened)
         if opened:
-            focus_target(self.sidebar.buttons[self.state.page]).focus_set()
+            focus_target(self.sidebar.buttons[self.state.nav_key]).focus_set()
 
     def _escape(self, _event=None) -> None:
         if self.state.sidebar_open and self.state.layout == LayoutMode.NARROW and self.state.close_sidebar():

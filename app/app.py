@@ -92,9 +92,10 @@ from app.ui.components import (
 from app.ui.conflict_view import ConflictDialog
 from app.ui.execution_controller import ExecutionController
 from app.ui.guide_page import GuidePage
-from app.ui.pages import PageHeader, PlaceholderPage, ScrollPage, SettingsPage
+from app.ui.pages import DeferredPage, PageHeader, PlaceholderPage, ScrollPage, SettingsPage
 from app.ui.productivity_controller import ProductivityController
 from app.ui.productivity_page import ProductivityPage
+from app.ui.budget_page import BudgetingPage
 from app.ui.shell import AppShell
 from app.ui.shell_state import ShellState
 from app.ui.task_defaults import FILENAME as TASK_DEFAULTS_FILENAME, TaskDefaultsStore
@@ -278,7 +279,7 @@ class ScheduleOptimizerApp(ctk.CTk):
         self._transport_factory = transport_factory
         self._background_sync = background_sync
         self.account_controller: AccountController | DirectAccountController | None = None
-        #: Update checks and the update notice (app/ui/update_view.py); built with the shell, local storage only.
+        #: Updates remain available even if local storage could not open.
         self._update_controller = update_controller
         self.updates: UpdateFlow | None = None
         self._status_poll = None
@@ -296,6 +297,10 @@ class ScheduleOptimizerApp(ctk.CTk):
         self._closed = False
 
         self._configure_treeview_style()
+        if not self.direct:
+            self.updates = UpdateFlow(self, self._update_controller or UpdateController(),
+                                      get_settings=lambda: self.ui_settings, save_settings=self._save_ui_settings,
+                                      close_app=self._on_close)
         try:
             if self.direct:
                 self.services = open_direct_app_services(env_file=env_file, timezone=timezone,
@@ -673,11 +678,6 @@ class ScheduleOptimizerApp(ctk.CTk):
         shell.on_navigate = self._navigated
         shell.sidebar.set_footer(services.location_label())
         host = shell.host
-        if not self.direct:
-            self.updates = UpdateFlow(self, self._update_controller or UpdateController(),
-                                      get_settings=lambda: self.ui_settings, save_settings=self._save_ui_settings,
-                                      close_app=self._on_close)
-
         self._build_workspace_pages(replace=False)
         if self.direct:
             self.account_controller = DirectAccountController(services)
@@ -712,6 +712,8 @@ class ScheduleOptimizerApp(ctk.CTk):
         services, shell = self.services, self.shell
         add = shell.replace_page if replace else shell.add_page
         today = self.today()
+        # One budget controller per workspace, shared by the Budgeting page and the Day page's money widgets.
+        budget = services.budget_controller(self.today)
         for mode_name in SCHEDULE_PAGES:
             remembered = self.shell_state.selection(mode_name)
             if mode_name == "day":
@@ -721,7 +723,7 @@ class ScheduleOptimizerApp(ctk.CTk):
                     services.execution_controller, services.productivity_controller,
                     on_anchor_changed=self.shell_state.remember, on_return=self.show_page,
                     return_context=self.shell_state.selection("day_return"), background_io=True,
-                    task_defaults=self.task_defaults,
+                    task_defaults=self.task_defaults, budget_controller=budget,
                 ))
                 continue
             add(mode_name, CalendarPage(
@@ -735,6 +737,8 @@ class ScheduleOptimizerApp(ctk.CTk):
             ))
         add("productivity", ScrollPage(
             shell.host, lambda parent: ProductivityPage(parent, services.productivity_controller)))
+        add("budget", DeferredPage(shell.host, lambda host: ScrollPage(
+            host, lambda parent: BudgetingPage(parent, budget, background_io=True))))
         add("projects", ProjectsPage(
             shell.host, ProjectsController(services.planning_controller, timezone=services.timezone,
                                            executions=services.execution_controller),

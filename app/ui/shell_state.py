@@ -6,9 +6,12 @@ page is shown, whether the sidebar is open, which responsive layout the
 window width calls for, and the date each page last showed.
 
 Navigation: Day, Week and Month Schedule, Project Schedule, Productivity (the existing execution analytics; Execute stays in
-each schedule page), Settings, Account, How to Use (the in-app guide) and
-About. The app starts on Day with the sidebar collapsed; the sidebar's open
-state is never persisted.
+each schedule page), Budgeting, Settings and About. Settings is one section
+whose top bar (PAGE_GROUPS) switches between Settings, Account and How to Use
+(the in-app guide); those three pages keep their own keys, so any of them can
+still be opened directly, and the sidebar marks Settings for all of them.
+The app starts on Day with the sidebar collapsed; the sidebar's open state is
+never persisted.
 
 Layout: the page width (in logical pixels, i.e. divided by the interface
 scale) picks WIDE / MEDIUM / NARROW. A small hysteresis band keeps a window
@@ -40,12 +43,29 @@ NAV_ITEMS: tuple[NavItem, ...] = (
     NavItem("month", "Month Schedule", "M"),
     NavItem("projects", "Project Schedule", "P", placeholder=True),
     NavItem("productivity", "Productivity", "%"),
+    NavItem("budget", "Budgeting", "$"),
     NavItem("settings", "Settings", "S"),
-    NavItem("account", "Account", "@", placeholder=True),
-    NavItem("guide", "How to Use", "?"),
     NavItem("about", "About", "i", placeholder=True),
 )
 NAV_KEYS = tuple(item.key for item in NAV_ITEMS)
+#: Sections whose pages share one navigation item, switched by a top bar: {item key: ((page key, label), ...)}.
+PAGE_GROUPS: dict[str, tuple[tuple[str, str], ...]] = {
+    "settings": (("settings", "Settings"), ("account", "Account"), ("guide", "How to Use")),
+}
+#: Every page of a group -> its navigation item.
+NAV_PARENT: dict[str, str] = {page: item for item, pages in PAGE_GROUPS.items() for page, _ in pages}
+#: Every page the shell knows by key: the navigation items and the other pages of their groups.
+PAGE_KEYS = tuple(dict.fromkeys((*NAV_KEYS, *NAV_PARENT)))
+
+
+def nav_key(page: str) -> str:
+    """The navigation item that shows `page` (itself, or its group's item)."""
+    return NAV_PARENT.get(page, page)
+
+
+def page_group(page: str) -> tuple[tuple[str, str], ...]:
+    """The pages that share `page`'s top bar (empty when it has none)."""
+    return PAGE_GROUPS.get(nav_key(page), ())
 DEFAULT_PAGE = "day"
 SCHEDULE_PAGES = ("day", "week", "month")
 
@@ -83,7 +103,7 @@ def layout_for_width(width: float, current: LayoutMode | None = None) -> LayoutM
 
 class ShellState:
     def __init__(self, *, page: str = DEFAULT_PAGE) -> None:
-        if page not in NAV_KEYS:
+        if page not in PAGE_KEYS:
             raise ValueError(f"unknown page {page!r}")
         self.page = page
         self.sidebar_open = False
@@ -92,13 +112,18 @@ class ShellState:
 
     def select(self, page: str) -> bool:
         """Show `page`; True if it changed. On a narrow window an open sidebar closes."""
-        if page not in NAV_KEYS:
+        if page not in PAGE_KEYS:
             raise ValueError(f"unknown page {page!r}")
         if self.layout == LayoutMode.NARROW:
             self.sidebar_open = False
         changed = page != self.page
         self.page = page
         return changed
+
+    @property
+    def nav_key(self) -> str:
+        """The navigation item marked for the page shown."""
+        return nav_key(self.page)
 
     def toggle_sidebar(self) -> bool:
         self.sidebar_open = not self.sidebar_open

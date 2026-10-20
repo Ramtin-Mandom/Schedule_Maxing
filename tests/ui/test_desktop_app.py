@@ -352,6 +352,7 @@ def test_startup_failure_shows_an_error_instead_of_the_scheduler(tmp_path: Path,
     try:
         assert app.services is None
         assert app.pages == {}  # no page that could accept unsaved edits
+        assert app.updates is not None  # an update can still be offered when storage did not open
         assert str(unusable) in dialogs.errors[-1]
     finally:
         app._on_close()
