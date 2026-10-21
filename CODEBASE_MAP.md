@@ -4,7 +4,7 @@ A navigation and change-impact guide. Use section D first: find the change you n
 "Start here" files, follow only the listed dependencies, run the listed tests. System design is in
 [ARCHITECTURE.md](ARCHITECTURE.md); feature status in [CURRENT_STATE.md](CURRENT_STATE.md).
 
-Paths verified against commit `bec7ad0` on 2026-10-21. Dependencies marked **(import)** were checked in
+Paths verified against commit `bdc67f6` on 2026-10-21. Dependencies marked **(import)** were checked in
 the source; others are call-level or conceptual relationships.
 
 ## A. Repository structure
@@ -57,7 +57,7 @@ Ignore: `.venv*`, `__pycache__`, `.pytest_cache`, `.ruff_cache`, `build/`, `dist
 | Task creation/editing (UI) | `app/ui/task_editor.py`, `app/ui/task_form_model.py` | `app/ui/task_defaults.py`, `time_fields.py`, `clock_input.py`, `app/ui/planning_controller.py` | `tests/ui/test_task_form_model.py`, `test_task_editor_widgets.py`, `test_task_defaults.py` | Planning models, fixed-block rules |
 | Task/record model | `app/planning/models.py` | `app/planning/repository.py`, `backend/resources.py`, `backend/record_mapping.py`, `app/sync/mapping.py` | `tests/planning/test_models.py`, `test_planning_repository.py`, `test_task_types_and_snapshots.py` | Every layer |
 | Persisted planning (CRUD, ranges, resets) | `app/planning/application.py` (`PlanningService`) | `app/planning/repository.py`, `errors.py`, `scope.py`, `task_data_reset.py` | `tests/planning/test_application_service.py`, `test_reset.py`, `test_owner_scope.py`, `test_concurrency.py` | Sync capture triggers |
-| Scheduling (day engine, modes) | `app/optimizer.py`, `app/mode_objectives.py` | `app/planning/catch_up.py`, `app/planning/preferences.py`, `app/planning/time.py`, `app/pert.py`, `app/reward.py` | `tests/test_day_engine.py`, `test_scheduling_modes.py`, `test_optimizer_candidates.py`, `test_optimizer_differential.py` | `benchmarks/scheduling_mode_baseline.py --check` |
+| Scheduling (day engine, modes) | `app/optimizer.py`, `app/mode_objectives.py` | `app/planning/catch_up.py`, `app/planning/preferences.py`, `app/planning/time.py`, `app/pert.py`, `app/reward.py`; desktop runs it through `app/planning/engine_process.py` | `tests/test_day_engine.py`, `test_scheduling_modes.py`, `test_optimizer_candidates.py`, `test_optimizer_differential.py`, `tests/test_engine_process.py` | `benchmarks/scheduling_mode_baseline.py --check` |
 | Legacy Greedy v1 | `app/optimizer.py: optimize_day_schedule` | `app/models.py`, `app/constraints.py`, `app/data_processor.py` | `tests/test_optimizer.py`, `test_constraints.py`, `test_data_processor.py` | `benchmarks/optimizer_baseline.py` |
 | Scheduling workflow (generate/save/freshness) | `app/planning/workflow.py` | `app/planning/service.py`, `allocation.py`, `provenance.py`, `external_dependencies.py` | `tests/planning/test_workflow.py`, `test_allocation*.py`, `tests/ui/test_desktop_generation_workflow.py` | Day page, backend `planning_api.py` |
 | Reward / preferences | `app/reward.py`, `app/planning/preferences.py` | `config/task_preference.yaml`, `backend/preferences.py`, `app/ui/preferences_model.py`, `preferences_editor.py` | `tests/test_reward.py`, `tests/planning/test_preferences.py`, `tests/ui/test_settings_controller.py` | Settings page, Day Preferences |
@@ -118,6 +118,7 @@ Grouped by package. Short paths inside a table are relative to that section's pa
 | `repository.py` | `PlanningRepository`: the only SQL for planning tables; row mapping functions | `execution.db` | `application.py`, `sync/engine.py`, `ui/app_services.py` |
 | `workflow.py` | The one scheduling orchestration: `read_inputs`, `allocate`, `preview_allocation`, `day_freshness`, `generate`/`generate_from`, `reschedule_placement`, reservations, preference views | `optimizer`, `allocation`, `application`, `service`, `catch_up`, `series`, `provenance`, `mode_objectives` | `ui/planning_controller.py`, `backend/planning_api.py`, `app/web` |
 | `service.py` | `generate_selected_day` (calls the engine once per date), `SelectedDayState`, `week_states` | `optimizer`, `allocation`, `external_dependencies`, `provenance` | `workflow.py` |
+| `engine_process.py` | `run_engine` (the hook `_generate_date` calls the engine through), `EngineProcess` (one spawned worker process, in-thread fallback; ADR-044) | stdlib `concurrent.futures`, `multiprocessing` | `workflow.py`; installed by `ui/app_services.py` |
 | `allocation.py` | `allocate_tasks` (task → date for week/month), `week_dates`, `month_dates`, diagnostics | `pert`, models | `workflow.py`, `service.py` |
 | `preferences.py` | `OptimizerMode`, `ENGINE_LABELS`, preference layers (`PreferenceRecord`, scopes), `resolve_day_preferences`, adapters to `RewardSettings` | `reward` | Engine, workflow, Settings UI, `backend/preferences.py` |
 | `provenance.py` | `inputs_fingerprint`, `placements_digest`, `classify_generation` (current/stale) | — | `application.py`, `workflow.py` |
@@ -182,7 +183,8 @@ scheduling stack imports this package (`tests/budget/test_budget_service.py` che
 |---|---|
 | Composition and threading | `app_services.py` (`AppServices.data_version`), `direct_services.py`, `background.py` (`ControllerResult`, `WorkerRegistry`, `run_io`, `run_in_background`, `WRITE_LANE`), `tk_lifecycle.py` (GC timer, `tune_customtkinter_loops`), `diagnostics.py` |
 | Activity and freshness | `activity.py` (focused / unfocused / minimized, `ACTIVITY_POLICIES`), `page_freshness.py` (skip a page's re-read on show when the data is unchanged) |
-| Shell and shared widgets | `shell.py` (page area with a debounced page size, `PAGE_SETTLE_MS`), `shell_state.py`, `layout.py` (`Coalescer`, optionally debounced), `components.py` (shared `font()`), `paint_widgets.py`, `theme.py`, `pages.py` (`PageHeader`, `ScrollPage`, `DeferredPage` (every page but Day, built on first show), `PlaceholderPage`, `SettingsPage`) |
+| Light widgets | `light_widgets.py` (`LightFrame`, `LightLabel`, `LightButton`: one native window each, themed through CTk's trackers; long lists and static text, ADR-043) |
+| Shell and shared widgets | `shell.py` (page area with a debounced page size, `PAGE_SETTLE_MS`; hidden pages detached after `DETACH_AFTER_MS`), `shell_state.py`, `layout.py` (`Coalescer`, optionally debounced), `components.py` (shared `font()`), `paint_widgets.py`, `theme.py`, `pages.py` (`PageHeader`, `ScrollPage`, `DeferredPage` (every page but Day, built on first show), `PlaceholderPage`, `SettingsPage`) |
 | Planning controllers | `planning_controller.py` (Tk-free facade over workflow/services; CSV), `schedule_page_controller.py`, `day_controller.py`, `calendar_controller.py`, `projects_controller.py` |
 | Pages and views | `day_page.py`, `day_timeline.py`, `day_window.py`, `day_window_bar.py`, `day_outcomes.py`, `task_status_board.py`, `calendar_page.py`, `calendar_view.py`, `calendar_model.py`, `selected_day_panel.py`, `planning_pages.py` |
 | Task form | `task_editor.py`, `task_form_model.py`, `task_defaults.py`, `time_fields.py`, `clock_input.py`, `task_actions.py`, `task_status.py` |
@@ -240,7 +242,7 @@ files and keeps the fast ones. Two exceptions:
     `test_calendar_pages.py`, `test_calendar_outcomes.py`, `test_planning_pages.py`, `test_settings_page.py`,
     `test_task_editor_widgets.py`, `test_desktop_app.py`, `test_desktop_shell.py`, `test_async_storage.py`,
     `test_bounded_rendering.py`, `test_responsiveness_regressions.py`, `test_budget_page.py`,
-    `test_deferred_pages.py`, `test_page_freshness.py`, `test_activity_window.py`;
+    `test_deferred_pages.py`, `test_page_freshness.py`, `test_activity_window.py`, `test_light_widgets.py`;
   - *slow only*: `tests/backend/test_migrations.py`, `tests/backend/test_normalized_migration.py`,
     `tests/backend/test_live_server.py`, `tests/test_desktop_isolation.py`.
 

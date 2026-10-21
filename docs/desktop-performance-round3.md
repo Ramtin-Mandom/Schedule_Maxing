@@ -149,11 +149,8 @@ The minimized CPU includes the probe's own 20 Hz heartbeat.
 - `PreferencesEditor` builds its rows in 8 ms idle slices (the Settings page and the Day
   preferences dialog) instead of one ~1.2 s callback; `finish()` completes it before typed
   values are restored.
-- Not done: replacing CTk buttons in dense lists with lighter widgets (their cost is
-  CustomTkinter's rounded drawing; swapping them changes look and keyboard behaviour), and
-  idle pre-building of the Week page (a page build is one blocking block of 0.1-0.4 s).
-- Not justified: a separate process for schedule generation. Lateness during generation is
-  p95 25-40 ms; its worst stalls come from rendering the result, not from GIL contention.
+- Deferred at first, done in Round 3b below: lighter widgets for the long lists, idle
+  pre-building of the Week page (in parts), and the day engine in a separate process.
 
 ### Phase 6 -- SQLite (no change; ADR-042)
 
@@ -181,3 +178,109 @@ Focused tests per phase (new: `tests/test_startup_cost.py`, `tests/ui/test_defer
 `tests/ui/test_page_freshness_keys.py`, additions to `tests/execution/test_transactions.py`
 and `tests/ui/test_shell_foundation.py`), the affected real-window modules, and the existing
 sync idle-loop, keep-signed-in and HTTP transport tests; results in CURRENT_STATE.md section D.
+
+## Round 3b: dragging, light widgets, Week pre-build, engine process
+
+Follow-up after the user reported that dragging the window was better but still raised
+`dwm.exe` (the Windows compositor) from about 1% to 14% of total CPU (12 logical cores).
+
+### Why dragging costs the compositor
+
+A probe (scratch script, not committed) moved a 1440x880 window with `SetWindowPos` every 16 ms
+for 8 s on the left monitor and read `\Process(dwm)\% Processor Time` (percent of ONE core)
+through PDH. Measured with low background load:
+
+| Window | Native child windows | dwm.exe while moving |
+|---|---:|---:|
+| empty CustomTkinter window | 3 | 7-10% |
+| the app, Day page, 200 tasks (round 3 end) | 556 | 22-24% |
+| 150 CustomTkinter buttons | 453 | 22% |
+| 400 plain Tk buttons | 403 | 20% |
+| 400 CustomTkinter buttons | 1203 | 35% |
+| the same 400 items drawn on one Canvas | 4 | 5% |
+
+The cost follows the number of native child windows, not what the app draws (the app itself
+used ~10% of a core). Tk gives every widget one; a CustomTkinter widget is two or three
+(frame, drawing canvas, often an inner label). Later measurements (with heavy background
+compositor load on the machine, so as paired still/moving medians) showed that **hidden** child
+windows cost as much as visible ones: 400 hidden CTk buttons 43-51% while moving, visible 41-48%,
+the same widgets in a withdrawn window of their own 18-23% (empty window 18-24%). So every page
+built during a session -- and the pre-built Week page -- made dragging heavier.
+`WS_EX_COMPOSITED` on the window was tried and rejected: Tk repaints endlessly with it.
+
+### What changed
+
+- **Light widgets** (`app/ui/light_widgets.py`, ADR-043): one native window each, themed through
+  CustomTkinter's trackers. Used for the available-task chips, the status-board cards (16 -> 7
+  windows each), `SectionTitle`, field captions/hints/errors and `Notice` text. Day page with 200
+  tasks: 556 -> 435 child windows; dwm.exe while moving ~23% -> ~16% of one core (single runs).
+  Look: list buttons have square corners; ghost buttons lost their outline.
+- **Hidden pages detached** (`AppShell._hide`/`_detach`): a hidden page that stayed hidden for
+  30 s, with no input for 2 s and no idle callback pending, moves into a withdrawn window of its
+  own (`wm manage`); showing it makes it a child again (`wm forget`). After visiting five pages
+  the window holds ~450 child windows instead of ~1,700. Two pitfalls found and handled:
+  re-attaching costs a full re-map and redraw (0.2-0.7 s, about a first visit), so pages are not
+  detached while the user moves between them; and `wm manage`/`wm withdraw` run every pending idle
+  callback at once (a 1.8 s block in a synthetic test, 1.3-3.2 s in the probe when Settings was
+  building its rows), so a detach waits until no idle callback is pending.
+- **Week pre-built in idle time** (`DeferredPage.prebuild_step`, `CalendarPage(staged=True)`):
+  one part per idle callback (header, day-window bar, calendar, details, task form, load) while
+  the Day page has rendered, no worker runs, the window is not minimized and there was no input
+  for 0.8 s; then parked (detached). Gives up after about a minute without such a moment.
+- **Day engine in a separate process** (`app/planning/engine_process.py`, ADR-044): only the pure
+  engine call; probe heartbeat lateness during a 200-task generation p95 26-41 -> 15 ms (two runs
+  each); the worst stall (rendering the result) is unchanged.
+
+### Probe results
+
+Same harness as above; one run per column. The 1612f65 column is before hidden pages were
+detached; its page switches are the fastest, but every visited page stayed in the window.
+
+#### 10 tasks
+
+| Measure | Round 3 end (bec7ad0) | + light widgets, Week pre-build, engine process (1612f65) | + hidden pages detached (bdc67f6) |
+|---|---:|---:|---:|
+| `import app.app` ms | 633 | 532 | 563 |
+| Constructor ms | 655 | 646 | 651 |
+| First paint ms | 1165 | 1044 | 1094 |
+| Interactive ms | 1163 | 1043 | 1093 |
+| resize p95 / worst ms | 86 / 95 | 97 / 103 | 100 / 120 |
+| pages p95 / worst ms | 110 / 348 | 99 / 302 | 143 / 343 |
+| pages_revisit p95 / worst ms | 25 / 49 | 15 / 29 | 35 / 86 |
+| generate p95 / worst ms | 25 / 79 | 14 / 31 | 11 / 52 |
+| resize CPU % | 96.0 | 92.6 | 88.1 |
+| pages CPU % | 55.0 | 49.4 | 52.9 |
+| idle_after CPU % | 0.0 | 0.0 | 0.8 |
+| resize Configure (all) | 1057 | 949 | 663 |
+| minimized 60 s: CPU s / status polls | 0.031 / 0 | 0.078 / 0 | 0.047 / 0 |
+
+#### 200 tasks
+
+| Measure | Round 3 end (bec7ad0) | + light widgets, Week pre-build, engine process (1612f65) | + hidden pages detached (bdc67f6) |
+|---|---:|---:|---:|
+| `import app.app` ms | 652 | 549 | 544 |
+| Constructor ms | 650 | 654 | 665 |
+| First paint ms | 1284 | 1123 | 1181 |
+| Interactive ms | 1282 | 1122 | 1179 |
+| resize p95 / worst ms | 96 / 111 | 78 / 84 | 109 / 118 |
+| pages p95 / worst ms | 109 / 346 | 96 / 319 | 127 / 335 |
+| pages_revisit p95 / worst ms | 18 / 47 | 21 / 45 | 27 / 69 |
+| generate p95 / worst ms | 40 / 234 | 22 / 124 | 13 / 161 |
+| resize CPU % | 95.6 | 89.0 | 87.8 |
+| pages CPU % | 56.9 | 52.3 | 55.2 |
+| idle_after CPU % | 0.0 | 0.0 | 0.6 |
+| resize Configure (all) | 1216 | 1165 | 693 |
+| minimized 60 s: CPU s / status polls | 0.016 / 0 | 0.062 / 0 | 0.047 / 0 |
+
+The minimized-phase CPU (0.03-0.08 s per minute, still about 0.1% of a core) varies between
+runs; today's runs had much more background load on the machine than yesterday's.
+
+### Not done / limits
+
+- The rest of the visible page is still CustomTkinter: the form's entries and menus, the action
+  and navigation buttons (36 `AppButton`s on the Day page, three native windows each). Converting
+  them changes the look of the whole app; drawing very long lists on one Canvas would save more
+  but loses per-item focus and widget-level tests.
+- Physical dragging was not measured with a mouse; the probe's `SetWindowPos` steps are not
+  Windows' interactive move loop. The dwm.exe numbers vary strongly with other activity on the
+  machine.

@@ -60,6 +60,8 @@ decision was made.
 | ADR-040 | Budget forecast: a balance snapshot plus a 15-day one-time spending average; future items are not transactions | Accepted |
 | ADR-041 | The background sync cadence follows the desktop window's activity | Accepted |
 | ADR-042 | Local SQLite keeps the rollback journal: WAL evaluated and not adopted; no new indexes | Accepted |
+| ADR-043 | Long lists and static text use one-window light widgets | Accepted |
+| ADR-044 | The desktop runs the day engine in a separate process | Accepted |
 
 ---
 
@@ -556,3 +558,25 @@ decision was made.
 - **Consequences:** No storage-format change in round 3.
 - **Relevant files:** `app/execution/db.py`, `app/execution/backup.py`.
 - **Evidence:** docs/desktop-performance-round3.md (SQLite section).
+
+### ADR-043 — Long lists and static text use one-window light widgets
+
+- **Status:** Accepted
+- **Context:** Moving the window made dwm.exe use 22-24% of one core on the Day page (200 tasks), against 7-10% for an empty window of the same size. The cost follows the number of visible native child windows: Tk gives every widget one, and a CustomTkinter widget is two or three (frame, drawing canvas, inner label). 400 items as CTk buttons (1203 windows) cost 35%, the same items drawn on one Canvas 5% (docs/desktop-performance-round3.md, "Round 3b").
+- **Decision:** `app/ui/light_widgets.py` (`LightFrame`, `LightLabel`, `LightButton`): plain Tk widgets, one native window each, registered with CustomTkinter's appearance and scaling trackers so they follow light/dark and the interface size, with AppButton's keyboard behaviour (Tab focus ring, Enter/Space). They are used for the available-task chips, the status-board cards, `SectionTitle`, the captions/hints/errors of `LabeledEntry`/`LabeledSelect` and `Notice` text. Interactive inputs (entries, menus, primary buttons) stay CustomTkinter.
+- **Rationale:** Measured: Day page 556 -> 435 native windows, dwm.exe while moving ~23% -> ~16% of one core; a card is 7 windows instead of 16.
+- **Alternatives:** `WS_EX_COMPOSITED` on the window (Tk repaints endlessly with it); drawing every list on one Canvas (the largest saving, but loses per-item focus and widget-level tests; a later option for very long lists); converting every CTk widget (changes the look of the whole app).
+- **Consequences:** List buttons have square corners and ghost buttons no outline. A new long list should use the light widgets; a page's native-window count is the measure to watch. Hidden child windows cost as much as visible ones, so the shell also detaches a page that stayed hidden for 30 s into a withdrawn window of its own (`AppShell._hide`/`_detach`, `wm manage`), only when no idle callback is pending (a `wm` command runs them all at once); showing it again costs a re-layout of 0.2-0.7 s.
+- **Relevant files:** `app/ui/light_widgets.py`, `app/ui/components.py`, `app/ui/day_page.py`, `app/ui/task_status_board.py`.
+- **Evidence:** `tests/ui/test_light_widgets.py`; the dwm.exe measurements above.
+
+### ADR-044 — The desktop runs the day engine in a separate process
+
+- **Status:** Accepted
+- **Context:** A schedule generation's day engine is CPU-bound Python running in a worker thread; it shares the GIL with the Tk thread.
+- **Decision:** `app/planning/engine_process.py`: one spawned worker process (`ProcessPoolExecutor`) runs only the pure engine call (`workflow._generate_date` -> `run_engine(generate_selected_day, ...)`). Reading inputs, reservations, the stale checks and the save stay in the worker thread, which waits for the result. Installed by the desktop's `open_app_services(engine_process=...)` from `settings.GENERATION_PROCESS` (on by default; `SCHEDULE_MAXING_GENERATION_PROCESS=off`), warmed up after start-up, shut down when storage closes. A broken process or an undeliverable answer falls back to the same call in the thread for the rest of the session; an engine error keeps its type.
+- **Rationale:** Heartbeat lateness during a 200-task generation: p95 26-41 -> 15 ms. The engine is deterministic (ADR-007), so the process gives the same result, verified by `tests/test_engine_process.py`.
+- **Alternatives:** Keep the thread (round 3 measured no stall caused by the engine itself; the worst stall is rendering the result); moving the whole generation (it needs the database connection, ADR-008/010).
+- **Consequences:** One extra Python process while the desktop runs. Packaged builds rely on `multiprocessing.freeze_support()` in `packaging/windows/launcher.py`. The test suite turns the process off except in its own tests.
+- **Relevant files:** `app/planning/engine_process.py`, `app/planning/workflow.py`, `app/ui/app_services.py`, `config/settings.py`, `packaging/windows/launcher.py`.
+- **Evidence:** `tests/test_engine_process.py`; docs/desktop-performance-round3.md ("Round 3b").

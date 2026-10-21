@@ -5,7 +5,7 @@ System-level view of Schedule Maxing. For file-level navigation and change impac
 reasons behind the structure see [DECISIONS.md](DECISIONS.md). Detailed contracts live in `docs/` and are
 linked where relevant rather than repeated.
 
-Verified against commit `bec7ad0` (app version 1.2.0) on 2026-10-21.
+Verified against commit `bdc67f6` (app version 1.2.0) on 2026-10-21.
 
 ## 1. What the system is
 
@@ -164,7 +164,15 @@ so the same rules run on both sides.
   lets Day, Week/Month, Projects and Productivity skip re-reading and re-rendering on show when nothing was
   written since their last read (`app/ui/page_freshness.py`). The shown page is placed in the shell's page
   area at a fixed size that follows the window only after it kept its size for 120 ms (`PAGE_SETTLE_MS`), so a
-  drag-resize lays the page out once.
+  drag-resize lays the page out once. Week is pre-built in idle time, one part per Tk callback
+  (`DeferredPage.prebuild_step`, `ScheduleOptimizerApp._prebuild`).
+- **Native-window budget.** Every Tk widget is a Win32 child window and moving the window costs dwm.exe work
+  per child window, hidden ones included; long lists and static text use the one-window widgets of
+  `app/ui/light_widgets.py`, and a page hidden for 30 s is detached into a withdrawn window of its own
+  (`AppShell._hide`, ADR-043).
+- **Engine process.** A schedule generation runs in a worker thread, but its day-engine calls run in one
+  separate spawned process (`app/planning/engine_process.py`, ADR-044), so their CPU never holds the GIL the
+  Tk thread needs; everything that touches the database stays in the thread.
 - **Error handling.** Startup failures show a "Database Unavailable" panel rather than a scheduler that
   cannot save. `app/desktop.py` installs log files and exception hooks (`app/logging_setup.py`, with secret
   scrubbing) because the packaged app has no console.
