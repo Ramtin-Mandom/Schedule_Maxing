@@ -20,7 +20,8 @@ from __future__ import annotations
 def data_key(widget, *view) -> tuple | None:
     """The data version of `widget`'s application plus `view`, or None when the version is unknown."""
     try:
-        root = widget.winfo_toplevel()
+        # The application's root, also for a hidden page the shell detached into its own window (app/ui/shell.py).
+        root = widget._root()
     except Exception:  # noqa: BLE001 - a destroyed widget: nothing can be known
         return None
     version = getattr(getattr(root, "services", None), "data_version", None)

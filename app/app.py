@@ -598,6 +598,8 @@ class ScheduleOptimizerApp(ctk.CTk):
                 self._prebuild(attempts)
                 return
             more = page.prebuild_step()
+            if not more:  # built and hidden: out of the moving window's native windows (AppShell.park)
+                self.shell.park(next(key for key, value in self.pages.items() if value is page))
             self.after(30 if more else 0, lambda: self._prebuild(attempts))  # input and painting run between parts
 
         self.after_idle(step)
