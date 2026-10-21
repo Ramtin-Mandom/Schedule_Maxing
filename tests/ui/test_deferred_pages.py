@@ -24,7 +24,9 @@ def app(tmp_path, dialogs, monkeypatch):  # noqa: F811 - the fixture imported ab
 
 def test_week_is_pre_built_in_parts_while_the_app_is_idle(app, monkeypatch) -> None:
     import app.app as app_module
+    import app.ui.shell as shell_module
 
+    monkeypatch.setattr(shell_module, "_input_idle_ms", lambda: 10_000)
     week = app.pages["week"]
     monkeypatch.setattr(app, "PREBUILD_PAGES", ("week",))
     monkeypatch.setattr(app_module, "_input_idle_ms", lambda: 0)  # someone is typing: it waits
@@ -40,18 +42,30 @@ def test_week_is_pre_built_in_parts_while_the_app_is_idle(app, monkeypatch) -> N
     pump(app, lambda: week.built, timeout=15)
     assert len(steps) > 3  # one part per idle callback, not one block
     assert app.shell.current == "day" and week.page.snapshot is not None  # built hidden, its period read
-    assert str(week) in app.shell._detached  # and parked out of the main window
+    pump(app, lambda: str(week) in app.shell._detached, timeout=5)  # and parked out of the main window
     app.show_page("week")
     pump(app)
     assert app.shell.current == "week"
 
 
-def test_a_hidden_page_lives_in_its_own_withdrawn_window(app) -> None:
+def test_a_hidden_page_lives_in_its_own_withdrawn_window(app, monkeypatch) -> None:
+    import time
+
+    import app.ui.shell as shell_module
+
+    monkeypatch.setattr(shell_module, "_input_idle_ms", lambda: 10_000)  # nobody is typing
     app.show_page("week")
     pump(app, lambda: app.pages["week"].built)
     week = app.pages["week"]
     app.show_page("day")
+    app.show_page("month")
     pump(app)
+    assert str(week) not in app.shell._detached  # while moving between pages they stay attached: switching is quick
+    assert "week" in app.shell._detach_pending  # until hidden for DETACH_AFTER_MS
+    app.shell._detach_when_idle("week")  # what that timer runs
+    deadline = time.monotonic() + 5
+    while str(week) not in app.shell._detached and time.monotonic() < deadline:
+        pump(app)
     # Not a hidden child of the main window: the window's native child windows exclude the page's.
     assert str(week) in app.shell._detached and week.winfo_toplevel() is week
     assert app.tk.call("wm", "state", week._w) == "withdrawn"
@@ -59,6 +73,36 @@ def test_a_hidden_page_lives_in_its_own_withdrawn_window(app) -> None:
     pump(app)
     assert week.winfo_toplevel() is app and week.winfo_manager() == "place" and str(week) not in app.shell._detached
     assert week.page.snapshot is not None
+
+
+def test_a_hidden_page_is_detached_only_while_the_user_is_idle(app, monkeypatch) -> None:
+    import app.ui.shell as shell_module
+
+    app.show_page("week")
+    pump(app, lambda: app.pages["week"].built)
+    app.show_page("day")
+    pump(app)
+    week = app.pages["week"]
+    monkeypatch.setattr(shell_module, "_input_idle_ms", lambda: 0)  # the user is busy: not now
+    app.shell._detach_when_idle("week")
+    assert str(week) not in app.shell._detached and "week" in app.shell._detach_pending
+    monkeypatch.setattr(shell_module, "_input_idle_ms", lambda: 60_000)
+    app.shell._detach_when_idle("week")
+    pump(app, lambda: str(week) in app.shell._detached, timeout=5)
+    app.show_page("week")  # shown again: attached, and no detach left pending for it
+    assert "week" not in app.shell._detach_pending and str(week) not in app.shell._detached
+
+
+def test_a_detach_waits_until_no_idle_work_is_pending(app, monkeypatch) -> None:
+    import app.ui.shell as shell_module
+
+    monkeypatch.setattr(shell_module, "_input_idle_ms", lambda: 10_000)
+    assert app.shell._quiet()
+    pending = app.after_idle(lambda: None)  # e.g. a page building its rows in idle slices
+    assert not app.shell._quiet()  # a `wm` command would run it (and every slice after it) at once
+    app.after_cancel(pending)
+    monkeypatch.setattr(shell_module, "_input_idle_ms", lambda: 0)
+    assert not app.shell._quiet()  # nor while someone is typing or moving the mouse
 
 
 def test_showing_a_page_while_it_is_pre_built_finishes_it_at_once(app) -> None:

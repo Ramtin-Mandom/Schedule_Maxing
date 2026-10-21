@@ -19,8 +19,24 @@ schedule generation and saves always run immediately.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from enum import Enum
+
+
+def input_idle_ms() -> int:
+    """Milliseconds since the last keyboard or mouse input on this computer (Windows); elsewhere a large number."""
+    if os.name != "nt":
+        return 1 << 30
+    import ctypes
+
+    class LastInputInfo(ctypes.Structure):
+        _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+
+    info = LastInputInfo(ctypes.sizeof(LastInputInfo), 0)
+    if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
+        return 1 << 30
+    return (ctypes.windll.kernel32.GetTickCount() - info.dwTime) & 0xFFFFFFFF
 
 
 class Activity(str, Enum):

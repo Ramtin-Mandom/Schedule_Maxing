@@ -37,6 +37,7 @@ from collections.abc import Callable
 import customtkinter as ctk
 
 from app.ui import diagnostics, theme
+from app.ui.activity import input_idle_ms as _input_idle_ms
 from app.ui.components import AppButton, Tooltip, font, focus_target
 from app.ui.layout import BoundedAnimation, Coalescer
 from app.ui.shell_state import NAV_ITEMS, PAGE_KEYS, LayoutMode, ShellState, nav_key, page_group
@@ -45,6 +46,15 @@ COLLAPSED_WIDTH = 64
 EXPANDED_WIDTH = 236
 #: How long the page area must keep its size before the shown page is laid out at it (a trailing debounce).
 PAGE_SETTLE_MS = 120
+#: A hidden page is detached (AppShell._hide) after staying hidden this long, once there was no input
+#: for DETACH_IDLE_MS.
+DETACH_AFTER_MS = 30_000
+DETACH_IDLE_MS = 2_000
+#: A detach waits until no idle callback is pending and there was no input for QUIET_INPUT_MS
+#: (AppShell._quiet), looking every QUIET_RETRY_MS, QUIET_ATTEMPTS times at most.
+QUIET_INPUT_MS = 300
+QUIET_RETRY_MS = 200
+QUIET_ATTEMPTS = 150
 
 _SIDEBAR_BUTTON = dict(fg_color="transparent", hover_color=theme.SIDEBAR_HOVER, text_color=theme.SIDEBAR_TEXT,
                        border_color=theme.SIDEBAR_BG)
@@ -247,6 +257,8 @@ class AppShell(ctk.CTkFrame):
         self._page_size: tuple[int, int] | None = None
         #: Path names of the hidden pages that live in a withdrawn window of their own (_detach).
         self._detached: set[str] = set()
+        #: Hidden pages waiting to be detached (_hide, _detach_when_quiet): key -> pending timer.
+        self._detach_pending: dict[str, str] = {}
         self.pages: dict[str, ctk.CTkFrame] = {}
         self.current: str | None = None
         self.layout_checks = Coalescer(self, self._check_layout)
@@ -286,7 +298,7 @@ class AppShell(ctk.CTkFrame):
         else:
             self.group_bar.grid_remove()
         if self.current is not None and self.current != key:
-            self._detach(self.pages[self.current])
+            self._hide(self.current, key)
         page = self.pages[key]
         self._attach(page)
         self._place(page)
@@ -313,10 +325,67 @@ class AppShell(ctk.CTkFrame):
     # -- hidden pages (native windows) ---------------------------------------------------
 
     def park(self, key: str) -> None:
-        """Detach the built, hidden page `key` now (e.g. one pre-built in idle time); see _detach."""
-        page = self.pages.get(key)
-        if page is not None and key != self.current:
-            self._detach(page)
+        """Detach the built, hidden page `key` as soon as that is safe (e.g. one pre-built in idle time)."""
+        if key != self.current and key in self.pages:
+            self._detach_when_quiet(key)
+
+    def _quiet(self) -> bool:
+        """
+        No idle callback is pending and there was no input just now. A `wm` command runs every pending idle
+        callback at once, so detaching in the middle of sliced work (a page building its rows in idle slices)
+        would turn the slices into one long block.
+        """
+        try:
+            for ident in self.tk.splitlist(self.tk.call("after", "info")):
+                if self.tk.splitlist(self.tk.call("after", "info", ident))[-1] == "idle":
+                    return False
+        except tk.TclError:
+            return False
+        return _input_idle_ms() >= QUIET_INPUT_MS
+
+    def _detach_when_quiet(self, key: str, attempts: int = 0) -> None:
+        self._detach_pending.pop(key, None)
+        if key == self.current or key not in self.pages or not self.winfo_exists():
+            return
+        if self._quiet():
+            self._detach(self.pages[key])
+        elif attempts < QUIET_ATTEMPTS:  # else it stays an attached hidden page (as before detaching existed)
+            self._detach_pending[key] = self.after(QUIET_RETRY_MS,
+                                                   lambda: self._detach_when_quiet(key, attempts + 1))
+
+    def _hide(self, key: str, showing: str) -> None:
+        """
+        The page `key` is left for `showing`. It stays an attached hidden child -- going back to it is
+        instant -- while the user moves between pages; once it stayed hidden for DETACH_AFTER_MS and there
+        was no input for DETACH_IDLE_MS, it is detached (_detach), and going back to it then costs a
+        re-layout (0.2-0.7 s, about a first visit). So dragging the window, which usually happens while one
+        page is in use, involves only that page's native windows.
+        """
+        self.pages[key].place_forget()
+        self._cancel_detach(key)
+        self._detach_pending[key] = self.after(DETACH_AFTER_MS, lambda: self._detach_when_idle(key))
+
+    def _detach_when_idle(self, key: str) -> None:
+        self._detach_pending.pop(key, None)
+        if key == self.current or key not in self.pages or not self.winfo_exists():
+            return
+        if _input_idle_ms() < DETACH_IDLE_MS:  # the user is busy: look again later (a detach is ~50 ms of work)
+            self._detach_pending[key] = self.after(DETACH_IDLE_MS, lambda: self._detach_when_idle(key))
+            return
+        self._detach_when_quiet(key)
+
+    def _cancel_detach(self, key: str) -> None:
+        timer = self._detach_pending.pop(key, None)
+        if timer is not None:
+            try:
+                self.after_cancel(timer)
+            except tk.TclError:
+                pass
+
+    def destroy(self) -> None:
+        for key in list(self._detach_pending):
+            self._cancel_detach(key)
+        super().destroy()
 
     def _detach(self, page) -> None:
         """
@@ -327,15 +396,21 @@ class AppShell(ctk.CTkFrame):
         """
         if str(page) in self._detached:
             return
+        width, height = page.winfo_width(), page.winfo_height()
         page.place_forget()
         try:
             page.tk.call("wm", "manage", page._w)
             page.tk.call("wm", "withdraw", page._w)
+            if width > 1 and height > 1:  # keeps its size: shown again at the same size, nothing is laid out anew
+                page.tk.call("wm", "geometry", page._w, f"{width}x{height}")
         except tk.TclError:
             return  # it stays a hidden child window, as before
         self._detached.add(str(page))
 
     def _attach(self, page) -> None:
+        for key, value in self.pages.items():  # shown again: no pending detach
+            if value is page:
+                self._cancel_detach(key)
         if str(page) in self._detached:
             self._detached.discard(str(page))
             page.tk.call("wm", "forget", page._w)

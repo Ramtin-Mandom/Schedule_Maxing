@@ -96,6 +96,7 @@ from app.ui.update_controller import UpdateController
 from app.ui.update_view import UpdateFlow
 from app.ui.settings_controller import SettingsController, TaskDataResetController
 from app.ui.activity import Activity, ActivityState, policy_for
+from app.ui.activity import input_idle_ms as _input_idle_ms
 from app.ui.tk_lifecycle import DesktopCollection, release_resources, tune_customtkinter_loops
 from app.version import APP_NAME, __version__
 from config import settings
@@ -217,21 +218,6 @@ class RewardConfigPage(ctk.CTkFrame):
 # -----------------------------------------------------------------------------
 # Application Shell
 # -----------------------------------------------------------------------------
-
-def _input_idle_ms() -> int:
-    """Milliseconds since the last keyboard or mouse input on this computer (Windows); elsewhere a large number."""
-    if os.name != "nt":
-        return 1 << 30
-    import ctypes
-
-    class LastInputInfo(ctypes.Structure):
-        _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
-
-    info = LastInputInfo(ctypes.sizeof(LastInputInfo), 0)
-    if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
-        return 1 << 30
-    return (ctypes.windll.kernel32.GetTickCount() - info.dwTime) & 0xFFFFFFFF
-
 
 def _built(page) -> bool:
     """Whether `page` exists and has been built (a DeferredPage is built the first time it is shown)."""
