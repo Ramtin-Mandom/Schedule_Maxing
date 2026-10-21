@@ -13,10 +13,45 @@ DEFERRED = ("week", "month", "projects", "productivity", "budget", "settings", "
 
 
 @pytest.fixture
-def app(tmp_path, dialogs):  # noqa: F811 - the fixture imported above
+def app(tmp_path, dialogs, monkeypatch):  # noqa: F811 - the fixture imported above
+    from app.app import ScheduleOptimizerApp
+
+    monkeypatch.setattr(ScheduleOptimizerApp, "PREBUILD_PAGES", ())  # these tests check what is NOT built
     window = open_app(tmp_path / "app.db", tmp_path, build_pages=False)
     yield window
     close_app(window)
+
+
+def test_week_is_pre_built_in_parts_while_the_app_is_idle(app, monkeypatch) -> None:
+    import app.app as app_module
+
+    week = app.pages["week"]
+    monkeypatch.setattr(app, "PREBUILD_PAGES", ("week",))
+    monkeypatch.setattr(app_module, "_input_idle_ms", lambda: 0)  # someone is typing: it waits
+    app._prebuild()
+    pump(app)
+    assert not week.built and week._building is None
+
+    monkeypatch.setattr(app_module, "_input_idle_ms", lambda: 10_000)
+    steps = []
+    original = week.prebuild_step
+    monkeypatch.setattr(week, "prebuild_step", lambda: (steps.append(1), original())[1])
+    app._prebuild()
+    pump(app, lambda: week.built, timeout=15)
+    assert len(steps) > 3  # one part per idle callback, not one block
+    assert app.shell.current == "day" and week.page.snapshot is not None  # built hidden, its period read
+    app.show_page("week")
+    pump(app)
+    assert app.shell.current == "week"
+
+
+def test_showing_a_page_while_it_is_pre_built_finishes_it_at_once(app) -> None:
+    week = app.pages["week"]
+    assert week.prebuild_step() and week._building is not None and not week.built
+    app.show_page("week")
+    assert week.built and week._building is None
+    pump(app)
+    assert week.page.snapshot is not None
 
 
 def test_only_the_day_page_is_built_at_start_up(app) -> None:

@@ -218,6 +218,21 @@ class RewardConfigPage(ctk.CTkFrame):
 # Application Shell
 # -----------------------------------------------------------------------------
 
+def _input_idle_ms() -> int:
+    """Milliseconds since the last keyboard or mouse input on this computer (Windows); elsewhere a large number."""
+    if os.name != "nt":
+        return 1 << 30
+    import ctypes
+
+    class LastInputInfo(ctypes.Structure):
+        _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+
+    info = LastInputInfo(ctypes.sizeof(LastInputInfo), 0)
+    if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
+        return 1 << 30
+    return (ctypes.windll.kernel32.GetTickCount() - info.dwTime) & 0xFFFFFFFF
+
+
 def _built(page) -> bool:
     """Whether `page` exists and has been built (a DeferredPage is built the first time it is shown)."""
     return page is not None and getattr(page, "built", True)
@@ -535,11 +550,53 @@ class ScheduleOptimizerApp(ctk.CTk):
     #: After this, once the window is up, the credential store is looked up in the background (_warm_up).
     WARM_UP_MS = 1500
 
+    #: Pages pre-built in idle time once the window is up, the most likely next one first.
+    PREBUILD_PAGES = ("week",)
+    #: No keyboard or mouse input for this long (anywhere on this computer) counts as idle.
+    PREBUILD_IDLE_MS = 800
+    #: How often to look again while the app or the user is busy.
+    PREBUILD_RETRY_MS = 400
+
     def _warm_up(self) -> None:
         """Work the window does not need in order to appear, done once it has (never touches widgets off Tk)."""
-        if self._closing or self.services is None or self.direct:
+        if self._closing or self.services is None:
             return
-        self.services.sync_service.prefetch_credentials()
+        if not self.direct:
+            self.services.sync_service.prefetch_credentials()
+        self._prebuild()
+
+    #: Looks for an idle moment at most this often before giving up (about a minute).
+    PREBUILD_ATTEMPTS = 150
+
+    def _prebuild(self, attempts: int = 0) -> None:
+        """
+        Build PREBUILD_PAGES in idle time, one part per Tk callback (DeferredPage.prebuild_step), so the
+        first switch to them is quick: only while the Day page has rendered, no background work runs, the
+        window is not minimized and there was no input for PREBUILD_IDLE_MS. Showing the page meanwhile
+        builds its remaining parts at once, as without a pre-build. Without an idle moment for about a
+        minute (e.g. direct storage before signing in), it gives up: the page is built when shown.
+        """
+        if self._closing or self.shell is None or attempts >= self.PREBUILD_ATTEMPTS:
+            return
+        page = next((self.pages[key] for key in self.PREBUILD_PAGES
+                     if not getattr(self.pages.get(key), "built", True)), None)
+        if page is None:
+            return  # every page is built
+        day = self.pages.get("day")
+        ready = (getattr(day, "snapshot", None) is not None and not self.services.registry.active
+                 and self.activity.activity != Activity.MINIMIZED and _input_idle_ms() >= self.PREBUILD_IDLE_MS)
+        if not ready:
+            self.after(self.PREBUILD_RETRY_MS, lambda: self._prebuild(attempts + 1))
+            return
+
+        def step() -> None:
+            if self._closing or not page.winfo_exists() or getattr(page, "built", True):
+                self._prebuild(attempts)
+                return
+            more = page.prebuild_step()
+            self.after(30 if more else 0, lambda: self._prebuild(attempts))  # input and painting run between parts
+
+        self.after_idle(step)
 
     def apply_workspace(self, *, reload_only: bool = False) -> None:
         """
@@ -820,7 +877,7 @@ class ScheduleOptimizerApp(ctk.CTk):
             task_defaults=self.task_defaults, budget_controller=budget,
         ))
 
-        def calendar(host, mode_name: str):
+        def calendar(host, mode_name: str, *, staged: bool = False):
             from app.ui.calendar_controller import CalendarController
             from app.ui.calendar_page import CalendarPage
 
@@ -833,8 +890,15 @@ class ScheduleOptimizerApp(ctk.CTk):
                                    executions=services.execution_controller),
                 services.productivity_controller, on_anchor_changed=self.shell_state.remember,
                 on_open_day=lambda day: self.open_day(day, return_to=mode_name),
-                background_io=True, task_defaults=self.task_defaults,
+                background_io=True, task_defaults=self.task_defaults, staged=staged,
             )
+
+        def calendar_steps(host, mode_name: str):
+            """The same page in parts, for pre-building it in idle time (_prebuild)."""
+            page = calendar(host, mode_name, staged=True)
+            yield
+            yield from page.build_steps()
+            return page
 
         def productivity(host):
             from app.ui.productivity_page import ProductivityPage
@@ -863,7 +927,8 @@ class ScheduleOptimizerApp(ctk.CTk):
                 on_reset_task_data=self.reset_task_data, task_defaults=self.task_defaults, updates=self.updates)
 
         for mode_name in SCHEDULE_PAGES[1:]:
-            add(mode_name, DeferredPage(shell.host, lambda host, mode_name=mode_name: calendar(host, mode_name)))
+            add(mode_name, DeferredPage(shell.host, lambda host, mode_name=mode_name: calendar(host, mode_name),
+                                        steps=lambda host, mode_name=mode_name: calendar_steps(host, mode_name)))
         add("productivity", DeferredPage(shell.host, productivity))
         add("budget", DeferredPage(shell.host, budgeting))
         add("projects", DeferredPage(shell.host, projects))
