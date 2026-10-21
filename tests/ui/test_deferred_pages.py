@@ -57,18 +57,17 @@ def test_a_hidden_page_lives_in_its_own_withdrawn_window(app, monkeypatch) -> No
     app.show_page("week")
     pump(app, lambda: app.pages["week"].built)
     week = app.pages["week"]
-    app.show_page("day")
     app.show_page("month")
-    pump(app)
-    assert str(week) not in app.shell._detached  # while moving between pages they stay attached: switching is quick
-    assert "week" in app.shell._detach_pending  # until hidden for DETACH_AFTER_MS
-    app.shell._detach_when_idle("week")  # what that timer runs
+    assert str(week) not in app.shell._detached and "week" in app.shell._detach_pending  # the page just left: kept
+    app.show_page("projects")  # leaving another page: Week is no longer the last one, so it goes promptly
     deadline = time.monotonic() + 5
     while str(week) not in app.shell._detached and time.monotonic() < deadline:
         pump(app)
     # Not a hidden child of the main window: the window's native child windows exclude the page's.
     assert str(week) in app.shell._detached and week.winfo_toplevel() is week
     assert app.tk.call("wm", "state", week._w) == "withdrawn"
+    assert str(app.pages["day"]) not in app.shell._detached  # the home page always stays attached
+    assert str(app.pages["month"]) not in app.shell._detached  # and so does the page just left
     app.show_page("week")
     pump(app)
     assert week.winfo_toplevel() is app and week.winfo_manager() == "place" and str(week) not in app.shell._detached

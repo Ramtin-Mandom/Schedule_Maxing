@@ -46,7 +46,9 @@ COLLAPSED_WIDTH = 64
 EXPANDED_WIDTH = 236
 #: How long the page area must keep its size before the shown page is laid out at it (a trailing debounce).
 PAGE_SETTLE_MS = 120
-#: A hidden page is detached (AppShell._hide) after staying hidden this long, once there was no input
+#: The page that stays attached while hidden (AppShell._hide): the one the app opens on and returns to most.
+HOME_PAGE = "day"
+#: The page left last is detached (AppShell._hide) after staying hidden this long, once there was no input
 #: for DETACH_IDLE_MS.
 DETACH_AFTER_MS = 30_000
 DETACH_IDLE_MS = 2_000
@@ -355,15 +357,23 @@ class AppShell(ctk.CTkFrame):
 
     def _hide(self, key: str, showing: str) -> None:
         """
-        The page `key` is left for `showing`. It stays an attached hidden child -- going back to it is
-        instant -- while the user moves between pages; once it stayed hidden for DETACH_AFTER_MS and there
-        was no input for DETACH_IDLE_MS, it is detached (_detach), and going back to it then costs a
-        re-layout (0.2-0.7 s, about a first visit). So dragging the window, which usually happens while one
-        page is in use, involves only that page's native windows.
+        The page `key` is left for `showing`. Attached hidden pages are bounded: only the home page (Day)
+        and `key`, the page just left, stay attached -- going back to either is instant. Every other built
+        hidden page is detached (_detach) as soon as that is safe (_detach_when_quiet); going back to it then
+        costs a re-layout (0.2-0.7 s, about a first visit). Without this bound, opening every page made the
+        window hold ~3,800 native child windows instead of ~450, and dragging it that much heavier. The page
+        just left is detached too once it stayed hidden for DETACH_AFTER_MS with no input for DETACH_IDLE_MS.
         """
         self.pages[key].place_forget()
         self._cancel_detach(key)
-        self._detach_pending[key] = self.after(DETACH_AFTER_MS, lambda: self._detach_when_idle(key))
+        if key != HOME_PAGE:
+            self._detach_pending[key] = self.after(DETACH_AFTER_MS, lambda: self._detach_when_idle(key))
+        for other, page in self.pages.items():
+            if (other in (key, showing, HOME_PAGE) or not getattr(page, "built", True)
+                    or str(page) in self._detached):
+                continue
+            self._cancel_detach(other)
+            self._detach_pending[other] = self.after(QUIET_RETRY_MS, lambda other=other: self._detach_when_quiet(other))
 
     def _detach_when_idle(self, key: str) -> None:
         self._detach_pending.pop(key, None)
