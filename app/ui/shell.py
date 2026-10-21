@@ -259,8 +259,11 @@ class AppShell(ctk.CTkFrame):
         self._page_size: tuple[int, int] | None = None
         #: Path names of the hidden pages that live in a withdrawn window of their own (_detach).
         self._detached: set[str] = set()
-        #: Hidden pages waiting to be detached (_hide, _detach_when_quiet): key -> pending timer.
+        #: Hidden pages waiting to be detached or released (_hide, _detach_when_quiet, _release_when_quiet):
+        #: key -> pending timer.
         self._detach_pending: dict[str, str] = {}
+        #: Light caching (Settings, set_light_caching): only HOME_PAGE and the shown page's section stay built.
+        self.light_caching = False
         self.pages: dict[str, ctk.CTkFrame] = {}
         self.current: str | None = None
         self.layout_checks = Coalescer(self, self._check_layout)
@@ -363,17 +366,62 @@ class AppShell(ctk.CTkFrame):
         costs a re-layout (0.2-0.7 s, about a first visit). Without this bound, opening every page made the
         window hold ~3,800 native child windows instead of ~450, and dragging it that much heavier. The page
         just left is detached too once it stayed hidden for DETACH_AFTER_MS with no input for DETACH_IDLE_MS.
+        With light caching (set_light_caching), pages outside the shown page's section are released instead.
         """
         self.pages[key].place_forget()
         self._cancel_detach(key)
-        if key != HOME_PAGE:
+        released = self._release_others(showing) if self.light_caching else set()
+        if key != HOME_PAGE and key not in released:
             self._detach_pending[key] = self.after(DETACH_AFTER_MS, lambda: self._detach_when_idle(key))
         for other, page in self.pages.items():
-            if (other in (key, showing, HOME_PAGE) or not getattr(page, "built", True)
+            if (other in (key, showing, HOME_PAGE) or other in released or not getattr(page, "built", True)
                     or str(page) in self._detached):
                 continue
             self._cancel_detach(other)
             self._detach_pending[other] = self.after(QUIET_RETRY_MS, lambda other=other: self._detach_when_quiet(other))
+
+    # -- light caching ---------------------------------------------------------------------
+
+    def set_light_caching(self, on: bool) -> None:
+        """
+        Light caching: while a page is shown, only HOME_PAGE (Day) and the pages of the shown page's section
+        (its group, e.g. Settings | Account | How to Use) stay built; every other built page is released
+        (DeferredPage.release) and built anew when it is shown again. Fewer widgets and native windows are
+        kept, at the cost of a first-visit build on every return to another section.
+        """
+        self.light_caching = on
+        if on and self.current is not None:
+            self._release_others(self.current)
+
+    @staticmethod
+    def kept_pages(showing: str) -> set[str]:
+        """The pages light caching keeps built while `showing` is shown: its section and the home page."""
+        return {showing, HOME_PAGE, *(page for page, _ in page_group(showing))}
+
+    def _release_others(self, showing: str) -> set[str]:
+        """Release every built page outside kept_pages(showing) once that is safe; their keys."""
+        kept, released = self.kept_pages(showing), set()
+        for other, page in self.pages.items():
+            if other in kept or not hasattr(page, "release") or not getattr(page, "built", False):
+                continue
+            self._cancel_detach(other)
+            self._detach_pending[other] = self.after(QUIET_RETRY_MS,
+                                                     lambda other=other: self._release_when_quiet(other))
+            released.add(other)
+        return released
+
+    def _release_when_quiet(self, key: str, attempts: int = 0) -> None:
+        """Release `key` when no idle work is pending and there was no input just now (as _detach_when_quiet)."""
+        self._detach_pending.pop(key, None)
+        if (not self.light_caching or self.current is None or key in self.kept_pages(self.current)
+                or key not in self.pages or not self.winfo_exists()):
+            return
+        if self._quiet() or attempts >= QUIET_ATTEMPTS:  # unlike a detach, it is released in the end anyway
+            with diagnostics.span("shell.release_page"):
+                self.pages[key].release()
+        else:
+            self._detach_pending[key] = self.after(QUIET_RETRY_MS,
+                                                   lambda: self._release_when_quiet(key, attempts + 1))
 
     def _detach_when_idle(self, key: str) -> None:
         self._detach_pending.pop(key, None)

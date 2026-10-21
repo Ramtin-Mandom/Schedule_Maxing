@@ -180,3 +180,66 @@ def test_a_workspace_switch_replaces_pages_without_building_unopened_ones(app) -
     pump(app)
     assert app.pages["week"] is not old_week and app.pages["week"].built  # the shown page is rebuilt now
     assert not app.pages["month"].built and not app.pages["productivity"].built
+
+
+def test_light_caching_keeps_only_day_and_the_open_section_built(app, monkeypatch) -> None:
+    import app.ui.shell as shell_module
+
+    monkeypatch.setattr(shell_module, "_input_idle_ms", lambda: 10_000)  # nobody is typing
+    assert app.set_light_caching(True) and app.ui_store.load().light_caching  # saved for next time
+    app.show_page("week")
+    pump(app, lambda: app.pages["week"].built)
+    week_page = app.pages["week"].page
+    app.show_page("settings")
+    pump(app, lambda: not app.pages["week"].built, timeout=5)  # another section: Week is released
+    pump(app, lambda: app.pages["week"].winfo_children() == [], timeout=5)  # its widgets go in slices
+    assert not week_page.winfo_exists()
+
+    app.shell.group_bar.buttons["account"].invoke()  # a page of the same section: Settings stays built
+    pump(app)
+    app.shell.group_bar.buttons["guide"].invoke()
+    pump(app)
+    assert all(app.pages[key].built for key in ("settings", "account", "guide"))
+
+    app.show_page("day")  # Day's section is Day alone
+    pump(app, lambda: not any(app.pages[key].built for key in ("settings", "account", "guide")), timeout=5)
+    assert app.pages["day"].winfo_exists() and app.shell.current == "day"
+
+    app.show_page("week")  # shown again: built anew, at the remembered date, with its data read
+    pump(app, lambda: app.pages["week"].built and app.pages["week"].page.snapshot is not None)
+    assert app.shell.current == "week"
+
+
+def test_light_caching_returning_before_the_release_keeps_the_page(app, monkeypatch) -> None:
+    import app.ui.shell as shell_module
+
+    monkeypatch.setattr(shell_module, "_input_idle_ms", lambda: 10_000)
+    app.set_light_caching(True)
+    app.show_page("projects")
+    pump(app, lambda: app.pages["projects"].built)
+    built = app.pages["projects"].page
+    app.show_page("day")
+    assert "projects" in app.shell._detach_pending  # released once it is safe, not during the switch
+    app.show_page("projects")  # back before then: nothing was released
+    pump(app)
+    assert app.pages["projects"].page is built and "projects" not in app.shell._detach_pending
+
+
+def test_turning_light_caching_on_releases_pages_outside_the_open_section(app, monkeypatch) -> None:
+    import app.ui.shell as shell_module
+
+    monkeypatch.setattr(shell_module, "_input_idle_ms", lambda: 10_000)
+    app.show_page("week")
+    pump(app, lambda: app.pages["week"].built)
+    app.show_page("settings")
+    pump(app)
+    app.pages["settings"].light_caching_box.toggle()  # the Settings checkbox
+    pump(app, lambda: not app.pages["week"].built, timeout=5)
+    assert app.shell.light_caching and app.ui_settings.light_caching and app.pages["settings"].built
+    app.pages["settings"].light_caching_box.toggle()  # off again: pages stay built as before
+    assert not app.shell.light_caching
+    app.show_page("week")
+    pump(app, lambda: app.pages["week"].built)
+    app.show_page("settings")
+    pump(app)
+    assert app.pages["week"].built

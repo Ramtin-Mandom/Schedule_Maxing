@@ -119,8 +119,12 @@ def test_ui_settings_default_round_trip_and_live_beside_the_database(tmp_path: P
         "appearance": "dark", "ui_scale": 1.15, "language": "en",
         # the update preferences (app/ui/update_controller.py), at their defaults
         "check_for_updates": True, "skipped_version": None, "last_update_check": None,
+        "light_caching": False,  # light caching (app/ui/shell.py), off by default
     }
     assert not store.path.with_name("ui_settings.json.tmp").exists()  # written atomically
+    assert store.save(UISettings().with_light_caching(True)) and store.load().light_caching is True
+    store.path.write_text(json.dumps({"light_caching": "yes"}), encoding="utf-8")
+    assert store.load().light_caching is False  # not a boolean: the default
 
 
 def test_bad_ui_settings_fall_back_per_field_and_never_block_startup(tmp_path: Path) -> None:
