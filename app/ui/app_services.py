@@ -74,7 +74,9 @@ from app.execution.service import ExecutionService
 from app.budget.repository import BudgetRepository
 from app.budget.service import BudgetService
 from app.ui.budget_controller import BudgetController
+from app.planning import engine_process as engine_runner
 from app.planning.application import PlanningService
+from app.planning.engine_process import EngineProcess
 from app.planning.repository import PlanningRepository
 from app.planning.scope import OwnerScope
 from app.planning.time import validate_timezone
@@ -123,6 +125,8 @@ class AppServices:
     #: "local" (this SQLite database); app/ui/direct_services.DirectAppServices is "postgres".
     storage_mode: str = field(default="local", init=False)
     closed: bool = field(default=False, init=False)
+    #: The separate process running the day engine (open_app_services(engine_process=True)), else None.
+    engine: EngineProcess | None = field(default=None, init=False, repr=False)
     _switch_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     # ------------------------------------------------------------------
@@ -214,6 +218,9 @@ class AppServices:
         if not finished:
             logger.warning("Waiting to close the database: %d background task(s) are still running.", self.registry.active)
             return False  # a waiting network worker may still need SQLite after it receives its response
+        if self.engine is not None:  # every generation has finished: no worker waits for the engine process
+            self.engine.shutdown()
+            engine_runner.install(None)
 
         state = transaction_state_for(self.connection)
         acquired = state.lock.acquire(timeout=timeout) if state is not None else True
@@ -296,11 +303,14 @@ def open_app_services(
     background_sync: bool = True,
     transport_factory: Callable[[str], SyncTransport] = HttpTransport,
     sync_start_delay: float = 0.0,
+    engine_process: bool = False,
 ) -> AppServices:
     """
     Open the application database and build the shared controllers.
     sync_start_delay: seconds before the background sync's first run (the
     desktop lets its window appear first; Sync now does not wait).
+    engine_process: run the day engine of schedule generations in a separate
+    process (app/planning/engine_process.py; stopped by close()).
 
     Raises (after closing anything it opened) if the database is in use by
     another Schedule Maxing process (DatabaseInUseError), cannot be
@@ -353,6 +363,9 @@ def open_app_services(
         instance_lock=lock,
     )
     registry.result_guard = services.workspace_guard  # background results never cross a workspace switch
+    if engine_process:
+        services.engine = EngineProcess()
+        engine_runner.install(services.engine)
     if background_sync:
         services.sync_service.start(initial_delay=sync_start_delay)  # a no-op without a configured backend
     return services

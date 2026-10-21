@@ -326,7 +326,8 @@ class ScheduleOptimizerApp(ctk.CTk):
             else:
                 self.services = open_app_services(db_path, timezone=timezone, project_root=project_root,
                                                   transport_factory=transport_factory, background_sync=background_sync,
-                                                  sync_start_delay=self.STARTUP_SYNC_DELAY_S)
+                                                  sync_start_delay=self.STARTUP_SYNC_DELAY_S,
+                                                  engine_process=settings.GENERATION_PROCESS)
         except Exception as error:  # noqa: BLE001 - reported to the user; no scheduler without storage
             logger.error("The application's storage could not be opened.", exc_info=error)
             self.startup_error = (describe_direct_startup_failure(error) if self.direct
@@ -563,6 +564,9 @@ class ScheduleOptimizerApp(ctk.CTk):
             return
         if not self.direct:
             self.services.sync_service.prefetch_credentials()
+        engine = getattr(self.services, "engine", None)
+        if engine is not None:
+            engine.warm_up()  # the engine process starts (and imports the engine) before the first generation
         self._prebuild()
 
     #: Looks for an idle moment at most this often before giving up (about a minute).

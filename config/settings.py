@@ -214,6 +214,14 @@ def resolve_update_repository(environ: Mapping[str, str] | None = None) -> str |
 
 UPDATE_REPOSITORY = resolve_update_repository()
 
+# The desktop runs the day engine of a schedule generation in a separate process
+# (app/planning/engine_process.py), so its CPU never competes with the window for Python's
+# GIL. SCHEDULE_MAXING_GENERATION_PROCESS=off runs it in the background thread instead
+# (the same results; the test suite does this to stay fast).
+GENERATION_PROCESS_ENV_VAR = "SCHEDULE_MAXING_GENERATION_PROCESS"
+GENERATION_PROCESS = (os.environ.get(GENERATION_PROCESS_ENV_VAR) or "").strip().lower() not in (
+    "off", "none", "false", "0")
+
 # Where the desktop app stores its records (docs/direct-postgres.md):
 #   "local"    -- the SQLite database above; works offline (the default)
 #   "postgres" -- direct PostgreSQL storage (app/persistence), for private development
