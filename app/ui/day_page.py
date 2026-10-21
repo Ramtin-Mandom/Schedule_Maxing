@@ -67,6 +67,7 @@ from app.planning.csv_import import ImportMode
 from app.planning.workflow import Freshness
 from app.ui import theme
 from app.ui.background import WRITE_LANE, ControllerResult, run_in_background
+from app.ui.light_widgets import LightButton
 from app.ui.page_freshness import data_key, unchanged
 from app.ui.components import AppButton, Card, ChoiceDialog, LabeledSelect, Notice, SectionTitle, ask_confirm, font, focus_target
 from app.budget.models import BudgetKind
@@ -159,7 +160,7 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         self._busy = False
         self.layout: LayoutMode | None = None
         self._engine_labels = {option.label: option for option in page_controller.engine_options()}
-        self.chips: list[AppButton] = []
+        self.chips: list[LightButton] = []
         self.day_window = DayWindowController(page_controller.planning)
 
         self.columnconfigure(0, weight=1)
@@ -1081,11 +1082,11 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
             text = clip_text(task.text, limit) + (f"\n{clip_text(task.reason, limit)}" if task.reason else "")
             chip = by_ref.pop(task.ref, None)
             if chip is None:
-                chip = AppButton(self.chip_area, text, lambda ref=task.ref: self.edit_ref(ref), variant="secondary",
-                                 height=40, width=60, font=font(theme.SIZE_SMALL))
-                chip.remove_button = AppButton(self.chip_area, "✕", lambda ref=task.ref: self.remove_ref(ref),
-                                               variant="ghost", width=CHIP_REMOVE_WIDTH, height=28,
-                                               font=font(theme.SIZE_CAPTION, "bold"))
+                # Light buttons: one native window each instead of three (app/ui/light_widgets.py).
+                chip = LightButton(self.chip_area, text, lambda ref=task.ref: self.edit_ref(ref), variant="secondary",
+                                   size=theme.SIZE_SMALL, weight="normal", pady=4)
+                chip.remove_button = LightButton(self.chip_area, "✕", lambda ref=task.ref: self.remove_ref(ref),
+                                                 variant="ghost", size=theme.SIZE_CAPTION, padx=6, pady=2)
                 target = focus_target(chip)
                 for key, direction in (("Up", -1), ("Down", 1)):
                     target.bind(f"<{key}>", lambda event, chip=chip, direction=direction:
