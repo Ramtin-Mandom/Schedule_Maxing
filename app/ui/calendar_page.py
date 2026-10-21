@@ -76,7 +76,12 @@ class CalendarPage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         on_open_day: Callable[[date], None] | None = None,
         background_io: bool = False,
         task_defaults=None,
+        staged: bool = False,
     ) -> None:
+        """
+        staged: build only the frame now; build_steps() (a generator) builds the rest one part per step --
+        how the app pre-builds Week in idle time (app/ui/pages.py DeferredPage.prebuild_step).
+        """
         super().__init__(parent, fg_color=theme.APP_BG, corner_radius=0)
         self.background_io = background_io
         self.mode_name = mode_name
@@ -98,20 +103,31 @@ class CalendarPage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         self.day_window = DayWindowController(page_controller.planning)
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
+        if not staged:
+            for _step in self.build_steps():
+                pass
+
+    def build_steps(self):
+        """Build the page in parts (each part one step; the task form is the largest, about 0.2 s)."""
         self._build_header()
         self.body = AppScrollableFrame(self, fg_color="transparent", scrollbar_button_color=theme.SECONDARY_HOVER)
         self.body.grid(row=1, column=0, sticky="nsew")
         self.body.columnconfigure(0, weight=1)
+        yield
         self.window_bar = DayWindowBar(self.body, on_apply=self.apply_day_window,
                                        on_default=self.use_default_day_window)
         self.window_bar.grid(row=0, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_M))
-        self.schedule_canvas = self.calendar = CalendarView(self.body, mode=mode_name, on_select=self.select_date,
+        yield
+        self.schedule_canvas = self.calendar = CalendarView(self.body, mode=self.mode_name, on_select=self.select_date,
                                                             on_open=self.open_day)
         self.calendar.grid(row=1, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, 4))
         self.legend = DayStatusLegend(self.body)
         self.legend.grid(row=2, column=0, sticky="w", padx=theme.SPACE_XL, pady=(0, theme.SPACE_M))
+        yield
         self._build_details()
+        yield
         self._build_lower()
+        yield
         self.set_layout(LayoutMode.WIDE)
         self.reload()
         self._reset_editor()

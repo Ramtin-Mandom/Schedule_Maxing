@@ -16,7 +16,7 @@ Both only call the callbacks they are given.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 
 import customtkinter as ctk
 
@@ -106,11 +106,18 @@ class DeferredPage(ctk.CTkFrame):
     whether it exists yet (app code skips refreshing pages that do not).
     """
 
-    def __init__(self, parent, build: Callable[[ctk.CTkFrame], ctk.CTkFrame]) -> None:
+    def __init__(self, parent, build: Callable[[ctk.CTkFrame], ctk.CTkFrame], *,
+                 steps: Callable[[ctk.CTkFrame], Iterator[None]] | None = None) -> None:
+        """
+        steps (optional): a generator function building the same page in parts -- it yields between parts
+        and returns the page -- so prebuild_step() can build it in idle time, one part per call.
+        """
         super().__init__(parent, fg_color=theme.APP_BG, corner_radius=0)
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
         self._build = build
+        self._steps = steps
+        self._building: Iterator[None] | None = None
         self._layout = None
         self.page: ctk.CTkFrame | None = None
 
@@ -156,11 +163,39 @@ class DeferredPage(ctk.CTkFrame):
     def ensure(self) -> ctk.CTkFrame:
         if self.page is None:
             with diagnostics.span("deferred_page.build"):
-                self.page = self._build(self)
-                self.page.grid(row=0, column=0, sticky="nsew")
-                if self._layout is not None and hasattr(self.page, "set_layout"):
-                    self.page.set_layout(self._layout)
+                if self._building is not None:  # a pre-build in progress: its remaining parts now
+                    while self.prebuild_step():
+                        pass
+                    return self.page
+                self._built(self._build(self))
         return self.page
+
+    def prebuild_step(self) -> bool:
+        """
+        Build one part of the page now (the caller runs this in idle time). True while parts remain.
+        Without `steps`, the whole page is one part.
+        """
+        if self.page is not None:
+            return False
+        if self._steps is None:
+            self._built(self._build(self))
+            return False
+        if self._building is None:
+            self._building = self._steps(self)
+        with diagnostics.span("deferred_page.prebuild_step"):
+            try:
+                next(self._building)
+            except StopIteration as finished:
+                self._building = None
+                self._built(finished.value)
+                return False
+        return True
+
+    def _built(self, page) -> None:
+        self.page = page
+        page.grid(row=0, column=0, sticky="nsew")
+        if self._layout is not None and hasattr(page, "set_layout"):
+            page.set_layout(self._layout)
 
     def on_show(self) -> None:
         page = self.ensure()
