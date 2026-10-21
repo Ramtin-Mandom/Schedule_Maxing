@@ -40,9 +40,25 @@ def test_week_is_pre_built_in_parts_while_the_app_is_idle(app, monkeypatch) -> N
     pump(app, lambda: week.built, timeout=15)
     assert len(steps) > 3  # one part per idle callback, not one block
     assert app.shell.current == "day" and week.page.snapshot is not None  # built hidden, its period read
+    assert str(week) in app.shell._detached  # and parked out of the main window
     app.show_page("week")
     pump(app)
     assert app.shell.current == "week"
+
+
+def test_a_hidden_page_lives_in_its_own_withdrawn_window(app) -> None:
+    app.show_page("week")
+    pump(app, lambda: app.pages["week"].built)
+    week = app.pages["week"]
+    app.show_page("day")
+    pump(app)
+    # Not a hidden child of the main window: the window's native child windows exclude the page's.
+    assert str(week) in app.shell._detached and week.winfo_toplevel() is week
+    assert app.tk.call("wm", "state", week._w) == "withdrawn"
+    app.show_page("week")
+    pump(app)
+    assert week.winfo_toplevel() is app and week.winfo_manager() == "place" and str(week) not in app.shell._detached
+    assert week.page.snapshot is not None
 
 
 def test_showing_a_page_while_it_is_pre_built_finishes_it_at_once(app) -> None:

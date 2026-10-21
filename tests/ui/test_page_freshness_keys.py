@@ -20,10 +20,10 @@ class _Root:
 
 class _Widget:
     def __init__(self, root) -> None:
-        self._root = root
+        self._app = root
 
-    def winfo_toplevel(self):
-        return self._root
+    def _root(self):
+        return self._app
 
 
 def test_a_key_combines_the_data_version_with_the_view() -> None:

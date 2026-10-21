@@ -31,6 +31,7 @@ app itself (Open Day from Week/Month) do not.
 
 from __future__ import annotations
 
+import tkinter as tk
 from collections.abc import Callable
 
 import customtkinter as ctk
@@ -244,6 +245,8 @@ class AppShell(ctk.CTkFrame):
         self.page_area.bind("<Configure>", self._page_area_resized, add="+")
         #: The pixel size the shown page is placed at (None: it follows the area, whose size is not known yet).
         self._page_size: tuple[int, int] | None = None
+        #: Path names of the hidden pages that live in a withdrawn window of their own (_detach).
+        self._detached: set[str] = set()
         self.pages: dict[str, ctk.CTkFrame] = {}
         self.current: str | None = None
         self.layout_checks = Coalescer(self, self._check_layout)
@@ -283,8 +286,9 @@ class AppShell(ctk.CTkFrame):
         else:
             self.group_bar.grid_remove()
         if self.current is not None and self.current != key:
-            self.pages[self.current].place_forget()
+            self._detach(self.pages[self.current])
         page = self.pages[key]
+        self._attach(page)
         self._place(page)
         self.current = key
         if self.state.layout is not None and hasattr(page, "set_layout"):
@@ -303,7 +307,38 @@ class AppShell(ctk.CTkFrame):
             self.current = None
             self.show_page(key)
         if old is not None:
+            self._detached.discard(str(old))
             old.destroy()
+
+    # -- hidden pages (native windows) ---------------------------------------------------
+
+    def park(self, key: str) -> None:
+        """Detach the built, hidden page `key` now (e.g. one pre-built in idle time); see _detach."""
+        page = self.pages.get(key)
+        if page is not None and key != self.current:
+            self._detach(page)
+
+    def _detach(self, page) -> None:
+        """
+        Hide `page` in a withdrawn window of its own (Tk's `wm manage`) instead of as a hidden child:
+        moving or resizing the application window costs the Windows compositor work for every native child
+        window it holds, hidden ones included (docs/desktop-performance-round3.md, "Round 3b"). Shown again,
+        it becomes a child again (_attach). Widgets are always built while their page is attached.
+        """
+        if str(page) in self._detached:
+            return
+        page.place_forget()
+        try:
+            page.tk.call("wm", "manage", page._w)
+            page.tk.call("wm", "withdraw", page._w)
+        except tk.TclError:
+            return  # it stays a hidden child window, as before
+        self._detached.add(str(page))
+
+    def _attach(self, page) -> None:
+        if str(page) in self._detached:
+            self._detached.discard(str(page))
+            page.tk.call("wm", "forget", page._w)
 
     # -- page size (resizing) ------------------------------------------------------------
 
