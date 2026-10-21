@@ -284,3 +284,20 @@ runs; today's runs had much more background load on the machine than yesterday's
 - Physical dragging was not measured with a mouse; the probe's `SetWindowPos` steps are not
   Windows' interactive move loop. The dwm.exe numbers vary strongly with other activity on the
   machine.
+### Addendum: pages opened during a session
+
+The user noticed that after visiting Week, Month, Projects and the other pages, the Day page and
+dragging got heavier. Measured (200 tasks, every page opened, back on Day): the window held
+**3,847** native child windows (Day alone: 435); a full garbage collection only grew from 10 to
+25 ms, so memory was not the cause. Two changes:
+
+- The shell now keeps only the home page (Day) and the page left last attached while hidden;
+  every other built hidden page is detached as soon as it is safe (no idle callback pending, no
+  input for 0.3 s), the page left last after 30 s. After opening every page: **454** child windows.
+- The heaviest pages use the light widgets for their text, inner frames and list buttons:
+  Settings 1,451 -> 881 widgets (preference rows, `ClockInput`), How to Use 655 -> 259,
+  Productivity 383 -> 281 (stat tiles).
+
+Windows 10 versus 11: the user sees the problem mostly on Windows 10. Only Windows 10 (build
+19045) was available here, so the difference could not be measured; the per-child-window cost
+measured above is the likely part that differs between compositor versions.

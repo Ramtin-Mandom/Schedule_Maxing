@@ -168,8 +168,8 @@ so the same rules run on both sides.
   (`DeferredPage.prebuild_step`, `ScheduleOptimizerApp._prebuild`).
 - **Native-window budget.** Every Tk widget is a Win32 child window and moving the window costs dwm.exe work
   per child window, hidden ones included; long lists and static text use the one-window widgets of
-  `app/ui/light_widgets.py`, and a page hidden for 30 s is detached into a withdrawn window of its own
-  (`AppShell._hide`, ADR-043).
+  `app/ui/light_widgets.py`, and hidden pages other than Day and the page left last are detached into a
+  withdrawn window of their own (`AppShell._hide`, ADR-043).
 - **Engine process.** A schedule generation runs in a worker thread, but its day-engine calls run in one
   separate spawned process (`app/planning/engine_process.py`, ADR-044), so their CPU never holds the GIL the
   Tk thread needs; everything that touches the database stays in the thread.
