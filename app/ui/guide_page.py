@@ -17,7 +17,8 @@ import customtkinter as ctk
 from app.ui.paint_widgets import AppScrollableFrame
 
 from app.ui import theme
-from app.ui.components import AppButton, Card, font
+from app.ui.components import Card
+from app.ui.light_widgets import LightButton, LightFrame, LightLabel
 from app.ui.guide_content import GUIDE_SECTIONS, GUIDE_SUBTITLE, GUIDE_TITLE, Block, GuideSection
 from app.ui.shell_state import LayoutMode
 
@@ -36,57 +37,54 @@ class GuidePage(ctk.CTkFrame):
         self.body.grid(row=0, column=0, sticky="nsew")
         self.body.columnconfigure(0, weight=1)
 
-        header = ctk.CTkFrame(self.body, fg_color="transparent")
+        # Static text and its frames are light widgets (one native window each, app/ui/light_widgets.py):
+        # the guide was ~650 native windows.
+        header = LightFrame(self.body)
         header.grid(row=0, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(22, 12))
         header.columnconfigure(0, weight=1)
-        ctk.CTkLabel(header, text=GUIDE_TITLE, font=font(theme.SIZE_TITLE, "bold"), text_color=theme.TEXT_PRIMARY,
-                     anchor="w").grid(row=0, column=0, sticky="ew")
-        self.subtitle = ctk.CTkLabel(header, text=GUIDE_SUBTITLE, font=font(theme.SIZE_BODY),
-                                     text_color=theme.TEXT_MUTED, anchor="w", justify="left")
+        LightLabel(header, GUIDE_TITLE, size=theme.SIZE_TITLE, weight="bold").grid(row=0, column=0, sticky="ew")
+        self.subtitle = LightLabel(header, GUIDE_SUBTITLE, text_color=theme.TEXT_MUTED)
         self.subtitle.grid(row=1, column=0, sticky="ew", pady=(2, 0))
-        self.wrapped: list[tuple[ctk.CTkLabel, int]] = [(self.subtitle, 0)]
+        self.wrapped: list[tuple[LightLabel, int]] = [(self.subtitle, 0)]
 
         self.contents = Card(self.body)
         self.contents.grid(row=1, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_M))
-        ctk.CTkLabel(self.contents, text="Contents", font=font(theme.SIZE_HEADING, "bold"),
-                     text_color=theme.TEXT_PRIMARY, anchor="w").grid(row=0, column=0, columnspan=4, sticky="ew",
-                                                                    padx=theme.SPACE_L, pady=(theme.SPACE_L, 6))
-        self.contents_buttons: dict[str, AppButton] = {}
+        LightLabel(self.contents, "Contents", size=theme.SIZE_HEADING, weight="bold").grid(
+            row=0, column=0, columnspan=4, sticky="ew", padx=theme.SPACE_L, pady=(theme.SPACE_L, 6))
+        self.contents_buttons: dict[str, LightButton] = {}
         for item in GUIDE_SECTIONS:
-            self.contents_buttons[item.key] = AppButton(self.contents, item.title, lambda key=item.key: self.scroll_to(key),
-                                                        variant="ghost", height=30, anchor="w",
-                                                        font=font(theme.SIZE_SMALL))
+            button = LightButton(self.contents, item.title, lambda key=item.key: self.scroll_to(key), variant="ghost",
+                                 size=theme.SIZE_SMALL, weight="normal")
+            button.configure(anchor="w")
+            self.contents_buttons[item.key] = button
 
         self.cards: dict[str, Card] = {}
         for index, item in enumerate(GUIDE_SECTIONS, start=2):
             card = self._section_card(item)
             card.grid(row=index, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_M))
             self.cards[item.key] = card
-        ctk.CTkFrame(self.body, fg_color="transparent", height=theme.SPACE_XL).grid(
-            row=len(GUIDE_SECTIONS) + 2, column=0)
+        LightFrame(self.body, height=theme.SPACE_XL).grid(row=len(GUIDE_SECTIONS) + 2, column=0)
         self.set_layout(LayoutMode.WIDE)
 
     def _section_card(self, item: GuideSection) -> Card:
         card = Card(self.body)
         card.columnconfigure(0, weight=1)
-        ctk.CTkLabel(card, text=item.title, font=font(theme.SIZE_HEADING, "bold"), text_color=theme.TEXT_PRIMARY,
-                     anchor="w").grid(row=0, column=0, sticky="ew", padx=theme.SPACE_L, pady=(theme.SPACE_L, 4))
+        LightLabel(card, item.title, size=theme.SIZE_HEADING, weight="bold").grid(
+            row=0, column=0, sticky="ew", padx=theme.SPACE_L, pady=(theme.SPACE_L, 4))
         row = 1
         for block in item.blocks:
             for label, indent in self._block(card, block):
                 label.grid(row=row, column=0, sticky="ew", padx=(theme.SPACE_L + indent, theme.SPACE_L), pady=(4, 0))
                 self.wrapped.append((label, indent))
                 row += 1
-        ctk.CTkFrame(card, fg_color="transparent", height=theme.SPACE_L).grid(row=row, column=0)
+        LightFrame(card, height=theme.SPACE_L).grid(row=row, column=0)
         return card
 
     @staticmethod
-    def _block(card: Card, block: Block) -> list[tuple[ctk.CTkLabel, int]]:
+    def _block(card: Card, block: Block) -> list[tuple[LightLabel, int]]:
         if isinstance(block, str):
-            return [(ctk.CTkLabel(card, text=block, font=font(theme.SIZE_BODY), text_color=theme.TEXT_PRIMARY,
-                                  anchor="w", justify="left"), 0)]
-        return [(ctk.CTkLabel(card, text=f"•  {line}", font=font(theme.SIZE_BODY), text_color=theme.TEXT_PRIMARY,
-                              anchor="w", justify="left"), 14) for line in block]
+            return [(LightLabel(card, block), 0)]
+        return [(LightLabel(card, f"•  {line}"), 14) for line in block]
 
     # ------------------------------------------------------------------ layout
 

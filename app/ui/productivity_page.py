@@ -44,6 +44,7 @@ from app.productivity.tracker import WEEKDAYS, TrackerFilters, TrackerReport
 from app.ui import theme, tracker_view
 from app.ui.background import ControllerResult, run_in_background
 from app.ui.components import AppButton
+from app.ui.light_widgets import LightLabel
 from app.ui.page_freshness import data_key, unchanged
 from app.ui.paint_widgets import AppOptionMenu
 from app.ui.productivity_charts import CompletionRateByBucketChart, PlannedVsActualChart
@@ -75,14 +76,13 @@ class _StatTile(ctk.CTkFrame):
 
     def __init__(self, parent: tk.Widget, wraplength: int) -> None:
         super().__init__(parent, fg_color=theme.CARD_BG, corner_radius=14, border_color=theme.CARD_BORDER, border_width=1)
-        self.title_label = ctk.CTkLabel(self, text="", font=ctk.CTkFont(size=12, weight="bold"),
-                                        text_color=theme.TEXT_MUTED, anchor="w", justify="left", wraplength=wraplength)
+        # Light labels: one native window each instead of three (app/ui/light_widgets.py).
+        self.title_label = LightLabel(self, "", size=12, weight="bold", text_color=theme.TEXT_MUTED,
+                                      wraplength=wraplength)
         self.title_label.pack(anchor="w", padx=14, pady=(12, 0))
-        self.value_label = ctk.CTkLabel(self, text="--", font=ctk.CTkFont(size=26, weight="bold"),
-                                        text_color=theme.TEXT_PRIMARY, anchor="w", justify="left", wraplength=wraplength)
+        self.value_label = LightLabel(self, "--", size=26, weight="bold", wraplength=wraplength)
         self.value_label.pack(anchor="w", padx=14, pady=(2, 0))
-        self.caption_label = ctk.CTkLabel(self, text="", font=ctk.CTkFont(size=11), text_color=theme.TEXT_MUTED,
-                                          anchor="w", justify="left", wraplength=wraplength)
+        self.caption_label = LightLabel(self, "", size=11, text_color=theme.TEXT_MUTED, wraplength=wraplength)
         self.caption_label.pack(anchor="w", padx=14, pady=(0, 12))
 
     def set(self, stat: Stat) -> None:

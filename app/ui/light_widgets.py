@@ -83,13 +83,20 @@ class _Themed(CTkAppearanceModeBaseClass, CTkScalingBaseClass):
     def _color(self, color: Color) -> str:
         return self._apply_appearance_mode(color)
 
-    def grid(self, **kwargs):
-        """Like a CTk widget's grid(): padding is given in logical pixels and scaled."""
+    def _scaled(self, kwargs: dict) -> dict:
         scaling = self._get_widget_scaling()
         for key in ("padx", "pady"):
             if key in kwargs:
                 kwargs[key] = _scaled_pad(kwargs[key], scaling)
-        return tk.Grid.grid_configure(self, **kwargs)
+        return kwargs
+
+    def grid(self, **kwargs):
+        """Like a CTk widget's grid(): padding is given in logical pixels and scaled."""
+        return tk.Grid.grid_configure(self, **self._scaled(kwargs))
+
+    def pack(self, **kwargs):
+        """Like a CTk widget's pack(): padding is given in logical pixels and scaled."""
+        return tk.Pack.pack_configure(self, **self._scaled(kwargs))
 
     def _stop_theming(self) -> None:
         CTkAppearanceModeBaseClass.destroy(self)
