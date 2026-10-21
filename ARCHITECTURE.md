@@ -323,7 +323,8 @@ sequenceDiagram
 
 - **Desktop configuration** (`config/settings.py`): `SCHEDULE_MAXING_DATA_DIR`, `SCHEDULE_MAXING_TIMEZONE`,
   `SCHEDULE_MAXING_BACKEND_URL`, `SCHEDULE_MAXING_UPDATE_REPOSITORY`, `SCHEDULE_MAXING_UPDATE_CHECK`,
-  `SCHEDULE_MAXING_STORAGE`, `SCHEDULE_MAXING_ENV_FILE`. Reward defaults come from
+  `SCHEDULE_MAXING_STORAGE`, `SCHEDULE_MAXING_ENV_FILE`, `SCHEDULE_MAXING_GENERATION_PROCESS` (`off`: the day
+  engine runs in the worker thread instead of its own process, ADR-044). Reward defaults come from
   `config/task_preference.yaml` read through `app.runtime.resource_path`. Appearance and task-form defaults
   are per-device JSON files (`app/ui/ui_settings.py`, `app/ui/task_defaults.py`).
 - **Backend configuration** comes only from environment variables (`backend/settings.py`, never a `.env`
