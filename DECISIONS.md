@@ -58,6 +58,8 @@ decision was made.
 | ADR-038 | The local web profile listens on loopback only, behind a session guard | Accepted |
 | ADR-039 | Budget records: a separate domain, integer minor units, expanded recurrence, optional sync feature | Accepted |
 | ADR-040 | Budget forecast: a balance snapshot plus a 15-day one-time spending average; future items are not transactions | Accepted |
+| ADR-041 | The background sync cadence follows the desktop window's activity | Accepted |
+| ADR-042 | Local SQLite keeps the rollback journal: WAL evaluated and not adopted; no new indexes | Accepted |
 
 ---
 
@@ -527,3 +529,30 @@ decision was made.
 - **Consequences:** The forecast has no seasonality. Two devices converting the same wishlist item offline produce one expense record and an explicit conflict (ADR-014), never two expenses.
 - **Relevant files:** `app/budget/stats.py`, `app/budget/service.py`, `app/budget/models.py`, `app/ui/budget_controller.py`.
 - **Evidence:** `tests/budget/test_budget_stats.py`, `tests/budget/test_budget_future.py`, `tests/sync/test_budget_sync.py`.
+
+### ADR-041 — The background sync cadence follows the desktop window's activity
+
+- **Status:** Accepted
+- **Context:** The sync loop ran every 60 s and looked at the pending count every 5 s whether or not anyone used the window; the status bar re-read the sync status every 4 s, also while minimized (docs/desktop-performance-round3.md).
+- **Decision:**
+  - The desktop reports its window's activity -- focused, unfocused (visible, another application in front) or minimized (iconified) -- from the root's focus and map events (`app/ui/activity.py`, `ACTIVITY_POLICIES`) through the thread-safe `SyncService.set_activity`.
+  - Interval: 60 s while focused, 300 s otherwise (`background_interval`). Minimized: no pending-count looks. Regaining focus syncs at once when the last successful sync is older than 60 s.
+  - A local commit (a `TransactionState` commit listener) is pushed 2.5 s after the last one (`edit_debounce`); the pending count is skipped when nothing was written since it was last counted (`db.data_version`).
+  - The status bar polls every 4 s focused, 15 s unfocused, never while minimized (one read on restore).
+  - The first background run waits 3 s after start-up (`start(initial_delay=...)`), so it does not compete with building the window.
+- **Rationale:** Near-zero work while the app is not in use, without weakening durability: pending records stay in the durable outbox and the next run pushes them; Sync now and the backoff are unchanged.
+- **Alternatives:** A fixed slower interval (later uploads while in use); stopping sync entirely while minimized (pending edits could wait indefinitely).
+- **Consequences:** While unfocused or minimized, another device's changes arrive up to 5 minutes later. The sync protocol is unchanged.
+- **Relevant files:** `app/sync/service.py`, `app/ui/activity.py`, `app/app.py`, `app/execution/db.py`.
+- **Evidence:** `tests/test_sync_activity.py`, `tests/ui/test_activity.py`, `tests/ui/test_activity_window.py`, `tests/sync/test_local_first_accounts.py::test_the_idle_loop_notices_new_pending_work_without_a_request`.
+
+### ADR-042 — Local SQLite keeps the rollback journal: WAL evaluated and not adopted; no new indexes
+
+- **Status:** Accepted
+- **Context:** Round 3 evaluated `journal_mode=WAL`, `synchronous=NORMAL`, `cache_size`, `temp_store=MEMORY` and `busy_timeout` on the app's real write and read paths (200 tasks).
+- **Decision:** `get_connection` is unchanged: rollback journal, default synchronous, no extra pragmas, and no index added.
+- **Rationale:** WAL + NORMAL made a task save about 3x faster (median 3.2 -> 0.95 ms) but every write already runs off the Tk thread, so no UI latency changes; a schedule generation went 621 -> 605 ms. In exchange WAL keeps `-wal`/`-shm` files beside the database, makes the documented restore (copy a backup over `executions.db`) unsafe while a stale `-wal` exists, and makes a plain file copy of a running database miss recent commits. The other pragmas showed no measurable effect (the default 5 s busy timeout already applies). EXPLAIN QUERY PLAN of the Day/Week snapshot reads and the status read showed scans only of the workspace's own tasks, which those reads need in full (the date filter is an expression over preferred dates), and one executions count; a Day load takes about 13 ms in a worker and a status read about 0.05 ms.
+- **Alternatives:** WAL with updated restore instructions (revisit if sync applies or imports become write-bound); `CREATE INDEX IF NOT EXISTS` outside the migrations (rejected: indexes belong in versioned migrations, ADR-009).
+- **Consequences:** No storage-format change in round 3.
+- **Relevant files:** `app/execution/db.py`, `app/execution/backup.py`.
+- **Evidence:** docs/desktop-performance-round3.md (SQLite section).
