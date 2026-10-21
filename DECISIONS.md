@@ -62,6 +62,7 @@ decision was made.
 | ADR-042 | Local SQLite keeps the rollback journal: WAL evaluated and not adopted; no new indexes | Accepted |
 | ADR-043 | Long lists and static text use one-window light widgets | Accepted |
 | ADR-044 | The desktop runs the day engine in a separate process | Accepted |
+| ADR-045 | Light caching: an opt-in mode that keeps only Day and the open section built | Accepted |
 
 ---
 
@@ -580,3 +581,14 @@ decision was made.
 - **Consequences:** One extra Python process while the desktop runs. Packaged builds rely on `multiprocessing.freeze_support()` in `packaging/windows/launcher.py`. The test suite turns the process off except in its own tests.
 - **Relevant files:** `app/planning/engine_process.py`, `app/planning/workflow.py`, `app/ui/app_services.py`, `config/settings.py`, `packaging/windows/launcher.py`.
 - **Evidence:** `tests/test_engine_process.py`; docs/desktop-performance-round3.md ("Round 3b").
+
+### ADR-045 — Light caching: an opt-in mode that keeps only Day and the open section built
+
+- **Status:** Accepted
+- **Context:** By default every page stays built once opened (hidden pages are detached, ADR-043), so returning to one is quick, but a session that visited every page holds ~3,200 Tk widgets and ~2,650 native windows.
+- **Decision:** Settings -> Appearance -> "Light caching" (`UISettings.light_caching`, off by default, saved in `ui_settings.json`). While it is on, `AppShell` keeps built only the home page (Day) and the pages of the shown page's section (`page_group`, e.g. Settings | Account | How to Use); every other built `DeferredPage` is released (`DeferredPage.release`) once the shell is quiet, its widgets destroyed innermost first in ~12 ms slices, and built anew on its next show (dates come back from `ShellState`). The idle Week pre-build is skipped.
+- **Rationale:** Measured after opening every page: 3,246 -> 462 widgets, 2,659 -> 411 native windows, 89 -> 74-78 MB private memory, main-window child windows 673 -> 403, dwm.exe while moving ~10-25% lower (noisy). Switching to Day is unchanged (~50 ms).
+- **Alternatives:** Making it the default (rejected: returning to Week/Month costs ~0.8 s instead of ~60 ms, Settings ~0.43 s instead of 0.15 s); releasing in one block (90-350 ms freezes).
+- **Consequences:** A trade of memory and window weight for slower returns to other sections. State held only by a page's widgets (scroll position, Productivity's report cache, unsaved form input) is lost when it is released.
+- **Relevant files:** `app/ui/shell.py`, `app/ui/pages.py`, `app/ui/ui_settings.py`, `app/app.py`.
+- **Evidence:** `tests/ui/test_deferred_pages.py` (light caching tests); docs/desktop-performance-round3.md ("Addendum: light caching").

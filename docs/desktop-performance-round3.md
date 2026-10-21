@@ -301,3 +301,26 @@ dragging got heavier. Measured (200 tasks, every page opened, back on Day): the 
 Windows 10 versus 11: the user sees the problem mostly on Windows 10. Only Windows 10 (build
 19045) was available here, so the difference could not be measured; the per-child-window cost
 measured above is the likely part that differs between compositor versions.
+
+### Addendum: light caching (ADR-045)
+
+An opt-in Settings choice: only Day and the pages of the open section stay built; the others are
+released (destroyed in ~12 ms slices) and built again when shown. Probe (scratch script, empty
+database, 1400x900 window, every page opened then ten revisits; three alternating runs per mode,
+times are show + layout + draw):
+
+| | Default | Light caching |
+|---|---:|---:|
+| Tk widgets after the tour | 3,246 | 462 |
+| Native windows of the process | 2,659 | 411 |
+| Main-window child windows | 673-683 | 403-405 |
+| Private memory | 89 MB | 74-78 MB |
+| dwm.exe while moving (Day shown, five runs each, noisy) | 29-35% | 21-33% |
+| Switch to Day | ~50 ms | ~50 ms |
+| Back to Week / Month | ~60 ms | ~780 ms |
+| Back to Settings / Account | 150 / 75 ms | 430 / 455 ms |
+| Back to Productivity | ~32 ms | ~220 ms |
+| Longest UI block while releasing | -- | 13 ms |
+
+So it lowers memory and window weight, not switching time: every return to another section costs a
+first-visit build. It stays off by default.

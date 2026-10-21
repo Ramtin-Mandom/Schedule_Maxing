@@ -568,6 +568,8 @@ class ScheduleOptimizerApp(ctk.CTk):
         """
         if self._closing or self.shell is None or attempts >= self.PREBUILD_ATTEMPTS:
             return
+        if self.shell.light_caching:  # it keeps no page outside Day and the open section built
+            return
         page = next((self.pages[key] for key in self.PREBUILD_PAGES
                      if not getattr(self.pages.get(key), "built", True)), None)
         if page is None:
@@ -766,6 +768,13 @@ class ScheduleOptimizerApp(ctk.CTk):
             self.shell.layout_checks.request()  # the same window now holds fewer logical pixels
         return self.ui_store.save(self.ui_settings)
 
+    def set_light_caching(self, on: bool) -> bool:
+        """Turn light caching (AppShell.set_light_caching) on or off now and remember it; False if not saved."""
+        self.ui_settings = self.ui_settings.with_light_caching(on)
+        if self.shell is not None:
+            self.shell.set_light_caching(on)
+        return self.ui_store.save(self.ui_settings)
+
     def _configure_treeview_style(self) -> None:
         style = ttk.Style(self)
         style.theme_use("clam")
@@ -802,6 +811,7 @@ class ScheduleOptimizerApp(ctk.CTk):
         self.shell = shell = AppShell(self, self.shell_state, scaling=lambda: self.ui_settings.ui_scale)
         shell.grid(row=0, column=0, sticky="nsew")
         shell.on_navigate = self._navigated
+        shell.light_caching = self.ui_settings.light_caching
         shell.sidebar.set_footer(services.location_label())
         host = shell.host
         self._build_workspace_pages(replace=False)
@@ -916,7 +926,8 @@ class ScheduleOptimizerApp(ctk.CTk):
             return SettingsPage(
                 host, self.ui_settings, on_appearance=self.set_appearance, on_scale=self.set_ui_scale,
                 controller=SettingsController(services.planning_controller, today=self.today), background_io=True,
-                on_reset_task_data=self.reset_task_data, task_defaults=self.task_defaults, updates=self.updates)
+                on_reset_task_data=self.reset_task_data, task_defaults=self.task_defaults, updates=self.updates,
+                on_light_caching=self.set_light_caching)
 
         for mode_name in SCHEDULE_PAGES[1:]:
             add(mode_name, DeferredPage(shell.host, lambda host, mode_name=mode_name: calendar(host, mode_name),

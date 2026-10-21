@@ -16,6 +16,8 @@ Both only call the callbacks they are given.
 
 from __future__ import annotations
 
+import time
+from collections import deque
 from collections.abc import Callable, Iterator
 
 import customtkinter as ctk
@@ -84,6 +86,17 @@ class ScrollPage(AppScrollableFrame):
     def on_appearance_changed(self) -> None:
         if hasattr(self.content, "on_appearance_changed"):
             self.content.on_appearance_changed()
+
+
+#: A released page's widgets are destroyed in slices of about this long (DeferredPage.release).
+RELEASE_SLICE_MS = 12
+
+
+def _innermost_first(widget) -> Iterator:
+    """`widget` and its descendants, every widget after its own children."""
+    for child in widget.winfo_children():
+        yield from _innermost_first(child)
+    yield widget
 
 
 def _own_attribute(widget, name: str) -> bool:
@@ -191,6 +204,35 @@ class DeferredPage(ctk.CTkFrame):
                 return False
         return True
 
+    def release(self) -> bool:
+        """
+        Destroy the built (or partly pre-built) page, so it holds no widgets until it is shown again and
+        built anew, as on its first show (light caching, AppShell). True if there was something to release.
+        The page is unbuilt at once; its widgets go innermost first in slices of RELEASE_SLICE_MS (one block
+        takes 90-350 ms), so the window keeps answering input meanwhile.
+        """
+        if self.page is None and self._building is None:
+            return False
+        if self._building is not None:
+            self._building.close()
+        self.page, self._building = None, None
+        doomed: deque = deque()
+        for child in self.winfo_children():
+            child.grid_forget()
+            doomed.extend(_innermost_first(child))
+        self._destroy_slice(doomed)
+        return True
+
+    def _destroy_slice(self, doomed: deque) -> None:
+        deadline = time.perf_counter() + RELEASE_SLICE_MS / 1000
+        while doomed and time.perf_counter() < deadline:
+            doomed.popleft().destroy()
+        if doomed and self.winfo_exists():
+            self.after(1, lambda: self._destroy_slice(doomed))
+        else:
+            for widget in doomed:  # the wrapper itself is going: Tk destroys the rest with it
+                widget.destroy()
+
     def _built(self, page) -> None:
         self.page = page
         page.grid(row=0, column=0, sticky="nsew")
@@ -250,9 +292,12 @@ class SettingsPage(ctk.CTkFrame):
         on_reset_task_data: Callable[[Callable], None] | None = None,
         task_defaults: TaskDefaultsStore | None = None,
         updates=None,
+        on_light_caching: Callable[[bool], bool] | None = None,
     ) -> None:
         super().__init__(parent, fg_color=theme.APP_BG, corner_radius=0)
         self.task_defaults = task_defaults or TaskDefaultsStore()
+        #: Turns light caching on/off now and saves it (False: not saved); None where it does not apply (tests).
+        self._on_light_caching = on_light_caching
         #: The window's UpdateFlow (app/ui/update_view.py); None where updates do not apply (direct storage, tests).
         self.updates = updates
         self.updates_card = None
@@ -298,6 +343,19 @@ class SettingsPage(ctk.CTkFrame):
 
         self.language_select = LabeledSelect(appearance, "Language", list(LANGUAGES.values()))
         self.language_select.grid(row=3, column=0, columnspan=2, sticky="ew", padx=theme.SPACE_L, pady=(0, 12))
+
+        self.light_caching = ctk.BooleanVar(value=settings.light_caching)
+        self.light_caching_box = ctk.CTkCheckBox(
+            appearance, text="Light caching: keep only the Day page and the section you are in ready",
+            variable=self.light_caching, command=self._light_caching_changed, text_color=theme.TEXT_PRIMARY,
+            font=font(theme.SIZE_BODY))
+        self.light_caching_box.grid(row=4, column=0, columnspan=2, sticky="w", padx=theme.SPACE_L, pady=(0, 4))
+        ctk.CTkLabel(appearance, text="Uses less memory and keeps the window lighter to move; other pages load "
+                     "again each time you open them.", font=font(theme.SIZE_SMALL), text_color=theme.TEXT_MUTED,
+                     anchor="w", justify="left", wraplength=440
+                     ).grid(row=5, column=0, columnspan=2, sticky="ew", padx=theme.SPACE_L, pady=(0, theme.SPACE_L))
+        if on_light_caching is None:
+            self.light_caching_box.configure(state="disabled")
 
         defaults = Card(body)
         defaults.grid(row=1, column=0, sticky="ew", padx=theme.SPACE_S, pady=(0, theme.SPACE_M))
@@ -552,6 +610,11 @@ class SettingsPage(ctk.CTkFrame):
         scale = next(value for value in SCALES if scale_label(value) == label)
         saved = self._on_scale(scale)
         self._report(saved, f"Interface size {label}")
+
+    def _light_caching_changed(self) -> None:
+        on = bool(self.light_caching.get())
+        if self._on_light_caching is not None:
+            self._report(self._on_light_caching(on), "Light caching " + ("on" if on else "off"))
 
     def _report(self, saved: bool, what: str) -> None:
         if saved:
