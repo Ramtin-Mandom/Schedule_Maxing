@@ -4,7 +4,7 @@ A navigation and change-impact guide. Use section D first: find the change you n
 "Start here" files, follow only the listed dependencies, run the listed tests. System design is in
 [ARCHITECTURE.md](ARCHITECTURE.md); feature status in [CURRENT_STATE.md](CURRENT_STATE.md).
 
-Paths verified against commit `f20cf0b` plus the uncommitted budgeting work on 2026-10-19. Dependencies marked **(import)** were checked in
+Paths verified against commit `bec7ad0` on 2026-10-21. Dependencies marked **(import)** were checked in
 the source; others are call-level or conceptual relationships.
 
 ## A. Repository structure
@@ -76,13 +76,13 @@ Ignore: `.venv*`, `__pycache__`, `.pytest_cache`, `.ruff_cache`, `build/`, `dist
 | Duration prediction / ML | `app/productivity/prediction.py`, `ml_*.py` | `predictor_comparison_cli.py`, `app/ui/duration_suggestion.py` (not wired) | `tests/productivity/test_prediction.py`, `test_ml_*.py` | CLI only |
 | Settings / preferences UI | `app/ui/pages.py` (`SettingsPage`), `app/ui/settings_controller.py` | `preferences_editor.py`, `preferences_model.py`, `ui_settings.py`, `task_defaults.py` | `tests/ui/test_settings_page.py`, `test_settings_controller.py` | Reward/preferences |
 | Desktop shell / navigation (page groups: Settings / Account / How to Use) | `app/ui/shell.py`, `shell_state.py` | `layout.py`, `components.py`, `paint_widgets.py`, `theme.py`, `guide_page.py`, `guide_content.py` | `tests/ui/test_desktop_shell.py`, `test_shell_foundation.py`, `test_guide.py` | All pages |
-| UI responsiveness | `app/ui/background.py` | `tk_lifecycle.py`, `diagnostics.py`, `layout.py`, `paint_widgets.py` | `tests/ui/test_background_executor.py`, `test_async_storage.py`, `test_responsiveness_regressions.py`, `test_bounded_rendering.py` (helper: `tests/tk_cleanup.py`) | `benchmarks/desktop_responsiveness.py`, `docs/desktop-responsiveness-*.md` |
+| UI responsiveness | `app/ui/background.py` | `tk_lifecycle.py`, `diagnostics.py`, `layout.py`, `paint_widgets.py`, `activity.py`, `page_freshness.py`, `pages.py` (`DeferredPage`), `shell.py` (page size) | `tests/ui/test_background_executor.py`, `test_async_storage.py`, `test_responsiveness_regressions.py`, `test_bounded_rendering.py`, `test_deferred_pages.py`, `test_page_freshness*.py`, `test_activity*.py`, `tests/test_startup_cost.py` (helper: `tests/tk_cleanup.py`) | `benchmarks/desktop_responsiveness.py`, `docs/desktop-responsiveness-*.md`, `docs/desktop-performance-round3.md` |
 | Local persistence (SQLite) | `app/execution/db.py` | `app/planning/repository.py`, `app/execution/repository.py`, `backup.py`, `instance_lock.py` | `tests/execution/test_db.py`, `test_migration_v*.py`, `test_backup.py`, `test_transactions.py`, `tests/ui/test_data_compatibility.py` | Sync triggers |
 | Synchronization (client) | `app/sync/service.py`, `engine.py` | `store.py`, `mapping.py`, `transport.py`, `credentials.py` | `tests/sync/*` (system tier), `tests/test_transport_security.py`, `tests/test_sync_status_counts.py` | `docs/sync-protocol.md` |
 | Synchronization (server) | `backend/sync.py`, `backend/mutations.py` | `backend/snapshots.py`, `backend/api.py` (`/changes`), `backend/resources.py` | `tests/backend/test_sync_push.py`, `test_change_log.py`, `test_isolation.py` | Client sync |
 | Accounts / authentication (server) | `backend/accounts.py`, `backend/api.py` (auth routes), `backend/security.py` | `passwords.py`, `password_policy.py`, `native_sessions.py`, `browser_sessions.py`, `login_guard.py`, `rate_limit.py`, `mfa.py`, `account_security.py`, `security_api.py`, `verification*.py`, `recovery*.py` | `tests/backend/test_auth*.py`, `test_account_*.py`, `test_native_sessions.py`, `test_email_verification.py`, `test_api_security.py` | `docs/account-security.md` |
 | Accounts (desktop) | `app/ui/account_controller.py`, `account_page.py` | `conflict_view.py`, `app/sync/service.py`, `app/sync/credentials.py`, `app/sync/transport.py` | `tests/sync/test_desktop_account_*.py`, `test_keep_signed_in.py`, `test_local_first_accounts.py` | `docs/desktop-accounts.md` |
-| API communication (client) | `app/sync/transport.py` (`HttpTransport`) | `app/update/transport.py` (GitHub only) | `tests/sync/test_http_transport.py`, `tests/test_transport_security.py` | Backend routes |
+| API communication (client) | `app/sync/transport.py` (`HttpTransport`) | `app/update/transport.py` (GitHub only) | `tests/sync/test_http_transport.py`, `tests/test_transport_security.py`, `tests/test_transport_keepalive.py` | Backend routes |
 | Backend HTTP API | `backend/app.py` (`create_app`), `backend/api.py`, `backend/planning_api.py` | `errors.py`, `http_errors.py`, `protection.py`, `resources.py`, `days.py`, `outcomes.py`, `executions.py` | `tests/backend/test_resources.py`, `test_planning_api.py`, `test_days_api.py`, `test_server_security.py` | `docs/web-api.md`, `docs/backend.md` |
 | Server schema / migrations | `backend/models.py`, `backend/migrations/versions/` | `backend/migrate.py`, `record_mapping.py`, `snapshots.py`, `migrations/normalized_storage.py` | `tests/backend/test_migrations.py`, `test_normalized_*.py`, `test_postgres.py` | Direct mode |
 | Email | `backend/outbox.py`, `backend/mail.py` | `email_webhooks.py`, `email_diagnostic.py`, `verification.py`, `recovery.py` | `tests/backend/test_email_verification.py`, `test_account_recovery.py` | `docs/email.md` |
@@ -169,19 +169,20 @@ scheduling stack imports this package (`tests/budget/test_budget_service.py` che
 
 | File | Responsibility |
 |---|---|
-| `service.py` | `SyncService`: sign-in/out, registration, restore session, association, workspace scope, `sync_now`, background thread with backoff, status |
+| `service.py` | `SyncService`: sign-in/out, registration, restore session, association, workspace scope, `sync_now`, background thread with backoff and an activity-aware cadence (`set_activity`, commit-listener debounce; ADR-041), status |
 | `engine.py` | `SyncEngine`: prepare operations from dirty records, push/pull application, conflict storage and resolution, association preview |
 | `store.py` | SQL for `sync_*` tables (`SyncStore`, `Account`, `Shadow`, `OutboxOp`, `Conflict`) |
 | `mapping.py` | Local record ↔ wire format; `execution_changes` (lifecycle actions from local history) |
-| `transport.py` | `SyncTransport` interface, `HttpTransport` (urllib), auth helpers (`login_via`, `refresh_via`, MFA, registration, profile) and typed errors |
-| `credentials.py` | `KeyringVault` / `MemoryVault` for the saved refresh credential |
+| `transport.py` | `SyncTransport` interface, `HttpTransport` (`http.client`, one keep-alive connection, idempotent-only retry), auth helpers (`login_via`, `refresh_via`, MFA, registration, profile) and typed errors |
+| `credentials.py` | `KeyringVault` / `MemoryVault` for the saved refresh credential; `LazyVault` (finds the OS store on first use or by `prefetch()`) |
 
 ### C.6 Desktop UI (`app/ui/`)
 
 | Group | Files |
 |---|---|
-| Composition and threading | `app_services.py`, `direct_services.py`, `background.py` (`ControllerResult`, `WorkerRegistry`, `run_io`, `run_in_background`, `WRITE_LANE`), `tk_lifecycle.py`, `diagnostics.py` |
-| Shell and shared widgets | `shell.py`, `shell_state.py`, `layout.py`, `components.py`, `paint_widgets.py`, `theme.py`, `pages.py` (`PageHeader`, `ScrollPage`, `DeferredPage` (built on first show; Budgeting), `PlaceholderPage`, `SettingsPage`) |
+| Composition and threading | `app_services.py` (`AppServices.data_version`), `direct_services.py`, `background.py` (`ControllerResult`, `WorkerRegistry`, `run_io`, `run_in_background`, `WRITE_LANE`), `tk_lifecycle.py` (GC timer, `tune_customtkinter_loops`), `diagnostics.py` |
+| Activity and freshness | `activity.py` (focused / unfocused / minimized, `ACTIVITY_POLICIES`), `page_freshness.py` (skip a page's re-read on show when the data is unchanged) |
+| Shell and shared widgets | `shell.py` (page area with a debounced page size, `PAGE_SETTLE_MS`), `shell_state.py`, `layout.py` (`Coalescer`, optionally debounced), `components.py` (shared `font()`), `paint_widgets.py`, `theme.py`, `pages.py` (`PageHeader`, `ScrollPage`, `DeferredPage` (every page but Day, built on first show), `PlaceholderPage`, `SettingsPage`) |
 | Planning controllers | `planning_controller.py` (Tk-free facade over workflow/services; CSV), `schedule_page_controller.py`, `day_controller.py`, `calendar_controller.py`, `projects_controller.py` |
 | Pages and views | `day_page.py`, `day_timeline.py`, `day_window.py`, `day_window_bar.py`, `day_outcomes.py`, `task_status_board.py`, `calendar_page.py`, `calendar_view.py`, `calendar_model.py`, `selected_day_panel.py`, `planning_pages.py` |
 | Task form | `task_editor.py`, `task_form_model.py`, `task_defaults.py`, `time_fields.py`, `clock_input.py`, `task_actions.py`, `task_status.py` |
@@ -238,7 +239,8 @@ files and keeps the fast ones. Two exceptions:
   - *real-window only* (`tests/ui/`): `test_day_page.py`, `test_day_status_board.py`, `test_day_window_pages.py`,
     `test_calendar_pages.py`, `test_calendar_outcomes.py`, `test_planning_pages.py`, `test_settings_page.py`,
     `test_task_editor_widgets.py`, `test_desktop_app.py`, `test_desktop_shell.py`, `test_async_storage.py`,
-    `test_bounded_rendering.py`, `test_responsiveness_regressions.py`, `test_budget_page.py`;
+    `test_bounded_rendering.py`, `test_responsiveness_regressions.py`, `test_budget_page.py`,
+    `test_deferred_pages.py`, `test_page_freshness.py`, `test_activity_window.py`;
   - *slow only*: `tests/backend/test_migrations.py`, `tests/backend/test_normalized_migration.py`,
     `tests/backend/test_live_server.py`, `tests/test_desktop_isolation.py`.
 

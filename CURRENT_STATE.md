@@ -7,9 +7,9 @@ feature's state changes, and do not rewrite the file only to move the date. Arch
 
 | | |
 |---|---|
-| Generated | 2026-10-20 |
-| Commit | `664de0ecf039` ("Merge pull request #22 from Ramtin-Mandom/feat/budgeting") |
-| Branch | `optimization`, clean, at the merge commit. Pull request #22 merged the budgeting feature (`app/budget/`, `app/ui/budget_*.py`, `app/ui/day_money.py`, local schema v17-v18, server revisions 0019-0020), the updater edits (check on every launch, lazy TLS setup in `app/sync/transport.py`), the Ruff fix and the certifi 2026.10.19 bump in `requirements.lock` |
+| Generated | 2026-10-21 |
+| Commit | `bec7ad0` ("perf(ui): settle the page size after a resize; build preference rows in slices") |
+| Branch | `optimization`, ahead of `main` (`664de0e`, pull request #22: budgeting, updater edits, Ruff fix, certifi bump) by a knowledge-base sync and the round-3 performance work with its documentation ([docs/desktop-performance-round3.md](docs/desktop-performance-round3.md)) |
 | App version | 1.2.0 (`app/version.py`); backend API version 1.0.0 (`backend/app.py`) |
 | Local schema | SQLite v18 (`app/execution/db.py`); server Alembic head `0020_budget_future_items` |
 
@@ -27,7 +27,7 @@ FastAPI/PostgreSQL account server.
 
 | Subsystem | Operational? | Basis |
 |---|---|---|
-| Desktop app (local SQLite) | Yes | The dev suite passed, including desktop controllers and widgets. The real-window tier passed in the full suite (section D) |
+| Desktop app (local SQLite) | Yes | The dev suite passed except two tests that also fail before round 3 (section C); the affected real-window modules passed (section D) |
 | Scheduling engines and modes | Yes | Engine, mode and baseline tests passed |
 | Execution tracking and analytics | Yes | Execution and productivity tests passed |
 | Sync client ↔ backend | Yes, against an in-process backend | `tests/sync` (system tier) passed in the full suite. No live server was contacted |
@@ -61,7 +61,8 @@ FastAPI/PostgreSQL account server.
 | How to Use guide and About | Implemented | `app/ui/guide_page.py`; About is a `PlaceholderPage` holding the version text | `tests/ui/test_guide.py` | Settings, Account and How to Use share one sidebar item with a top bar (`app/ui/shell.py: GroupBar`) |
 | Budgeting: balance (saved as today's; every manual change kept), income/expense entries, recurrence, occurrence edits, Stats with History and the 90-day forecast, Future (income ideas, wishlist) | Implemented (desktop) | `app/budget/`, `app/ui/budget_*.py`, `app/ui/day_money.py`, `app/persistence/budget.py`, `backend/resources.py` (`BUDGET_*`), local schema v17-v18, server revisions 0019-0020 | `tests/budget/*`, `tests/execution/test_migration_v17.py`, `test_migration_v18.py`, `tests/backend/test_budget_api.py`, `tests/sync/test_budget_sync.py`, `tests/direct/test_direct_budget.py`, `tests/ui/test_budget_controller.py`, `tests/ui/test_budget_page.py` | Local, direct and synced storage, REST CRUD; the local web profile has no budget routes |
 | Local SQLite storage, migrations v1→v18, backups, instance lock | Implemented | `app/execution/db.py`, `backup.py`, `instance_lock.py` | `tests/execution/test_db.py`, `test_migration_v*.py`, `test_backup.py` | |
-| Offline-first sync client | Implemented | `app/sync/` | `tests/sync/*` (full suite) | Live server Unverified |
+| Offline-first sync client | Implemented | `app/sync/` | `tests/sync/*` (full suite), `tests/test_sync_activity.py`, `tests/test_transport_keepalive.py` | Live server Unverified. Cadence follows the window's activity (60 s focused, 300 s otherwise, edits pushed 2.5 s after the last commit; ADR-041); one keep-alive HTTPS connection per transport |
+| Desktop start-up and idle behaviour (round 3) | Implemented | `app/app.py`, `app/ui/pages.py` (`DeferredPage`), `app/ui/activity.py`, `app/ui/page_freshness.py`, `app/ui/shell.py` (page size), `app/sync/credentials.py` (`LazyVault`) | `tests/test_startup_cost.py`, `tests/ui/test_deferred_pages.py`, `test_activity*.py`, `test_page_freshness*.py` | Probe: first paint 5.5-5.8 s -> 1.2-1.3 s, minimized 60 s with no status poll, resize p95 330-460 -> 86-96 ms ([docs/desktop-performance-round3.md](docs/desktop-performance-round3.md)). Physical dragging Unverified |
 | Conflict review and association UI | Implemented | `app/ui/account_page.py`, `conflict_view.py` | `tests/sync/test_desktop_account_*.py` | `keep_local` cannot be used on a record deleted on the server |
 | Backend REST, planning API and sync push | Implemented | `backend/api.py`, `planning_api.py`, `sync.py` | `tests/backend/*` (full suite, SQLite) | PostgreSQL runs: CI `postgres` job only |
 | Registration with email verification | Implemented | `backend/verification.py`, `verification_api.py` | `tests/backend/test_email_verification.py` | Live email delivery Unverified |
@@ -100,12 +101,15 @@ FastAPI/PostgreSQL account server.
 | Budget statistics read at most the last 3,660 days of history; the forecast's everyday spending is a flat 15-day average of one-time expenses (no seasonality) | Low (by design) | `app/budget/stats.py` | Module docstring |
 | The Day page draws at most 40 money cards; more are reachable through the totals' dialogs | Low (by design) | `app/ui/day_money.py` | `MONEY_CARD_LIMIT` |
 | The first sync of an account with a server that offers `budget` replays the whole change feed once (to pick up budget changes an older client version skipped) | Low (one-time cost) | Sync | `SyncEngine.pull_budget_history` |
-| `tests/test_desktop_isolation.py::test_python_m_app_app_launches_offline_and_closes_cleanly` fails when start-up is slow: its probe closes the app 1.5 s after the main loop starts, and the first layout pass then ends inside CustomTkinter's title-bar update (`TclError: application has been destroyed`) | Low (test timing) | Launch probe (`tests/isolation_probe.py`) | **Verified failure** on 2026-10-20 on the clean commit `f20cf0b` as well (start-up took 10-18 s on this machine); it passed in the run of 2026-10-19 |
+| `tests/test_desktop_isolation.py::test_python_m_app_app_launches_offline_and_closes_cleanly` fails when start-up is slow: its probe closes the app 1.5 s after the main loop starts, and the first layout pass then ends inside CustomTkinter's title-bar update (`TclError: application has been destroyed`) | Low (test timing) | Launch probe (`tests/isolation_probe.py`) | **Verified failure** on 2026-10-20 on the clean commit `f20cf0b` as well (start-up took 10-18 s on this machine); it passed in the run of 2026-10-19, and **passed** on 2026-10-20 with the round-3 start-up (the constructor now takes about 0.7 s) -- possibly resolved, the probe's timing is unchanged |
+| Two dev-suite tests fail on this machine: `test_a_balance_without_transactions_stays_flat` (the forecast's `zero_day` is None, the test expects tomorrow) and `test_new_tasks_get_distinct_types_and_never_group_by_name` (type label order) | Unknown (not investigated) | `app/budget/stats.py`, task types | **Verified failure** on 2026-10-21 on `257d0e8` and `bec7ad0` alike |
+| A page is built the first time it is shown (0.1-0.4 s once per page and workspace); after a window resize the shown page keeps its old size for 120 ms before it is laid out at the new one | Low (by design) | `app/ui/pages.py: DeferredPage`, `app/ui/shell.py: PAGE_SETTLE_MS` | docs/desktop-performance-round3.md |
+| While the window is not focused, remote changes arrive up to 5 minutes later (background sync interval 300 s) | Low (by design) | Sync | ADR-041 |
 | Python 3.10, pinned everywhere, reaches upstream end of security support in October 2026 | Medium (suspected risk) | Toolchain | PEP 619 schedule; see ROADMAP R2 |
 
 ## D. Testing and quality
 
-Test layout: 213 `test_*.py` modules under `tests/` (about 2,580 collected tests), with tiers assigned automatically (`tests/test_tiers.py`).
+Test layout: 221 `test_*.py` modules under `tests/`, with tiers assigned automatically (`tests/test_tiers.py`).
 
 | Command | Purpose |
 |---|---|
@@ -117,8 +121,16 @@ Test layout: 213 `test_*.py` modules under `tests/` (about 2,580 collected tests
 | `ruff check .` | Lint |
 | `python -m benchmarks.scheduling_mode_baseline --check` | Engine baseline drift (not run by CI) |
 
-Results of the latest session (Windows 10, `.venv` with Python 3.10.11, working tree including the
-uncommitted budgeting and updater changes):
+Results of the round-3 session (2026-10-20/21, Windows 10, `.venv` with Python 3.10.11, commit `bec7ad0`):
+
+| Check | Result |
+|---|---|
+| `pytest -m dev` | **2 failed**, 2233 passed, 2 skipped, 388 deselected (218 s). The two failures (`tests/budget/test_budget_stats.py::test_a_balance_without_transactions_stays_flat`, `tests/planning/test_task_types_and_snapshots.py::test_new_tasks_get_distinct_types_and_never_group_by_name`) fail identically on `257d0e8`, before any round-3 change: **Verified failure**, not investigated |
+| `ruff check .` | **Passed** |
+| Real-window and system modules affected by round 3 (deferred pages, shell, settings, calendar, planning, productivity, Day, budget, task editor, async storage, account page and milestone-4 sync windows, desktop isolation, activity, page freshness) | **Passed:** 86, then 69 + 4, then 29 (per phase, not the full `-m "not dev"` tier) |
+| `tests/sync/test_local_first_accounts.py`, `test_protocol.py`, `test_keep_signed_in.py`, `test_http_transport.py`, `tests/test_transport_security.py` | **Passed** |
+
+Results of the session before (working tree including the then-uncommitted budgeting and updater changes):
 
 | Check | Result |
 |---|---|
