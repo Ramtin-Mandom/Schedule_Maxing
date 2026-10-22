@@ -262,7 +262,7 @@ class AppShell(ctk.CTkFrame):
         #: Hidden pages waiting to be detached or released (_hide, _detach_when_quiet, _release_when_quiet):
         #: key -> pending timer.
         self._detach_pending: dict[str, str] = {}
-        #: Light caching (Settings, set_light_caching): only HOME_PAGE and the shown page's section stay built.
+        #: Light caching (Settings, set_light_caching): only HOME_PAGE and the shown page stay built.
         self.light_caching = False
         self.pages: dict[str, ctk.CTkFrame] = {}
         self.current: str | None = None
@@ -366,7 +366,7 @@ class AppShell(ctk.CTkFrame):
         costs a re-layout (0.2-0.7 s, about a first visit). Without this bound, opening every page made the
         window hold ~3,800 native child windows instead of ~450, and dragging it that much heavier. The page
         just left is detached too once it stayed hidden for DETACH_AFTER_MS with no input for DETACH_IDLE_MS.
-        With light caching (set_light_caching), pages outside the shown page's section are released instead.
+        With light caching (set_light_caching), every page but the home page and `showing` is released instead.
         """
         self.pages[key].place_forget()
         self._cancel_detach(key)
@@ -384,10 +384,10 @@ class AppShell(ctk.CTkFrame):
 
     def set_light_caching(self, on: bool) -> None:
         """
-        Light caching: while a page is shown, only HOME_PAGE (Day) and the pages of the shown page's section
-        (its group, e.g. Settings | Account | How to Use) stay built; every other built page is released
+        Light caching: while a page is shown, only HOME_PAGE (Day) and the shown page stay built -- not even
+        the other pages of its group (Settings | Account | How to Use); every other built page is released
         (DeferredPage.release) and built anew when it is shown again. Fewer widgets and native windows are
-        kept, at the cost of a first-visit build on every return to another section.
+        kept, at the cost of a first-visit build on every return to a page other than Day.
         """
         self.light_caching = on
         if on and self.current is not None:
@@ -395,8 +395,8 @@ class AppShell(ctk.CTkFrame):
 
     @staticmethod
     def kept_pages(showing: str) -> set[str]:
-        """The pages light caching keeps built while `showing` is shown: its section and the home page."""
-        return {showing, HOME_PAGE, *(page for page, _ in page_group(showing))}
+        """The pages light caching keeps built while `showing` is shown: it and the home page."""
+        return {showing, HOME_PAGE}
 
     def _release_others(self, showing: str) -> set[str]:
         """Release every built page outside kept_pages(showing) once that is safe; their keys."""

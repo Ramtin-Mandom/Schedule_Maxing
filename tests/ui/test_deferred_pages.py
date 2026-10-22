@@ -182,7 +182,7 @@ def test_a_workspace_switch_replaces_pages_without_building_unopened_ones(app) -
     assert not app.pages["month"].built and not app.pages["productivity"].built
 
 
-def test_light_caching_keeps_only_day_and_the_open_section_built(app, monkeypatch) -> None:
+def test_light_caching_keeps_only_day_and_the_shown_page_built(app, monkeypatch) -> None:
     import app.ui.shell as shell_module
 
     monkeypatch.setattr(shell_module, "_input_idle_ms", lambda: 10_000)  # nobody is typing
@@ -195,14 +195,14 @@ def test_light_caching_keeps_only_day_and_the_open_section_built(app, monkeypatc
     pump(app, lambda: app.pages["week"].winfo_children() == [], timeout=5)  # its widgets go in slices
     assert not week_page.winfo_exists()
 
-    app.shell.group_bar.buttons["account"].invoke()  # a page of the same section: Settings stays built
-    pump(app)
+    app.shell.group_bar.buttons["account"].invoke()  # another page of the same group: Settings goes too
+    pump(app, lambda: not app.pages["settings"].built, timeout=5)
     app.shell.group_bar.buttons["guide"].invoke()
-    pump(app)
-    assert all(app.pages[key].built for key in ("settings", "account", "guide"))
+    pump(app, lambda: not app.pages["account"].built, timeout=5)
+    assert app.pages["guide"].built
 
-    app.show_page("day")  # Day's section is Day alone
-    pump(app, lambda: not any(app.pages[key].built for key in ("settings", "account", "guide")), timeout=5)
+    app.show_page("day")
+    pump(app, lambda: not app.pages["guide"].built, timeout=5)
     assert app.pages["day"].winfo_exists() and app.shell.current == "day"
 
     app.show_page("week")  # shown again: built anew, at the remembered date, with its data read
