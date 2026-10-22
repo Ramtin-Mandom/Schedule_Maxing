@@ -40,7 +40,7 @@ class UISettings:
     check_for_updates: bool = True
     skipped_version: str | None = None
     last_update_check: str | None = None
-    #: Light caching (app/ui/shell.py AppShell.set_light_caching): only Day and the open section stay built.
+    #: Light caching (app/ui/shell.py AppShell.set_light_caching): only Day and the shown page stay built.
     light_caching: bool = False
 
     def with_appearance(self, appearance: str) -> "UISettings":

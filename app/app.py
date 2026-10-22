@@ -568,7 +568,7 @@ class ScheduleOptimizerApp(ctk.CTk):
         """
         if self._closing or self.shell is None or attempts >= self.PREBUILD_ATTEMPTS:
             return
-        if self.shell.light_caching:  # it keeps no page outside Day and the open section built
+        if self.shell.light_caching:  # it keeps no hidden page but Day built
             return
         page = next((self.pages[key] for key in self.PREBUILD_PAGES
                      if not getattr(self.pages.get(key), "built", True)), None)

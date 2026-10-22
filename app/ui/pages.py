@@ -346,7 +346,7 @@ class SettingsPage(ctk.CTkFrame):
 
         self.light_caching = ctk.BooleanVar(value=settings.light_caching)
         self.light_caching_box = ctk.CTkCheckBox(
-            appearance, text="Light caching: keep only the Day page and the section you are in ready",
+            appearance, text="Light caching: keep only the Day page and the page you are on ready",
             variable=self.light_caching, command=self._light_caching_changed, text_color=theme.TEXT_PRIMARY,
             font=font(theme.SIZE_BODY))
         self.light_caching_box.grid(row=4, column=0, columnspan=2, sticky="w", padx=theme.SPACE_L, pady=(0, 4))

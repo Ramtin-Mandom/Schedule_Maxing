@@ -304,8 +304,9 @@ measured above is the likely part that differs between compositor versions.
 
 ### Addendum: light caching (ADR-045)
 
-An opt-in Settings choice: only Day and the pages of the open section stay built; the others are
-released (destroyed in ~12 ms slices) and built again when shown. Probe (scratch script, empty
+An opt-in Settings choice: only Day and the shown page stay built (not even the other pages of
+the Settings | Account | How to Use group); the others are released (destroyed in ~12 ms slices)
+and built again when shown. Probe (scratch script, empty
 database, 1400x900 window, every page opened then ten revisits; three alternating runs per mode,
 times are show + layout + draw):
 
@@ -322,5 +323,7 @@ times are show + layout + draw):
 | Back to Productivity | ~32 ms | ~220 ms |
 | Longest UI block while releasing | -- | 13 ms |
 
-So it lowers memory and window weight, not switching time: every return to another section costs a
-first-visit build. It stays off by default.
+So it lowers memory and window weight, not switching time: every return to a page other than Day
+costs a first-visit build (measured when the group's pages were still kept; the tour and the
+revisits above went through Day between sections, so the figures hold for the final rule). It
+stays off by default.
