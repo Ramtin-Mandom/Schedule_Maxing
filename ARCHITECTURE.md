@@ -5,7 +5,7 @@ System-level view of Schedule Maxing. For file-level navigation and change impac
 reasons behind the structure see [DECISIONS.md](DECISIONS.md). Detailed contracts live in `docs/` and are
 linked where relevant rather than repeated.
 
-Verified against commit `bdc67f6` (app version 1.2.0) on 2026-10-21.
+Verified against commit `f5d91aa` (app version 1.2.0) on 2026-10-22.
 
 ## 1. What the system is
 
@@ -169,7 +169,8 @@ so the same rules run on both sides.
 - **Native-window budget.** Every Tk widget is a Win32 child window and moving the window costs dwm.exe work
   per child window, hidden ones included; long lists and static text use the one-window widgets of
   `app/ui/light_widgets.py`, and hidden pages other than Day and the page left last are detached into a
-  withdrawn window of their own (`AppShell._hide`, ADR-043).
+  withdrawn window of their own (`AppShell._hide`, ADR-043). With the opt-in light caching, every hidden page
+  but Day is destroyed instead (`DeferredPage.release`) and built again on its next show (ADR-045).
 - **Engine process.** A schedule generation runs in a worker thread, but its day-engine calls run in one
   separate spawned process (`app/planning/engine_process.py`, ADR-044), so their CPU never holds the GIL the
   Tk thread needs; everything that touches the database stays in the thread.
