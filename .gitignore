@@ -69,3 +69,6 @@ exports/
 .venv-build/
 /build/
 /dist/
+
+# /sum session hand-off summaries
+/sum_*.md
