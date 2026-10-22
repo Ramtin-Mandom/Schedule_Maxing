@@ -1,10 +1,11 @@
 ---
 name: sum
 description: Hand-off summary for a new session. Distills what this conversation already learned about the topics given in [brackets] (state, decisions, exact file/line pointers, dead ends, next steps) into a compact sum_<topic>.md so the next session can start from it instead of re-reading files and re-deriving context. Never edits code, commits or pushes.
-argument-hint: "[topic or parts to extract, e.g. [sync conflict fix] or [deferred pages, perf numbers]]"
+argument-hint: "[topic or parts to extract] [+ sum_<name>.md to add to an existing summary; + alone = latest]"
 disable-model-invocation: true
 allowed-tools:
   - Write
+  - Read
   - Glob
   - Bash(git rev-parse:*)
   - Bash(git status:*)
@@ -28,14 +29,20 @@ the next session a file read, a search, a test run or a wrong turn — or it doe
 - No brackets / empty: summarize the session's main line of work (skip side questions and abandoned tangents).
 - If the scope names something this conversation never covered, say so and stop — don't explore the
   repository to fill it in. A summary of what you didn't see is worse than none.
+- **Add mode:** a `+` after the brackets means "add to an existing summary" instead of creating a new one:
+  - `+ sum_sync_fix.md` (or `+ sum_sync_fix`, `+ sync_fix`) — that file in the project root.
+  - `+` alone — the most recently modified `sum_*.md` in the project root (first `Glob` result).
+  - Plain words such as "add to sum_sync_fix.md" / "update the previous summary" mean the same.
+  - If the target doesn't exist (or there is no `sum_*.md` at all), say so and stop; don't create one.
+  - Examples: `/sum [retry logic] + sum_sync_fix.md`, `/sum [test results] +`, `/sum +`.
 
 ## 2. Gather — from the conversation, not the repository
 
 - Source material is what is **already in this conversation**: files read, edits made, command and test
   output, decisions the user made, errors hit.
 - Don't re-read files or search to "refresh" the picture. The only allowed calls are cheap facts for the
-  header: `git rev-parse --abbrev-ref HEAD`, `git rev-parse --short HEAD`, `git status --short`, and `Glob`
-  for an existing `sum_*.md`.
+  header: `git rev-parse --abbrev-ref HEAD`, `git rev-parse --short HEAD`, `git status --short`, `Glob`
+  for an existing `sum_*.md`, and — in add mode only — `Read` of the one target summary file.
 - If you're unsure whether something is still true (e.g. a file was edited after you read it), mark it
   `(unverified)` rather than checking.
 - Never include secrets, tokens, `.env` contents or credentials.
@@ -47,6 +54,25 @@ the next session a file read, a search, a test run or a wrong turn — or it doe
   name it after the session's main work.
 - If that file already exists, don't overwrite it: use `sum_<slug>_2.md` (`_3`, …) — unless the scope says
   to update/replace it, in which case rewrite it in place.
+- In add mode, skip naming: the target file keeps its name.
+
+## 3b. Add mode — merge into the existing summary
+
+Merge, don't just append a second summary below the first. The result must still read as one current
+briefing for a fresh agent:
+
+- **Status** — rewrite to the current truth: move items from In progress / Not started to Done when this
+  session finished them; drop "Uncommitted" entries that are now committed.
+- **Key facts / Decisions / Gotchas / Already ruled out** — add new bullets; correct or delete old ones this
+  session proved wrong (never leave two contradicting bullets). Don't repeat what's already there.
+- **Where to look** — add new rows; remove rows for files that no longer matter.
+- **Tests & commands** — replace an old result with the newer one for the same command.
+- **Next steps / Open questions** — rewrite: drop what's done or answered, add what's new.
+- New topics from the brackets that don't fit an existing section get their own `##` section.
+- Update the header line to the new date, branch and sha, and keep a short history line under it:
+  `> Updated: <YYYY-MM-DD> (+ <scope>), <earlier date>, …`
+- Keep the merged file within ~150 lines: compress or drop the least useful old detail rather than growing.
+- Write the whole merged file with `Write`.
 
 ## 4. Write it — template
 
@@ -103,5 +129,6 @@ each snippet to a few lines. Drop the sections that would be empty.
 ## 5. Finish
 
 - Don't edit any other file; don't commit, push or stage.
-- Reply with the file path, its line count, and one line telling the user how to use it, e.g.:
+- Reply with the file path, its line count (in add mode: what was added, changed or removed, in one or two
+  lines), and one line telling the user how to use it, e.g.:
   "In the new session start with: read `sum_sync_conflict_fix.md` and continue from Next steps."
