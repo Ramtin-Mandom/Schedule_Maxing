@@ -79,7 +79,8 @@ def settle(app, seconds: float = 0.4) -> None:
         state = _activity(app)
         if state != last:
             last, quiet_since = state, now
-        elif now - quiet_since >= QUIET_SECONDS:
+        # Never quiet while work is queued: a debounced page resize stays "pending" unchanged for 120 ms.
+        elif not any(state[:3]) and now - quiet_since >= QUIET_SECONDS:
             return
         if now >= deadline:
             return

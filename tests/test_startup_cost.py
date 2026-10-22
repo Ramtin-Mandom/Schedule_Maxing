@@ -101,3 +101,25 @@ def test_sync_service_offers_keep_signed_in_only_with_a_store(tmp_path) -> None:
         assert not SyncService(connection, None).can_keep_signed_in
     finally:
         connection.close()
+
+
+def test_credential_prefetch_needs_a_configured_backend(tmp_path) -> None:
+    from app.execution.db import get_connection
+    from app.sync.service import SyncService
+
+    class Transport:
+        base_url = "http://127.0.0.1:9"
+
+    class Vault(LazyVault):
+        def prefetch(self) -> None:
+            prefetched.append(True)
+
+    prefetched: list = []
+    connection = get_connection(tmp_path / "app.db")
+    try:
+        SyncService(connection, None, vault=Vault(MemoryVault)).prefetch_credentials()
+        assert prefetched == []  # no backend: no lookup thread (it would outlive a quick close)
+        SyncService(connection, Transport(), vault=Vault(MemoryVault)).prefetch_credentials()
+        assert prefetched == [True]
+    finally:
+        connection.close()

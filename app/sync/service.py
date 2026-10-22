@@ -384,7 +384,12 @@ class SyncService:
         return self._vault is not None and getattr(self._vault, "available", True)
 
     def prefetch_credentials(self) -> None:
-        """Find the credential store now, in the background (a LazyVault), so no later step waits for it."""
+        """
+        Find the credential store now, in the background (a LazyVault), so no later step waits for it.
+        Without a backend nobody can sign in, so nothing is looked up (and no thread is started).
+        """
+        if self._transport is None:
+            return
         prefetch = getattr(self._vault, "prefetch", None)
         if prefetch is not None:
             prefetch()
