@@ -22,7 +22,7 @@ Keep responsibilities separated:
 - dependencies/PERT
 - reward/scoring
 - optimizer/engine strategies
-- analytics/ML
+- analytics
 - UI
 - persistence/sync/API
 The UI should call domain/application logic rather than reimplement it. Hard constraints must remain hard constraints.

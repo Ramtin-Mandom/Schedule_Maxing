@@ -331,12 +331,12 @@ with TestClient(app) as client:
     result = client.post("/planning/generate", headers=headers,
                          json={"start_date": "2026-03-02", "end_date": "2026-03-02", "timezone": "UTC"}).json()
     assert len(result["days"][0]["placements"]) == 1, result
-print(sorted({name.split(".")[0] for name in sys.modules} & {"tkinter", "customtkinter", "pandas", "sklearn"}))
+print(sorted({name.split(".")[0] for name in sys.modules} & {"tkinter", "customtkinter"}))
 """
 
 
 def test_generation_needs_no_desktop_packages(tmp_path) -> None:
-    """A fresh process generates through the hosted API without importing Tk, pandas or scikit-learn."""
+    """A fresh process generates through the hosted API without importing Tk."""
     import os
     import subprocess
     import sys

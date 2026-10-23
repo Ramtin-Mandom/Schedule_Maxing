@@ -28,7 +28,7 @@ app/                    desktop application and the shared domain layer (also im
   data_processor.py     legacy CSV loader (Greedy v1 path, tests, benchmarks)
   planning/             canonical planning domain + application services (see C.2)
   execution/            local SQLite infrastructure + execution tracking (see C.3)
-  productivity/         analytics, tracker, cohort, predictors, ML experiment (see C.4)
+  productivity/         analytics, tracker, cohort, median predictor (see C.4)
   budget/               budgeting domain: money, models, recurrence, BudgetService, stats/forecast, SQLite repository (see C.3a)
   sync/                 offline-first sync client (see C.5)
   persistence/          optional direct-PostgreSQL desktop storage (dev only)
@@ -73,7 +73,7 @@ Ignore: `.venv*`, `__pycache__`, `.pytest_cache`, `.ruff_cache`, `build/`, `dist
 | Budgeting page (General / Stats / Future) | `app/ui/budget_page.py` (`BudgetingPage`), `app/ui/budget_controller.py` (`BudgetController`) | `budget_future.py`, `budget_charts.py`; composition `AppServices.budget_controller()` / `DirectAppServices.budget_controller()`; wiring `app/app.py: _build_workspace_pages`, nav `shell_state.py` | `tests/ui/test_budget_controller.py`; real-window `tests/ui/test_budget_page.py` | `app/budget/stats.py` |
 | Day page money widgets | `app/ui/day_money.py` (`MoneyTotals`, `MoneyStrip`, `DayMoneyDialog`) | `app/ui/day_page.py` (`_show_money`, `open_money`, `_save_money`), `BudgetController.day` / `set_day_amounts` | `tests/ui/test_budget_controller.py`; real-window `tests/ui/test_budget_page.py` | Budgeting page |
 | Productivity analytics | `app/productivity/reporting.py`, `tracker.py` | `stats.py`, `segments.py`, `day_summary.py`, `schedule_cohort.py`, `app/planning/history.py`, `app/ui/productivity_controller.py`, `productivity_page.py`, `tracker_view.py`, `productivity_charts.py` | `tests/productivity/test_tracker*.py`, `test_reporting.py`, `test_schedule_cohort*.py`, `tests/ui/test_productivity_*.py`, `test_tracker_view.py` | `docs/analytics.md` |
-| Duration prediction / ML | `app/productivity/prediction.py`, `ml_*.py` | `predictor_comparison_cli.py`, `app/ui/duration_suggestion.py` (not wired) | `tests/productivity/test_prediction.py`, `test_ml_*.py` | CLI only |
+| Duration prediction | `app/productivity/prediction.py` | `app/ui/duration_suggestion.py` (not wired) | `tests/productivity/test_prediction.py` | Median-based only |
 | Settings / preferences UI | `app/ui/pages.py` (`SettingsPage`), `app/ui/settings_controller.py` | `preferences_editor.py`, `preferences_model.py`, `ui_settings.py`, `task_defaults.py` | `tests/ui/test_settings_page.py`, `test_settings_controller.py` | Reward/preferences |
 | Desktop shell / navigation (page groups: Settings / Account / How to Use) | `app/ui/shell.py`, `shell_state.py` | `layout.py`, `components.py`, `paint_widgets.py`, `theme.py`, `guide_page.py`, `guide_content.py` | `tests/ui/test_desktop_shell.py`, `test_shell_foundation.py`, `test_guide.py` | All pages |
 | UI responsiveness | `app/ui/background.py` | `tk_lifecycle.py`, `diagnostics.py`, `layout.py`, `paint_widgets.py`, `activity.py`, `page_freshness.py`, `pages.py` (`DeferredPage`), `shell.py` (page size) | `tests/ui/test_background_executor.py`, `test_async_storage.py`, `test_responsiveness_regressions.py`, `test_bounded_rendering.py`, `test_deferred_pages.py`, `test_page_freshness*.py`, `test_activity*.py`, `tests/test_startup_cost.py` (helper: `tests/tk_cleanup.py`) | `benchmarks/desktop_responsiveness.py`, `docs/desktop-responsiveness-*.md`, `docs/desktop-performance-round3.md` |
@@ -162,9 +162,8 @@ scheduling stack imports this package (`tests/budget/test_budget_service.py` che
 `tracker.py` (awards, points, averages, task-type and time views), `project_stats.py`,
 `schedule_cohort.py` (planned vs actual), `day_summary.py` (day aggregates and colour class),
 `stats.py`/`segments.py`/`buckets.py`/`filters.py`/`insights.py`/`trends.py` (execution statistics),
-`data_prep.py` (executions → observations), `prediction.py` (median duration predictor), `ml_*.py`
-(gated scikit-learn experiment; persisted under the data folder), `exporters.py`, `report_cli.py`,
-`predictor_comparison_cli.py`. Pure functions except `reporting.py`, `data_prep.py` and `ml_persistence.py`.
+`data_prep.py` (executions → observations), `prediction.py` (median duration predictor), `exporters.py`, `report_cli.py`.
+Pure functions except `reporting.py` and `data_prep.py`.
 
 ### C.5 Sync client (`app/sync/`)
 

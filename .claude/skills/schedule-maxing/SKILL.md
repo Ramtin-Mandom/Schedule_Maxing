@@ -1,6 +1,6 @@
 ---
 name: schedule-maxing
-description: Where things live in Schedule Maxing and which layer a change belongs to. Use before implementing a feature or fix that touches the scheduling engines, constraints/PERT/reward, planning, execution tracking, productivity/ML, sync, the FastAPI backend, the CustomTkinter UI, or Windows packaging -- to find the right module without exploring the repository.
+description: Where things live in Schedule Maxing and which layer a change belongs to. Use before implementing a feature or fix that touches the scheduling engines, constraints/PERT/reward, planning, execution tracking, productivity analytics, sync, the FastAPI backend, the CustomTkinter UI, or Windows packaging -- to find the right module without exploring the repository.
 ---
 
 # Schedule Maxing: project map
@@ -20,7 +20,7 @@ repository-wide exploration, no unrelated refactors.
 | Engines | `app/optimizer.py` (Greedy v1 legacy baseline + the minute-precise day engine), modes in `docs/scheduling-modes.md` | Normal, ADHD friendly, Early Finish, Night Owl, Catch-Up. Do not change baseline output unless the task says so |
 | Planning service | `app/planning/` (`service`, `application`, `allocation`, `recurrence`, `series`, `csv_import`/`csv_export`) | The persistence-backed CSV importer rejects unknown dependencies; the legacy pipeline ignores them |
 | Execution tracking | `app/execution/` (`service`, `lifecycle`, `db`, `backup`, `instance_lock`) | `db.py` owns local SQLite migrations; `backup.py` copies the file before any migration |
-| Productivity / ML | `app/productivity/` | |
+| Productivity | `app/productivity/` | |
 | UI | `app/ui/` -- `*_page`/`*_view` draw, `*_controller`/`*_model` hold logic | UI calls domain/application services; it never reimplements scheduling or persistence |
 | Sync / API client | `app/sync/` (`engine`, `transport`, `credentials`), `app/persistence/` | |
 | Backend (server only) | `backend/` (`api`, `accounts`, `auth*`, `sync`, `migrate`, `mail`, `rate_limit`) | Never imported by the packaged client |

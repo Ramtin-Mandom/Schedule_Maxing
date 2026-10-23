@@ -54,7 +54,7 @@ All legacy timestamps (created_at, updated_at, and WorkSession's
 started_at/ended_at) remain timezone-aware ISO 8601 strings (see
 datetime.now(timezone.utc).isoformat()), stored as TEXT in SQLite, exactly
 as before -- changing that would ripple through every existing consumer
-(service.py, data_prep.py, ml_features.py, buckets.py, exporters.py) for no
+(service.py, data_prep.py, buckets.py, exporters.py) for no
 benefit this milestone needs. The *new* canonical timestamp/date fields
 below (canonical_planned_start/end, actual_first_start_at,
 actual_final_end_at, canonical_planned_date) instead use typed, timezone-
