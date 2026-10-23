@@ -78,7 +78,8 @@ def test_logout_revokes_the_session_on_the_server(browser) -> None:
     assert browser.get("/auth/browser/session").json() == {"authenticated": False, "user": None, "csrf_token": None,
                                                            "expires_at": None}
     # Even a copy of the old cookie no longer works.
-    replay = browser.get("/me", cookies={"sm_session": stolen})
+    browser.cookies.set("sm_session", stolen)
+    replay = browser.get("/me")
     assert replay.status_code == 401 and replay.json()["error"]["code"] == "unauthenticated"
 
 
@@ -91,7 +92,8 @@ def test_sessions_expire(browser, clock) -> None:
 
 
 def test_an_unknown_cookie_is_a_clear_401(browser) -> None:
-    response = browser.get("/me", cookies={"sm_session": "made-up"})
+    browser.cookies.set("sm_session", "made-up")
+    response = browser.get("/me")
     assert response.status_code == 401 and response.json()["error"]["code"] == "unauthenticated"
 
 
