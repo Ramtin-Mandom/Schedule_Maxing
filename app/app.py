@@ -68,7 +68,6 @@ from app.execution.db import resolve_db_path
 from app.sync.transport import HttpTransport, SyncTransport
 from app.ui import diagnostics, theme
 from app.ui.account_controller import AccountController, ConnectionView
-from app.ui.account_page import AccountPage
 from app.ui.app_services import AppServices, describe_startup_failure, open_app_services
 from app.ui.direct_services import (
     DirectAccountController,
@@ -78,10 +77,6 @@ from app.ui.direct_services import (
 )
 from app.ui.background import current_registry, run_in_background
 from app.ui.day_controller import DayScheduleController
-from app.ui.calendar_controller import CalendarController
-from app.ui.calendar_page import CalendarPage
-from app.ui.projects_controller import ProjectsController
-from app.ui.planning_pages import ProjectsPage
 from app.ui.day_page import DaySchedulePage
 from app.ui.components import (
     AppButton,
@@ -91,11 +86,8 @@ from app.ui.components import (
 )
 from app.ui.conflict_view import ConflictDialog
 from app.ui.execution_controller import ExecutionController
-from app.ui.guide_page import GuidePage
 from app.ui.pages import DeferredPage, PageHeader, PlaceholderPage, ScrollPage, SettingsPage
 from app.ui.productivity_controller import ProductivityController
-from app.ui.productivity_page import ProductivityPage
-from app.ui.budget_page import BudgetingPage
 from app.ui.shell import AppShell
 from app.ui.shell_state import ShellState
 from app.ui.task_defaults import FILENAME as TASK_DEFAULTS_FILENAME, TaskDefaultsStore
@@ -103,7 +95,9 @@ from app.ui.ui_settings import UISettings, UISettingsStore, settings_path_for
 from app.ui.update_controller import UpdateController
 from app.ui.update_view import UpdateFlow
 from app.ui.settings_controller import SettingsController, TaskDataResetController
-from app.ui.tk_lifecycle import DesktopCollection, release_resources
+from app.ui.activity import Activity, ActivityState, policy_for
+from app.ui.activity import input_idle_ms as _input_idle_ms
+from app.ui.tk_lifecycle import DesktopCollection, release_resources, tune_customtkinter_loops
 from app.version import APP_NAME, __version__
 from config import settings
 
@@ -225,6 +219,11 @@ class RewardConfigPage(ctk.CTkFrame):
 # Application Shell
 # -----------------------------------------------------------------------------
 
+def _built(page) -> bool:
+    """Whether `page` exists and has been built (a DeferredPage is built the first time it is shown)."""
+    return page is not None and getattr(page, "built", True)
+
+
 _PLACEHOLDERS = {
     "about": ("About", f"{APP_NAME} {__version__}\n\n"
                         "Schedule Maxing is a personal scheduling and productivity project created by Ramtin Rezaei "
@@ -256,8 +255,11 @@ class ScheduleOptimizerApp(ctk.CTk):
         self.task_defaults = TaskDefaultsStore(self.ui_store.path.with_name(TASK_DEFAULTS_FILENAME))
         ctk.set_appearance_mode(self.ui_settings.appearance)
         ctk.set_widget_scaling(self.ui_settings.ui_scale)
+        tune_customtkinter_loops()  # before the first window starts CustomTkinter's tracker loops
         super().__init__()
         self._collection = DesktopCollection(self)
+        #: Focused / unfocused / minimized (app/ui/activity.py): how often periodic work runs.
+        self.activity = ActivityState()
         # Opt-in (SCHEDULE_MAXING_UI_DIAGNOSTICS): event-loop lateness and callback timings, app/ui/diagnostics.py.
         self._diagnostics = diagnostics.install_from_env(self, jobs=lambda: current_registry().active)
         ctk.set_default_color_theme("blue")
@@ -293,6 +295,8 @@ class ScheduleOptimizerApp(ctk.CTk):
         self._conflicts_reading = False
         self.conflict_dialog: ConflictDialog | None = None
         self._closing = False
+        #: A pending look at whether this application still has the focus (_focus_out).
+        self._focus_check = None
         #: True once the window is destroyed and its storage closed (the end of _on_close's polling).
         self._closed = False
 
@@ -307,7 +311,9 @@ class ScheduleOptimizerApp(ctk.CTk):
                                                          project_root=project_root, backend=direct_backend)
             else:
                 self.services = open_app_services(db_path, timezone=timezone, project_root=project_root,
-                                                  transport_factory=transport_factory, background_sync=background_sync)
+                                                  transport_factory=transport_factory, background_sync=background_sync,
+                                                  sync_start_delay=self.STARTUP_SYNC_DELAY_S,
+                                                  engine_process=settings.GENERATION_PROCESS)
         except Exception as error:  # noqa: BLE001 - reported to the user; no scheduler without storage
             logger.error("The application's storage could not be opened.", exc_info=error)
             self.startup_error = (describe_direct_startup_failure(error) if self.direct
@@ -324,6 +330,64 @@ class ScheduleOptimizerApp(ctk.CTk):
                 self._check_direct_database()
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        # On the root only: its descendants' focus/map events reach these bindings too, and are filtered there.
+        self.bind("<FocusIn>", self._focus_in, add="+")
+        self.bind("<FocusOut>", self._focus_out, add="+")
+        self.bind("<Map>", self._mapped, add="+")
+        self.bind("<Unmap>", self._unmapped, add="+")
+
+    # -- activity (app/ui/activity.py) ------------------------------------------------------
+
+    def _focus_in(self, _event=None) -> None:
+        self._activity_changed(self.activity.set_focused(True))
+
+    def _focus_out(self, _event=None) -> None:
+        # Focus moving between this window's own widgets also sends FocusOut: look once it has settled.
+        if self._focus_check is None and not self._closing:
+            self._focus_check = self.after(50, self._check_focus)
+
+    def _check_focus(self) -> None:
+        self._focus_check = None
+        try:
+            focused = self.focus_get() is not None  # None: no window of this application has the focus
+        except (KeyError, tk.TclError):  # e.g. a combobox popdown has it
+            focused = True
+        self._activity_changed(self.activity.set_focused(focused))
+
+    def _mapped(self, event) -> None:
+        if event.widget is self:
+            self._activity_changed(self.activity.set_shown(True))
+
+    def _unmapped(self, event) -> None:
+        # Iconified only: the app itself withdraws the window while closing and while setting its title bar.
+        if event.widget is self and not self._closing and self.state() == "iconic":
+            self._activity_changed(self.activity.set_shown(False))
+
+    def _activity_changed(self, activity: Activity | None) -> None:
+        """Apply the policy of a new activity: status polling, the GC timer and the sync interval."""
+        if activity is None or self._closing:
+            return
+        policy = policy_for(activity)
+        self._collection.set_interval(policy.gc_interval_ms)
+        if self.services is not None and not self.direct:
+            self.services.sync_service.set_activity(activity.value)
+        if self.shell is None:
+            return
+        resumed = self._status_poll is None and policy.status_poll_ms is not None
+        self._cancel_status_poll()
+        if policy.status_poll_ms is not None:
+            if resumed:  # back from minimized: one status read now, and the visible page re-reads if data changed
+                self.refresh_status()
+                self._reload_current_page()
+            self._status_poll = self.after(policy.status_poll_ms, self._poll_status)
+
+    def _cancel_status_poll(self) -> None:
+        if self._status_poll is not None:
+            try:
+                self.after_cancel(self._status_poll)
+            except tk.TclError:
+                pass
+            self._status_poll = None
 
     def _set_window_icon(self) -> None:
         """The application's own icon (assets/, bundled with the packaged app); the default one if it is unavailable."""
@@ -413,11 +477,12 @@ class ScheduleOptimizerApp(ctk.CTk):
     def _task_data_was_reset(self) -> None:
         self.task_defaults.reset()  # added categories and changed default values go with the data
         settings_page = self.pages.get("settings")
-        if settings_page is not None:
+        if _built(settings_page):
             settings_page.render_task_defaults()
         for key in ("day", "week", "month", "projects", "productivity"):
             page = self.pages.get(key)
-            if page is not None and hasattr(page, "on_show") and not getattr(page, "_busy", False):
+            # A page not built yet reads the (now empty) data when it is first shown.
+            if _built(page) and hasattr(page, "on_show") and not getattr(page, "_busy", False):
                 page.on_show()  # re-read now: nothing stale stays on any page
         self.refresh_status()
 
@@ -438,12 +503,13 @@ class ScheduleOptimizerApp(ctk.CTk):
         if self._closing:
             return
         self._closing = True
-        if self._status_poll is not None:
+        self._cancel_status_poll()
+        if self._focus_check is not None:
             try:
-                self.after_cancel(self._status_poll)
+                self.after_cancel(self._focus_check)
             except tk.TclError:
                 pass
-            self._status_poll = None
+            self._focus_check = None
         self._finish_close()
 
     def _finish_close(self, timeout: float = 0.0) -> None:
@@ -463,8 +529,68 @@ class ScheduleOptimizerApp(ctk.CTk):
 
     # -- workspace and synchronization --------------------------------------------------
 
-    #: How often the status bar re-reads the (local, durable) sync status.
-    STATUS_POLL_MS = 4000
+    #: How often the status bar re-reads the (local, durable) sync status while focused (app/ui/activity.py
+    #: ACTIVITY_POLICIES: slower while another application is in front, paused while minimized).
+    STATUS_POLL_MS = policy_for(Activity.FOCUSED).status_poll_ms
+    #: The background sync's first run waits this long, so it does not compete with building the window.
+    STARTUP_SYNC_DELAY_S = 3.0
+    #: After this, once the window is up, the credential store is looked up in the background (_warm_up).
+    WARM_UP_MS = 1500
+
+    #: Pages pre-built in idle time once the window is up, the most likely next one first.
+    PREBUILD_PAGES = ("week",)
+    #: No keyboard or mouse input for this long (anywhere on this computer) counts as idle.
+    PREBUILD_IDLE_MS = 800
+    #: How often to look again while the app or the user is busy.
+    PREBUILD_RETRY_MS = 400
+
+    def _warm_up(self) -> None:
+        """Work the window does not need in order to appear, done once it has (never touches widgets off Tk)."""
+        if self._closing or self.services is None:
+            return
+        if not self.direct:
+            self.services.sync_service.prefetch_credentials()
+        engine = getattr(self.services, "engine", None)
+        if engine is not None:
+            engine.warm_up()  # the engine process starts (and imports the engine) before the first generation
+        self._prebuild()
+
+    #: Looks for an idle moment at most this often before giving up (about a minute).
+    PREBUILD_ATTEMPTS = 150
+
+    def _prebuild(self, attempts: int = 0) -> None:
+        """
+        Build PREBUILD_PAGES in idle time, one part per Tk callback (DeferredPage.prebuild_step), so the
+        first switch to them is quick: only while the Day page has rendered, no background work runs, the
+        window is not minimized and there was no input for PREBUILD_IDLE_MS. Showing the page meanwhile
+        builds its remaining parts at once, as without a pre-build. Without an idle moment for about a
+        minute (e.g. direct storage before signing in), it gives up: the page is built when shown.
+        """
+        if self._closing or self.shell is None or attempts >= self.PREBUILD_ATTEMPTS:
+            return
+        if self.shell.light_caching:  # it keeps no hidden page but Day built
+            return
+        page = next((self.pages[key] for key in self.PREBUILD_PAGES
+                     if not getattr(self.pages.get(key), "built", True)), None)
+        if page is None:
+            return  # every page is built
+        day = self.pages.get("day")
+        ready = (getattr(day, "snapshot", None) is not None and not self.services.registry.active
+                 and self.activity.activity != Activity.MINIMIZED and _input_idle_ms() >= self.PREBUILD_IDLE_MS)
+        if not ready:
+            self.after(self.PREBUILD_RETRY_MS, lambda: self._prebuild(attempts + 1))
+            return
+
+        def step() -> None:
+            if self._closing or not page.winfo_exists() or getattr(page, "built", True):
+                self._prebuild(attempts)
+                return
+            more = page.prebuild_step()
+            if not more:  # built and hidden: out of the moving window's native windows (AppShell.park)
+                self.shell.park(next(key for key, value in self.pages.items() if value is page))
+            self.after(30 if more else 0, lambda: self._prebuild(attempts))  # input and painting run between parts
+
+        self.after_idle(step)
 
     def apply_workspace(self, *, reload_only: bool = False) -> None:
         """
@@ -593,7 +719,9 @@ class ScheduleOptimizerApp(ctk.CTk):
             return
         with diagnostics.span("app.poll_status"):
             self.refresh_status()
-        self._status_poll = self.after(self.STATUS_POLL_MS, self._poll_status)
+        interval = policy_for(self.activity.activity).status_poll_ms
+        if interval is not None:  # paused while minimized (_activity_changed starts it again)
+            self._status_poll = self.after(interval, self._poll_status)
 
     def sync_now(self) -> None:
         """The status bar's Sync now (the same SyncService.sync_now the Account page uses; one at a time)."""
@@ -624,7 +752,7 @@ class ScheduleOptimizerApp(ctk.CTk):
         """Switch light/dark now and remember it; False if it could not be saved (it still applies)."""
         self.ui_settings = self.ui_settings.with_appearance(appearance)
         ctk.set_appearance_mode(appearance)
-        if self.shell is not None and "settings" in self.pages:
+        if self.shell is not None and _built(self.pages.get("settings")):  # built later, it reads ui_settings
             self.pages["settings"].appearance_select.variable.set(appearance.title())
         self._configure_treeview_style()
         if self.shell is not None:
@@ -638,6 +766,13 @@ class ScheduleOptimizerApp(ctk.CTk):
         self._configure_treeview_style()
         if self.shell is not None:
             self.shell.layout_checks.request()  # the same window now holds fewer logical pixels
+        return self.ui_store.save(self.ui_settings)
+
+    def set_light_caching(self, on: bool) -> bool:
+        """Turn light caching (AppShell.set_light_caching) on or off now and remember it; False if not saved."""
+        self.ui_settings = self.ui_settings.with_light_caching(on)
+        if self.shell is not None:
+            self.shell.set_light_caching(on)
         return self.ui_store.save(self.ui_settings)
 
     def _configure_treeview_style(self) -> None:
@@ -676,6 +811,7 @@ class ScheduleOptimizerApp(ctk.CTk):
         self.shell = shell = AppShell(self, self.shell_state, scaling=lambda: self.ui_settings.ui_scale)
         shell.grid(row=0, column=0, sticky="nsew")
         shell.on_navigate = self._navigated
+        shell.light_caching = self.ui_settings.light_caching
         shell.sidebar.set_footer(services.location_label())
         host = shell.host
         self._build_workspace_pages(replace=False)
@@ -685,16 +821,31 @@ class ScheduleOptimizerApp(ctk.CTk):
         else:
             self.account_controller = AccountController(services.sync_service, transport_factory=self._transport_factory,
                                                         background_sync=self._background_sync)
-        shell.add_page("account", AccountPage(host, self.account_controller, on_workspace_changed=self.apply_workspace))
+        controller = self.account_controller
+
+        def account(parent):
+            from app.ui.account_page import AccountPage
+
+            return AccountPage(parent, controller, on_workspace_changed=self.apply_workspace)
+
+        def guide(parent):
+            from app.ui.guide_page import GuidePage
+
+            return GuidePage(parent)
+
+        # Built on first show, like the workspace pages (the status bar's Account button shows it, which builds it).
+        shell.add_page("account", DeferredPage(host, account))
         shell.status_bar.sync_button.configure(command=self.sync_now)
         shell.status_bar.account_button.configure(command=lambda: self.show_page("account"))
         links = [("Open Day Schedule", lambda: self.show_page("day")),
                  ("Open Productivity", lambda: self.show_page("productivity"))]
-        shell.add_page("guide", GuidePage(host))
+        shell.add_page("guide", DeferredPage(host, guide))
         for key, (title, message) in _PLACEHOLDERS.items():
-            shell.add_page(key, PlaceholderPage(host, title, message, links))
+            shell.add_page(key, DeferredPage(host, lambda parent, title=title, message=message:
+                                             PlaceholderPage(parent, title, message, links)))
         self.refresh_status()
         self._status_poll = self.after(self.STATUS_POLL_MS, self._poll_status)
+        self.after(self.WARM_UP_MS, self._warm_up)
 
     def _check_direct_database(self) -> None:
         """Check the direct database's connection and schema revision in a worker; show the outcome."""
@@ -708,46 +859,83 @@ class ScheduleOptimizerApp(ctk.CTk):
         run_in_background(self, self.account_controller.check_backend, done, still_current=lambda: True)
 
     def _build_workspace_pages(self, *, replace: bool) -> None:
-        """The pages bound to the workspace's controllers (each schedule page keeps its remembered date)."""
+        """
+        The pages bound to the workspace's controllers (each schedule page keeps its remembered date).
+        Only Day is built now; every other page is a DeferredPage built the first time it is shown,
+        with its module imported then, so start-up builds, lays out and paints one page.
+        """
         services, shell = self.services, self.shell
         add = shell.replace_page if replace else shell.add_page
         today = self.today()
         # One budget controller per workspace, shared by the Budgeting page and the Day page's money widgets.
         budget = services.budget_controller(self.today)
-        for mode_name in SCHEDULE_PAGES:
-            remembered = self.shell_state.selection(mode_name)
-            if mode_name == "day":
-                add(mode_name, DaySchedulePage(
-                    shell.host, DayScheduleController(services.planning_controller, anchor_date=remembered or today,
-                                                      timezone=services.timezone, today=self.today),
-                    services.execution_controller, services.productivity_controller,
-                    on_anchor_changed=self.shell_state.remember, on_return=self.show_page,
-                    return_context=self.shell_state.selection("day_return"), background_io=True,
-                    task_defaults=self.task_defaults, budget_controller=budget,
-                ))
-                continue
-            add(mode_name, CalendarPage(
-                shell.host, mode_name,
-                CalendarController(services.planning_controller, mode=mode_name, selected=remembered or today,
+        add("day", DaySchedulePage(
+            shell.host, DayScheduleController(services.planning_controller,
+                                              anchor_date=self.shell_state.selection("day") or today,
+                                              timezone=services.timezone, today=self.today),
+            services.execution_controller, services.productivity_controller,
+            on_anchor_changed=self.shell_state.remember, on_return=self.show_page,
+            return_context=self.shell_state.selection("day_return"), background_io=True,
+            task_defaults=self.task_defaults, budget_controller=budget,
+        ))
+
+        def calendar(host, mode_name: str, *, staged: bool = False):
+            from app.ui.calendar_controller import CalendarController
+            from app.ui.calendar_page import CalendarPage
+
+            # The remembered date is read when the page is built: Day may have moved it meanwhile.
+            return CalendarPage(
+                host, mode_name,
+                CalendarController(services.planning_controller, mode=mode_name,
+                                   selected=self.shell_state.selection(mode_name) or self.today(),
                                    timezone=services.timezone, today=self.today,
                                    executions=services.execution_controller),
                 services.productivity_controller, on_anchor_changed=self.shell_state.remember,
-                on_open_day=lambda day, mode_name=mode_name: self.open_day(day, return_to=mode_name),
-                background_io=True, task_defaults=self.task_defaults,
-            ))
-        add("productivity", ScrollPage(
-            shell.host, lambda parent: ProductivityPage(parent, services.productivity_controller)))
-        add("budget", DeferredPage(shell.host, lambda host: ScrollPage(
-            host, lambda parent: BudgetingPage(parent, budget, background_io=True))))
-        add("projects", ProjectsPage(
-            shell.host, ProjectsController(services.planning_controller, timezone=services.timezone,
-                                           executions=services.execution_controller),
-            on_open_day=lambda day: self.open_day(day, return_to="projects"), task_defaults=self.task_defaults,
-            on_open_performance=self.open_project_performance))
-        add("settings", SettingsPage(
-            shell.host, self.ui_settings, on_appearance=self.set_appearance, on_scale=self.set_ui_scale,
-            controller=SettingsController(services.planning_controller, today=self.today), background_io=True,
-            on_reset_task_data=self.reset_task_data, task_defaults=self.task_defaults, updates=self.updates))
+                on_open_day=lambda day: self.open_day(day, return_to=mode_name),
+                background_io=True, task_defaults=self.task_defaults, staged=staged,
+            )
+
+        def calendar_steps(host, mode_name: str):
+            """The same page in parts, for pre-building it in idle time (_prebuild)."""
+            page = calendar(host, mode_name, staged=True)
+            yield
+            yield from page.build_steps()
+            return page
+
+        def productivity(host):
+            from app.ui.productivity_page import ProductivityPage
+
+            return ScrollPage(host, lambda parent: ProductivityPage(parent, services.productivity_controller))
+
+        def budgeting(host):
+            from app.ui.budget_page import BudgetingPage
+
+            return ScrollPage(host, lambda parent: BudgetingPage(parent, budget, background_io=True))
+
+        def projects(host):
+            from app.ui.planning_pages import ProjectsPage
+            from app.ui.projects_controller import ProjectsController
+
+            return ProjectsPage(
+                host, ProjectsController(services.planning_controller, timezone=services.timezone,
+                                         executions=services.execution_controller),
+                on_open_day=lambda day: self.open_day(day, return_to="projects"), task_defaults=self.task_defaults,
+                on_open_performance=self.open_project_performance)
+
+        def settings_page(host):
+            return SettingsPage(
+                host, self.ui_settings, on_appearance=self.set_appearance, on_scale=self.set_ui_scale,
+                controller=SettingsController(services.planning_controller, today=self.today), background_io=True,
+                on_reset_task_data=self.reset_task_data, task_defaults=self.task_defaults, updates=self.updates,
+                on_light_caching=self.set_light_caching)
+
+        for mode_name in SCHEDULE_PAGES[1:]:
+            add(mode_name, DeferredPage(shell.host, lambda host, mode_name=mode_name: calendar(host, mode_name),
+                                        steps=lambda host, mode_name=mode_name: calendar_steps(host, mode_name)))
+        add("productivity", DeferredPage(shell.host, productivity))
+        add("budget", DeferredPage(shell.host, budgeting))
+        add("projects", DeferredPage(shell.host, projects))
+        add("settings", DeferredPage(shell.host, settings_page))
 
 
 def main(argv: list[str] | None = None) -> None:

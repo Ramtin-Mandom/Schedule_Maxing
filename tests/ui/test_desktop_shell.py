@@ -53,6 +53,7 @@ def _activity(app) -> tuple:
     return (
         background.current_registry().outstanding,
         bool(shell is not None and shell.layout_checks.pending),
+        bool(shell is not None and shell.page_sizes.pending),  # the shown page's size follows a resize debounced
         app.winfo_geometry(),
         shell.host.winfo_width() if shell is not None else None,
         getattr(getattr(app, "shell_state", None), "layout", None),
@@ -63,8 +64,8 @@ def _activity(app) -> tuple:
 def settle(app, seconds: float = 0.4) -> None:
     """
     Let queued layout, paint and worker callbacks run: pump the event loop until
-    the app has stayed unchanged (no worker running, no layout check pending,
-    the same geometry, layout and focus) for QUIET_SECONDS, at most `seconds`
+    the app has stayed unchanged (no worker running, no layout check or page
+    resize pending, the same geometry, layout and focus) for QUIET_SECONDS, at most `seconds`
     -- a safeguard, never a fixed wait. Idle callbacks run in every update();
     the app's delayed callbacks (e.g. 10 ms card batches) fall inside the quiet
     window. Use wait_fixed() to prove that nothing happens for a while.
@@ -78,7 +79,8 @@ def settle(app, seconds: float = 0.4) -> None:
         state = _activity(app)
         if state != last:
             last, quiet_since = state, now
-        elif now - quiet_since >= QUIET_SECONDS:
+        # Never quiet while work is queued: a debounced page resize stays "pending" unchanged for 120 ms.
+        elif not any(state[:3]) and now - quiet_since >= QUIET_SECONDS:
             return
         if now >= deadline:
             return

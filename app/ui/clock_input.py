@@ -32,6 +32,7 @@ import customtkinter as ctk
 
 from app.ui import theme
 from app.ui.components import AppButton, Tooltip, font
+from app.ui.light_widgets import LightFrame, LightLabel
 from app.ui.time_fields import (
     AM,
     MINUTES_PER_DAY,
@@ -58,12 +59,15 @@ class _ClockText:
         self._owner.set_text(text)
 
 
-class ClockInput(ctk.CTkFrame):
-    """[ Hour ] : [ Minute ] [ AM/PM ] with a label, an optional hint and an inline error."""
+class ClockInput(LightFrame):
+    """
+    [ Hour ] : [ Minute ] [ AM/PM ] with a label, an optional hint and an inline error. The frames and the
+    text are light widgets (one native window each; app/ui/light_widgets.py), the entries and button CTk.
+    """
 
     def __init__(self, parent, label: str = "", *, end_of_interval: bool = False, hint: str = "",
                  wraplength: int = 280, on_change: Callable[[], None] | None = None) -> None:
-        super().__init__(parent, fg_color="transparent")
+        super().__init__(parent)
         self.columnconfigure(0, weight=1)
         self.end_of_interval = end_of_interval
         self._on_change = on_change
@@ -75,38 +79,36 @@ class ClockInput(ctk.CTkFrame):
         self.error = ""
         self._pending_check: str | None = None
 
-        self.label = ctk.CTkLabel(self, text=label, text_color=theme.TEXT_MUTED, font=font(theme.SIZE_SMALL, "bold"),
-                                  anchor="w")
+        self.label = LightLabel(self, label, size=theme.SIZE_SMALL, weight="bold", text_color=theme.TEXT_MUTED)
         if label:
             self.label.grid(row=0, column=0, sticky="ew", pady=(0, 4))
 
-        controls = self.controls = ctk.CTkFrame(self, fg_color="transparent")
+        controls = self.controls = LightFrame(self)
         controls.grid(row=1, column=0, sticky="w")
         entry_style = dict(width=46, height=theme.CONTROL_HEIGHT, corner_radius=theme.RADIUS_CONTROL,
                            border_color=theme.CARD_BORDER, fg_color=theme.INPUT_BG, text_color=theme.TEXT_PRIMARY,
                            justify="center")
         self.hour_entry = ctk.CTkEntry(controls, textvariable=self.hour_var, placeholder_text="hh", **entry_style)
         self.hour_entry.grid(row=0, column=0)
-        ctk.CTkLabel(controls, text=":", font=font(theme.SIZE_HEADING, "bold"), text_color=theme.TEXT_PRIMARY,
-                     width=10).grid(row=0, column=1, padx=2)
+        LightLabel(controls, ":", size=theme.SIZE_HEADING, weight="bold", anchor="center").grid(row=0, column=1,
+                                                                                               padx=4)
         self.minute_entry = ctk.CTkEntry(controls, textvariable=self.minute_var, placeholder_text="mm", **entry_style)
         self.minute_entry.grid(row=0, column=2)
         self.meridiem_button = AppButton(controls, AM, self.toggle_meridiem, variant="secondary", width=52,
                                          font=font(theme.SIZE_SMALL, "bold"))
         self.meridiem_button.grid(row=0, column=3, padx=(6, 0))
         Tooltip(self.meridiem_button, "Switch AM / PM (or type a / p)")
-        self.next_day_label = ctk.CTkLabel(controls, text="next day", font=font(theme.SIZE_CAPTION),
-                                           text_color=theme.TEXT_MUTED)
+        self.next_day_label = LightLabel(controls, "next day", size=theme.SIZE_CAPTION, text_color=theme.TEXT_MUTED)
         #: The field a caller focuses or binds keys on (the hour, where typing starts).
         self.entry = self.hour_entry
 
         self.hint_label = None
         if hint:
-            self.hint_label = ctk.CTkLabel(self, text=hint, text_color=theme.TEXT_MUTED, font=font(theme.SIZE_CAPTION),
-                                           anchor="w", justify="left", wraplength=wraplength)
+            self.hint_label = LightLabel(self, hint, size=theme.SIZE_CAPTION, text_color=theme.TEXT_MUTED,
+                                         wraplength=wraplength)
             self.hint_label.grid(row=2, column=0, sticky="ew")
-        self.error_label = ctk.CTkLabel(self, text="", text_color=theme.TONES["error"].foreground,
-                                        font=font(theme.SIZE_CAPTION), anchor="w", justify="left", wraplength=wraplength)
+        self.error_label = LightLabel(self, "", size=theme.SIZE_CAPTION, text_color=theme.TONES["error"].foreground,
+                                      wraplength=wraplength)
         self._border = theme.CARD_BORDER
 
         self.label.bind("<Button-1>", lambda _e: self.hour_entry.focus_set(), add="+")

@@ -76,3 +76,5 @@ Keep them accurate in the same change that makes them wrong:
 - a consequential decision made or superseded -> add or amend a record in DECISIONS.md
 Do not rewrite unchanged documentation just to refresh dates or commit hashes.
 At the end of a session the user can run /wrap (.claude/skills/wrap/SKILL.md), which detects changes since the last wrap and applies these updates incrementally.
+CI check notes
+ci_check_notes.md (repository root) is what /ci-check (.claude/skills/ci-check/SKILL.md) reads first, so it can fix CI in one pass. After every major structural change, add an entry under its "Pending" heading in the same change, using the file's template. Its "What counts as a structural change" list defines major: renamed/moved/removed or re-signatured public code, changed defaults/settings/storage fields/UI text that tests look up, moved paths, new background threads/processes/timers, new real-window behaviour, dependency or workflow changes. Do not read it for unrelated tasks.

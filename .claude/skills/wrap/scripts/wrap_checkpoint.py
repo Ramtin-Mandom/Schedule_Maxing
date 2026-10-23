@@ -46,7 +46,7 @@ LIST_LIMIT = 60
 
 # (category, path prefixes or exact paths) -- first match wins. Exact paths have no trailing slash.
 RULES = (
-    ("knowledge-base", KB_DOCS),
+    ("knowledge-base", (*KB_DOCS, "ci_check_notes.md")),
     ("agent-instructions", AGENT_DOCS),
     ("agent-tooling", (".claude/",)),
     ("schema", ("backend/migrations/", "backend/models.py", "app/execution/db.py")),

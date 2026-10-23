@@ -119,8 +119,12 @@ def test_ui_settings_default_round_trip_and_live_beside_the_database(tmp_path: P
         "appearance": "dark", "ui_scale": 1.15, "language": "en",
         # the update preferences (app/ui/update_controller.py), at their defaults
         "check_for_updates": True, "skipped_version": None, "last_update_check": None,
+        "light_caching": False,  # light caching (app/ui/shell.py), off by default
     }
     assert not store.path.with_name("ui_settings.json.tmp").exists()  # written atomically
+    assert store.save(UISettings().with_light_caching(True)) and store.load().light_caching is True
+    store.path.write_text(json.dumps({"light_caching": "yes"}), encoding="utf-8")
+    assert store.load().light_caching is False  # not a boolean: the default
 
 
 def test_bad_ui_settings_fall_back_per_field_and_never_block_startup(tmp_path: Path) -> None:
@@ -237,6 +241,18 @@ def test_the_coalescer_turns_a_burst_of_requests_into_one_call_and_stops_when_de
     assert calls == [1]
     coalescer.request()
     assert widget.scheduled == []  # nothing is scheduled on a destroyed widget
+
+
+def test_a_debounced_coalescer_runs_once_the_requests_stopped() -> None:
+    widget, calls = LoopWidget(), []
+    coalescer = Coalescer(widget, lambda: calls.append(1), delay_ms=120, debounce=True)
+    for _ in range(50):  # a drag-resize: each request restarts the delay
+        coalescer.request()
+    assert len(widget.scheduled) == 1 and len(widget.cancelled) == 49
+    widget.run_pending()
+    assert calls == [1] and not coalescer.pending
+    with pytest.raises(ValueError):
+        Coalescer(widget, lambda: None, debounce=True)  # a debounce needs a delay
 
 
 def test_the_bounded_animation_never_schedules_more_than_its_steps_and_stops_on_destroy() -> None:

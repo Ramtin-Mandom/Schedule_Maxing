@@ -56,6 +56,9 @@ DANGER_HOVER: Color = ("#A11F1F", "#9C2828")
 SUCCESS: Color = ("#15803D", "#237A46")
 WARNING: Color = ("#B45309", "#E0A33A")
 FOCUS_RING: Color = ("#1D4ED8", "#8AB4FF")
+#: Budgeting: income is green, expenses are red (the words "Income"/"Expense" always say it too).
+INCOME_COLOR: Color = ("#15803D", "#4ADE80")
+EXPENSE_COLOR: Color = ("#B91C1C", "#F87171")
 
 CANVAS_BG: Color = ("#F8FAFC", "#121923")
 GRID_LINE: Color = ("#E5E7EB", "#222C3A")

@@ -16,14 +16,16 @@ Both only call the callbacks they are given.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import time
+from collections import deque
+from collections.abc import Callable, Iterator
 
 import customtkinter as ctk
 
 from app.ui.paint_widgets import AppScrollableFrame
 
 from app.persistence.errors import NotSignedInError
-from app.ui import theme
+from app.ui import diagnostics, theme
 from app.ui.background import WRITE_LANE, run_io
 from app.ui.components import AppButton, Card, LabeledEntry, LabeledSelect, Notice, SectionTitle, ask_confirm, font
 from app.planning.preferences import ENGINE_LABELS
@@ -86,30 +88,156 @@ class ScrollPage(AppScrollableFrame):
             self.content.on_appearance_changed()
 
 
+#: A released page's widgets are destroyed in slices of about this long (DeferredPage.release).
+RELEASE_SLICE_MS = 12
+
+
+def _innermost_first(widget) -> Iterator:
+    """`widget` and its descendants, every widget after its own children."""
+    for child in widget.winfo_children():
+        yield from _innermost_first(child)
+    yield widget
+
+
+def _own_attribute(widget, name: str) -> bool:
+    """`name` is set on `widget` itself or defined by one of the application's classes (not by Tk/CTk)."""
+    return name in vars(widget) or any(name in vars(cls) for cls in type(widget).__mro__
+                                       if cls.__module__.startswith("app."))
+
+
 class DeferredPage(ctk.CTkFrame):
     """
-    A page built the first time it is shown, so start-up lays out only the
-    pages opened first (every scrollable area costs a full layout pass when it
-    is created). build(parent) makes the page; `content` is its content (a
-    ScrollPage's), and on_show/set_layout/on_appearance_changed are passed on.
+    A page built the first time it is shown, so start-up builds and lays out
+    only the Day page. build(parent) makes the page; `content` is its content
+    (a ScrollPage's), and on_show/set_layout/on_appearance_changed are passed
+    on -- the last layout mode given before the build is applied right after it.
+
+    Callers may use the page as if it were the built one: an attribute the
+    wrapper lacks is the page's (or its content's), and asking for a public one
+    builds the page first. A private name (`_busy`) never builds it, so
+    "is it busy?" checks on a page nobody opened stay free. `built` tells
+    whether it exists yet (app code skips refreshing pages that do not).
     """
 
-    def __init__(self, parent, build: Callable[[ctk.CTkFrame], ctk.CTkFrame]) -> None:
+    def __init__(self, parent, build: Callable[[ctk.CTkFrame], ctk.CTkFrame], *,
+                 steps: Callable[[ctk.CTkFrame], Iterator[None]] | None = None) -> None:
+        """
+        steps (optional): a generator function building the same page in parts -- it yields between parts
+        and returns the page -- so prebuild_step() can build it in idle time, one part per call.
+        """
         super().__init__(parent, fg_color=theme.APP_BG, corner_radius=0)
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
         self._build = build
+        self._steps = steps
+        self._building: Iterator[None] | None = None
+        self._layout = None
         self.page: ctk.CTkFrame | None = None
+
+    def __getattr__(self, name: str):
+        # Only reached for names the wrapper itself does not have (Tk/CTk attributes are all its own).
+        state = self.__dict__
+        if name.startswith("__") or "_build" not in state:
+            raise AttributeError(name)
+        page = state.get("page")
+        if page is None:
+            if name.startswith("_"):
+                raise AttributeError(name)
+            page = self.ensure()
+        content = getattr(page, "content", None)
+        for target in (page, content):
+            if target is not None:
+                try:
+                    return getattr(target, name)
+                except AttributeError:
+                    continue
+        raise AttributeError(name)
+
+    def __setattr__(self, name: str, value) -> None:
+        # Assigning one of the built page's own attributes (e.g. replacing one of its methods) sets it there.
+        state = self.__dict__
+        page = state.get("page")
+        if page is not None and name not in state and not hasattr(type(self), name):
+            for target in (page, getattr(page, "content", None)):
+                if target is not None and _own_attribute(target, name):
+                    setattr(target, name, value)
+                    return
+        super().__setattr__(name, value)
+
+    @property
+    def built(self) -> bool:
+        return self.page is not None
 
     @property
     def content(self):
-        return getattr(self.page, "content", self.page)
+        page = self.ensure()
+        return getattr(page, "content", page)
 
     def ensure(self) -> ctk.CTkFrame:
         if self.page is None:
-            self.page = self._build(self)
-            self.page.grid(row=0, column=0, sticky="nsew")
+            with diagnostics.span("deferred_page.build"):
+                if self._building is not None:  # a pre-build in progress: its remaining parts now
+                    while self.prebuild_step():
+                        pass
+                    return self.page
+                self._built(self._build(self))
         return self.page
+
+    def prebuild_step(self) -> bool:
+        """
+        Build one part of the page now (the caller runs this in idle time). True while parts remain.
+        Without `steps`, the whole page is one part.
+        """
+        if self.page is not None:
+            return False
+        if self._steps is None:
+            self._built(self._build(self))
+            return False
+        if self._building is None:
+            self._building = self._steps(self)
+        with diagnostics.span("deferred_page.prebuild_step"):
+            try:
+                next(self._building)
+            except StopIteration as finished:
+                self._building = None
+                self._built(finished.value)
+                return False
+        return True
+
+    def release(self) -> bool:
+        """
+        Destroy the built (or partly pre-built) page, so it holds no widgets until it is shown again and
+        built anew, as on its first show (light caching, AppShell). True if there was something to release.
+        The page is unbuilt at once; its widgets go innermost first in slices of RELEASE_SLICE_MS (one block
+        takes 90-350 ms), so the window keeps answering input meanwhile.
+        """
+        if self.page is None and self._building is None:
+            return False
+        if self._building is not None:
+            self._building.close()
+        self.page, self._building = None, None
+        doomed: deque = deque()
+        for child in self.winfo_children():
+            child.grid_forget()
+            doomed.extend(_innermost_first(child))
+        self._destroy_slice(doomed)
+        return True
+
+    def _destroy_slice(self, doomed: deque) -> None:
+        deadline = time.perf_counter() + RELEASE_SLICE_MS / 1000
+        while doomed and time.perf_counter() < deadline:
+            doomed.popleft().destroy()
+        if doomed and self.winfo_exists():
+            self.after(1, lambda: self._destroy_slice(doomed))
+        else:
+            for widget in doomed:  # the wrapper itself is going: Tk destroys the rest with it
+                widget.destroy()
+
+    def _built(self, page) -> None:
+        self.page = page
+        page.grid(row=0, column=0, sticky="nsew")
+        if self._layout is not None and hasattr(page, "set_layout"):
+            page.set_layout(self._layout)
 
     def on_show(self) -> None:
         page = self.ensure()
@@ -117,6 +245,7 @@ class DeferredPage(ctk.CTkFrame):
             page.on_show()
 
     def set_layout(self, mode) -> None:
+        self._layout = mode
         if self.page is not None and hasattr(self.page, "set_layout"):
             self.page.set_layout(mode)
 
@@ -163,9 +292,12 @@ class SettingsPage(ctk.CTkFrame):
         on_reset_task_data: Callable[[Callable], None] | None = None,
         task_defaults: TaskDefaultsStore | None = None,
         updates=None,
+        on_light_caching: Callable[[bool], bool] | None = None,
     ) -> None:
         super().__init__(parent, fg_color=theme.APP_BG, corner_radius=0)
         self.task_defaults = task_defaults or TaskDefaultsStore()
+        #: Turns light caching on/off now and saves it (False: not saved); None where it does not apply (tests).
+        self._on_light_caching = on_light_caching
         #: The window's UpdateFlow (app/ui/update_view.py); None where updates do not apply (direct storage, tests).
         self.updates = updates
         self.updates_card = None
@@ -211,6 +343,19 @@ class SettingsPage(ctk.CTkFrame):
 
         self.language_select = LabeledSelect(appearance, "Language", list(LANGUAGES.values()))
         self.language_select.grid(row=3, column=0, columnspan=2, sticky="ew", padx=theme.SPACE_L, pady=(0, 12))
+
+        self.light_caching = ctk.BooleanVar(value=settings.light_caching)
+        self.light_caching_box = ctk.CTkCheckBox(
+            appearance, text="Light caching: keep only the Day page and the page you are on ready",
+            variable=self.light_caching, command=self._light_caching_changed, text_color=theme.TEXT_PRIMARY,
+            font=font(theme.SIZE_BODY))
+        self.light_caching_box.grid(row=4, column=0, columnspan=2, sticky="w", padx=theme.SPACE_L, pady=(0, 4))
+        ctk.CTkLabel(appearance, text="Uses less memory and keeps the window lighter to move; other pages load "
+                     "again each time you open them.", font=font(theme.SIZE_SMALL), text_color=theme.TEXT_MUTED,
+                     anchor="w", justify="left", wraplength=440
+                     ).grid(row=5, column=0, columnspan=2, sticky="ew", padx=theme.SPACE_L, pady=(0, theme.SPACE_L))
+        if on_light_caching is None:
+            self.light_caching_box.configure(state="disabled")
 
         defaults = Card(body)
         defaults.grid(row=1, column=0, sticky="ew", padx=theme.SPACE_S, pady=(0, theme.SPACE_M))
@@ -394,11 +539,13 @@ class SettingsPage(ctk.CTkFrame):
             self.render_defaults(result.value)
             self.preference_notice.show("success", "Defaults saved. Date overrides were kept; no schedule was generated.")
         else:
+            self.editor.finish()
             pending = {name: self.editor.value_of(name) for name in self.editor.inputs}
 
             def reloaded(latest):
                 if latest.ok:
                     self.render_defaults(latest.value)
+                    self.editor.finish()  # every row exists before the typed values go back in
                     for name, value in pending.items():
                         if name in self.editor.inputs:
                             self.editor.set_input(name, value)
@@ -463,6 +610,11 @@ class SettingsPage(ctk.CTkFrame):
         scale = next(value for value in SCALES if scale_label(value) == label)
         saved = self._on_scale(scale)
         self._report(saved, f"Interface size {label}")
+
+    def _light_caching_changed(self) -> None:
+        on = bool(self.light_caching.get())
+        if self._on_light_caching is not None:
+            self._report(self._on_light_caching(on), "Light caching " + ("on" if on else "off"))
 
     def _report(self, saved: bool, what: str) -> None:
         if saved:
