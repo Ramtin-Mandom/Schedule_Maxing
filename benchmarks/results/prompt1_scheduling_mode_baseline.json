@@ -13,899 +13,37 @@
     "America/New_York": {
       "adhd_friendly": {
         "day_engine": {
-          "_elapsed_ms": 19.773,
+          "_elapsed_ms": 20.611,
           "date": "2026-03-04",
           "placements": [
             {
               "date": "2026-03-04",
-              "end": "08:15",
-              "score": 60.0,
+              "end": "07:45",
+              "score": 6.5,
               "start": "07:00",
-              "task": "Task 10",
-              "task_id": "120a2852-4d7a-546f-b621-c87052e5b625"
+              "task": "Task 06",
+              "task_id": "6114d905-a07c-5008-91b6-b19a7d3e8817"
             },
             {
               "date": "2026-03-04",
-              "end": "08:40",
-              "score": 36.0,
-              "start": "08:15",
+              "end": "08:10",
+              "score": 8.5,
+              "start": "07:45",
               "task": "Task 11",
               "task_id": "c9842a65-0683-5880-bfb8-311ae86471b4"
             },
             {
               "date": "2026-03-04",
-              "end": "10:05",
-              "score": 33.0,
-              "start": "09:15",
-              "task": "Task 02",
-              "task_id": "3aa096aa-b0c1-5cae-8568-9f91d78625a7"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "10:30",
-              "score": 30.0,
-              "start": "10:05",
-              "task": "Task 08",
-              "task_id": "2d43b280-ffb6-55e1-b248-8e3ee258ed32"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "11:20",
-              "score": 29.94,
-              "start": "10:30",
-              "task": "Task 09",
-              "task_id": "b567a7f8-a52b-5830-a2e9-07cb21da0b95"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "11:50",
-              "score": 28.0,
-              "start": "11:20",
+              "end": "09:30",
+              "score": 8.0,
+              "start": "09:00",
               "task": "Task 03",
               "task_id": "b9f3a058-b2e8-52e8-a5b8-b8522410a4a3"
             },
             {
               "date": "2026-03-04",
-              "end": "14:05",
-              "score": 28.0,
-              "start": "13:15",
-              "task": "Task 04",
-              "task_id": "2f11f16b-66f4-533d-9632-b369ad6b3b13"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "17:45",
-              "score": 24.0,
-              "start": "16:30",
-              "task": "Task 00",
-              "task_id": "62bc8741-901c-5961-b1bb-063897a421ce"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "19:00",
-              "score": 22.0,
-              "start": "17:45",
-              "task": "Task 07",
-              "task_id": "2da4b9f0-5c5a-52a2-a17d-0d9abbc9a5e3"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "19:45",
-              "score": 12.0,
-              "start": "19:00",
-              "task": "Task 05",
-              "task_id": "acdc7ded-00de-5f40-a6b4-9cde5caecdc1"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "20:15",
-              "score": 4.5,
-              "start": "19:45",
-              "task": "Task 01",
-              "task_id": "0d26edcf-0c77-5f5e-a8d5-e934970e960b"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "21:00",
-              "score": 5.5,
-              "start": "20:15",
-              "task": "Task 06",
-              "task_id": "6114d905-a07c-5008-91b6-b19a7d3e8817"
-            }
-          ],
-          "task_count": 12,
-          "total_score": 312.94,
-          "unscheduled": []
-        },
-        "day_engine_overloaded": {
-          "_elapsed_ms": 20.111,
-          "date": "2026-03-04",
-          "placements": [
-            {
-              "date": "2026-03-04",
-              "end": "08:30",
-              "score": 50.0,
-              "start": "07:00",
-              "task": "Task 08",
-              "task_id": "2d43b280-ffb6-55e1-b248-8e3ee258ed32"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "09:30",
-              "score": 51.0,
-              "start": "08:30",
-              "task": "Task 23",
-              "task_id": "404c5903-2776-5554-9f89-6f12dc2a1ea0"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "11:00",
-              "score": 48.0,
-              "start": "09:30",
-              "task": "Task 10",
-              "task_id": "120a2852-4d7a-546f-b621-c87052e5b625"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "12:00",
-              "score": 43.0,
-              "start": "11:00",
-              "task": "Task 20",
-              "task_id": "7caec850-2469-5d75-bbf1-06d194538980"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "14:45",
-              "score": 32.0,
-              "start": "13:15",
-              "task": "Task 09",
-              "task_id": "b567a7f8-a52b-5830-a2e9-07cb21da0b95"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "18:30",
-              "score": 45.0,
-              "start": "16:30",
-              "task": "Task 13",
-              "task_id": "62c899b2-6d57-58fe-8faa-f7514a09910e"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "20:30",
-              "score": 44.0,
-              "start": "18:30",
-              "task": "Task 12",
-              "task_id": "002280f0-12fb-59b1-8a46-9c6754cbd242"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "22:00",
-              "score": 40.0,
-              "start": "20:30",
-              "task": "Task 04",
-              "task_id": "2f11f16b-66f4-533d-9632-b369ad6b3b13"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "23:00",
-              "score": 26.0,
-              "start": "22:00",
-              "task": "Task 14",
-              "task_id": "885aba43-650e-5df5-87e0-0e3718f9dde4"
-            }
-          ],
-          "task_count": 24,
-          "total_score": 379.0,
-          "unscheduled": [
-            {
-              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
-              "reason": "no_valid_slot",
-              "task_id": "0d26edcf-0c77-5f5e-a8d5-e934970e960b"
-            },
-            {
-              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
-              "reason": "no_valid_slot",
-              "task_id": "2da4b9f0-5c5a-52a2-a17d-0d9abbc9a5e3"
-            },
-            {
-              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
-              "reason": "no_valid_slot",
-              "task_id": "3aa096aa-b0c1-5cae-8568-9f91d78625a7"
-            },
-            {
-              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
-              "reason": "no_valid_slot",
-              "task_id": "45d816e7-8e42-551c-8a50-2dd43bca5ccb"
-            },
-            {
-              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
-              "reason": "no_valid_slot",
-              "task_id": "51e08cb3-ea8a-5f82-aac4-64d404abaa82"
-            },
-            {
-              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
-              "reason": "no_valid_slot",
-              "task_id": "6114d905-a07c-5008-91b6-b19a7d3e8817"
-            },
-            {
-              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
-              "reason": "no_valid_slot",
-              "task_id": "62bc8741-901c-5961-b1bb-063897a421ce"
-            },
-            {
-              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
-              "reason": "no_valid_slot",
-              "task_id": "72d80703-0b1f-51da-80e0-9a51db99b355"
-            },
-            {
-              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
-              "reason": "no_valid_slot",
-              "task_id": "9f420a60-3352-5447-a092-da048e4df9ff"
-            },
-            {
-              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
-              "reason": "no_valid_slot",
-              "task_id": "acdc7ded-00de-5f40-a6b4-9cde5caecdc1"
-            },
-            {
-              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
-              "reason": "no_valid_slot",
-              "task_id": "b9f3a058-b2e8-52e8-a5b8-b8522410a4a3"
-            },
-            {
-              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
-              "reason": "no_valid_slot",
-              "task_id": "c9842a65-0683-5880-bfb8-311ae86471b4"
-            },
-            {
-              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
-              "reason": "no_valid_slot",
-              "task_id": "d4642ad1-7d7d-5161-ae95-b03f954f15fb"
-            },
-            {
-              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
-              "reason": "no_valid_slot",
-              "task_id": "e1a23a0e-0c98-59ae-9ab2-558a881e2996"
-            },
-            {
-              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
-              "reason": "no_valid_slot",
-              "task_id": "fe52300c-d8c1-5771-9bea-999ec692880e"
-            }
-          ]
-        },
-        "workflow": {
-          "_elapsed_ms": 20.595,
-          "assignments": {
-            "002280f0-12fb-59b1-8a46-9c6754cbd242": "2026-03-05",
-            "0d26edcf-0c77-5f5e-a8d5-e934970e960b": "2026-03-07",
-            "120a2852-4d7a-546f-b621-c87052e5b625": "2026-03-08",
-            "2d43b280-ffb6-55e1-b248-8e3ee258ed32": "2026-03-03",
-            "2da4b9f0-5c5a-52a2-a17d-0d9abbc9a5e3": "2026-03-06",
-            "2f11f16b-66f4-533d-9632-b369ad6b3b13": "2026-03-08",
-            "3aa096aa-b0c1-5cae-8568-9f91d78625a7": "2026-03-08",
-            "6114d905-a07c-5008-91b6-b19a7d3e8817": "2026-03-02",
-            "62bc8741-901c-5961-b1bb-063897a421ce": "2026-03-05",
-            "62c899b2-6d57-58fe-8faa-f7514a09910e": "2026-03-06",
-            "885aba43-650e-5df5-87e0-0e3718f9dde4": "2026-03-02",
-            "9f420a60-3352-5447-a092-da048e4df9ff": "2026-03-07",
-            "acdc7ded-00de-5f40-a6b4-9cde5caecdc1": "2026-03-03",
-            "b567a7f8-a52b-5830-a2e9-07cb21da0b95": "2026-03-07",
-            "b9f3a058-b2e8-52e8-a5b8-b8522410a4a3": "2026-03-03",
-            "c9842a65-0683-5880-bfb8-311ae86471b4": "2026-03-02",
-            "e1a23a0e-0c98-59ae-9ab2-558a881e2996": "2026-03-05",
-            "fe52300c-d8c1-5771-9bea-999ec692880e": "2026-03-08"
-          },
-          "days": {
-            "2026-03-02": {
-              "placements": [
-                {
-                  "date": "2026-03-02",
-                  "end": "07:45",
-                  "score": 4.5,
-                  "start": "07:00",
-                  "task": "Task 06",
-                  "task_id": "6114d905-a07c-5008-91b6-b19a7d3e8817"
-                },
-                {
-                  "date": "2026-03-02",
-                  "end": "08:10",
-                  "score": 38.0,
-                  "start": "07:45",
-                  "task": "Task 11",
-                  "task_id": "c9842a65-0683-5880-bfb8-311ae86471b4"
-                },
-                {
-                  "date": "2026-03-02",
-                  "end": "08:40",
-                  "score": 30.0,
-                  "start": "08:10",
-                  "task": "Task 14",
-                  "task_id": "885aba43-650e-5df5-87e0-0e3718f9dde4"
-                }
-              ],
-              "total_score": 72.5,
-              "unscheduled": []
-            },
-            "2026-03-03": {
-              "placements": [
-                {
-                  "date": "2026-03-03",
-                  "end": "07:25",
-                  "score": 30.0,
-                  "start": "07:00",
-                  "task": "Task 08",
-                  "task_id": "2d43b280-ffb6-55e1-b248-8e3ee258ed32"
-                },
-                {
-                  "date": "2026-03-03",
-                  "end": "09:00",
-                  "score": 12.0,
-                  "start": "08:15",
-                  "task": "Task 05",
-                  "task_id": "acdc7ded-00de-5f40-a6b4-9cde5caecdc1"
-                },
-                {
-                  "date": "2026-03-03",
-                  "end": "09:30",
-                  "score": 29.0,
-                  "start": "09:00",
-                  "task": "Task 03",
-                  "task_id": "b9f3a058-b2e8-52e8-a5b8-b8522410a4a3"
-                }
-              ],
-              "total_score": 71.0,
-              "unscheduled": []
-            },
-            "2026-03-04": {
-              "placements": [],
-              "total_score": 0.0,
-              "unscheduled": []
-            },
-            "2026-03-05": {
-              "placements": [
-                {
-                  "date": "2026-03-05",
-                  "end": "08:15",
-                  "score": 24.0,
-                  "start": "07:00",
-                  "task": "Task 00",
-                  "task_id": "62bc8741-901c-5961-b1bb-063897a421ce"
-                },
-                {
-                  "date": "2026-03-05",
-                  "end": "09:15",
-                  "score": 22.0,
-                  "start": "08:15",
-                  "task": "Task 12",
-                  "task_id": "002280f0-12fb-59b1-8a46-9c6754cbd242"
-                },
-                {
-                  "date": "2026-03-05",
-                  "end": "14:05",
-                  "score": 27.0,
-                  "start": "13:15",
-                  "task": "Task 15",
-                  "task_id": "e1a23a0e-0c98-59ae-9ab2-558a881e2996"
-                }
-              ],
-              "total_score": 73.0,
-              "unscheduled": []
-            },
-            "2026-03-06": {
-              "placements": [
-                {
-                  "date": "2026-03-06",
-                  "end": "08:15",
-                  "score": 22.0,
-                  "start": "07:00",
-                  "task": "Task 07",
-                  "task_id": "2da4b9f0-5c5a-52a2-a17d-0d9abbc9a5e3"
-                },
-                {
-                  "date": "2026-03-06",
-                  "end": "08:40",
-                  "score": 5.0,
-                  "start": "08:15",
-                  "task": "Task 13",
-                  "task_id": "62c899b2-6d57-58fe-8faa-f7514a09910e"
-                }
-              ],
-              "total_score": 27.0,
-              "unscheduled": []
-            },
-            "2026-03-07": {
-              "placements": [
-                {
-                  "date": "2026-03-07",
-                  "end": "09:00",
-                  "score": 38.5,
-                  "start": "07:00",
-                  "task": "Task 17",
-                  "task_id": "9f420a60-3352-5447-a092-da048e4df9ff"
-                },
-                {
-                  "date": "2026-03-07",
-                  "end": "09:50",
-                  "score": 31.0,
-                  "start": "09:00",
-                  "task": "Task 09",
-                  "task_id": "b567a7f8-a52b-5830-a2e9-07cb21da0b95"
-                },
-                {
-                  "date": "2026-03-07",
-                  "end": "10:20",
-                  "score": 4.5,
-                  "start": "09:50",
-                  "task": "Task 01",
-                  "task_id": "0d26edcf-0c77-5f5e-a8d5-e934970e960b"
-                }
-              ],
-              "total_score": 74.0,
-              "unscheduled": []
-            },
-            "2026-03-08": {
-              "placements": [
-                {
-                  "date": "2026-03-08",
-                  "end": "07:50",
-                  "score": 33.0,
-                  "start": "07:00",
-                  "task": "Task 02",
-                  "task_id": "3aa096aa-b0c1-5cae-8568-9f91d78625a7"
-                },
-                {
-                  "date": "2026-03-08",
-                  "end": "09:45",
-                  "score": 60.0,
-                  "start": "08:30",
-                  "task": "Task 10",
-                  "task_id": "120a2852-4d7a-546f-b621-c87052e5b625"
-                },
-                {
-                  "date": "2026-03-08",
-                  "end": "11:45",
-                  "score": 31.5,
-                  "start": "09:45",
-                  "task": "Task 16",
-                  "task_id": "fe52300c-d8c1-5771-9bea-999ec692880e"
-                },
-                {
-                  "date": "2026-03-08",
-                  "end": "14:05",
-                  "score": 28.0,
-                  "start": "13:15",
-                  "task": "Task 04",
-                  "task_id": "2f11f16b-66f4-533d-9632-b369ad6b3b13"
-                }
-              ],
-              "total_score": 152.5,
-              "unscheduled": []
-            }
-          },
-          "status": "generated",
-          "unallocated": [],
-          "week_total_score": 470.0
-        },
-        "workflow_overloaded": {
-          "_elapsed_ms": 30.213,
-          "assignments": {
-            "002280f0-12fb-59b1-8a46-9c6754cbd242": "2026-03-04",
-            "0d26edcf-0c77-5f5e-a8d5-e934970e960b": "2026-03-08",
-            "0e478892-375b-5887-b05d-7b6468243fe9": "2026-03-04",
-            "103b6731-fcb2-5cdc-b562-43d8727e7141": "2026-03-04",
-            "14e2bf7c-712d-5133-90d0-94eb33302ae7": "2026-03-08",
-            "1abc5675-f4d2-506b-b97f-001fe8923e06": "2026-03-04",
-            "2d43b280-ffb6-55e1-b248-8e3ee258ed32": "2026-03-04",
-            "2da4b9f0-5c5a-52a2-a17d-0d9abbc9a5e3": "2026-03-02",
-            "2f11f16b-66f4-533d-9632-b369ad6b3b13": "2026-03-04",
-            "404c5903-2776-5554-9f89-6f12dc2a1ea0": "2026-03-08",
-            "45d816e7-8e42-551c-8a50-2dd43bca5ccb": "2026-03-02",
-            "4acfc6b0-d0cc-581f-9479-a48ba079058c": "2026-03-05",
-            "51c1e436-96b8-5759-b2bb-e04863595e4c": "2026-03-08",
-            "5a05010a-6c57-5d7b-9bca-43c34ef4cf5a": "2026-03-07",
-            "62c899b2-6d57-58fe-8faa-f7514a09910e": "2026-03-06",
-            "72d80703-0b1f-51da-80e0-9a51db99b355": "2026-03-06",
-            "79592540-b3b1-5978-89e1-84cc25aab90c": "2026-03-07",
-            "8cde1658-8bb3-5fee-81fc-91f7bf67cfb1": "2026-03-04",
-            "94077b16-5206-53bd-9162-81a4edcc0130": "2026-03-05",
-            "9f420a60-3352-5447-a092-da048e4df9ff": "2026-03-03",
-            "acdc7ded-00de-5f40-a6b4-9cde5caecdc1": "2026-03-06",
-            "b567a7f8-a52b-5830-a2e9-07cb21da0b95": "2026-03-04",
-            "b9f3a058-b2e8-52e8-a5b8-b8522410a4a3": "2026-03-08",
-            "c9842a65-0683-5880-bfb8-311ae86471b4": "2026-03-06",
-            "da295f8d-ead2-5708-8b6c-511812ea3720": "2026-03-04",
-            "e1a23a0e-0c98-59ae-9ab2-558a881e2996": "2026-03-07",
-            "e77cea11-2d00-5586-96f2-a3ce156b4c40": "2026-03-05",
-            "e9d1219a-94d8-52a8-ac47-79f06dce99c3": "2026-03-06"
-          },
-          "days": {
-            "2026-03-02": {
-              "placements": [
-                {
-                  "date": "2026-03-02",
-                  "end": "08:30",
-                  "score": 16.5,
-                  "start": "07:00",
-                  "task": "Task 07",
-                  "task_id": "2da4b9f0-5c5a-52a2-a17d-0d9abbc9a5e3"
-                },
-                {
-                  "date": "2026-03-02",
-                  "end": "09:30",
-                  "score": 9.0,
-                  "start": "08:30",
-                  "task": "Task 21",
-                  "task_id": "45d816e7-8e42-551c-8a50-2dd43bca5ccb"
-                }
-              ],
-              "total_score": 25.5,
-              "unscheduled": []
-            },
-            "2026-03-03": {
-              "placements": [
-                {
-                  "date": "2026-03-03",
-                  "end": "08:30",
-                  "score": 11.0,
-                  "start": "07:00",
-                  "task": "Task 17",
-                  "task_id": "9f420a60-3352-5447-a092-da048e4df9ff"
-                }
-              ],
-              "total_score": 11.0,
-              "unscheduled": []
-            },
-            "2026-03-04": {
-              "placements": [
-                {
-                  "date": "2026-03-04",
-                  "end": "08:00",
-                  "score": 60.0,
-                  "start": "07:00",
-                  "task": "Task 25",
-                  "task_id": "1abc5675-f4d2-506b-b97f-001fe8923e06"
-                },
-                {
-                  "date": "2026-03-04",
-                  "end": "09:30",
-                  "score": 61.0,
-                  "start": "08:00",
-                  "task": "Task 40",
-                  "task_id": "8cde1658-8bb3-5fee-81fc-91f7bf67cfb1"
-                },
-                {
-                  "date": "2026-03-04",
-                  "end": "11:00",
-                  "score": 55.0,
-                  "start": "09:30",
-                  "task": "Task 27",
-                  "task_id": "0e478892-375b-5887-b05d-7b6468243fe9"
-                },
-                {
-                  "date": "2026-03-04",
-                  "end": "12:30",
-                  "score": 50.0,
-                  "start": "11:00",
-                  "task": "Task 08",
-                  "task_id": "2d43b280-ffb6-55e1-b248-8e3ee258ed32"
-                },
-                {
-                  "date": "2026-03-04",
-                  "end": "14:45",
-                  "score": 32.0,
-                  "start": "13:15",
-                  "task": "Task 09",
-                  "task_id": "b567a7f8-a52b-5830-a2e9-07cb21da0b95"
-                },
-                {
-                  "date": "2026-03-04",
-                  "end": "18:00",
-                  "score": 50.0,
-                  "start": "16:30",
-                  "task": "Task 38",
-                  "task_id": "da295f8d-ead2-5708-8b6c-511812ea3720"
-                },
-                {
-                  "date": "2026-03-04",
-                  "end": "20:00",
-                  "score": 44.0,
-                  "start": "18:00",
-                  "task": "Task 12",
-                  "task_id": "002280f0-12fb-59b1-8a46-9c6754cbd242"
-                },
-                {
-                  "date": "2026-03-04",
-                  "end": "21:00",
-                  "score": 45.0,
-                  "start": "20:00",
-                  "task": "Task 32",
-                  "task_id": "103b6731-fcb2-5cdc-b562-43d8727e7141"
-                },
-                {
-                  "date": "2026-03-04",
-                  "end": "22:30",
-                  "score": 40.0,
-                  "start": "21:00",
-                  "task": "Task 04",
-                  "task_id": "2f11f16b-66f4-533d-9632-b369ad6b3b13"
-                }
-              ],
-              "total_score": 437.0,
-              "unscheduled": []
-            },
-            "2026-03-05": {
-              "placements": [
-                {
-                  "date": "2026-03-05",
-                  "end": "08:00",
-                  "score": 27.0,
-                  "start": "07:00",
-                  "task": "Task 41",
-                  "task_id": "e77cea11-2d00-5586-96f2-a3ce156b4c40"
-                },
-                {
-                  "date": "2026-03-05",
-                  "end": "10:00",
-                  "score": 4.0,
-                  "start": "08:00",
-                  "task": "Task 39",
-                  "task_id": "4acfc6b0-d0cc-581f-9479-a48ba079058c"
-                },
-                {
-                  "date": "2026-03-05",
-                  "end": "11:00",
-                  "score": 5.0,
-                  "start": "10:00",
-                  "task": "Task 29",
-                  "task_id": "94077b16-5206-53bd-9162-81a4edcc0130"
-                }
-              ],
-              "total_score": 36.0,
-              "unscheduled": []
-            },
-            "2026-03-06": {
-              "placements": [
-                {
-                  "date": "2026-03-06",
-                  "end": "09:00",
-                  "score": 54.0,
-                  "start": "07:00",
-                  "task": "Task 35",
-                  "task_id": "e9d1219a-94d8-52a8-ac47-79f06dce99c3"
-                },
-                {
-                  "date": "2026-03-06",
-                  "end": "11:00",
-                  "score": 45.0,
-                  "start": "09:00",
-                  "task": "Task 13",
-                  "task_id": "62c899b2-6d57-58fe-8faa-f7514a09910e"
-                },
-                {
-                  "date": "2026-03-06",
-                  "end": "12:00",
-                  "score": 12.0,
-                  "start": "11:00",
-                  "task": "Task 05",
-                  "task_id": "acdc7ded-00de-5f40-a6b4-9cde5caecdc1"
-                },
-                {
-                  "date": "2026-03-06",
-                  "end": "14:15",
-                  "score": 9.0,
-                  "start": "13:15",
-                  "task": "Task 11",
-                  "task_id": "c9842a65-0683-5880-bfb8-311ae86471b4"
-                },
-                {
-                  "date": "2026-03-06",
-                  "end": "18:30",
-                  "score": 20.0,
-                  "start": "16:30",
-                  "task": "Task 19",
-                  "task_id": "72d80703-0b1f-51da-80e0-9a51db99b355"
-                }
-              ],
-              "total_score": 140.0,
-              "unscheduled": []
-            },
-            "2026-03-07": {
-              "placements": [
-                {
-                  "date": "2026-03-07",
-                  "end": "09:00",
-                  "score": 40.5,
-                  "start": "07:00",
-                  "task": "Task 31",
-                  "task_id": "5a05010a-6c57-5d7b-9bca-43c34ef4cf5a"
-                },
-                {
-                  "date": "2026-03-07",
-                  "end": "10:30",
-                  "score": 35.0,
-                  "start": "09:00",
-                  "task": "Task 43",
-                  "task_id": "79592540-b3b1-5978-89e1-84cc25aab90c"
-                },
-                {
-                  "date": "2026-03-07",
-                  "end": "11:30",
-                  "score": 6.0,
-                  "start": "10:30",
-                  "task": "Task 15",
-                  "task_id": "e1a23a0e-0c98-59ae-9ab2-558a881e2996"
-                }
-              ],
-              "total_score": 81.5,
-              "unscheduled": []
-            },
-            "2026-03-08": {
-              "placements": [
-                {
-                  "date": "2026-03-08",
-                  "end": "08:30",
-                  "score": 55.0,
-                  "start": "07:00",
-                  "task": "Task 37",
-                  "task_id": "14e2bf7c-712d-5133-90d0-94eb33302ae7"
-                },
-                {
-                  "date": "2026-03-08",
-                  "end": "09:30",
-                  "score": 50.0,
-                  "start": "08:30",
-                  "task": "Task 23",
-                  "task_id": "404c5903-2776-5554-9f89-6f12dc2a1ea0"
-                },
-                {
-                  "date": "2026-03-08",
-                  "end": "11:30",
-                  "score": 27.0,
-                  "start": "09:30",
-                  "task": "Task 03",
-                  "task_id": "b9f3a058-b2e8-52e8-a5b8-b8522410a4a3"
-                },
-                {
-                  "date": "2026-03-08",
-                  "end": "15:15",
-                  "score": 20.0,
-                  "start": "13:15",
-                  "task": "Task 33",
-                  "task_id": "51c1e436-96b8-5759-b2bb-e04863595e4c"
-                },
-                {
-                  "date": "2026-03-08",
-                  "end": "17:15",
-                  "score": 4.5,
-                  "start": "15:15",
-                  "task": "Task 01",
-                  "task_id": "0d26edcf-0c77-5f5e-a8d5-e934970e960b"
-                }
-              ],
-              "total_score": 156.5,
-              "unscheduled": []
-            }
-          },
-          "status": "generated",
-          "unallocated": [
-            {
-              "reason": "capacity_exceeded",
-              "required": false,
-              "task_id": "120a2852-4d7a-546f-b621-c87052e5b625"
-            },
-            {
-              "reason": "capacity_exceeded",
-              "required": false,
-              "task_id": "24777f72-ef44-5a99-af18-254d8b5ad1f9"
-            },
-            {
-              "reason": "capacity_exceeded",
-              "required": false,
-              "task_id": "33f475e0-dd74-5fc6-a355-8f72ec62748b"
-            },
-            {
-              "reason": "capacity_exceeded",
-              "required": false,
-              "task_id": "3aa096aa-b0c1-5cae-8568-9f91d78625a7"
-            },
-            {
-              "reason": "capacity_exceeded",
-              "required": false,
-              "task_id": "51e08cb3-ea8a-5f82-aac4-64d404abaa82"
-            },
-            {
-              "reason": "capacity_exceeded",
-              "required": false,
-              "task_id": "6114d905-a07c-5008-91b6-b19a7d3e8817"
-            },
-            {
-              "reason": "capacity_exceeded",
-              "required": false,
-              "task_id": "62bc8741-901c-5961-b1bb-063897a421ce"
-            },
-            {
-              "reason": "capacity_exceeded",
-              "required": false,
-              "task_id": "7caec850-2469-5d75-bbf1-06d194538980"
-            },
-            {
-              "reason": "capacity_exceeded",
-              "required": false,
-              "task_id": "885aba43-650e-5df5-87e0-0e3718f9dde4"
-            },
-            {
-              "reason": "capacity_exceeded",
-              "required": false,
-              "task_id": "b58a5b8d-3e81-5753-b293-6df3732d49a7"
-            },
-            {
-              "reason": "capacity_exceeded",
-              "required": false,
-              "task_id": "c0288625-e863-52b6-bef8-83b8e17e5861"
-            },
-            {
-              "reason": "capacity_exceeded",
-              "required": false,
-              "task_id": "d4642ad1-7d7d-5161-ae95-b03f954f15fb"
-            },
-            {
-              "reason": "capacity_exceeded",
-              "required": false,
-              "task_id": "df236f8b-f765-529b-b10e-511fabdc749c"
-            },
-            {
-              "reason": "capacity_exceeded",
-              "required": false,
-              "task_id": "df6cace3-80a2-5150-9a89-d421cfb51dfd"
-            },
-            {
-              "reason": "capacity_exceeded",
-              "required": false,
-              "task_id": "f874bbb7-9fee-5326-a579-9988317d63ab"
-            },
-            {
-              "reason": "capacity_exceeded",
-              "required": false,
-              "task_id": "fe52300c-d8c1-5771-9bea-999ec692880e"
-            }
-          ],
-          "week_total_score": 887.5
-        }
-      },
-      "precise_greedy": {
-        "day_engine": {
-          "_elapsed_ms": 26.786,
-          "date": "2026-03-04",
-          "placements": [
-            {
-              "date": "2026-03-04",
-              "end": "08:15",
-              "score": 60.0,
-              "start": "07:00",
-              "task": "Task 10",
-              "task_id": "120a2852-4d7a-546f-b621-c87052e5b625"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "08:40",
-              "score": 36.0,
-              "start": "08:15",
-              "task": "Task 11",
-              "task_id": "c9842a65-0683-5880-bfb8-311ae86471b4"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "09:30",
-              "score": 33.0,
-              "start": "08:40",
-              "task": "Task 02",
-              "task_id": "3aa096aa-b0c1-5cae-8568-9f91d78625a7"
-            },
-            {
-              "date": "2026-03-04",
               "end": "10:20",
-              "score": 31.0,
+              "score": 7.0,
               "start": "09:30",
               "task": "Task 09",
               "task_id": "b567a7f8-a52b-5830-a2e9-07cb21da0b95"
@@ -913,151 +51,151 @@
             {
               "date": "2026-03-04",
               "end": "10:45",
-              "score": 30.0,
+              "score": 5.0,
               "start": "10:20",
               "task": "Task 08",
               "task_id": "2d43b280-ffb6-55e1-b248-8e3ee258ed32"
             },
             {
               "date": "2026-03-04",
-              "end": "11:15",
-              "score": 29.0,
-              "start": "10:45",
-              "task": "Task 03",
-              "task_id": "b9f3a058-b2e8-52e8-a5b8-b8522410a4a3"
-            },
-            {
-              "date": "2026-03-04",
               "end": "12:30",
-              "score": 24.0,
+              "score": 6.0,
               "start": "11:15",
               "task": "Task 00",
               "task_id": "62bc8741-901c-5961-b1bb-063897a421ce"
             },
             {
               "date": "2026-03-04",
-              "end": "14:05",
-              "score": 28.0,
+              "end": "14:00",
+              "score": 6.0,
               "start": "13:15",
-              "task": "Task 04",
-              "task_id": "2f11f16b-66f4-533d-9632-b369ad6b3b13"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "17:45",
-              "score": 22.0,
-              "start": "16:30",
-              "task": "Task 07",
-              "task_id": "2da4b9f0-5c5a-52a2-a17d-0d9abbc9a5e3"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "18:30",
-              "score": 12.0,
-              "start": "17:45",
               "task": "Task 05",
               "task_id": "acdc7ded-00de-5f40-a6b4-9cde5caecdc1"
             },
             {
               "date": "2026-03-04",
-              "end": "19:00",
-              "score": 4.5,
-              "start": "18:30",
-              "task": "Task 01",
-              "task_id": "0d26edcf-0c77-5f5e-a8d5-e934970e960b"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "19:45",
-              "score": 5.5,
-              "start": "19:00",
-              "task": "Task 06",
-              "task_id": "6114d905-a07c-5008-91b6-b19a7d3e8817"
-            }
-          ],
-          "task_count": 12,
-          "total_score": 315.0,
-          "unscheduled": []
-        },
-        "day_engine_overloaded": {
-          "_elapsed_ms": 37.463,
-          "date": "2026-03-04",
-          "placements": [
-            {
-              "date": "2026-03-04",
-              "end": "08:30",
-              "score": 50.0,
-              "start": "07:00",
-              "task": "Task 08",
-              "task_id": "2d43b280-ffb6-55e1-b248-8e3ee258ed32"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "09:30",
-              "score": 51.0,
-              "start": "08:30",
-              "task": "Task 23",
-              "task_id": "404c5903-2776-5554-9f89-6f12dc2a1ea0"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "11:00",
-              "score": 48.0,
-              "start": "09:30",
+              "end": "17:45",
+              "score": 6.0,
+              "start": "16:30",
               "task": "Task 10",
               "task_id": "120a2852-4d7a-546f-b621-c87052e5b625"
             },
             {
               "date": "2026-03-04",
+              "end": "18:35",
+              "score": 5.5,
+              "start": "17:45",
+              "task": "Task 02",
+              "task_id": "3aa096aa-b0c1-5cae-8568-9f91d78625a7"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "19:05",
+              "score": 6.5,
+              "start": "18:35",
+              "task": "Task 01",
+              "task_id": "0d26edcf-0c77-5f5e-a8d5-e934970e960b"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "21:00",
+              "score": 5.5,
+              "start": "19:45",
+              "task": "Task 07",
+              "task_id": "2da4b9f0-5c5a-52a2-a17d-0d9abbc9a5e3"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "21:50",
+              "score": 4.0,
+              "start": "21:00",
+              "task": "Task 04",
+              "task_id": "2f11f16b-66f4-533d-9632-b369ad6b3b13"
+            }
+          ],
+          "task_count": 12,
+          "total_score": 74.5,
+          "unscheduled": []
+        },
+        "day_engine_overloaded": {
+          "_elapsed_ms": 25.383,
+          "date": "2026-03-04",
+          "placements": [
+            {
+              "date": "2026-03-04",
+              "end": "08:30",
+              "score": 6.0,
+              "start": "07:00",
+              "task": "Task 00",
+              "task_id": "62bc8741-901c-5961-b1bb-063897a421ce"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "09:30",
+              "score": 7.0,
+              "start": "08:30",
+              "task": "Task 05",
+              "task_id": "acdc7ded-00de-5f40-a6b4-9cde5caecdc1"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "10:30",
+              "score": 8.0,
+              "start": "09:30",
+              "task": "Task 15",
+              "task_id": "e1a23a0e-0c98-59ae-9ab2-558a881e2996"
+            },
+            {
+              "date": "2026-03-04",
               "end": "12:00",
-              "score": 43.0,
-              "start": "11:00",
+              "score": 7.5,
+              "start": "10:30",
+              "task": "Task 17",
+              "task_id": "9f420a60-3352-5447-a092-da048e4df9ff"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "14:15",
+              "score": 6.0,
+              "start": "13:15",
               "task": "Task 20",
               "task_id": "7caec850-2469-5d75-bbf1-06d194538980"
             },
             {
               "date": "2026-03-04",
-              "end": "14:45",
-              "score": 32.0,
-              "start": "13:15",
-              "task": "Task 09",
-              "task_id": "b567a7f8-a52b-5830-a2e9-07cb21da0b95"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "18:30",
-              "score": 45.0,
+              "end": "18:00",
+              "score": 6.0,
               "start": "16:30",
-              "task": "Task 13",
-              "task_id": "62c899b2-6d57-58fe-8faa-f7514a09910e"
+              "task": "Task 10",
+              "task_id": "120a2852-4d7a-546f-b621-c87052e5b625"
             },
             {
               "date": "2026-03-04",
-              "end": "20:30",
-              "score": 44.0,
-              "start": "18:30",
-              "task": "Task 12",
-              "task_id": "002280f0-12fb-59b1-8a46-9c6754cbd242"
+              "end": "19:30",
+              "score": 7.5,
+              "start": "18:00",
+              "task": "Task 07",
+              "task_id": "2da4b9f0-5c5a-52a2-a17d-0d9abbc9a5e3"
             },
             {
               "date": "2026-03-04",
-              "end": "22:00",
-              "score": 40.0,
-              "start": "20:30",
-              "task": "Task 04",
-              "task_id": "2f11f16b-66f4-533d-9632-b369ad6b3b13"
+              "end": "21:00",
+              "score": 6.5,
+              "start": "19:30",
+              "task": "Task 02",
+              "task_id": "3aa096aa-b0c1-5cae-8568-9f91d78625a7"
             },
             {
               "date": "2026-03-04",
               "end": "23:00",
-              "score": 26.0,
-              "start": "22:00",
-              "task": "Task 14",
-              "task_id": "885aba43-650e-5df5-87e0-0e3718f9dde4"
+              "score": 6.5,
+              "start": "21:00",
+              "task": "Task 12",
+              "task_id": "002280f0-12fb-59b1-8a46-9c6754cbd242"
             }
           ],
           "task_count": 24,
-          "total_score": 379.0,
+          "total_score": 61.0,
           "unscheduled": [
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
@@ -1067,12 +205,17 @@
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
               "reason": "no_valid_slot",
-              "task_id": "2da4b9f0-5c5a-52a2-a17d-0d9abbc9a5e3"
+              "task_id": "2d43b280-ffb6-55e1-b248-8e3ee258ed32"
             },
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
               "reason": "no_valid_slot",
-              "task_id": "3aa096aa-b0c1-5cae-8568-9f91d78625a7"
+              "task_id": "2f11f16b-66f4-533d-9632-b369ad6b3b13"
+            },
+            {
+              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
+              "reason": "no_valid_slot",
+              "task_id": "404c5903-2776-5554-9f89-6f12dc2a1ea0"
             },
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
@@ -1092,7 +235,7 @@
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
               "reason": "no_valid_slot",
-              "task_id": "62bc8741-901c-5961-b1bb-063897a421ce"
+              "task_id": "62c899b2-6d57-58fe-8faa-f7514a09910e"
             },
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
@@ -1102,12 +245,12 @@
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
               "reason": "no_valid_slot",
-              "task_id": "9f420a60-3352-5447-a092-da048e4df9ff"
+              "task_id": "885aba43-650e-5df5-87e0-0e3718f9dde4"
             },
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
               "reason": "no_valid_slot",
-              "task_id": "acdc7ded-00de-5f40-a6b4-9cde5caecdc1"
+              "task_id": "b567a7f8-a52b-5830-a2e9-07cb21da0b95"
             },
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
@@ -1127,17 +270,12 @@
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
               "reason": "no_valid_slot",
-              "task_id": "e1a23a0e-0c98-59ae-9ab2-558a881e2996"
-            },
-            {
-              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
-              "reason": "no_valid_slot",
               "task_id": "fe52300c-d8c1-5771-9bea-999ec692880e"
             }
           ]
         },
         "workflow": {
-          "_elapsed_ms": 21.816,
+          "_elapsed_ms": 26.078,
           "assignments": {
             "002280f0-12fb-59b1-8a46-9c6754cbd242": "2026-03-05",
             "0d26edcf-0c77-5f5e-a8d5-e934970e960b": "2026-03-07",
@@ -1172,7 +310,7 @@
                 {
                   "date": "2026-03-02",
                   "end": "08:10",
-                  "score": 38.0,
+                  "score": 6.5,
                   "start": "07:45",
                   "task": "Task 11",
                   "task_id": "c9842a65-0683-5880-bfb8-311ae86471b4"
@@ -1180,13 +318,13 @@
                 {
                   "date": "2026-03-02",
                   "end": "08:40",
-                  "score": 30.0,
+                  "score": 6.0,
                   "start": "08:10",
                   "task": "Task 14",
                   "task_id": "885aba43-650e-5df5-87e0-0e3718f9dde4"
                 }
               ],
-              "total_score": 72.5,
+              "total_score": 17.0,
               "unscheduled": []
             },
             "2026-03-03": {
@@ -1194,29 +332,29 @@
                 {
                   "date": "2026-03-03",
                   "end": "07:25",
-                  "score": 30.0,
+                  "score": 6.0,
                   "start": "07:00",
                   "task": "Task 08",
                   "task_id": "2d43b280-ffb6-55e1-b248-8e3ee258ed32"
                 },
                 {
                   "date": "2026-03-03",
-                  "end": "08:10",
-                  "score": 12.0,
-                  "start": "07:25",
+                  "end": "09:00",
+                  "score": 6.0,
+                  "start": "08:15",
                   "task": "Task 05",
                   "task_id": "acdc7ded-00de-5f40-a6b4-9cde5caecdc1"
                 },
                 {
                   "date": "2026-03-03",
                   "end": "09:30",
-                  "score": 29.0,
+                  "score": 8.0,
                   "start": "09:00",
                   "task": "Task 03",
                   "task_id": "b9f3a058-b2e8-52e8-a5b8-b8522410a4a3"
                 }
               ],
-              "total_score": 71.0,
+              "total_score": 20.0,
               "unscheduled": []
             },
             "2026-03-04": {
@@ -1229,7 +367,7 @@
                 {
                   "date": "2026-03-05",
                   "end": "08:15",
-                  "score": 24.0,
+                  "score": 6.0,
                   "start": "07:00",
                   "task": "Task 00",
                   "task_id": "62bc8741-901c-5961-b1bb-063897a421ce"
@@ -1237,7 +375,7 @@
                 {
                   "date": "2026-03-05",
                   "end": "09:15",
-                  "score": 22.0,
+                  "score": 5.5,
                   "start": "08:15",
                   "task": "Task 12",
                   "task_id": "002280f0-12fb-59b1-8a46-9c6754cbd242"
@@ -1245,13 +383,13 @@
                 {
                   "date": "2026-03-05",
                   "end": "14:05",
-                  "score": 27.0,
+                  "score": 9.0,
                   "start": "13:15",
                   "task": "Task 15",
                   "task_id": "e1a23a0e-0c98-59ae-9ab2-558a881e2996"
                 }
               ],
-              "total_score": 73.0,
+              "total_score": 20.5,
               "unscheduled": []
             },
             "2026-03-06": {
@@ -1259,7 +397,7 @@
                 {
                   "date": "2026-03-06",
                   "end": "08:15",
-                  "score": 22.0,
+                  "score": 5.5,
                   "start": "07:00",
                   "task": "Task 07",
                   "task_id": "2da4b9f0-5c5a-52a2-a17d-0d9abbc9a5e3"
@@ -1273,37 +411,37 @@
                   "task_id": "62c899b2-6d57-58fe-8faa-f7514a09910e"
                 }
               ],
-              "total_score": 27.0,
+              "total_score": 10.5,
               "unscheduled": []
             },
             "2026-03-07": {
               "placements": [
                 {
                   "date": "2026-03-07",
-                  "end": "09:00",
-                  "score": 38.5,
+                  "end": "07:30",
+                  "score": 4.5,
                   "start": "07:00",
-                  "task": "Task 17",
-                  "task_id": "9f420a60-3352-5447-a092-da048e4df9ff"
+                  "task": "Task 01",
+                  "task_id": "0d26edcf-0c77-5f5e-a8d5-e934970e960b"
                 },
                 {
                   "date": "2026-03-07",
-                  "end": "09:50",
-                  "score": 31.0,
-                  "start": "09:00",
+                  "end": "08:50",
+                  "score": 7.0,
+                  "start": "08:00",
                   "task": "Task 09",
                   "task_id": "b567a7f8-a52b-5830-a2e9-07cb21da0b95"
                 },
                 {
                   "date": "2026-03-07",
-                  "end": "10:20",
-                  "score": 4.5,
-                  "start": "09:50",
-                  "task": "Task 01",
-                  "task_id": "0d26edcf-0c77-5f5e-a8d5-e934970e960b"
+                  "end": "11:30",
+                  "score": 5.5,
+                  "start": "09:30",
+                  "task": "Task 17",
+                  "task_id": "9f420a60-3352-5447-a092-da048e4df9ff"
                 }
               ],
-              "total_score": 74.0,
+              "total_score": 17.0,
               "unscheduled": []
             },
             "2026-03-08": {
@@ -1311,72 +449,74 @@
                 {
                   "date": "2026-03-08",
                   "end": "07:50",
-                  "score": 33.0,
+                  "score": 5.5,
                   "start": "07:00",
                   "task": "Task 02",
                   "task_id": "3aa096aa-b0c1-5cae-8568-9f91d78625a7"
                 },
                 {
                   "date": "2026-03-08",
-                  "end": "09:05",
-                  "score": 60.0,
-                  "start": "07:50",
+                  "end": "09:45",
+                  "score": 6.0,
+                  "start": "08:30",
                   "task": "Task 10",
                   "task_id": "120a2852-4d7a-546f-b621-c87052e5b625"
                 },
                 {
                   "date": "2026-03-08",
-                  "end": "11:05",
-                  "score": 31.5,
-                  "start": "09:05",
+                  "end": "11:45",
+                  "score": 4.5,
+                  "start": "09:45",
                   "task": "Task 16",
                   "task_id": "fe52300c-d8c1-5771-9bea-999ec692880e"
                 },
                 {
                   "date": "2026-03-08",
-                  "end": "11:55",
-                  "score": 28.0,
-                  "start": "11:05",
+                  "end": "14:05",
+                  "score": 4.0,
+                  "start": "13:15",
                   "task": "Task 04",
                   "task_id": "2f11f16b-66f4-533d-9632-b369ad6b3b13"
                 }
               ],
-              "total_score": 152.5,
+              "total_score": 20.0,
               "unscheduled": []
             }
           },
           "status": "generated",
           "unallocated": [],
-          "week_total_score": 470.0
+          "week_total_score": 105.0
         },
         "workflow_overloaded": {
-          "_elapsed_ms": 37.654,
+          "_elapsed_ms": 39.473,
           "assignments": {
             "002280f0-12fb-59b1-8a46-9c6754cbd242": "2026-03-04",
             "0d26edcf-0c77-5f5e-a8d5-e934970e960b": "2026-03-08",
             "0e478892-375b-5887-b05d-7b6468243fe9": "2026-03-04",
             "103b6731-fcb2-5cdc-b562-43d8727e7141": "2026-03-04",
+            "120a2852-4d7a-546f-b621-c87052e5b625": "2026-03-04",
             "14e2bf7c-712d-5133-90d0-94eb33302ae7": "2026-03-08",
             "1abc5675-f4d2-506b-b97f-001fe8923e06": "2026-03-04",
+            "24777f72-ef44-5a99-af18-254d8b5ad1f9": "2026-03-04",
             "2d43b280-ffb6-55e1-b248-8e3ee258ed32": "2026-03-04",
             "2da4b9f0-5c5a-52a2-a17d-0d9abbc9a5e3": "2026-03-02",
             "2f11f16b-66f4-533d-9632-b369ad6b3b13": "2026-03-04",
+            "33f475e0-dd74-5fc6-a355-8f72ec62748b": "2026-03-04",
             "404c5903-2776-5554-9f89-6f12dc2a1ea0": "2026-03-08",
             "45d816e7-8e42-551c-8a50-2dd43bca5ccb": "2026-03-02",
-            "4acfc6b0-d0cc-581f-9479-a48ba079058c": "2026-03-05",
+            "4acfc6b0-d0cc-581f-9479-a48ba079058c": "2026-03-07",
             "51c1e436-96b8-5759-b2bb-e04863595e4c": "2026-03-08",
             "5a05010a-6c57-5d7b-9bca-43c34ef4cf5a": "2026-03-07",
             "62c899b2-6d57-58fe-8faa-f7514a09910e": "2026-03-06",
             "72d80703-0b1f-51da-80e0-9a51db99b355": "2026-03-06",
             "79592540-b3b1-5978-89e1-84cc25aab90c": "2026-03-07",
-            "8cde1658-8bb3-5fee-81fc-91f7bf67cfb1": "2026-03-04",
+            "7caec850-2469-5d75-bbf1-06d194538980": "2026-03-04",
             "94077b16-5206-53bd-9162-81a4edcc0130": "2026-03-05",
             "9f420a60-3352-5447-a092-da048e4df9ff": "2026-03-03",
             "acdc7ded-00de-5f40-a6b4-9cde5caecdc1": "2026-03-06",
-            "b567a7f8-a52b-5830-a2e9-07cb21da0b95": "2026-03-04",
+            "b567a7f8-a52b-5830-a2e9-07cb21da0b95": "2026-03-05",
             "b9f3a058-b2e8-52e8-a5b8-b8522410a4a3": "2026-03-08",
             "c9842a65-0683-5880-bfb8-311ae86471b4": "2026-03-06",
-            "da295f8d-ead2-5708-8b6c-511812ea3720": "2026-03-04",
             "e1a23a0e-0c98-59ae-9ab2-558a881e2996": "2026-03-07",
             "e77cea11-2d00-5586-96f2-a3ce156b4c40": "2026-03-05",
             "e9d1219a-94d8-52a8-ac47-79f06dce99c3": "2026-03-06"
@@ -1387,7 +527,7 @@
                 {
                   "date": "2026-03-02",
                   "end": "08:30",
-                  "score": 16.5,
+                  "score": 5.5,
                   "start": "07:00",
                   "task": "Task 07",
                   "task_id": "2da4b9f0-5c5a-52a2-a17d-0d9abbc9a5e3"
@@ -1395,13 +535,13 @@
                 {
                   "date": "2026-03-02",
                   "end": "09:30",
-                  "score": 9.0,
+                  "score": 4.5,
                   "start": "08:30",
                   "task": "Task 21",
                   "task_id": "45d816e7-8e42-551c-8a50-2dd43bca5ccb"
                 }
               ],
-              "total_score": 25.5,
+              "total_score": 10.0,
               "unscheduled": []
             },
             "2026-03-03": {
@@ -1409,153 +549,159 @@
                 {
                   "date": "2026-03-03",
                   "end": "08:30",
-                  "score": 11.0,
+                  "score": 5.5,
                   "start": "07:00",
                   "task": "Task 17",
                   "task_id": "9f420a60-3352-5447-a092-da048e4df9ff"
                 }
               ],
-              "total_score": 11.0,
+              "total_score": 5.5,
               "unscheduled": []
             },
             "2026-03-04": {
               "placements": [
                 {
                   "date": "2026-03-04",
-                  "end": "08:00",
-                  "score": 60.0,
+                  "end": "08:30",
+                  "score": 6.0,
                   "start": "07:00",
-                  "task": "Task 25",
-                  "task_id": "1abc5675-f4d2-506b-b97f-001fe8923e06"
+                  "task": "Task 10",
+                  "task_id": "120a2852-4d7a-546f-b621-c87052e5b625"
                 },
                 {
                   "date": "2026-03-04",
-                  "end": "09:30",
-                  "score": 61.0,
-                  "start": "08:00",
-                  "task": "Task 40",
-                  "task_id": "8cde1658-8bb3-5fee-81fc-91f7bf67cfb1"
-                },
-                {
-                  "date": "2026-03-04",
-                  "end": "11:00",
-                  "score": 55.0,
-                  "start": "09:30",
+                  "end": "10:00",
+                  "score": 7.5,
+                  "start": "08:30",
                   "task": "Task 27",
                   "task_id": "0e478892-375b-5887-b05d-7b6468243fe9"
                 },
                 {
                   "date": "2026-03-04",
-                  "end": "12:30",
-                  "score": 50.0,
-                  "start": "11:00",
-                  "task": "Task 08",
-                  "task_id": "2d43b280-ffb6-55e1-b248-8e3ee258ed32"
-                },
-                {
-                  "date": "2026-03-04",
-                  "end": "14:45",
-                  "score": 32.0,
-                  "start": "13:15",
-                  "task": "Task 09",
-                  "task_id": "b567a7f8-a52b-5830-a2e9-07cb21da0b95"
-                },
-                {
-                  "date": "2026-03-04",
-                  "end": "18:00",
-                  "score": 50.0,
-                  "start": "16:30",
-                  "task": "Task 38",
-                  "task_id": "da295f8d-ead2-5708-8b6c-511812ea3720"
-                },
-                {
-                  "date": "2026-03-04",
-                  "end": "20:00",
-                  "score": 44.0,
-                  "start": "18:00",
+                  "end": "12:00",
+                  "score": 6.5,
+                  "start": "10:00",
                   "task": "Task 12",
                   "task_id": "002280f0-12fb-59b1-8a46-9c6754cbd242"
                 },
                 {
                   "date": "2026-03-04",
-                  "end": "21:00",
-                  "score": 45.0,
-                  "start": "20:00",
+                  "end": "14:15",
+                  "score": 6.0,
+                  "start": "13:15",
+                  "task": "Task 25",
+                  "task_id": "1abc5675-f4d2-506b-b97f-001fe8923e06"
+                },
+                {
+                  "date": "2026-03-04",
+                  "end": "17:30",
+                  "score": 6.0,
+                  "start": "16:30",
+                  "task": "Task 20",
+                  "task_id": "7caec850-2469-5d75-bbf1-06d194538980"
+                },
+                {
+                  "date": "2026-03-04",
+                  "end": "18:30",
+                  "score": 5.5,
+                  "start": "17:30",
                   "task": "Task 32",
                   "task_id": "103b6731-fcb2-5cdc-b562-43d8727e7141"
                 },
                 {
                   "date": "2026-03-04",
+                  "end": "19:30",
+                  "score": 7.0,
+                  "start": "18:30",
+                  "task": "Task 28",
+                  "task_id": "33f475e0-dd74-5fc6-a355-8f72ec62748b"
+                },
+                {
+                  "date": "2026-03-04",
+                  "end": "21:00",
+                  "score": 6.0,
+                  "start": "19:30",
+                  "task": "Task 08",
+                  "task_id": "2d43b280-ffb6-55e1-b248-8e3ee258ed32"
+                },
+                {
+                  "date": "2026-03-04",
                   "end": "22:30",
-                  "score": 40.0,
+                  "score": 5.5,
                   "start": "21:00",
-                  "task": "Task 04",
-                  "task_id": "2f11f16b-66f4-533d-9632-b369ad6b3b13"
+                  "task": "Task 42",
+                  "task_id": "24777f72-ef44-5a99-af18-254d8b5ad1f9"
                 }
               ],
-              "total_score": 437.0,
-              "unscheduled": []
+              "total_score": 56.0,
+              "unscheduled": [
+                {
+                  "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
+                  "reason": "no_valid_slot",
+                  "task_id": "2f11f16b-66f4-533d-9632-b369ad6b3b13"
+                }
+              ]
             },
             "2026-03-05": {
               "placements": [
                 {
                   "date": "2026-03-05",
                   "end": "08:00",
-                  "score": 27.0,
+                  "score": 4.5,
                   "start": "07:00",
                   "task": "Task 41",
                   "task_id": "e77cea11-2d00-5586-96f2-a3ce156b4c40"
                 },
                 {
                   "date": "2026-03-05",
-                  "end": "10:00",
+                  "end": "09:00",
                   "score": 4.0,
                   "start": "08:00",
-                  "task": "Task 39",
-                  "task_id": "4acfc6b0-d0cc-581f-9479-a48ba079058c"
+                  "task": "Task 29",
+                  "task_id": "94077b16-5206-53bd-9162-81a4edcc0130"
                 },
                 {
                   "date": "2026-03-05",
-                  "end": "11:00",
+                  "end": "10:30",
                   "score": 5.0,
-                  "start": "10:00",
-                  "task": "Task 29",
-                  "task_id": "94077b16-5206-53bd-9162-81a4edcc0130"
+                  "start": "09:00",
+                  "task": "Task 09",
+                  "task_id": "b567a7f8-a52b-5830-a2e9-07cb21da0b95"
                 }
               ],
-              "total_score": 36.0,
+              "total_score": 13.5,
               "unscheduled": []
             },
             "2026-03-06": {
               "placements": [
                 {
                   "date": "2026-03-06",
-                  "end": "09:00",
-                  "score": 54.0,
+                  "end": "08:00",
+                  "score": 6.0,
                   "start": "07:00",
-                  "task": "Task 35",
-                  "task_id": "e9d1219a-94d8-52a8-ac47-79f06dce99c3"
-                },
-                {
-                  "date": "2026-03-06",
-                  "end": "11:00",
-                  "score": 45.0,
-                  "start": "09:00",
-                  "task": "Task 13",
-                  "task_id": "62c899b2-6d57-58fe-8faa-f7514a09910e"
-                },
-                {
-                  "date": "2026-03-06",
-                  "end": "12:00",
-                  "score": 12.0,
-                  "start": "11:00",
                   "task": "Task 05",
                   "task_id": "acdc7ded-00de-5f40-a6b4-9cde5caecdc1"
                 },
                 {
                   "date": "2026-03-06",
+                  "end": "10:00",
+                  "score": 7.0,
+                  "start": "08:00",
+                  "task": "Task 35",
+                  "task_id": "e9d1219a-94d8-52a8-ac47-79f06dce99c3"
+                },
+                {
+                  "date": "2026-03-06",
+                  "end": "12:00",
+                  "score": 5.0,
+                  "start": "10:00",
+                  "task": "Task 13",
+                  "task_id": "62c899b2-6d57-58fe-8faa-f7514a09910e"
+                },
+                {
+                  "date": "2026-03-06",
                   "end": "14:15",
-                  "score": 9.0,
+                  "score": 4.5,
                   "start": "13:15",
                   "task": "Task 11",
                   "task_id": "c9842a65-0683-5880-bfb8-311ae86471b4"
@@ -1563,43 +709,51 @@
                 {
                   "date": "2026-03-06",
                   "end": "18:30",
-                  "score": 20.0,
+                  "score": 4.0,
                   "start": "16:30",
                   "task": "Task 19",
                   "task_id": "72d80703-0b1f-51da-80e0-9a51db99b355"
                 }
               ],
-              "total_score": 140.0,
+              "total_score": 26.5,
               "unscheduled": []
             },
             "2026-03-07": {
               "placements": [
                 {
                   "date": "2026-03-07",
-                  "end": "09:00",
-                  "score": 40.5,
+                  "end": "08:00",
+                  "score": 6.0,
                   "start": "07:00",
-                  "task": "Task 31",
-                  "task_id": "5a05010a-6c57-5d7b-9bca-43c34ef4cf5a"
+                  "task": "Task 15",
+                  "task_id": "e1a23a0e-0c98-59ae-9ab2-558a881e2996"
                 },
                 {
                   "date": "2026-03-07",
-                  "end": "10:30",
-                  "score": 35.0,
-                  "start": "09:00",
+                  "end": "09:30",
+                  "score": 5.0,
+                  "start": "08:00",
                   "task": "Task 43",
                   "task_id": "79592540-b3b1-5978-89e1-84cc25aab90c"
                 },
                 {
                   "date": "2026-03-07",
                   "end": "11:30",
-                  "score": 6.0,
-                  "start": "10:30",
-                  "task": "Task 15",
-                  "task_id": "e1a23a0e-0c98-59ae-9ab2-558a881e2996"
+                  "score": 4.5,
+                  "start": "09:30",
+                  "task": "Task 31",
+                  "task_id": "5a05010a-6c57-5d7b-9bca-43c34ef4cf5a"
+                },
+                {
+                  "date": "2026-03-07",
+                  "end": "15:15",
+                  "score": 4.0,
+                  "start": "13:15",
+                  "task": "Task 39",
+                  "task_id": "4acfc6b0-d0cc-581f-9479-a48ba079058c"
                 }
               ],
-              "total_score": 81.5,
+              "total_score": 19.5,
               "unscheduled": []
             },
             "2026-03-08": {
@@ -1607,7 +761,7 @@
                 {
                   "date": "2026-03-08",
                   "end": "08:30",
-                  "score": 55.0,
+                  "score": 5.5,
                   "start": "07:00",
                   "task": "Task 37",
                   "task_id": "14e2bf7c-712d-5133-90d0-94eb33302ae7"
@@ -1615,7 +769,7 @@
                 {
                   "date": "2026-03-08",
                   "end": "09:30",
-                  "score": 50.0,
+                  "score": 5.0,
                   "start": "08:30",
                   "task": "Task 23",
                   "task_id": "404c5903-2776-5554-9f89-6f12dc2a1ea0"
@@ -1623,7 +777,7 @@
                 {
                   "date": "2026-03-08",
                   "end": "11:30",
-                  "score": 27.0,
+                  "score": 7.0,
                   "start": "09:30",
                   "task": "Task 03",
                   "task_id": "b9f3a058-b2e8-52e8-a5b8-b8522410a4a3"
@@ -1631,7 +785,7 @@
                 {
                   "date": "2026-03-08",
                   "end": "15:15",
-                  "score": 20.0,
+                  "score": 5.0,
                   "start": "13:15",
                   "task": "Task 33",
                   "task_id": "51c1e436-96b8-5759-b2bb-e04863595e4c"
@@ -1645,27 +799,12 @@
                   "task_id": "0d26edcf-0c77-5f5e-a8d5-e934970e960b"
                 }
               ],
-              "total_score": 156.5,
+              "total_score": 27.0,
               "unscheduled": []
             }
           },
           "status": "generated",
           "unallocated": [
-            {
-              "reason": "capacity_exceeded",
-              "required": false,
-              "task_id": "120a2852-4d7a-546f-b621-c87052e5b625"
-            },
-            {
-              "reason": "capacity_exceeded",
-              "required": false,
-              "task_id": "24777f72-ef44-5a99-af18-254d8b5ad1f9"
-            },
-            {
-              "reason": "capacity_exceeded",
-              "required": false,
-              "task_id": "33f475e0-dd74-5fc6-a355-8f72ec62748b"
-            },
             {
               "reason": "capacity_exceeded",
               "required": false,
@@ -1689,12 +828,12 @@
             {
               "reason": "capacity_exceeded",
               "required": false,
-              "task_id": "7caec850-2469-5d75-bbf1-06d194538980"
+              "task_id": "885aba43-650e-5df5-87e0-0e3718f9dde4"
             },
             {
               "reason": "capacity_exceeded",
               "required": false,
-              "task_id": "885aba43-650e-5df5-87e0-0e3718f9dde4"
+              "task_id": "8cde1658-8bb3-5fee-81fc-91f7bf67cfb1"
             },
             {
               "reason": "capacity_exceeded",
@@ -1710,6 +849,11 @@
               "reason": "capacity_exceeded",
               "required": false,
               "task_id": "d4642ad1-7d7d-5161-ae95-b03f954f15fb"
+            },
+            {
+              "reason": "capacity_exceeded",
+              "required": false,
+              "task_id": "da295f8d-ead2-5708-8b6c-511812ea3720"
             },
             {
               "reason": "capacity_exceeded",
@@ -1732,68 +876,944 @@
               "task_id": "fe52300c-d8c1-5771-9bea-999ec692880e"
             }
           ],
-          "week_total_score": 887.5
+          "week_total_score": 158.0
+        }
+      },
+      "precise_greedy": {
+        "day_engine": {
+          "_elapsed_ms": 27.006,
+          "date": "2026-03-04",
+          "placements": [
+            {
+              "date": "2026-03-04",
+              "end": "07:25",
+              "score": 5.0,
+              "start": "07:00",
+              "task": "Task 08",
+              "task_id": "2d43b280-ffb6-55e1-b248-8e3ee258ed32"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "08:10",
+              "score": 6.0,
+              "start": "07:25",
+              "task": "Task 05",
+              "task_id": "acdc7ded-00de-5f40-a6b4-9cde5caecdc1"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "09:00",
+              "score": 7.0,
+              "start": "08:10",
+              "task": "Task 09",
+              "task_id": "b567a7f8-a52b-5830-a2e9-07cb21da0b95"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "09:30",
+              "score": 8.0,
+              "start": "09:00",
+              "task": "Task 03",
+              "task_id": "b9f3a058-b2e8-52e8-a5b8-b8522410a4a3"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "10:15",
+              "score": 6.5,
+              "start": "09:30",
+              "task": "Task 06",
+              "task_id": "6114d905-a07c-5008-91b6-b19a7d3e8817"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "10:40",
+              "score": 6.5,
+              "start": "10:15",
+              "task": "Task 11",
+              "task_id": "c9842a65-0683-5880-bfb8-311ae86471b4"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "11:55",
+              "score": 6.0,
+              "start": "10:40",
+              "task": "Task 00",
+              "task_id": "62bc8741-901c-5961-b1bb-063897a421ce"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "14:30",
+              "score": 6.0,
+              "start": "13:15",
+              "task": "Task 10",
+              "task_id": "120a2852-4d7a-546f-b621-c87052e5b625"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "17:20",
+              "score": 5.5,
+              "start": "16:30",
+              "task": "Task 02",
+              "task_id": "3aa096aa-b0c1-5cae-8568-9f91d78625a7"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "17:50",
+              "score": 6.5,
+              "start": "17:20",
+              "task": "Task 01",
+              "task_id": "0d26edcf-0c77-5f5e-a8d5-e934970e960b"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "19:05",
+              "score": 5.5,
+              "start": "17:50",
+              "task": "Task 07",
+              "task_id": "2da4b9f0-5c5a-52a2-a17d-0d9abbc9a5e3"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "19:55",
+              "score": 4.0,
+              "start": "19:05",
+              "task": "Task 04",
+              "task_id": "2f11f16b-66f4-533d-9632-b369ad6b3b13"
+            }
+          ],
+          "task_count": 12,
+          "total_score": 72.5,
+          "unscheduled": []
+        },
+        "day_engine_overloaded": {
+          "_elapsed_ms": 43.828,
+          "date": "2026-03-04",
+          "placements": [
+            {
+              "date": "2026-03-04",
+              "end": "08:30",
+              "score": 6.0,
+              "start": "07:00",
+              "task": "Task 00",
+              "task_id": "62bc8741-901c-5961-b1bb-063897a421ce"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "09:30",
+              "score": 7.0,
+              "start": "08:30",
+              "task": "Task 05",
+              "task_id": "acdc7ded-00de-5f40-a6b4-9cde5caecdc1"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "10:30",
+              "score": 8.0,
+              "start": "09:30",
+              "task": "Task 15",
+              "task_id": "e1a23a0e-0c98-59ae-9ab2-558a881e2996"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "12:00",
+              "score": 7.5,
+              "start": "10:30",
+              "task": "Task 17",
+              "task_id": "9f420a60-3352-5447-a092-da048e4df9ff"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "14:15",
+              "score": 6.0,
+              "start": "13:15",
+              "task": "Task 20",
+              "task_id": "7caec850-2469-5d75-bbf1-06d194538980"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "18:00",
+              "score": 6.0,
+              "start": "16:30",
+              "task": "Task 10",
+              "task_id": "120a2852-4d7a-546f-b621-c87052e5b625"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "19:30",
+              "score": 7.5,
+              "start": "18:00",
+              "task": "Task 07",
+              "task_id": "2da4b9f0-5c5a-52a2-a17d-0d9abbc9a5e3"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "21:00",
+              "score": 6.5,
+              "start": "19:30",
+              "task": "Task 02",
+              "task_id": "3aa096aa-b0c1-5cae-8568-9f91d78625a7"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "23:00",
+              "score": 6.5,
+              "start": "21:00",
+              "task": "Task 12",
+              "task_id": "002280f0-12fb-59b1-8a46-9c6754cbd242"
+            }
+          ],
+          "task_count": 24,
+          "total_score": 61.0,
+          "unscheduled": [
+            {
+              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
+              "reason": "no_valid_slot",
+              "task_id": "0d26edcf-0c77-5f5e-a8d5-e934970e960b"
+            },
+            {
+              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
+              "reason": "no_valid_slot",
+              "task_id": "2d43b280-ffb6-55e1-b248-8e3ee258ed32"
+            },
+            {
+              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
+              "reason": "no_valid_slot",
+              "task_id": "2f11f16b-66f4-533d-9632-b369ad6b3b13"
+            },
+            {
+              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
+              "reason": "no_valid_slot",
+              "task_id": "404c5903-2776-5554-9f89-6f12dc2a1ea0"
+            },
+            {
+              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
+              "reason": "no_valid_slot",
+              "task_id": "45d816e7-8e42-551c-8a50-2dd43bca5ccb"
+            },
+            {
+              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
+              "reason": "no_valid_slot",
+              "task_id": "51e08cb3-ea8a-5f82-aac4-64d404abaa82"
+            },
+            {
+              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
+              "reason": "no_valid_slot",
+              "task_id": "6114d905-a07c-5008-91b6-b19a7d3e8817"
+            },
+            {
+              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
+              "reason": "no_valid_slot",
+              "task_id": "62c899b2-6d57-58fe-8faa-f7514a09910e"
+            },
+            {
+              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
+              "reason": "no_valid_slot",
+              "task_id": "72d80703-0b1f-51da-80e0-9a51db99b355"
+            },
+            {
+              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
+              "reason": "no_valid_slot",
+              "task_id": "885aba43-650e-5df5-87e0-0e3718f9dde4"
+            },
+            {
+              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
+              "reason": "no_valid_slot",
+              "task_id": "b567a7f8-a52b-5830-a2e9-07cb21da0b95"
+            },
+            {
+              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
+              "reason": "no_valid_slot",
+              "task_id": "b9f3a058-b2e8-52e8-a5b8-b8522410a4a3"
+            },
+            {
+              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
+              "reason": "no_valid_slot",
+              "task_id": "c9842a65-0683-5880-bfb8-311ae86471b4"
+            },
+            {
+              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
+              "reason": "no_valid_slot",
+              "task_id": "d4642ad1-7d7d-5161-ae95-b03f954f15fb"
+            },
+            {
+              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
+              "reason": "no_valid_slot",
+              "task_id": "fe52300c-d8c1-5771-9bea-999ec692880e"
+            }
+          ]
+        },
+        "workflow": {
+          "_elapsed_ms": 26.557,
+          "assignments": {
+            "002280f0-12fb-59b1-8a46-9c6754cbd242": "2026-03-05",
+            "0d26edcf-0c77-5f5e-a8d5-e934970e960b": "2026-03-07",
+            "120a2852-4d7a-546f-b621-c87052e5b625": "2026-03-08",
+            "2d43b280-ffb6-55e1-b248-8e3ee258ed32": "2026-03-03",
+            "2da4b9f0-5c5a-52a2-a17d-0d9abbc9a5e3": "2026-03-06",
+            "2f11f16b-66f4-533d-9632-b369ad6b3b13": "2026-03-08",
+            "3aa096aa-b0c1-5cae-8568-9f91d78625a7": "2026-03-08",
+            "6114d905-a07c-5008-91b6-b19a7d3e8817": "2026-03-02",
+            "62bc8741-901c-5961-b1bb-063897a421ce": "2026-03-05",
+            "62c899b2-6d57-58fe-8faa-f7514a09910e": "2026-03-06",
+            "885aba43-650e-5df5-87e0-0e3718f9dde4": "2026-03-02",
+            "9f420a60-3352-5447-a092-da048e4df9ff": "2026-03-07",
+            "acdc7ded-00de-5f40-a6b4-9cde5caecdc1": "2026-03-03",
+            "b567a7f8-a52b-5830-a2e9-07cb21da0b95": "2026-03-07",
+            "b9f3a058-b2e8-52e8-a5b8-b8522410a4a3": "2026-03-03",
+            "c9842a65-0683-5880-bfb8-311ae86471b4": "2026-03-02",
+            "e1a23a0e-0c98-59ae-9ab2-558a881e2996": "2026-03-05",
+            "fe52300c-d8c1-5771-9bea-999ec692880e": "2026-03-08"
+          },
+          "days": {
+            "2026-03-02": {
+              "placements": [
+                {
+                  "date": "2026-03-02",
+                  "end": "07:45",
+                  "score": 4.5,
+                  "start": "07:00",
+                  "task": "Task 06",
+                  "task_id": "6114d905-a07c-5008-91b6-b19a7d3e8817"
+                },
+                {
+                  "date": "2026-03-02",
+                  "end": "08:10",
+                  "score": 6.5,
+                  "start": "07:45",
+                  "task": "Task 11",
+                  "task_id": "c9842a65-0683-5880-bfb8-311ae86471b4"
+                },
+                {
+                  "date": "2026-03-02",
+                  "end": "08:40",
+                  "score": 6.0,
+                  "start": "08:10",
+                  "task": "Task 14",
+                  "task_id": "885aba43-650e-5df5-87e0-0e3718f9dde4"
+                }
+              ],
+              "total_score": 17.0,
+              "unscheduled": []
+            },
+            "2026-03-03": {
+              "placements": [
+                {
+                  "date": "2026-03-03",
+                  "end": "07:25",
+                  "score": 6.0,
+                  "start": "07:00",
+                  "task": "Task 08",
+                  "task_id": "2d43b280-ffb6-55e1-b248-8e3ee258ed32"
+                },
+                {
+                  "date": "2026-03-03",
+                  "end": "08:10",
+                  "score": 6.0,
+                  "start": "07:25",
+                  "task": "Task 05",
+                  "task_id": "acdc7ded-00de-5f40-a6b4-9cde5caecdc1"
+                },
+                {
+                  "date": "2026-03-03",
+                  "end": "09:30",
+                  "score": 8.0,
+                  "start": "09:00",
+                  "task": "Task 03",
+                  "task_id": "b9f3a058-b2e8-52e8-a5b8-b8522410a4a3"
+                }
+              ],
+              "total_score": 20.0,
+              "unscheduled": []
+            },
+            "2026-03-04": {
+              "placements": [],
+              "total_score": 0.0,
+              "unscheduled": []
+            },
+            "2026-03-05": {
+              "placements": [
+                {
+                  "date": "2026-03-05",
+                  "end": "08:15",
+                  "score": 6.0,
+                  "start": "07:00",
+                  "task": "Task 00",
+                  "task_id": "62bc8741-901c-5961-b1bb-063897a421ce"
+                },
+                {
+                  "date": "2026-03-05",
+                  "end": "09:15",
+                  "score": 5.5,
+                  "start": "08:15",
+                  "task": "Task 12",
+                  "task_id": "002280f0-12fb-59b1-8a46-9c6754cbd242"
+                },
+                {
+                  "date": "2026-03-05",
+                  "end": "14:05",
+                  "score": 9.0,
+                  "start": "13:15",
+                  "task": "Task 15",
+                  "task_id": "e1a23a0e-0c98-59ae-9ab2-558a881e2996"
+                }
+              ],
+              "total_score": 20.5,
+              "unscheduled": []
+            },
+            "2026-03-06": {
+              "placements": [
+                {
+                  "date": "2026-03-06",
+                  "end": "08:15",
+                  "score": 5.5,
+                  "start": "07:00",
+                  "task": "Task 07",
+                  "task_id": "2da4b9f0-5c5a-52a2-a17d-0d9abbc9a5e3"
+                },
+                {
+                  "date": "2026-03-06",
+                  "end": "08:40",
+                  "score": 5.0,
+                  "start": "08:15",
+                  "task": "Task 13",
+                  "task_id": "62c899b2-6d57-58fe-8faa-f7514a09910e"
+                }
+              ],
+              "total_score": 10.5,
+              "unscheduled": []
+            },
+            "2026-03-07": {
+              "placements": [
+                {
+                  "date": "2026-03-07",
+                  "end": "07:30",
+                  "score": 4.5,
+                  "start": "07:00",
+                  "task": "Task 01",
+                  "task_id": "0d26edcf-0c77-5f5e-a8d5-e934970e960b"
+                },
+                {
+                  "date": "2026-03-07",
+                  "end": "08:50",
+                  "score": 7.0,
+                  "start": "08:00",
+                  "task": "Task 09",
+                  "task_id": "b567a7f8-a52b-5830-a2e9-07cb21da0b95"
+                },
+                {
+                  "date": "2026-03-07",
+                  "end": "10:50",
+                  "score": 5.5,
+                  "start": "08:50",
+                  "task": "Task 17",
+                  "task_id": "9f420a60-3352-5447-a092-da048e4df9ff"
+                }
+              ],
+              "total_score": 17.0,
+              "unscheduled": []
+            },
+            "2026-03-08": {
+              "placements": [
+                {
+                  "date": "2026-03-08",
+                  "end": "07:50",
+                  "score": 5.5,
+                  "start": "07:00",
+                  "task": "Task 02",
+                  "task_id": "3aa096aa-b0c1-5cae-8568-9f91d78625a7"
+                },
+                {
+                  "date": "2026-03-08",
+                  "end": "09:05",
+                  "score": 6.0,
+                  "start": "07:50",
+                  "task": "Task 10",
+                  "task_id": "120a2852-4d7a-546f-b621-c87052e5b625"
+                },
+                {
+                  "date": "2026-03-08",
+                  "end": "11:05",
+                  "score": 4.5,
+                  "start": "09:05",
+                  "task": "Task 16",
+                  "task_id": "fe52300c-d8c1-5771-9bea-999ec692880e"
+                },
+                {
+                  "date": "2026-03-08",
+                  "end": "11:55",
+                  "score": 4.0,
+                  "start": "11:05",
+                  "task": "Task 04",
+                  "task_id": "2f11f16b-66f4-533d-9632-b369ad6b3b13"
+                }
+              ],
+              "total_score": 20.0,
+              "unscheduled": []
+            }
+          },
+          "status": "generated",
+          "unallocated": [],
+          "week_total_score": 105.0
+        },
+        "workflow_overloaded": {
+          "_elapsed_ms": 53.61,
+          "assignments": {
+            "002280f0-12fb-59b1-8a46-9c6754cbd242": "2026-03-04",
+            "0d26edcf-0c77-5f5e-a8d5-e934970e960b": "2026-03-08",
+            "0e478892-375b-5887-b05d-7b6468243fe9": "2026-03-04",
+            "103b6731-fcb2-5cdc-b562-43d8727e7141": "2026-03-04",
+            "120a2852-4d7a-546f-b621-c87052e5b625": "2026-03-04",
+            "14e2bf7c-712d-5133-90d0-94eb33302ae7": "2026-03-08",
+            "1abc5675-f4d2-506b-b97f-001fe8923e06": "2026-03-04",
+            "24777f72-ef44-5a99-af18-254d8b5ad1f9": "2026-03-04",
+            "2d43b280-ffb6-55e1-b248-8e3ee258ed32": "2026-03-04",
+            "2da4b9f0-5c5a-52a2-a17d-0d9abbc9a5e3": "2026-03-02",
+            "2f11f16b-66f4-533d-9632-b369ad6b3b13": "2026-03-04",
+            "33f475e0-dd74-5fc6-a355-8f72ec62748b": "2026-03-04",
+            "404c5903-2776-5554-9f89-6f12dc2a1ea0": "2026-03-08",
+            "45d816e7-8e42-551c-8a50-2dd43bca5ccb": "2026-03-02",
+            "4acfc6b0-d0cc-581f-9479-a48ba079058c": "2026-03-07",
+            "51c1e436-96b8-5759-b2bb-e04863595e4c": "2026-03-08",
+            "5a05010a-6c57-5d7b-9bca-43c34ef4cf5a": "2026-03-07",
+            "62c899b2-6d57-58fe-8faa-f7514a09910e": "2026-03-06",
+            "72d80703-0b1f-51da-80e0-9a51db99b355": "2026-03-06",
+            "79592540-b3b1-5978-89e1-84cc25aab90c": "2026-03-07",
+            "7caec850-2469-5d75-bbf1-06d194538980": "2026-03-04",
+            "94077b16-5206-53bd-9162-81a4edcc0130": "2026-03-05",
+            "9f420a60-3352-5447-a092-da048e4df9ff": "2026-03-03",
+            "acdc7ded-00de-5f40-a6b4-9cde5caecdc1": "2026-03-06",
+            "b567a7f8-a52b-5830-a2e9-07cb21da0b95": "2026-03-05",
+            "b9f3a058-b2e8-52e8-a5b8-b8522410a4a3": "2026-03-08",
+            "c9842a65-0683-5880-bfb8-311ae86471b4": "2026-03-06",
+            "e1a23a0e-0c98-59ae-9ab2-558a881e2996": "2026-03-07",
+            "e77cea11-2d00-5586-96f2-a3ce156b4c40": "2026-03-05",
+            "e9d1219a-94d8-52a8-ac47-79f06dce99c3": "2026-03-06"
+          },
+          "days": {
+            "2026-03-02": {
+              "placements": [
+                {
+                  "date": "2026-03-02",
+                  "end": "08:30",
+                  "score": 5.5,
+                  "start": "07:00",
+                  "task": "Task 07",
+                  "task_id": "2da4b9f0-5c5a-52a2-a17d-0d9abbc9a5e3"
+                },
+                {
+                  "date": "2026-03-02",
+                  "end": "09:30",
+                  "score": 4.5,
+                  "start": "08:30",
+                  "task": "Task 21",
+                  "task_id": "45d816e7-8e42-551c-8a50-2dd43bca5ccb"
+                }
+              ],
+              "total_score": 10.0,
+              "unscheduled": []
+            },
+            "2026-03-03": {
+              "placements": [
+                {
+                  "date": "2026-03-03",
+                  "end": "08:30",
+                  "score": 5.5,
+                  "start": "07:00",
+                  "task": "Task 17",
+                  "task_id": "9f420a60-3352-5447-a092-da048e4df9ff"
+                }
+              ],
+              "total_score": 5.5,
+              "unscheduled": []
+            },
+            "2026-03-04": {
+              "placements": [
+                {
+                  "date": "2026-03-04",
+                  "end": "08:30",
+                  "score": 6.0,
+                  "start": "07:00",
+                  "task": "Task 10",
+                  "task_id": "120a2852-4d7a-546f-b621-c87052e5b625"
+                },
+                {
+                  "date": "2026-03-04",
+                  "end": "10:00",
+                  "score": 7.5,
+                  "start": "08:30",
+                  "task": "Task 27",
+                  "task_id": "0e478892-375b-5887-b05d-7b6468243fe9"
+                },
+                {
+                  "date": "2026-03-04",
+                  "end": "12:00",
+                  "score": 6.5,
+                  "start": "10:00",
+                  "task": "Task 12",
+                  "task_id": "002280f0-12fb-59b1-8a46-9c6754cbd242"
+                },
+                {
+                  "date": "2026-03-04",
+                  "end": "14:15",
+                  "score": 6.0,
+                  "start": "13:15",
+                  "task": "Task 25",
+                  "task_id": "1abc5675-f4d2-506b-b97f-001fe8923e06"
+                },
+                {
+                  "date": "2026-03-04",
+                  "end": "17:30",
+                  "score": 6.0,
+                  "start": "16:30",
+                  "task": "Task 20",
+                  "task_id": "7caec850-2469-5d75-bbf1-06d194538980"
+                },
+                {
+                  "date": "2026-03-04",
+                  "end": "18:30",
+                  "score": 5.5,
+                  "start": "17:30",
+                  "task": "Task 32",
+                  "task_id": "103b6731-fcb2-5cdc-b562-43d8727e7141"
+                },
+                {
+                  "date": "2026-03-04",
+                  "end": "19:30",
+                  "score": 7.0,
+                  "start": "18:30",
+                  "task": "Task 28",
+                  "task_id": "33f475e0-dd74-5fc6-a355-8f72ec62748b"
+                },
+                {
+                  "date": "2026-03-04",
+                  "end": "21:00",
+                  "score": 6.0,
+                  "start": "19:30",
+                  "task": "Task 08",
+                  "task_id": "2d43b280-ffb6-55e1-b248-8e3ee258ed32"
+                },
+                {
+                  "date": "2026-03-04",
+                  "end": "22:30",
+                  "score": 5.5,
+                  "start": "21:00",
+                  "task": "Task 42",
+                  "task_id": "24777f72-ef44-5a99-af18-254d8b5ad1f9"
+                }
+              ],
+              "total_score": 56.0,
+              "unscheduled": [
+                {
+                  "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
+                  "reason": "no_valid_slot",
+                  "task_id": "2f11f16b-66f4-533d-9632-b369ad6b3b13"
+                }
+              ]
+            },
+            "2026-03-05": {
+              "placements": [
+                {
+                  "date": "2026-03-05",
+                  "end": "08:00",
+                  "score": 4.5,
+                  "start": "07:00",
+                  "task": "Task 41",
+                  "task_id": "e77cea11-2d00-5586-96f2-a3ce156b4c40"
+                },
+                {
+                  "date": "2026-03-05",
+                  "end": "09:00",
+                  "score": 4.0,
+                  "start": "08:00",
+                  "task": "Task 29",
+                  "task_id": "94077b16-5206-53bd-9162-81a4edcc0130"
+                },
+                {
+                  "date": "2026-03-05",
+                  "end": "10:30",
+                  "score": 5.0,
+                  "start": "09:00",
+                  "task": "Task 09",
+                  "task_id": "b567a7f8-a52b-5830-a2e9-07cb21da0b95"
+                }
+              ],
+              "total_score": 13.5,
+              "unscheduled": []
+            },
+            "2026-03-06": {
+              "placements": [
+                {
+                  "date": "2026-03-06",
+                  "end": "08:00",
+                  "score": 6.0,
+                  "start": "07:00",
+                  "task": "Task 05",
+                  "task_id": "acdc7ded-00de-5f40-a6b4-9cde5caecdc1"
+                },
+                {
+                  "date": "2026-03-06",
+                  "end": "10:00",
+                  "score": 7.0,
+                  "start": "08:00",
+                  "task": "Task 35",
+                  "task_id": "e9d1219a-94d8-52a8-ac47-79f06dce99c3"
+                },
+                {
+                  "date": "2026-03-06",
+                  "end": "12:00",
+                  "score": 5.0,
+                  "start": "10:00",
+                  "task": "Task 13",
+                  "task_id": "62c899b2-6d57-58fe-8faa-f7514a09910e"
+                },
+                {
+                  "date": "2026-03-06",
+                  "end": "14:15",
+                  "score": 4.5,
+                  "start": "13:15",
+                  "task": "Task 11",
+                  "task_id": "c9842a65-0683-5880-bfb8-311ae86471b4"
+                },
+                {
+                  "date": "2026-03-06",
+                  "end": "18:30",
+                  "score": 4.0,
+                  "start": "16:30",
+                  "task": "Task 19",
+                  "task_id": "72d80703-0b1f-51da-80e0-9a51db99b355"
+                }
+              ],
+              "total_score": 26.5,
+              "unscheduled": []
+            },
+            "2026-03-07": {
+              "placements": [
+                {
+                  "date": "2026-03-07",
+                  "end": "08:00",
+                  "score": 6.0,
+                  "start": "07:00",
+                  "task": "Task 15",
+                  "task_id": "e1a23a0e-0c98-59ae-9ab2-558a881e2996"
+                },
+                {
+                  "date": "2026-03-07",
+                  "end": "09:30",
+                  "score": 5.0,
+                  "start": "08:00",
+                  "task": "Task 43",
+                  "task_id": "79592540-b3b1-5978-89e1-84cc25aab90c"
+                },
+                {
+                  "date": "2026-03-07",
+                  "end": "11:30",
+                  "score": 4.5,
+                  "start": "09:30",
+                  "task": "Task 31",
+                  "task_id": "5a05010a-6c57-5d7b-9bca-43c34ef4cf5a"
+                },
+                {
+                  "date": "2026-03-07",
+                  "end": "15:15",
+                  "score": 4.0,
+                  "start": "13:15",
+                  "task": "Task 39",
+                  "task_id": "4acfc6b0-d0cc-581f-9479-a48ba079058c"
+                }
+              ],
+              "total_score": 19.5,
+              "unscheduled": []
+            },
+            "2026-03-08": {
+              "placements": [
+                {
+                  "date": "2026-03-08",
+                  "end": "08:30",
+                  "score": 5.5,
+                  "start": "07:00",
+                  "task": "Task 37",
+                  "task_id": "14e2bf7c-712d-5133-90d0-94eb33302ae7"
+                },
+                {
+                  "date": "2026-03-08",
+                  "end": "09:30",
+                  "score": 5.0,
+                  "start": "08:30",
+                  "task": "Task 23",
+                  "task_id": "404c5903-2776-5554-9f89-6f12dc2a1ea0"
+                },
+                {
+                  "date": "2026-03-08",
+                  "end": "11:30",
+                  "score": 7.0,
+                  "start": "09:30",
+                  "task": "Task 03",
+                  "task_id": "b9f3a058-b2e8-52e8-a5b8-b8522410a4a3"
+                },
+                {
+                  "date": "2026-03-08",
+                  "end": "15:15",
+                  "score": 5.0,
+                  "start": "13:15",
+                  "task": "Task 33",
+                  "task_id": "51c1e436-96b8-5759-b2bb-e04863595e4c"
+                },
+                {
+                  "date": "2026-03-08",
+                  "end": "17:15",
+                  "score": 4.5,
+                  "start": "15:15",
+                  "task": "Task 01",
+                  "task_id": "0d26edcf-0c77-5f5e-a8d5-e934970e960b"
+                }
+              ],
+              "total_score": 27.0,
+              "unscheduled": []
+            }
+          },
+          "status": "generated",
+          "unallocated": [
+            {
+              "reason": "capacity_exceeded",
+              "required": false,
+              "task_id": "3aa096aa-b0c1-5cae-8568-9f91d78625a7"
+            },
+            {
+              "reason": "capacity_exceeded",
+              "required": false,
+              "task_id": "51e08cb3-ea8a-5f82-aac4-64d404abaa82"
+            },
+            {
+              "reason": "capacity_exceeded",
+              "required": false,
+              "task_id": "6114d905-a07c-5008-91b6-b19a7d3e8817"
+            },
+            {
+              "reason": "capacity_exceeded",
+              "required": false,
+              "task_id": "62bc8741-901c-5961-b1bb-063897a421ce"
+            },
+            {
+              "reason": "capacity_exceeded",
+              "required": false,
+              "task_id": "885aba43-650e-5df5-87e0-0e3718f9dde4"
+            },
+            {
+              "reason": "capacity_exceeded",
+              "required": false,
+              "task_id": "8cde1658-8bb3-5fee-81fc-91f7bf67cfb1"
+            },
+            {
+              "reason": "capacity_exceeded",
+              "required": false,
+              "task_id": "b58a5b8d-3e81-5753-b293-6df3732d49a7"
+            },
+            {
+              "reason": "capacity_exceeded",
+              "required": false,
+              "task_id": "c0288625-e863-52b6-bef8-83b8e17e5861"
+            },
+            {
+              "reason": "capacity_exceeded",
+              "required": false,
+              "task_id": "d4642ad1-7d7d-5161-ae95-b03f954f15fb"
+            },
+            {
+              "reason": "capacity_exceeded",
+              "required": false,
+              "task_id": "da295f8d-ead2-5708-8b6c-511812ea3720"
+            },
+            {
+              "reason": "capacity_exceeded",
+              "required": false,
+              "task_id": "df236f8b-f765-529b-b10e-511fabdc749c"
+            },
+            {
+              "reason": "capacity_exceeded",
+              "required": false,
+              "task_id": "df6cace3-80a2-5150-9a89-d421cfb51dfd"
+            },
+            {
+              "reason": "capacity_exceeded",
+              "required": false,
+              "task_id": "f874bbb7-9fee-5326-a579-9988317d63ab"
+            },
+            {
+              "reason": "capacity_exceeded",
+              "required": false,
+              "task_id": "fe52300c-d8c1-5771-9bea-999ec692880e"
+            }
+          ],
+          "week_total_score": 158.0
         }
       }
     },
     "UTC": {
       "adhd_friendly": {
         "day_engine": {
-          "_elapsed_ms": 34.971,
+          "_elapsed_ms": 29.48,
           "date": "2026-03-04",
           "placements": [
             {
               "date": "2026-03-04",
-              "end": "07:30",
-              "score": 55.0,
-              "start": "07:00",
-              "task": "Task 02",
-              "task_id": "ab54fb22-2006-5aaf-9f89-817db6782886"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "08:15",
-              "score": 48.0,
-              "start": "07:30",
+              "end": "08:00",
+              "score": 6.0,
+              "start": "07:15",
               "task": "Task 00",
               "task_id": "ec0f00fc-1c47-5a39-a74a-39802da5f287"
             },
             {
               "date": "2026-03-04",
-              "end": "08:40",
-              "score": 49.0,
-              "start": "08:15",
+              "end": "09:30",
+              "score": 7.0,
+              "start": "08:00",
+              "task": "Task 09",
+              "task_id": "a215adbc-0a46-562e-9be3-f9eee9d9a14f"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "09:55",
+              "score": 6.0,
+              "start": "09:30",
               "task": "Task 05",
               "task_id": "8b42505d-c0c8-5f41-8b32-ffedc639484f"
             },
             {
               "date": "2026-03-04",
-              "end": "09:05",
-              "score": 43.0,
-              "start": "08:40",
-              "task": "Task 10",
-              "task_id": "9ef27a8e-d40c-5ebf-9683-1fa718bcb34d"
+              "end": "10:15",
+              "score": 8.0,
+              "start": "09:55",
+              "task": "Task 07",
+              "task_id": "66e014de-4dfc-5752-afd1-04810a0626f3"
             },
             {
               "date": "2026-03-04",
-              "end": "09:35",
-              "score": 30.0,
-              "start": "09:05",
+              "end": "10:45",
+              "score": 7.0,
+              "start": "10:15",
               "task": "Task 08",
               "task_id": "a233c877-b12f-564d-b779-b65cc73b05b0"
             },
             {
               "date": "2026-03-04",
-              "end": "11:45",
-              "score": 28.0,
-              "start": "10:15",
-              "task": "Task 04",
-              "task_id": "1f0c22f3-d8fe-5152-aa50-b41678ee5c95"
+              "end": "11:10",
+              "score": 6.0,
+              "start": "10:45",
+              "task": "Task 10",
+              "task_id": "9ef27a8e-d40c-5ebf-9683-1fa718bcb34d"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "11:40",
+              "score": 5.5,
+              "start": "11:10",
+              "task": "Task 02",
+              "task_id": "ab54fb22-2006-5aaf-9f89-817db6782886"
             },
             {
               "date": "2026-03-04",
               "end": "13:45",
-              "score": 53.0,
+              "score": 8.0,
               "start": "13:15",
               "task": "Task 03",
               "task_id": "f3ef88e1-761f-55ec-a4ef-164c8179840d"
@@ -1801,7 +1821,7 @@
             {
               "date": "2026-03-04",
               "end": "14:15",
-              "score": 42.5,
+              "score": 6.5,
               "start": "13:45",
               "task": "Task 06",
               "task_id": "1cb4d7bc-f018-523c-9aa9-01e57fb87c5c"
@@ -1809,103 +1829,111 @@
             {
               "date": "2026-03-04",
               "end": "18:00",
-              "score": 22.5,
+              "score": 4.5,
               "start": "16:30",
               "task": "Task 01",
               "task_id": "ea7b738f-1f35-5aa4-8281-dac006d3f06a"
             },
             {
               "date": "2026-03-04",
-              "end": "19:30",
-              "score": 20.0,
+              "end": "19:00",
+              "score": 5.5,
               "start": "18:00",
-              "task": "Task 09",
-              "task_id": "a215adbc-0a46-562e-9be3-f9eee9d9a14f"
+              "task": "Task 11",
+              "task_id": "aa8a3dc1-bc29-5ee8-97bc-3f12f4ab0fec"
             },
             {
               "date": "2026-03-04",
-              "end": "19:50",
-              "score": 17.0,
-              "start": "19:30",
-              "task": "Task 07",
-              "task_id": "66e014de-4dfc-5752-afd1-04810a0626f3"
+              "end": "20:30",
+              "score": 4.0,
+              "start": "19:00",
+              "task": "Task 04",
+              "task_id": "1f0c22f3-d8fe-5152-aa50-b41678ee5c95"
+            }
+          ],
+          "task_count": 12,
+          "total_score": 74.0,
+          "unscheduled": []
+        },
+        "day_engine_overloaded": {
+          "_elapsed_ms": 26.808,
+          "date": "2026-03-04",
+          "placements": [
+            {
+              "date": "2026-03-04",
+              "end": "08:00",
+              "score": 6.0,
+              "start": "07:00",
+              "task": "Task 00",
+              "task_id": "ec0f00fc-1c47-5a39-a74a-39802da5f287"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "10:00",
+              "score": 7.0,
+              "start": "08:00",
+              "task": "Task 05",
+              "task_id": "8b42505d-c0c8-5f41-8b32-ffedc639484f"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "11:00",
+              "score": 7.0,
+              "start": "10:00",
+              "task": "Task 10",
+              "task_id": "9ef27a8e-d40c-5ebf-9683-1fa718bcb34d"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "12:00",
+              "score": 7.0,
+              "start": "11:00",
+              "task": "Task 03",
+              "task_id": "f3ef88e1-761f-55ec-a4ef-164c8179840d"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "14:15",
+              "score": 6.0,
+              "start": "13:15",
+              "task": "Task 15",
+              "task_id": "2bd4d0c6-afbe-5998-9828-91235dfbfde9"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "18:30",
+              "score": 6.0,
+              "start": "16:30",
+              "task": "Task 20",
+              "task_id": "27b6ad07-c5e3-5847-ab79-981d0f9dbba7"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "20:00",
+              "score": 7.5,
+              "start": "18:30",
+              "task": "Task 12",
+              "task_id": "a2586775-1948-527b-a5e6-ae64695e9339"
             },
             {
               "date": "2026-03-04",
               "end": "21:30",
-              "score": 4.5,
-              "start": "20:30",
-              "task": "Task 11",
-              "task_id": "aa8a3dc1-bc29-5ee8-97bc-3f12f4ab0fec"
-            }
-          ],
-          "task_count": 12,
-          "total_score": 412.5,
-          "unscheduled": []
-        },
-        "day_engine_overloaded": {
-          "_elapsed_ms": 17.324,
-          "date": "2026-03-04",
-          "placements": [
-            {
-              "date": "2026-03-04",
-              "end": "09:00",
-              "score": 49.5,
-              "start": "07:00",
-              "task": "Task 17",
-              "task_id": "443d2d25-17fa-5ab0-955e-c75fe6950b56"
+              "score": 6.5,
+              "start": "20:00",
+              "task": "Task 02",
+              "task_id": "ab54fb22-2006-5aaf-9f89-817db6782886"
             },
             {
               "date": "2026-03-04",
-              "end": "10:00",
-              "score": 47.0,
-              "start": "09:00",
-              "task": "Task 03",
-              "task_id": "f3ef88e1-761f-55ec-a4ef-164c8179840d"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "12:00",
-              "score": 45.0,
-              "start": "10:00",
-              "task": "Task 16",
-              "task_id": "3f843138-7da8-5268-91fa-312e439e18f5"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "14:15",
-              "score": 40.0,
-              "start": "13:15",
-              "task": "Task 18",
-              "task_id": "8e2022d8-17e1-5d4c-9a2c-a68c2250e55b"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "18:30",
-              "score": 40.5,
-              "start": "16:30",
-              "task": "Task 11",
-              "task_id": "aa8a3dc1-bc29-5ee8-97bc-3f12f4ab0fec"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "20:30",
-              "score": 40.0,
-              "start": "18:30",
-              "task": "Task 14",
-              "task_id": "60f7daf6-decb-5440-a6d5-cc50bebd9e40"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "22:30",
-              "score": 32.0,
-              "start": "20:30",
-              "task": "Task 08",
-              "task_id": "a233c877-b12f-564d-b779-b65cc73b05b0"
+              "end": "23:00",
+              "score": 6.5,
+              "start": "21:30",
+              "task": "Task 01",
+              "task_id": "ea7b738f-1f35-5aa4-8281-dac006d3f06a"
             }
           ],
           "task_count": 24,
-          "total_score": 294.0,
+          "total_score": 59.5,
           "unscheduled": [
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
@@ -1920,17 +1948,22 @@
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
               "reason": "no_valid_slot",
-              "task_id": "27b6ad07-c5e3-5847-ab79-981d0f9dbba7"
+              "task_id": "3f843138-7da8-5268-91fa-312e439e18f5"
             },
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
               "reason": "no_valid_slot",
-              "task_id": "2bd4d0c6-afbe-5998-9828-91235dfbfde9"
+              "task_id": "443d2d25-17fa-5ab0-955e-c75fe6950b56"
             },
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
               "reason": "no_valid_slot",
               "task_id": "5a48c880-ef44-5060-8d28-ae9b44c00de3"
+            },
+            {
+              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
+              "reason": "no_valid_slot",
+              "task_id": "60f7daf6-decb-5440-a6d5-cc50bebd9e40"
             },
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
@@ -1945,12 +1978,7 @@
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
               "reason": "no_valid_slot",
-              "task_id": "8b42505d-c0c8-5f41-8b32-ffedc639484f"
-            },
-            {
-              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
-              "reason": "no_valid_slot",
-              "task_id": "9ef27a8e-d40c-5ebf-9683-1fa718bcb34d"
+              "task_id": "8e2022d8-17e1-5d4c-9a2c-a68c2250e55b"
             },
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
@@ -1960,17 +1988,17 @@
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
               "reason": "no_valid_slot",
-              "task_id": "a2586775-1948-527b-a5e6-ae64695e9339"
+              "task_id": "a233c877-b12f-564d-b779-b65cc73b05b0"
+            },
+            {
+              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
+              "reason": "no_valid_slot",
+              "task_id": "aa8a3dc1-bc29-5ee8-97bc-3f12f4ab0fec"
             },
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
               "reason": "no_valid_slot",
               "task_id": "aacb652a-312b-5ab2-92f6-241ec09bfe49"
-            },
-            {
-              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
-              "reason": "no_valid_slot",
-              "task_id": "ab54fb22-2006-5aaf-9f89-817db6782886"
             },
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
@@ -1981,26 +2009,16 @@
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
               "reason": "no_valid_slot",
               "task_id": "bd570ff4-b41e-5072-9d37-3c62e7c6f176"
-            },
-            {
-              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
-              "reason": "no_valid_slot",
-              "task_id": "ea7b738f-1f35-5aa4-8281-dac006d3f06a"
-            },
-            {
-              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
-              "reason": "no_valid_slot",
-              "task_id": "ec0f00fc-1c47-5a39-a74a-39802da5f287"
             }
           ]
         },
         "workflow": {
-          "_elapsed_ms": 22.504,
+          "_elapsed_ms": 29.078,
           "assignments": {
             "1cb4d7bc-f018-523c-9aa9-01e57fb87c5c": "2026-03-02",
             "1f0c22f3-d8fe-5152-aa50-b41678ee5c95": "2026-03-06",
             "2bd4d0c6-afbe-5998-9828-91235dfbfde9": "2026-03-05",
-            "3f843138-7da8-5268-91fa-312e439e18f5": "2026-03-08",
+            "3f843138-7da8-5268-91fa-312e439e18f5": "2026-03-07",
             "443d2d25-17fa-5ab0-955e-c75fe6950b56": "2026-03-05",
             "60f7daf6-decb-5440-a6d5-cc50bebd9e40": "2026-03-07",
             "66e014de-4dfc-5752-afd1-04810a0626f3": "2026-03-04",
@@ -2022,7 +2040,7 @@
                 {
                   "date": "2026-03-02",
                   "end": "07:45",
-                  "score": 48.0,
+                  "score": 6.0,
                   "start": "07:00",
                   "task": "Task 00",
                   "task_id": "ec0f00fc-1c47-5a39-a74a-39802da5f287"
@@ -2030,13 +2048,13 @@
                 {
                   "date": "2026-03-02",
                   "end": "08:15",
-                  "score": 40.5,
+                  "score": 4.5,
                   "start": "07:45",
                   "task": "Task 06",
                   "task_id": "1cb4d7bc-f018-523c-9aa9-01e57fb87c5c"
                 }
               ],
-              "total_score": 88.5,
+              "total_score": 10.5,
               "unscheduled": []
             },
             "2026-03-03": {
@@ -2044,45 +2062,45 @@
                 {
                   "date": "2026-03-03",
                   "end": "07:50",
-                  "score": 55.0,
+                  "score": 5.5,
                   "start": "07:00",
                   "task": "Task 12",
                   "task_id": "a2586775-1948-527b-a5e6-ae64695e9339"
                 },
                 {
                   "date": "2026-03-03",
-                  "end": "08:15",
-                  "score": 48.0,
-                  "start": "07:50",
+                  "end": "09:30",
+                  "score": 6.5,
+                  "start": "08:30",
+                  "task": "Task 11",
+                  "task_id": "aa8a3dc1-bc29-5ee8-97bc-3f12f4ab0fec"
+                },
+                {
+                  "date": "2026-03-03",
+                  "end": "09:55",
+                  "score": 6.0,
+                  "start": "09:30",
                   "task": "Task 05",
                   "task_id": "8b42505d-c0c8-5f41-8b32-ffedc639484f"
                 },
                 {
                   "date": "2026-03-03",
-                  "end": "09:45",
-                  "score": 35.0,
-                  "start": "08:15",
+                  "end": "12:00",
+                  "score": 5.0,
+                  "start": "10:30",
                   "task": "Task 13",
                   "task_id": "aacb652a-312b-5ab2-92f6-241ec09bfe49"
                 },
                 {
                   "date": "2026-03-03",
-                  "end": "11:15",
-                  "score": 24.5,
-                  "start": "09:45",
+                  "end": "18:00",
+                  "score": 4.5,
+                  "start": "16:30",
                   "task": "Task 01",
                   "task_id": "ea7b738f-1f35-5aa4-8281-dac006d3f06a"
-                },
-                {
-                  "date": "2026-03-03",
-                  "end": "14:15",
-                  "score": 4.5,
-                  "start": "13:15",
-                  "task": "Task 11",
-                  "task_id": "aa8a3dc1-bc29-5ee8-97bc-3f12f4ab0fec"
                 }
               ],
-              "total_score": 167.0,
+              "total_score": 27.5,
               "unscheduled": []
             },
             "2026-03-04": {
@@ -2090,7 +2108,7 @@
                 {
                   "date": "2026-03-04",
                   "end": "07:20",
-                  "score": 17.0,
+                  "score": 6.0,
                   "start": "07:00",
                   "task": "Task 07",
                   "task_id": "66e014de-4dfc-5752-afd1-04810a0626f3"
@@ -2098,13 +2116,13 @@
                 {
                   "date": "2026-03-04",
                   "end": "09:30",
-                  "score": 23.0,
+                  "score": 7.0,
                   "start": "08:00",
                   "task": "Task 09",
                   "task_id": "a215adbc-0a46-562e-9be3-f9eee9d9a14f"
                 }
               ],
-              "total_score": 40.0,
+              "total_score": 13.0,
               "unscheduled": []
             },
             "2026-03-05": {
@@ -2112,7 +2130,7 @@
                 {
                   "date": "2026-03-05",
                   "end": "08:00",
-                  "score": 55.0,
+                  "score": 5.5,
                   "start": "07:00",
                   "task": "Task 17",
                   "task_id": "443d2d25-17fa-5ab0-955e-c75fe6950b56"
@@ -2120,7 +2138,7 @@
                 {
                   "date": "2026-03-05",
                   "end": "08:30",
-                  "score": 30.0,
+                  "score": 5.0,
                   "start": "08:00",
                   "task": "Task 08",
                   "task_id": "a233c877-b12f-564d-b779-b65cc73b05b0"
@@ -2134,7 +2152,7 @@
                   "task_id": "2bd4d0c6-afbe-5998-9828-91235dfbfde9"
                 }
               ],
-              "total_score": 94.0,
+              "total_score": 19.5,
               "unscheduled": []
             },
             "2026-03-06": {
@@ -2142,13 +2160,13 @@
                 {
                   "date": "2026-03-06",
                   "end": "08:30",
-                  "score": 28.0,
+                  "score": 4.0,
                   "start": "07:00",
                   "task": "Task 04",
                   "task_id": "1f0c22f3-d8fe-5152-aa50-b41678ee5c95"
                 }
               ],
-              "total_score": 28.0,
+              "total_score": 4.0,
               "unscheduled": []
             },
             "2026-03-07": {
@@ -2156,29 +2174,37 @@
                 {
                   "date": "2026-03-07",
                   "end": "07:25",
-                  "score": 42.0,
+                  "score": 6.0,
                   "start": "07:00",
                   "task": "Task 10",
                   "task_id": "9ef27a8e-d40c-5ebf-9683-1fa718bcb34d"
                 },
                 {
                   "date": "2026-03-07",
-                  "end": "07:55",
-                  "score": 12.0,
-                  "start": "07:25",
+                  "end": "10:00",
+                  "score": 4.5,
+                  "start": "08:00",
+                  "task": "Task 16",
+                  "task_id": "3f843138-7da8-5268-91fa-312e439e18f5"
+                },
+                {
+                  "date": "2026-03-07",
+                  "end": "10:30",
+                  "score": 4.0,
+                  "start": "10:00",
                   "task": "Task 14",
                   "task_id": "60f7daf6-decb-5440-a6d5-cc50bebd9e40"
                 },
                 {
                   "date": "2026-03-07",
                   "end": "13:45",
-                  "score": 53.0,
+                  "score": 8.0,
                   "start": "13:15",
                   "task": "Task 03",
                   "task_id": "f3ef88e1-761f-55ec-a4ef-164c8179840d"
                 }
               ],
-              "total_score": 107.0,
+              "total_score": 22.5,
               "unscheduled": []
             },
             "2026-03-08": {
@@ -2186,47 +2212,39 @@
                 {
                   "date": "2026-03-08",
                   "end": "07:30",
-                  "score": 55.0,
+                  "score": 5.5,
                   "start": "07:00",
                   "task": "Task 02",
                   "task_id": "ab54fb22-2006-5aaf-9f89-817db6782886"
-                },
-                {
-                  "date": "2026-03-08",
-                  "end": "09:30",
-                  "score": 18.0,
-                  "start": "07:30",
-                  "task": "Task 16",
-                  "task_id": "3f843138-7da8-5268-91fa-312e439e18f5"
                 }
               ],
-              "total_score": 73.0,
+              "total_score": 5.5,
               "unscheduled": []
             }
           },
           "status": "generated",
           "unallocated": [],
-          "week_total_score": 597.5
+          "week_total_score": 102.5
         },
         "workflow_overloaded": {
-          "_elapsed_ms": 32.655,
+          "_elapsed_ms": 38.439,
           "assignments": {
             "092bc7f4-d33e-5a97-924a-a426ef2534a9": "2026-03-08",
             "0a5961e9-9f66-50ba-8c01-37ae85b41a93": "2026-03-05",
             "1cb4d7bc-f018-523c-9aa9-01e57fb87c5c": "2026-03-04",
+            "1f0c22f3-d8fe-5152-aa50-b41678ee5c95": "2026-03-04",
+            "27b6ad07-c5e3-5847-ab79-981d0f9dbba7": "2026-03-04",
             "2bd4d0c6-afbe-5998-9828-91235dfbfde9": "2026-03-07",
+            "320041f0-eaec-5f29-87d0-380adde1f9b3": "2026-03-04",
             "3f843138-7da8-5268-91fa-312e439e18f5": "2026-03-04",
+            "427eef0e-8c88-5268-b24c-c15b8c8683ad": "2026-03-04",
             "443d2d25-17fa-5ab0-955e-c75fe6950b56": "2026-03-04",
             "516b31cc-aae6-5bc2-bdcb-87043945e936": "2026-03-04",
             "5a48c880-ef44-5060-8d28-ae9b44c00de3": "2026-03-05",
-            "5cb05a41-3ad4-572c-9594-8a1a1bf86fe3": "2026-03-04",
-            "60f7daf6-decb-5440-a6d5-cc50bebd9e40": "2026-03-04",
             "66e014de-4dfc-5752-afd1-04810a0626f3": "2026-03-03",
             "6c5f0129-6218-5649-b963-16acd55963d6": "2026-03-05",
             "6d0f7e1f-6b90-5102-96a8-0e7ec3216243": "2026-03-07",
-            "83ba091c-cc03-557c-a0ac-6b39a5a5bf5a": "2026-03-04",
             "8b42505d-c0c8-5f41-8b32-ffedc639484f": "2026-03-06",
-            "8e2022d8-17e1-5d4c-9a2c-a68c2250e55b": "2026-03-04",
             "9c6a19b9-1326-5c7d-a052-902ab57bec1f": "2026-03-05",
             "9e47db8e-1aa2-5e6c-a6ae-5e75bf04b0b5": "2026-03-07",
             "a215adbc-0a46-562e-9be3-f9eee9d9a14f": "2026-03-08",
@@ -2235,7 +2253,6 @@
             "abcafecf-4f2d-547b-9ae8-bfa8475c50c9": "2026-03-05",
             "b3ed8e1a-bef2-5aee-af5f-332c3538f9da": "2026-03-05",
             "bd570ff4-b41e-5072-9d37-3c62e7c6f176": "2026-03-08",
-            "c32bad19-c4c0-58d5-a1c9-33faf8d14efc": "2026-03-04",
             "e55eaa9a-8fa5-5aa6-a2e0-63545fe72adf": "2026-03-06",
             "ea7b738f-1f35-5aa4-8281-dac006d3f06a": "2026-03-06",
             "f3ef88e1-761f-55ec-a4ef-164c8179840d": "2026-03-06",
@@ -2248,13 +2265,13 @@
                 {
                   "date": "2026-03-02",
                   "end": "09:00",
-                  "score": 15.0,
+                  "score": 5.0,
                   "start": "07:00",
                   "task": "Task 13",
                   "task_id": "aacb652a-312b-5ab2-92f6-241ec09bfe49"
                 }
               ],
-              "total_score": 15.0,
+              "total_score": 5.0,
               "unscheduled": []
             },
             "2026-03-03": {
@@ -2276,74 +2293,66 @@
                 {
                   "date": "2026-03-04",
                   "end": "09:00",
-                  "score": 49.5,
+                  "score": 6.0,
                   "start": "07:00",
+                  "task": "Task 20",
+                  "task_id": "27b6ad07-c5e3-5847-ab79-981d0f9dbba7"
+                },
+                {
+                  "date": "2026-03-04",
+                  "end": "11:00",
+                  "score": 7.0,
+                  "start": "09:00",
+                  "task": "Task 30",
+                  "task_id": "427eef0e-8c88-5268-b24c-c15b8c8683ad"
+                },
+                {
+                  "date": "2026-03-04",
+                  "end": "12:00",
+                  "score": 4.0,
+                  "start": "11:00",
+                  "task": "Task 04",
+                  "task_id": "1f0c22f3-d8fe-5152-aa50-b41678ee5c95"
+                },
+                {
+                  "date": "2026-03-04",
+                  "end": "18:30",
+                  "score": 5.5,
+                  "start": "16:30",
                   "task": "Task 17",
                   "task_id": "443d2d25-17fa-5ab0-955e-c75fe6950b56"
                 },
                 {
                   "date": "2026-03-04",
-                  "end": "10:00",
-                  "score": 50.5,
-                  "start": "09:00",
+                  "end": "19:30",
+                  "score": 6.5,
+                  "start": "18:30",
                   "task": "Task 42",
                   "task_id": "516b31cc-aae6-5bc2-bdcb-87043945e936"
                 },
                 {
                   "date": "2026-03-04",
-                  "end": "12:00",
-                  "score": 45.0,
-                  "start": "10:00",
-                  "task": "Task 16",
-                  "task_id": "3f843138-7da8-5268-91fa-312e439e18f5"
-                },
-                {
-                  "date": "2026-03-04",
-                  "end": "14:15",
-                  "score": 40.0,
-                  "start": "13:15",
-                  "task": "Task 38",
-                  "task_id": "5cb05a41-3ad4-572c-9594-8a1a1bf86fe3"
-                },
-                {
-                  "date": "2026-03-04",
-                  "end": "18:30",
-                  "score": 40.0,
-                  "start": "16:30",
-                  "task": "Task 14",
-                  "task_id": "60f7daf6-decb-5440-a6d5-cc50bebd9e40"
-                },
-                {
-                  "date": "2026-03-04",
-                  "end": "19:30",
-                  "score": 40.0,
-                  "start": "18:30",
-                  "task": "Task 18",
-                  "task_id": "8e2022d8-17e1-5d4c-9a2c-a68c2250e55b"
-                },
-                {
-                  "date": "2026-03-04",
-                  "end": "20:30",
-                  "score": 36.0,
-                  "start": "19:30",
-                  "task": "Task 34",
-                  "task_id": "83ba091c-cc03-557c-a0ac-6b39a5a5bf5a"
-                },
-                {
-                  "date": "2026-03-04",
                   "end": "21:30",
-                  "score": 35.0,
-                  "start": "20:30",
-                  "task": "Task 28",
-                  "task_id": "c32bad19-c4c0-58d5-a1c9-33faf8d14efc"
+                  "score": 4.5,
+                  "start": "19:30",
+                  "task": "Task 06",
+                  "task_id": "1cb4d7bc-f018-523c-9aa9-01e57fb87c5c"
+                },
+                {
+                  "date": "2026-03-04",
+                  "end": "22:30",
+                  "score": 5.5,
+                  "start": "21:30",
+                  "task": "Task 26",
+                  "task_id": "320041f0-eaec-5f29-87d0-380adde1f9b3"
                 }
               ],
-              "total_score": 336.0,
+              "total_score": 39.0,
               "unscheduled": [
                 {
                   "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
                   "reason": "no_valid_slot",
-                  "task_id": "1cb4d7bc-f018-523c-9aa9-01e57fb87c5c"
+                  "task_id": "3f843138-7da8-5268-91fa-312e439e18f5"
                 }
               ]
             },
@@ -2352,7 +2361,7 @@
                 {
                   "date": "2026-03-05",
                   "end": "08:30",
-                  "score": 48.0,
+                  "score": 6.0,
                   "start": "07:00",
                   "task": "Task 25",
                   "task_id": "b3ed8e1a-bef2-5aee-af5f-332c3538f9da"
@@ -2360,137 +2369,137 @@
                 {
                   "date": "2026-03-05",
                   "end": "09:30",
-                  "score": 40.5,
+                  "score": 5.0,
                   "start": "08:30",
-                  "task": "Task 31",
-                  "task_id": "6c5f0129-6218-5649-b963-16acd55963d6"
-                },
-                {
-                  "date": "2026-03-05",
-                  "end": "11:00",
-                  "score": 36.0,
-                  "start": "09:30",
-                  "task": "Task 39",
-                  "task_id": "abcafecf-4f2d-547b-9ae8-bfa8475c50c9"
-                },
-                {
-                  "date": "2026-03-05",
-                  "end": "12:30",
-                  "score": 25.0,
-                  "start": "11:00",
-                  "task": "Task 33",
-                  "task_id": "fa8a6777-3260-5818-9465-91570b3f47e8"
-                },
-                {
-                  "date": "2026-03-05",
-                  "end": "14:15",
-                  "score": 15.0,
-                  "start": "13:15",
                   "task": "Task 23",
                   "task_id": "5a48c880-ef44-5060-8d28-ae9b44c00de3"
                 },
                 {
                   "date": "2026-03-05",
-                  "end": "18:00",
-                  "score": 10.0,
-                  "start": "16:30",
+                  "end": "10:30",
+                  "score": 6.5,
+                  "start": "09:30",
+                  "task": "Task 31",
+                  "task_id": "6c5f0129-6218-5649-b963-16acd55963d6"
+                },
+                {
+                  "date": "2026-03-05",
+                  "end": "12:00",
+                  "score": 5.0,
+                  "start": "10:30",
                   "task": "Task 43",
                   "task_id": "9c6a19b9-1326-5c7d-a052-902ab57bec1f"
                 },
                 {
                   "date": "2026-03-05",
-                  "end": "19:00",
+                  "end": "14:15",
                   "score": 4.0,
-                  "start": "18:00",
+                  "start": "13:15",
                   "task": "Task 29",
                   "task_id": "0a5961e9-9f66-50ba-8c01-37ae85b41a93"
+                },
+                {
+                  "date": "2026-03-05",
+                  "end": "18:00",
+                  "score": 5.0,
+                  "start": "16:30",
+                  "task": "Task 33",
+                  "task_id": "fa8a6777-3260-5818-9465-91570b3f47e8"
+                },
+                {
+                  "date": "2026-03-05",
+                  "end": "19:30",
+                  "score": 4.0,
+                  "start": "18:00",
+                  "task": "Task 39",
+                  "task_id": "abcafecf-4f2d-547b-9ae8-bfa8475c50c9"
                 }
               ],
-              "total_score": 178.5,
+              "total_score": 35.5,
               "unscheduled": []
             },
             "2026-03-06": {
               "placements": [
                 {
                   "date": "2026-03-06",
-                  "end": "08:00",
-                  "score": 45.0,
+                  "end": "09:00",
+                  "score": 6.0,
                   "start": "07:00",
-                  "task": "Task 03",
-                  "task_id": "f3ef88e1-761f-55ec-a4ef-164c8179840d"
-                },
-                {
-                  "date": "2026-03-06",
-                  "end": "10:00",
-                  "score": 42.5,
-                  "start": "08:00",
-                  "task": "Task 11",
-                  "task_id": "aa8a3dc1-bc29-5ee8-97bc-3f12f4ab0fec"
-                },
-                {
-                  "date": "2026-03-06",
-                  "end": "11:00",
-                  "score": 35.0,
-                  "start": "10:00",
-                  "task": "Task 37",
-                  "task_id": "e55eaa9a-8fa5-5aa6-a2e0-63545fe72adf"
-                },
-                {
-                  "date": "2026-03-06",
-                  "end": "12:30",
-                  "score": 27.0,
-                  "start": "11:00",
-                  "task": "Task 01",
-                  "task_id": "ea7b738f-1f35-5aa4-8281-dac006d3f06a"
-                },
-                {
-                  "date": "2026-03-06",
-                  "end": "18:30",
-                  "score": 18.0,
-                  "start": "16:30",
                   "task": "Task 05",
                   "task_id": "8b42505d-c0c8-5f41-8b32-ffedc639484f"
                 },
                 {
                   "date": "2026-03-06",
-                  "end": "20:00",
-                  "score": 13.5,
-                  "start": "18:30",
+                  "end": "10:00",
+                  "score": 5.5,
+                  "start": "09:00",
+                  "task": "Task 37",
+                  "task_id": "e55eaa9a-8fa5-5aa6-a2e0-63545fe72adf"
+                },
+                {
+                  "date": "2026-03-06",
+                  "end": "11:00",
+                  "score": 7.0,
+                  "start": "10:00",
+                  "task": "Task 03",
+                  "task_id": "f3ef88e1-761f-55ec-a4ef-164c8179840d"
+                },
+                {
+                  "date": "2026-03-06",
+                  "end": "12:30",
+                  "score": 6.5,
+                  "start": "11:00",
                   "task": "Task 41",
                   "task_id": "fb4ec47d-2137-544d-9203-cc7cf8d0b183"
+                },
+                {
+                  "date": "2026-03-06",
+                  "end": "18:30",
+                  "score": 4.5,
+                  "start": "16:30",
+                  "task": "Task 11",
+                  "task_id": "aa8a3dc1-bc29-5ee8-97bc-3f12f4ab0fec"
+                },
+                {
+                  "date": "2026-03-06",
+                  "end": "20:00",
+                  "score": 5.5,
+                  "start": "18:30",
+                  "task": "Task 01",
+                  "task_id": "ea7b738f-1f35-5aa4-8281-dac006d3f06a"
                 }
               ],
-              "total_score": 181.0,
+              "total_score": 35.0,
               "unscheduled": []
             },
             "2026-03-07": {
               "placements": [
                 {
                   "date": "2026-03-07",
-                  "end": "08:30",
-                  "score": 54.0,
+                  "end": "08:00",
+                  "score": 6.0,
                   "start": "07:00",
+                  "task": "Task 15",
+                  "task_id": "2bd4d0c6-afbe-5998-9828-91235dfbfde9"
+                },
+                {
+                  "date": "2026-03-07",
+                  "end": "09:30",
+                  "score": 7.0,
+                  "start": "08:00",
                   "task": "Task 35",
                   "task_id": "9e47db8e-1aa2-5e6c-a6ae-5e75bf04b0b5"
                 },
                 {
                   "date": "2026-03-07",
-                  "end": "09:30",
-                  "score": 13.5,
-                  "start": "08:30",
+                  "end": "10:30",
+                  "score": 4.5,
+                  "start": "09:30",
                   "task": "Task 21",
                   "task_id": "6d0f7e1f-6b90-5102-96a8-0e7ec3216243"
-                },
-                {
-                  "date": "2026-03-07",
-                  "end": "10:30",
-                  "score": 6.0,
-                  "start": "09:30",
-                  "task": "Task 15",
-                  "task_id": "2bd4d0c6-afbe-5998-9828-91235dfbfde9"
                 }
               ],
-              "total_score": 73.5,
+              "total_score": 17.5,
               "unscheduled": []
             },
             "2026-03-08": {
@@ -2498,7 +2507,7 @@
                 {
                   "date": "2026-03-08",
                   "end": "08:00",
-                  "score": 27.5,
+                  "score": 5.5,
                   "start": "07:00",
                   "task": "Task 27",
                   "task_id": "092bc7f4-d33e-5a97-924a-a426ef2534a9"
@@ -2506,7 +2515,7 @@
                 {
                   "date": "2026-03-08",
                   "end": "09:30",
-                  "score": 18.0,
+                  "score": 6.0,
                   "start": "08:00",
                   "task": "Task 19",
                   "task_id": "bd570ff4-b41e-5072-9d37-3c62e7c6f176"
@@ -2520,7 +2529,7 @@
                   "task_id": "a215adbc-0a46-562e-9be3-f9eee9d9a14f"
                 }
               ],
-              "total_score": 50.5,
+              "total_score": 16.5,
               "unscheduled": []
             }
           },
@@ -2529,22 +2538,22 @@
             {
               "reason": "capacity_exceeded",
               "required": false,
-              "task_id": "1f0c22f3-d8fe-5152-aa50-b41678ee5c95"
+              "task_id": "5cb05a41-3ad4-572c-9594-8a1a1bf86fe3"
             },
             {
               "reason": "capacity_exceeded",
               "required": false,
-              "task_id": "27b6ad07-c5e3-5847-ab79-981d0f9dbba7"
+              "task_id": "60f7daf6-decb-5440-a6d5-cc50bebd9e40"
             },
             {
               "reason": "capacity_exceeded",
               "required": false,
-              "task_id": "320041f0-eaec-5f29-87d0-380adde1f9b3"
+              "task_id": "83ba091c-cc03-557c-a0ac-6b39a5a5bf5a"
             },
             {
               "reason": "capacity_exceeded",
               "required": false,
-              "task_id": "427eef0e-8c88-5268-b24c-c15b8c8683ad"
+              "task_id": "8e2022d8-17e1-5d4c-9a2c-a68c2250e55b"
             },
             {
               "reason": "capacity_exceeded",
@@ -2579,6 +2588,11 @@
             {
               "reason": "capacity_exceeded",
               "required": false,
+              "task_id": "c32bad19-c4c0-58d5-a1c9-33faf8d14efc"
+            },
+            {
+              "reason": "capacity_exceeded",
+              "required": false,
               "task_id": "d9b302e2-c082-5253-8138-b86c0ac3eff7"
             },
             {
@@ -2597,74 +2611,74 @@
               "task_id": "f04175b5-ae80-5a76-a555-dd7c287dd5a7"
             }
           ],
-          "week_total_score": 840.0
+          "week_total_score": 154.0
         }
       },
       "precise_greedy": {
         "day_engine": {
-          "_elapsed_ms": 27.371,
+          "_elapsed_ms": 25.091,
           "date": "2026-03-04",
           "placements": [
             {
               "date": "2026-03-04",
-              "end": "07:30",
-              "score": 55.0,
-              "start": "07:00",
-              "task": "Task 02",
-              "task_id": "ab54fb22-2006-5aaf-9f89-817db6782886"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "08:15",
-              "score": 48.0,
-              "start": "07:30",
+              "end": "08:00",
+              "score": 6.0,
+              "start": "07:15",
               "task": "Task 00",
               "task_id": "ec0f00fc-1c47-5a39-a74a-39802da5f287"
             },
             {
               "date": "2026-03-04",
-              "end": "08:40",
-              "score": 49.0,
-              "start": "08:15",
+              "end": "09:30",
+              "score": 7.0,
+              "start": "08:00",
+              "task": "Task 09",
+              "task_id": "a215adbc-0a46-562e-9be3-f9eee9d9a14f"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "09:55",
+              "score": 6.0,
+              "start": "09:30",
               "task": "Task 05",
               "task_id": "8b42505d-c0c8-5f41-8b32-ffedc639484f"
             },
             {
               "date": "2026-03-04",
-              "end": "09:05",
-              "score": 43.0,
-              "start": "08:40",
-              "task": "Task 10",
-              "task_id": "9ef27a8e-d40c-5ebf-9683-1fa718bcb34d"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "09:35",
-              "score": 30.0,
-              "start": "09:05",
-              "task": "Task 08",
-              "task_id": "a233c877-b12f-564d-b779-b65cc73b05b0"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "11:05",
-              "score": 28.0,
-              "start": "09:35",
-              "task": "Task 04",
-              "task_id": "1f0c22f3-d8fe-5152-aa50-b41678ee5c95"
-            },
-            {
-              "date": "2026-03-04",
-              "end": "11:25",
-              "score": 16.5,
-              "start": "11:05",
+              "end": "10:15",
+              "score": 7.5,
+              "start": "09:55",
               "task": "Task 07",
               "task_id": "66e014de-4dfc-5752-afd1-04810a0626f3"
             },
             {
               "date": "2026-03-04",
+              "end": "10:45",
+              "score": 7.0,
+              "start": "10:15",
+              "task": "Task 08",
+              "task_id": "a233c877-b12f-564d-b779-b65cc73b05b0"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "11:10",
+              "score": 6.0,
+              "start": "10:45",
+              "task": "Task 10",
+              "task_id": "9ef27a8e-d40c-5ebf-9683-1fa718bcb34d"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "11:40",
+              "score": 5.5,
+              "start": "11:10",
+              "task": "Task 02",
+              "task_id": "ab54fb22-2006-5aaf-9f89-817db6782886"
+            },
+            {
+              "date": "2026-03-04",
               "end": "13:45",
-              "score": 53.0,
+              "score": 8.0,
               "start": "13:15",
               "task": "Task 03",
               "task_id": "f3ef88e1-761f-55ec-a4ef-164c8179840d"
@@ -2672,7 +2686,7 @@
             {
               "date": "2026-03-04",
               "end": "14:15",
-              "score": 42.5,
+              "score": 6.5,
               "start": "13:45",
               "task": "Task 06",
               "task_id": "1cb4d7bc-f018-523c-9aa9-01e57fb87c5c"
@@ -2680,95 +2694,111 @@
             {
               "date": "2026-03-04",
               "end": "18:00",
-              "score": 22.5,
+              "score": 4.5,
               "start": "16:30",
               "task": "Task 01",
               "task_id": "ea7b738f-1f35-5aa4-8281-dac006d3f06a"
             },
             {
               "date": "2026-03-04",
-              "end": "19:30",
-              "score": 20.0,
+              "end": "19:00",
+              "score": 5.5,
               "start": "18:00",
-              "task": "Task 09",
-              "task_id": "a215adbc-0a46-562e-9be3-f9eee9d9a14f"
+              "task": "Task 11",
+              "task_id": "aa8a3dc1-bc29-5ee8-97bc-3f12f4ab0fec"
             },
             {
               "date": "2026-03-04",
               "end": "20:30",
-              "score": 4.5,
-              "start": "19:30",
-              "task": "Task 11",
-              "task_id": "aa8a3dc1-bc29-5ee8-97bc-3f12f4ab0fec"
+              "score": 4.0,
+              "start": "19:00",
+              "task": "Task 04",
+              "task_id": "1f0c22f3-d8fe-5152-aa50-b41678ee5c95"
             }
           ],
           "task_count": 12,
-          "total_score": 412.0,
+          "total_score": 73.5,
           "unscheduled": []
         },
         "day_engine_overloaded": {
-          "_elapsed_ms": 28.646,
+          "_elapsed_ms": 33.621,
           "date": "2026-03-04",
           "placements": [
             {
               "date": "2026-03-04",
-              "end": "09:00",
-              "score": 49.5,
+              "end": "08:00",
+              "score": 6.0,
               "start": "07:00",
-              "task": "Task 17",
-              "task_id": "443d2d25-17fa-5ab0-955e-c75fe6950b56"
+              "task": "Task 00",
+              "task_id": "ec0f00fc-1c47-5a39-a74a-39802da5f287"
             },
             {
               "date": "2026-03-04",
               "end": "10:00",
-              "score": 47.0,
-              "start": "09:00",
+              "score": 7.0,
+              "start": "08:00",
+              "task": "Task 05",
+              "task_id": "8b42505d-c0c8-5f41-8b32-ffedc639484f"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "11:00",
+              "score": 7.0,
+              "start": "10:00",
+              "task": "Task 10",
+              "task_id": "9ef27a8e-d40c-5ebf-9683-1fa718bcb34d"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "12:00",
+              "score": 7.0,
+              "start": "11:00",
               "task": "Task 03",
               "task_id": "f3ef88e1-761f-55ec-a4ef-164c8179840d"
             },
             {
               "date": "2026-03-04",
-              "end": "12:00",
-              "score": 45.0,
-              "start": "10:00",
-              "task": "Task 16",
-              "task_id": "3f843138-7da8-5268-91fa-312e439e18f5"
-            },
-            {
-              "date": "2026-03-04",
               "end": "14:15",
-              "score": 40.0,
+              "score": 6.0,
               "start": "13:15",
-              "task": "Task 18",
-              "task_id": "8e2022d8-17e1-5d4c-9a2c-a68c2250e55b"
+              "task": "Task 15",
+              "task_id": "2bd4d0c6-afbe-5998-9828-91235dfbfde9"
             },
             {
               "date": "2026-03-04",
               "end": "18:30",
-              "score": 40.5,
+              "score": 6.0,
               "start": "16:30",
-              "task": "Task 11",
-              "task_id": "aa8a3dc1-bc29-5ee8-97bc-3f12f4ab0fec"
+              "task": "Task 20",
+              "task_id": "27b6ad07-c5e3-5847-ab79-981d0f9dbba7"
             },
             {
               "date": "2026-03-04",
-              "end": "20:30",
-              "score": 40.0,
+              "end": "20:00",
+              "score": 7.5,
               "start": "18:30",
-              "task": "Task 14",
-              "task_id": "60f7daf6-decb-5440-a6d5-cc50bebd9e40"
+              "task": "Task 12",
+              "task_id": "a2586775-1948-527b-a5e6-ae64695e9339"
             },
             {
               "date": "2026-03-04",
-              "end": "22:30",
-              "score": 32.0,
-              "start": "20:30",
-              "task": "Task 08",
-              "task_id": "a233c877-b12f-564d-b779-b65cc73b05b0"
+              "end": "21:30",
+              "score": 6.5,
+              "start": "20:00",
+              "task": "Task 02",
+              "task_id": "ab54fb22-2006-5aaf-9f89-817db6782886"
+            },
+            {
+              "date": "2026-03-04",
+              "end": "23:00",
+              "score": 6.5,
+              "start": "21:30",
+              "task": "Task 01",
+              "task_id": "ea7b738f-1f35-5aa4-8281-dac006d3f06a"
             }
           ],
           "task_count": 24,
-          "total_score": 294.0,
+          "total_score": 59.5,
           "unscheduled": [
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
@@ -2783,17 +2813,22 @@
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
               "reason": "no_valid_slot",
-              "task_id": "27b6ad07-c5e3-5847-ab79-981d0f9dbba7"
+              "task_id": "3f843138-7da8-5268-91fa-312e439e18f5"
             },
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
               "reason": "no_valid_slot",
-              "task_id": "2bd4d0c6-afbe-5998-9828-91235dfbfde9"
+              "task_id": "443d2d25-17fa-5ab0-955e-c75fe6950b56"
             },
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
               "reason": "no_valid_slot",
               "task_id": "5a48c880-ef44-5060-8d28-ae9b44c00de3"
+            },
+            {
+              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
+              "reason": "no_valid_slot",
+              "task_id": "60f7daf6-decb-5440-a6d5-cc50bebd9e40"
             },
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
@@ -2808,12 +2843,7 @@
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
               "reason": "no_valid_slot",
-              "task_id": "8b42505d-c0c8-5f41-8b32-ffedc639484f"
-            },
-            {
-              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
-              "reason": "no_valid_slot",
-              "task_id": "9ef27a8e-d40c-5ebf-9683-1fa718bcb34d"
+              "task_id": "8e2022d8-17e1-5d4c-9a2c-a68c2250e55b"
             },
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
@@ -2823,17 +2853,17 @@
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
               "reason": "no_valid_slot",
-              "task_id": "a2586775-1948-527b-a5e6-ae64695e9339"
+              "task_id": "a233c877-b12f-564d-b779-b65cc73b05b0"
+            },
+            {
+              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
+              "reason": "no_valid_slot",
+              "task_id": "aa8a3dc1-bc29-5ee8-97bc-3f12f4ab0fec"
             },
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
               "reason": "no_valid_slot",
               "task_id": "aacb652a-312b-5ab2-92f6-241ec09bfe49"
-            },
-            {
-              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
-              "reason": "no_valid_slot",
-              "task_id": "ab54fb22-2006-5aaf-9f89-817db6782886"
             },
             {
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
@@ -2844,26 +2874,16 @@
               "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
               "reason": "no_valid_slot",
               "task_id": "bd570ff4-b41e-5072-9d37-3c62e7c6f176"
-            },
-            {
-              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
-              "reason": "no_valid_slot",
-              "task_id": "ea7b738f-1f35-5aa4-8281-dac006d3f06a"
-            },
-            {
-              "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
-              "reason": "no_valid_slot",
-              "task_id": "ec0f00fc-1c47-5a39-a74a-39802da5f287"
             }
           ]
         },
         "workflow": {
-          "_elapsed_ms": 22.986,
+          "_elapsed_ms": 27.428,
           "assignments": {
             "1cb4d7bc-f018-523c-9aa9-01e57fb87c5c": "2026-03-02",
             "1f0c22f3-d8fe-5152-aa50-b41678ee5c95": "2026-03-06",
             "2bd4d0c6-afbe-5998-9828-91235dfbfde9": "2026-03-05",
-            "3f843138-7da8-5268-91fa-312e439e18f5": "2026-03-08",
+            "3f843138-7da8-5268-91fa-312e439e18f5": "2026-03-07",
             "443d2d25-17fa-5ab0-955e-c75fe6950b56": "2026-03-05",
             "60f7daf6-decb-5440-a6d5-cc50bebd9e40": "2026-03-07",
             "66e014de-4dfc-5752-afd1-04810a0626f3": "2026-03-04",
@@ -2885,7 +2905,7 @@
                 {
                   "date": "2026-03-02",
                   "end": "07:45",
-                  "score": 48.0,
+                  "score": 6.0,
                   "start": "07:00",
                   "task": "Task 00",
                   "task_id": "ec0f00fc-1c47-5a39-a74a-39802da5f287"
@@ -2893,13 +2913,13 @@
                 {
                   "date": "2026-03-02",
                   "end": "08:15",
-                  "score": 40.5,
+                  "score": 4.5,
                   "start": "07:45",
                   "task": "Task 06",
                   "task_id": "1cb4d7bc-f018-523c-9aa9-01e57fb87c5c"
                 }
               ],
-              "total_score": 88.5,
+              "total_score": 10.5,
               "unscheduled": []
             },
             "2026-03-03": {
@@ -2907,45 +2927,45 @@
                 {
                   "date": "2026-03-03",
                   "end": "07:50",
-                  "score": 55.0,
+                  "score": 5.5,
                   "start": "07:00",
                   "task": "Task 12",
                   "task_id": "a2586775-1948-527b-a5e6-ae64695e9339"
                 },
                 {
                   "date": "2026-03-03",
-                  "end": "08:15",
-                  "score": 48.0,
+                  "end": "08:50",
+                  "score": 6.5,
                   "start": "07:50",
+                  "task": "Task 11",
+                  "task_id": "aa8a3dc1-bc29-5ee8-97bc-3f12f4ab0fec"
+                },
+                {
+                  "date": "2026-03-03",
+                  "end": "09:15",
+                  "score": 6.0,
+                  "start": "08:50",
                   "task": "Task 05",
                   "task_id": "8b42505d-c0c8-5f41-8b32-ffedc639484f"
                 },
                 {
                   "date": "2026-03-03",
-                  "end": "09:45",
-                  "score": 35.0,
-                  "start": "08:15",
+                  "end": "10:45",
+                  "score": 5.0,
+                  "start": "09:15",
                   "task": "Task 13",
                   "task_id": "aacb652a-312b-5ab2-92f6-241ec09bfe49"
                 },
                 {
                   "date": "2026-03-03",
-                  "end": "11:15",
-                  "score": 24.5,
-                  "start": "09:45",
+                  "end": "18:00",
+                  "score": 4.5,
+                  "start": "16:30",
                   "task": "Task 01",
                   "task_id": "ea7b738f-1f35-5aa4-8281-dac006d3f06a"
-                },
-                {
-                  "date": "2026-03-03",
-                  "end": "14:15",
-                  "score": 4.5,
-                  "start": "13:15",
-                  "task": "Task 11",
-                  "task_id": "aa8a3dc1-bc29-5ee8-97bc-3f12f4ab0fec"
                 }
               ],
-              "total_score": 167.0,
+              "total_score": 27.5,
               "unscheduled": []
             },
             "2026-03-04": {
@@ -2953,7 +2973,7 @@
                 {
                   "date": "2026-03-04",
                   "end": "07:20",
-                  "score": 16.5,
+                  "score": 5.5,
                   "start": "07:00",
                   "task": "Task 07",
                   "task_id": "66e014de-4dfc-5752-afd1-04810a0626f3"
@@ -2961,13 +2981,13 @@
                 {
                   "date": "2026-03-04",
                   "end": "09:30",
-                  "score": 23.0,
+                  "score": 7.0,
                   "start": "08:00",
                   "task": "Task 09",
                   "task_id": "a215adbc-0a46-562e-9be3-f9eee9d9a14f"
                 }
               ],
-              "total_score": 39.5,
+              "total_score": 12.5,
               "unscheduled": []
             },
             "2026-03-05": {
@@ -2975,7 +2995,7 @@
                 {
                   "date": "2026-03-05",
                   "end": "08:00",
-                  "score": 55.0,
+                  "score": 5.5,
                   "start": "07:00",
                   "task": "Task 17",
                   "task_id": "443d2d25-17fa-5ab0-955e-c75fe6950b56"
@@ -2983,7 +3003,7 @@
                 {
                   "date": "2026-03-05",
                   "end": "08:30",
-                  "score": 30.0,
+                  "score": 5.0,
                   "start": "08:00",
                   "task": "Task 08",
                   "task_id": "a233c877-b12f-564d-b779-b65cc73b05b0"
@@ -2997,7 +3017,7 @@
                   "task_id": "2bd4d0c6-afbe-5998-9828-91235dfbfde9"
                 }
               ],
-              "total_score": 94.0,
+              "total_score": 19.5,
               "unscheduled": []
             },
             "2026-03-06": {
@@ -3005,13 +3025,13 @@
                 {
                   "date": "2026-03-06",
                   "end": "08:30",
-                  "score": 28.0,
+                  "score": 4.0,
                   "start": "07:00",
                   "task": "Task 04",
                   "task_id": "1f0c22f3-d8fe-5152-aa50-b41678ee5c95"
                 }
               ],
-              "total_score": 28.0,
+              "total_score": 4.0,
               "unscheduled": []
             },
             "2026-03-07": {
@@ -3019,29 +3039,37 @@
                 {
                   "date": "2026-03-07",
                   "end": "07:25",
-                  "score": 42.0,
+                  "score": 6.0,
                   "start": "07:00",
                   "task": "Task 10",
                   "task_id": "9ef27a8e-d40c-5ebf-9683-1fa718bcb34d"
                 },
                 {
                   "date": "2026-03-07",
-                  "end": "07:55",
-                  "score": 12.0,
+                  "end": "09:25",
+                  "score": 4.5,
                   "start": "07:25",
+                  "task": "Task 16",
+                  "task_id": "3f843138-7da8-5268-91fa-312e439e18f5"
+                },
+                {
+                  "date": "2026-03-07",
+                  "end": "09:55",
+                  "score": 4.0,
+                  "start": "09:25",
                   "task": "Task 14",
                   "task_id": "60f7daf6-decb-5440-a6d5-cc50bebd9e40"
                 },
                 {
                   "date": "2026-03-07",
                   "end": "13:45",
-                  "score": 53.0,
+                  "score": 8.0,
                   "start": "13:15",
                   "task": "Task 03",
                   "task_id": "f3ef88e1-761f-55ec-a4ef-164c8179840d"
                 }
               ],
-              "total_score": 107.0,
+              "total_score": 22.5,
               "unscheduled": []
             },
             "2026-03-08": {
@@ -3049,47 +3077,39 @@
                 {
                   "date": "2026-03-08",
                   "end": "07:30",
-                  "score": 55.0,
+                  "score": 5.5,
                   "start": "07:00",
                   "task": "Task 02",
                   "task_id": "ab54fb22-2006-5aaf-9f89-817db6782886"
-                },
-                {
-                  "date": "2026-03-08",
-                  "end": "09:30",
-                  "score": 18.0,
-                  "start": "07:30",
-                  "task": "Task 16",
-                  "task_id": "3f843138-7da8-5268-91fa-312e439e18f5"
                 }
               ],
-              "total_score": 73.0,
+              "total_score": 5.5,
               "unscheduled": []
             }
           },
           "status": "generated",
           "unallocated": [],
-          "week_total_score": 597.0
+          "week_total_score": 102.0
         },
         "workflow_overloaded": {
-          "_elapsed_ms": 41.804,
+          "_elapsed_ms": 46.119,
           "assignments": {
             "092bc7f4-d33e-5a97-924a-a426ef2534a9": "2026-03-08",
             "0a5961e9-9f66-50ba-8c01-37ae85b41a93": "2026-03-05",
             "1cb4d7bc-f018-523c-9aa9-01e57fb87c5c": "2026-03-04",
+            "1f0c22f3-d8fe-5152-aa50-b41678ee5c95": "2026-03-04",
+            "27b6ad07-c5e3-5847-ab79-981d0f9dbba7": "2026-03-04",
             "2bd4d0c6-afbe-5998-9828-91235dfbfde9": "2026-03-07",
+            "320041f0-eaec-5f29-87d0-380adde1f9b3": "2026-03-04",
             "3f843138-7da8-5268-91fa-312e439e18f5": "2026-03-04",
+            "427eef0e-8c88-5268-b24c-c15b8c8683ad": "2026-03-04",
             "443d2d25-17fa-5ab0-955e-c75fe6950b56": "2026-03-04",
             "516b31cc-aae6-5bc2-bdcb-87043945e936": "2026-03-04",
             "5a48c880-ef44-5060-8d28-ae9b44c00de3": "2026-03-05",
-            "5cb05a41-3ad4-572c-9594-8a1a1bf86fe3": "2026-03-04",
-            "60f7daf6-decb-5440-a6d5-cc50bebd9e40": "2026-03-04",
             "66e014de-4dfc-5752-afd1-04810a0626f3": "2026-03-03",
             "6c5f0129-6218-5649-b963-16acd55963d6": "2026-03-05",
             "6d0f7e1f-6b90-5102-96a8-0e7ec3216243": "2026-03-07",
-            "83ba091c-cc03-557c-a0ac-6b39a5a5bf5a": "2026-03-04",
             "8b42505d-c0c8-5f41-8b32-ffedc639484f": "2026-03-06",
-            "8e2022d8-17e1-5d4c-9a2c-a68c2250e55b": "2026-03-04",
             "9c6a19b9-1326-5c7d-a052-902ab57bec1f": "2026-03-05",
             "9e47db8e-1aa2-5e6c-a6ae-5e75bf04b0b5": "2026-03-07",
             "a215adbc-0a46-562e-9be3-f9eee9d9a14f": "2026-03-08",
@@ -3098,7 +3118,6 @@
             "abcafecf-4f2d-547b-9ae8-bfa8475c50c9": "2026-03-05",
             "b3ed8e1a-bef2-5aee-af5f-332c3538f9da": "2026-03-05",
             "bd570ff4-b41e-5072-9d37-3c62e7c6f176": "2026-03-08",
-            "c32bad19-c4c0-58d5-a1c9-33faf8d14efc": "2026-03-04",
             "e55eaa9a-8fa5-5aa6-a2e0-63545fe72adf": "2026-03-06",
             "ea7b738f-1f35-5aa4-8281-dac006d3f06a": "2026-03-06",
             "f3ef88e1-761f-55ec-a4ef-164c8179840d": "2026-03-06",
@@ -3111,13 +3130,13 @@
                 {
                   "date": "2026-03-02",
                   "end": "09:00",
-                  "score": 15.0,
+                  "score": 5.0,
                   "start": "07:00",
                   "task": "Task 13",
                   "task_id": "aacb652a-312b-5ab2-92f6-241ec09bfe49"
                 }
               ],
-              "total_score": 15.0,
+              "total_score": 5.0,
               "unscheduled": []
             },
             "2026-03-03": {
@@ -3139,74 +3158,66 @@
                 {
                   "date": "2026-03-04",
                   "end": "09:00",
-                  "score": 49.5,
+                  "score": 6.0,
                   "start": "07:00",
+                  "task": "Task 20",
+                  "task_id": "27b6ad07-c5e3-5847-ab79-981d0f9dbba7"
+                },
+                {
+                  "date": "2026-03-04",
+                  "end": "11:00",
+                  "score": 7.0,
+                  "start": "09:00",
+                  "task": "Task 30",
+                  "task_id": "427eef0e-8c88-5268-b24c-c15b8c8683ad"
+                },
+                {
+                  "date": "2026-03-04",
+                  "end": "12:00",
+                  "score": 4.0,
+                  "start": "11:00",
+                  "task": "Task 04",
+                  "task_id": "1f0c22f3-d8fe-5152-aa50-b41678ee5c95"
+                },
+                {
+                  "date": "2026-03-04",
+                  "end": "18:30",
+                  "score": 5.5,
+                  "start": "16:30",
                   "task": "Task 17",
                   "task_id": "443d2d25-17fa-5ab0-955e-c75fe6950b56"
                 },
                 {
                   "date": "2026-03-04",
-                  "end": "10:00",
-                  "score": 50.5,
-                  "start": "09:00",
+                  "end": "19:30",
+                  "score": 6.5,
+                  "start": "18:30",
                   "task": "Task 42",
                   "task_id": "516b31cc-aae6-5bc2-bdcb-87043945e936"
                 },
                 {
                   "date": "2026-03-04",
-                  "end": "12:00",
-                  "score": 45.0,
-                  "start": "10:00",
-                  "task": "Task 16",
-                  "task_id": "3f843138-7da8-5268-91fa-312e439e18f5"
-                },
-                {
-                  "date": "2026-03-04",
-                  "end": "14:15",
-                  "score": 40.0,
-                  "start": "13:15",
-                  "task": "Task 38",
-                  "task_id": "5cb05a41-3ad4-572c-9594-8a1a1bf86fe3"
-                },
-                {
-                  "date": "2026-03-04",
-                  "end": "18:30",
-                  "score": 40.0,
-                  "start": "16:30",
-                  "task": "Task 14",
-                  "task_id": "60f7daf6-decb-5440-a6d5-cc50bebd9e40"
-                },
-                {
-                  "date": "2026-03-04",
-                  "end": "19:30",
-                  "score": 40.0,
-                  "start": "18:30",
-                  "task": "Task 18",
-                  "task_id": "8e2022d8-17e1-5d4c-9a2c-a68c2250e55b"
-                },
-                {
-                  "date": "2026-03-04",
-                  "end": "20:30",
-                  "score": 36.0,
-                  "start": "19:30",
-                  "task": "Task 34",
-                  "task_id": "83ba091c-cc03-557c-a0ac-6b39a5a5bf5a"
-                },
-                {
-                  "date": "2026-03-04",
                   "end": "21:30",
-                  "score": 35.0,
-                  "start": "20:30",
-                  "task": "Task 28",
-                  "task_id": "c32bad19-c4c0-58d5-a1c9-33faf8d14efc"
+                  "score": 4.5,
+                  "start": "19:30",
+                  "task": "Task 06",
+                  "task_id": "1cb4d7bc-f018-523c-9aa9-01e57fb87c5c"
+                },
+                {
+                  "date": "2026-03-04",
+                  "end": "22:30",
+                  "score": 5.5,
+                  "start": "21:30",
+                  "task": "Task 26",
+                  "task_id": "320041f0-eaec-5f29-87d0-380adde1f9b3"
                 }
               ],
-              "total_score": 336.0,
+              "total_score": 39.0,
               "unscheduled": [
                 {
                   "explanation": "no valid slot was found for this task given the current schedule and mode's grid.",
                   "reason": "no_valid_slot",
-                  "task_id": "1cb4d7bc-f018-523c-9aa9-01e57fb87c5c"
+                  "task_id": "3f843138-7da8-5268-91fa-312e439e18f5"
                 }
               ]
             },
@@ -3215,7 +3226,7 @@
                 {
                   "date": "2026-03-05",
                   "end": "08:30",
-                  "score": 48.0,
+                  "score": 6.0,
                   "start": "07:00",
                   "task": "Task 25",
                   "task_id": "b3ed8e1a-bef2-5aee-af5f-332c3538f9da"
@@ -3223,137 +3234,137 @@
                 {
                   "date": "2026-03-05",
                   "end": "09:30",
-                  "score": 40.5,
+                  "score": 5.0,
                   "start": "08:30",
-                  "task": "Task 31",
-                  "task_id": "6c5f0129-6218-5649-b963-16acd55963d6"
-                },
-                {
-                  "date": "2026-03-05",
-                  "end": "11:00",
-                  "score": 36.0,
-                  "start": "09:30",
-                  "task": "Task 39",
-                  "task_id": "abcafecf-4f2d-547b-9ae8-bfa8475c50c9"
-                },
-                {
-                  "date": "2026-03-05",
-                  "end": "12:30",
-                  "score": 25.0,
-                  "start": "11:00",
-                  "task": "Task 33",
-                  "task_id": "fa8a6777-3260-5818-9465-91570b3f47e8"
-                },
-                {
-                  "date": "2026-03-05",
-                  "end": "14:15",
-                  "score": 15.0,
-                  "start": "13:15",
                   "task": "Task 23",
                   "task_id": "5a48c880-ef44-5060-8d28-ae9b44c00de3"
                 },
                 {
                   "date": "2026-03-05",
-                  "end": "18:00",
-                  "score": 10.0,
-                  "start": "16:30",
+                  "end": "10:30",
+                  "score": 6.5,
+                  "start": "09:30",
+                  "task": "Task 31",
+                  "task_id": "6c5f0129-6218-5649-b963-16acd55963d6"
+                },
+                {
+                  "date": "2026-03-05",
+                  "end": "12:00",
+                  "score": 5.0,
+                  "start": "10:30",
                   "task": "Task 43",
                   "task_id": "9c6a19b9-1326-5c7d-a052-902ab57bec1f"
                 },
                 {
                   "date": "2026-03-05",
-                  "end": "19:00",
+                  "end": "14:15",
                   "score": 4.0,
-                  "start": "18:00",
+                  "start": "13:15",
                   "task": "Task 29",
                   "task_id": "0a5961e9-9f66-50ba-8c01-37ae85b41a93"
+                },
+                {
+                  "date": "2026-03-05",
+                  "end": "18:00",
+                  "score": 5.0,
+                  "start": "16:30",
+                  "task": "Task 33",
+                  "task_id": "fa8a6777-3260-5818-9465-91570b3f47e8"
+                },
+                {
+                  "date": "2026-03-05",
+                  "end": "19:30",
+                  "score": 4.0,
+                  "start": "18:00",
+                  "task": "Task 39",
+                  "task_id": "abcafecf-4f2d-547b-9ae8-bfa8475c50c9"
                 }
               ],
-              "total_score": 178.5,
+              "total_score": 35.5,
               "unscheduled": []
             },
             "2026-03-06": {
               "placements": [
                 {
                   "date": "2026-03-06",
-                  "end": "08:00",
-                  "score": 45.0,
+                  "end": "09:00",
+                  "score": 6.0,
                   "start": "07:00",
-                  "task": "Task 03",
-                  "task_id": "f3ef88e1-761f-55ec-a4ef-164c8179840d"
-                },
-                {
-                  "date": "2026-03-06",
-                  "end": "10:00",
-                  "score": 42.5,
-                  "start": "08:00",
-                  "task": "Task 11",
-                  "task_id": "aa8a3dc1-bc29-5ee8-97bc-3f12f4ab0fec"
-                },
-                {
-                  "date": "2026-03-06",
-                  "end": "11:00",
-                  "score": 35.0,
-                  "start": "10:00",
-                  "task": "Task 37",
-                  "task_id": "e55eaa9a-8fa5-5aa6-a2e0-63545fe72adf"
-                },
-                {
-                  "date": "2026-03-06",
-                  "end": "12:30",
-                  "score": 27.0,
-                  "start": "11:00",
-                  "task": "Task 01",
-                  "task_id": "ea7b738f-1f35-5aa4-8281-dac006d3f06a"
-                },
-                {
-                  "date": "2026-03-06",
-                  "end": "18:30",
-                  "score": 18.0,
-                  "start": "16:30",
                   "task": "Task 05",
                   "task_id": "8b42505d-c0c8-5f41-8b32-ffedc639484f"
                 },
                 {
                   "date": "2026-03-06",
-                  "end": "20:00",
-                  "score": 13.5,
-                  "start": "18:30",
+                  "end": "10:00",
+                  "score": 5.5,
+                  "start": "09:00",
+                  "task": "Task 37",
+                  "task_id": "e55eaa9a-8fa5-5aa6-a2e0-63545fe72adf"
+                },
+                {
+                  "date": "2026-03-06",
+                  "end": "11:00",
+                  "score": 7.0,
+                  "start": "10:00",
+                  "task": "Task 03",
+                  "task_id": "f3ef88e1-761f-55ec-a4ef-164c8179840d"
+                },
+                {
+                  "date": "2026-03-06",
+                  "end": "12:30",
+                  "score": 6.5,
+                  "start": "11:00",
                   "task": "Task 41",
                   "task_id": "fb4ec47d-2137-544d-9203-cc7cf8d0b183"
+                },
+                {
+                  "date": "2026-03-06",
+                  "end": "18:30",
+                  "score": 4.5,
+                  "start": "16:30",
+                  "task": "Task 11",
+                  "task_id": "aa8a3dc1-bc29-5ee8-97bc-3f12f4ab0fec"
+                },
+                {
+                  "date": "2026-03-06",
+                  "end": "20:00",
+                  "score": 5.5,
+                  "start": "18:30",
+                  "task": "Task 01",
+                  "task_id": "ea7b738f-1f35-5aa4-8281-dac006d3f06a"
                 }
               ],
-              "total_score": 181.0,
+              "total_score": 35.0,
               "unscheduled": []
             },
             "2026-03-07": {
               "placements": [
                 {
                   "date": "2026-03-07",
-                  "end": "08:30",
-                  "score": 54.0,
+                  "end": "08:00",
+                  "score": 6.0,
                   "start": "07:00",
+                  "task": "Task 15",
+                  "task_id": "2bd4d0c6-afbe-5998-9828-91235dfbfde9"
+                },
+                {
+                  "date": "2026-03-07",
+                  "end": "09:30",
+                  "score": 7.0,
+                  "start": "08:00",
                   "task": "Task 35",
                   "task_id": "9e47db8e-1aa2-5e6c-a6ae-5e75bf04b0b5"
                 },
                 {
                   "date": "2026-03-07",
-                  "end": "09:30",
-                  "score": 13.5,
-                  "start": "08:30",
+                  "end": "10:30",
+                  "score": 4.5,
+                  "start": "09:30",
                   "task": "Task 21",
                   "task_id": "6d0f7e1f-6b90-5102-96a8-0e7ec3216243"
-                },
-                {
-                  "date": "2026-03-07",
-                  "end": "10:30",
-                  "score": 6.0,
-                  "start": "09:30",
-                  "task": "Task 15",
-                  "task_id": "2bd4d0c6-afbe-5998-9828-91235dfbfde9"
                 }
               ],
-              "total_score": 73.5,
+              "total_score": 17.5,
               "unscheduled": []
             },
             "2026-03-08": {
@@ -3361,7 +3372,7 @@
                 {
                   "date": "2026-03-08",
                   "end": "08:00",
-                  "score": 27.5,
+                  "score": 5.5,
                   "start": "07:00",
                   "task": "Task 27",
                   "task_id": "092bc7f4-d33e-5a97-924a-a426ef2534a9"
@@ -3369,7 +3380,7 @@
                 {
                   "date": "2026-03-08",
                   "end": "09:30",
-                  "score": 18.0,
+                  "score": 6.0,
                   "start": "08:00",
                   "task": "Task 19",
                   "task_id": "bd570ff4-b41e-5072-9d37-3c62e7c6f176"
@@ -3383,7 +3394,7 @@
                   "task_id": "a215adbc-0a46-562e-9be3-f9eee9d9a14f"
                 }
               ],
-              "total_score": 50.5,
+              "total_score": 16.5,
               "unscheduled": []
             }
           },
@@ -3392,22 +3403,22 @@
             {
               "reason": "capacity_exceeded",
               "required": false,
-              "task_id": "1f0c22f3-d8fe-5152-aa50-b41678ee5c95"
+              "task_id": "5cb05a41-3ad4-572c-9594-8a1a1bf86fe3"
             },
             {
               "reason": "capacity_exceeded",
               "required": false,
-              "task_id": "27b6ad07-c5e3-5847-ab79-981d0f9dbba7"
+              "task_id": "60f7daf6-decb-5440-a6d5-cc50bebd9e40"
             },
             {
               "reason": "capacity_exceeded",
               "required": false,
-              "task_id": "320041f0-eaec-5f29-87d0-380adde1f9b3"
+              "task_id": "83ba091c-cc03-557c-a0ac-6b39a5a5bf5a"
             },
             {
               "reason": "capacity_exceeded",
               "required": false,
-              "task_id": "427eef0e-8c88-5268-b24c-c15b8c8683ad"
+              "task_id": "8e2022d8-17e1-5d4c-9a2c-a68c2250e55b"
             },
             {
               "reason": "capacity_exceeded",
@@ -3442,6 +3453,11 @@
             {
               "reason": "capacity_exceeded",
               "required": false,
+              "task_id": "c32bad19-c4c0-58d5-a1c9-33faf8d14efc"
+            },
+            {
+              "reason": "capacity_exceeded",
+              "required": false,
               "task_id": "d9b302e2-c082-5253-8138-b86c0ac3eff7"
             },
             {
@@ -3460,7 +3476,7 @@
               "task_id": "f04175b5-ae80-5a76-a555-dd7c287dd5a7"
             }
           ],
-          "week_total_score": 840.0
+          "week_total_score": 154.0
         }
       }
     }
@@ -3516,8 +3532,8 @@
   },
   "source": {
     "dirty_status": [],
-    "imported_from": "C:\\Users\\Ramtin\\AppData\\Local\\Temp\\claude\\C--Users-Ramtin-Desktop-coding-Internship-Schedule-Maxing\\1abb766f-60d0-4265-b582-74b0a4d532a3\\scratchpad\\pristine_ec072e7",
-    "revision": "ec072e7e7b86655eff6240b8a936fd16ceb28ed7",
+    "imported_from": "C:\\Users\\Ramtin\\AppData\\Local\\Temp\\claude\\C--Users-Ramtin--claude-spares-spare-rPcaf8\\36b2bb79-d124-428d-bff6-5b358324f61d\\scratchpad\\pristine_dfd53d6",
+    "revision": "dfd53d6e2b4089418f5b9f9d410799c8fcf2f059",
     "tree": "git archive export (unmodified)"
   }
 }
