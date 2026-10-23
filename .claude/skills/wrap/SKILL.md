@@ -27,6 +27,7 @@ User notes for this run (may be empty): $ARGUMENTS
 
 - **Write only** to `ARCHITECTURE.md`, `ROADMAP.md`, `CURRENT_STATE.md`, `DECISIONS.md` and `CODEBASE_MAP.md`.
   - Also `AGENTS.md`/`CLAUDE.md`, under the conditions in step 6.
+  - Also `ci_check_notes.md`, only to add missing Pending entries (step 4).
   - Also the checkpoint, and only through the script.
 - **Never:**
   - edit application code, tests, configs or dependencies;
@@ -163,6 +164,9 @@ Use targeted edits that keep each document's structure and wording.
   - Keep it a coherent map, not an appended list.
 - **Commit references.** A "Verified against commit" line in a document: update it only in documents you
   otherwise change this run.
+- **ci_check_notes.md** (the memory of `/ci-check`): for every structural change in the review list (the file's
+  "What counts as a structural change" list) that has no entry yet, add one under "Pending" with its template.
+  Never move, edit or delete existing entries; `/ci-check` settles them.
 
 ### 5. Validate (targeted)
 
