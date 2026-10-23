@@ -96,7 +96,6 @@ from app.execution.lifecycle import (  # noqa: F401 - re-exported for existing c
 )
 from app.execution.models import CancelReason, ExecutionStatus, TaskExecution, WorkSession
 from app.execution.repository import ExecutionRepository
-from app.models import ScheduledTask
 from app.planning.models import ScheduledTask as CanonicalScheduledTask
 from app.planning.models import Task as CanonicalTask
 from app.planning.scope import OwnerScope
@@ -175,32 +174,6 @@ class ExecutionService:
             user_id=self._new_record_owner(None),
         )
         return self._repository.create_execution(execution)
-
-    @_atomic
-    def create_execution_from_scheduled_task(
-        self,
-        scheduled_task: ScheduledTask,
-        *,
-        planned_date: int,
-        priority: int,
-    ) -> TaskExecution:
-        """
-        Convenience constructor from an optimizer ScheduledTask.
-
-        ScheduledTask does not carry priority or an abstract day index, so
-        those are supplied separately by the caller; planned_duration is
-        derived from the scheduled time window.
-        """
-        return self.create_execution(
-            task_name=scheduled_task.name,
-            category=scheduled_task.category,
-            tag=scheduled_task.tag,
-            planned_date=planned_date,
-            planned_start=scheduled_task.time_window.start_time,
-            planned_end=scheduled_task.time_window.end_time,
-            planned_duration=scheduled_task.time_window.end_time - scheduled_task.time_window.start_time,
-            priority=priority,
-        )
 
     @_atomic
     def get_or_create_execution(

@@ -29,9 +29,7 @@ fresh read of what was committed. There is no widget-owned task collection.
 - Day (app/ui/day_page.py, docs/desktop-day.md) shows one date's timeline
   and makes its schedule through the shared workflow; Week and Month
   (app/ui/calendar_page.py) are real calendar periods in the planning
-  timezone whose days open on Day. Greedy Optimizer v1
-  (app.optimizer.optimize_day_schedule) remains the legacy/CLI baseline and
-  is unchanged.
+  timezone whose days open on Day.
 - Layout is responsive (wide, medium and narrow) and is re-laid out only
   when that mode changes, so moving/resizing the window stays smooth.
 - Closing waits for background work, then closes the database.
@@ -62,7 +60,6 @@ except ImportError as error:  # pragma: no cover - runtime dependency message
         "pip install customtkinter"
     ) from error
 
-from app.ui.paint_widgets import AppScrollableFrame
 from app import runtime
 from app.execution.db import resolve_db_path
 from app.sync.transport import HttpTransport, SyncTransport
@@ -79,14 +76,12 @@ from app.ui.background import current_registry, run_in_background
 from app.ui.day_controller import DayScheduleController
 from app.ui.day_page import DaySchedulePage
 from app.ui.components import (
-    AppButton,
     Card,
-    LabeledEntry,
     font,
 )
 from app.ui.conflict_view import ConflictDialog
 from app.ui.execution_controller import ExecutionController
-from app.ui.pages import DeferredPage, PageHeader, PlaceholderPage, ScrollPage, SettingsPage
+from app.ui.pages import DeferredPage, PlaceholderPage, ScrollPage, SettingsPage
 from app.ui.productivity_controller import ProductivityController
 from app.ui.shell import AppShell
 from app.ui.shell_state import ShellState
@@ -118,101 +113,6 @@ ICON_FILENAME = "ScheduleMaxing.ico"
 
 #: The schedule pages, in navigation order (Week and Month are real calendar periods, not day counts).
 SCHEDULE_PAGES = ("day", "week", "month")
-
-
-# -----------------------------------------------------------------------------
-# Reward Config Page (legacy compatibility class; not exposed by the desktop shell)
-# -----------------------------------------------------------------------------
-
-
-class RewardConfigPage(ctk.CTkFrame):
-    """Runtime reward configuration of the legacy Greedy Optimizer v1 (unchanged behavior)."""
-
-    REWARD_FIELDS = [
-        "WEIGHT_PRIORITY",
-        "WEIGHT_PREFERENCE_TIME",
-        "WEIGHT_TAG_RELATION",
-        "WEIGHT_SPACING",
-        "WEIGHT_NO_BREAK_PENALTY",
-        "PREFERENCE_TIME_DISTANCE_SCALE",
-        "TAG_RELATION_MAX_GAP",
-        "MIN_GOOD_BREAK",
-        "MAX_GOOD_BREAK",
-        "BACK_TO_BACK_GAP",
-        "INITIAL_TEMPERATURE",
-        "MIN_TEMPERATURE",
-        "COOLING_RATE",
-        "MAX_ITERATIONS",
-        "NO_IMPROVEMENT_LIMIT",
-    ]
-
-    def __init__(self, parent: tk.Widget, on_back: Callable[[], None] | None = None) -> None:
-        super().__init__(parent, fg_color=theme.APP_BG, corner_radius=0)
-        self.vars: dict[str, tk.StringVar] = {}
-        self._on_back = on_back
-        self.columnconfigure(0, weight=1)
-        self.rowconfigure(1, weight=1)
-        self._build()
-
-    def _build(self) -> None:
-        header = ctk.CTkFrame(self, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(22, 12))
-        header.columnconfigure(0, weight=1)
-        PageHeader(header, "Reward Config (legacy)",
-                   "These values are applied at runtime only and affect the legacy Greedy Optimizer v1 (CLI "
-                   "baseline). The desktop scheduler reads config/task_preference.yaml instead.",
-                   ).grid(row=0, column=0, sticky="ew")
-        if self._on_back is not None:
-            AppButton(header, "Back to Settings", self._on_back, variant="secondary").grid(row=0, column=1, sticky="ne")
-
-        body = Card(self)
-        body.grid(row=1, column=0, sticky="nsew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_XL))
-        body.columnconfigure(0, weight=1)
-        body.rowconfigure(0, weight=1)
-        scroll = AppScrollableFrame(body, fg_color="transparent")
-        scroll.grid(row=0, column=0, sticky="nsew", padx=16, pady=16)
-        scroll.columnconfigure((0, 1), weight=1)
-        for index, field_name in enumerate(self.REWARD_FIELDS):
-            var = tk.StringVar(value=str(getattr(settings, field_name)))
-            self.vars[field_name] = var
-            entry = LabeledEntry(scroll, field_name, var)
-            entry.grid(row=index // 2, column=index % 2, sticky="ew", padx=6, pady=6)
-
-        button_bar = ctk.CTkFrame(body, fg_color="transparent")
-        button_bar.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 16))
-        button_bar.columnconfigure((0, 1), weight=1)
-        AppButton(button_bar, "Apply Runtime Config", self.apply_config, height=42).grid(row=0, column=0, sticky="ew",
-                                                                                          padx=(0, 6))
-        AppButton(button_bar, "Reload From settings.py", self.reload_config, variant="secondary", height=42).grid(
-            row=0, column=1, sticky="ew", padx=(6, 0))
-
-    def apply_config(self) -> None:
-        try:
-            for field_name, var in self.vars.items():
-                current_value = getattr(settings, field_name)
-                raw_value = var.get().strip()
-                if isinstance(current_value, int) and not isinstance(current_value, bool):
-                    new_value = int(raw_value)
-                elif isinstance(current_value, float):
-                    new_value = float(raw_value)
-                else:
-                    new_value = raw_value
-                setattr(settings, field_name, new_value)
-                self._set_if_exists("app.reward", field_name, new_value)
-                self._set_if_exists("app.optimizer", field_name, new_value)
-        except ValueError as error:
-            messagebox.showerror("Invalid Config", str(error))
-            return
-        messagebox.showinfo("Config Applied", "Reward config updated for this app session.")
-
-    def reload_config(self) -> None:
-        for field_name, var in self.vars.items():
-            var.set(str(getattr(settings, field_name)))
-
-    def _set_if_exists(self, module_name: str, field_name: str, value: object) -> None:
-        module = __import__(module_name, fromlist=[field_name])
-        if hasattr(module, field_name):
-            setattr(module, field_name, value)
 
 
 # -----------------------------------------------------------------------------

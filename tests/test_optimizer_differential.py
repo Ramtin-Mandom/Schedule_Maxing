@@ -1,6 +1,6 @@
 """Differential tests: the production event search must exactly match its
 independent exhaustive reference -- both per task and across a full greedy
-run -- for both the canonical engine and Greedy Optimizer v1.
+run -- for the canonical engine.
 
 Per-task tests use the *_exhaustive helpers directly (test/benchmark-only,
 never called by production -- see the "production never calls the
@@ -21,11 +21,8 @@ from app.optimizer import (
     MandatoryTaskSchedulingError,
     _best_candidate_for_canonical_task,
     _best_candidate_for_canonical_task_exhaustive,
-    _best_candidate_for_task,
-    _best_candidate_for_task_exhaustive,
     _Placed,
     generate_day_schedule,
-    optimize_day_schedule,
 )
 from app.planning.models import DaySchedule, FixedBlock, LocalTimeWindow, Task, TaskRegistry
 from app.planning.preferences import (
@@ -35,7 +32,6 @@ from app.planning.preferences import (
     RewardPreferencesOverride,
     resolve_day_preferences,
 )
-from app.reward import RewardSettings
 
 DAY = date(2024, 6, 3)
 TZ = "UTC"
@@ -112,23 +108,6 @@ def test_generate_day_schedule_never_calls_the_canonical_exhaustive_reference(mo
     ]
     schedule = make_day_schedule(tasks)
     generate_day_schedule(schedule, prefs())
-
-    assert calls == []
-
-
-def test_optimize_day_schedule_never_calls_the_legacy_exhaustive_reference(monkeypatch, make_day_schedule, make_task):
-    calls = []
-    original = optimizer_module._best_candidate_for_task_exhaustive
-
-    def spy(*args, **kwargs):
-        calls.append(1)
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(optimizer_module, "_best_candidate_for_task_exhaustive", spy)
-
-    tasks = [make_task(f"T{i}", duration=30) for i in range(5)]
-    schedule = make_day_schedule(tasks=tasks)
-    optimize_day_schedule(schedule, date=1)
 
     assert calls == []
 
@@ -225,60 +204,6 @@ def test_canonical_per_task_parity_no_feasible_candidates():
     )
     assert _best_candidate_for_canonical_task(**kwargs) is None
     assert _best_candidate_for_canonical_task_exhaustive(**kwargs) is None
-
-
-# -----------------------------------------------------------------------------
-# Per-task differential: legacy, seeded scenarios
-# -----------------------------------------------------------------------------
-
-
-LEGACY_DURATIONS = [1, 3, 13, 29, 30, 31, 37, 90]
-
-
-@pytest.mark.parametrize("duration", LEGACY_DURATIONS)
-def test_legacy_per_task_parity_across_durations(duration, make_scheduled_task):
-    from types import SimpleNamespace
-
-    task = SimpleNamespace(
-        name="T", category="study", tag="math", duration=duration, priority=5, fixed=False,
-        preference_time=SimpleNamespace(start_time=100, end_time=400),
-    )
-    scheduled = [
-        make_scheduled_task("Prev", start=0, end=60, category="study", tag="math"),
-        make_scheduled_task("Next", start=500, end=560),
-    ]
-    settings = RewardSettings(weight_fragmentation_penalty=-4.0, weight_tag_relation=2.0)
-
-    kwargs = dict(task=task, scheduled_tasks=scheduled, day_start=0, day_end=1440, earliest_start=0, settings=settings)
-    event = _best_candidate_for_task(**kwargs)
-    exhaustive = _best_candidate_for_task_exhaustive(**kwargs)
-
-    assert event == exhaustive
-
-
-def test_legacy_per_task_parity_nongrid_day_start(make_scheduled_task):
-    from types import SimpleNamespace
-
-    task = SimpleNamespace(name="Odd", category="other", tag="", duration=45, priority=5, fixed=False, preference_time=None)
-    settings = RewardSettings()
-
-    kwargs = dict(task=task, scheduled_tasks=[], day_start=17, day_end=200, earliest_start=0, settings=settings)
-    event = _best_candidate_for_task(**kwargs)
-    exhaustive = _best_candidate_for_task_exhaustive(**kwargs)
-
-    assert event == exhaustive == (30, 75, event[2])
-
-
-def test_legacy_per_task_parity_no_feasible_candidates(make_scheduled_task):
-    from types import SimpleNamespace
-
-    task = SimpleNamespace(name="T", category="other", tag="", duration=60, priority=5, fixed=False, preference_time=None)
-    settings = RewardSettings()
-    full = make_scheduled_task("Full", start=0, end=1440)
-
-    kwargs = dict(task=task, scheduled_tasks=[full], day_start=0, day_end=1440, earliest_start=0, settings=settings)
-    assert _best_candidate_for_task(**kwargs) is None
-    assert _best_candidate_for_task_exhaustive(**kwargs) is None
 
 
 # -----------------------------------------------------------------------------
@@ -391,42 +316,6 @@ def test_full_greedy_parity_non_midnight_quarter_hour_alignment():
 
 
 # -----------------------------------------------------------------------------
-# Full-greedy differential: legacy
-# -----------------------------------------------------------------------------
-
-
-def _legacy_exhaustive_run(schedule, date_):
-    original = optimizer_module._best_candidate_for_task
-    optimizer_module._best_candidate_for_task = optimizer_module._best_candidate_for_task_exhaustive
-    try:
-        return optimize_day_schedule(schedule, date=date_)
-    finally:
-        optimizer_module._best_candidate_for_task = original
-
-
-def test_legacy_full_greedy_parity(make_day_schedule, make_task, make_fixed_block):
-    tasks = [
-        make_task("A", duration=45, priority=7, dependencies=[]),
-        make_task("B", duration=13, priority=3, dependencies=["A"]),
-        make_task("C", duration=90, priority=9, category="work"),
-    ]
-    fixed = make_fixed_block("Lunch", start=700, end=760)
-    schedule = make_day_schedule(day_start=0, day_end=1440, tasks=tasks, fixed_blocks=[fixed])
-
-    event_result = optimize_day_schedule(schedule, date=1)
-    exhaustive_result = _legacy_exhaustive_run(schedule, 1)
-
-    event_placements = sorted(
-        (t.name, t.time_window.start_time, t.time_window.end_time, round(t.score, 2)) for t in event_result.scheduled_tasks
-    )
-    exhaustive_placements = sorted(
-        (t.name, t.time_window.start_time, t.time_window.end_time, round(t.score, 2)) for t in exhaustive_result.scheduled_tasks
-    )
-    assert event_placements == exhaustive_placements
-    assert event_result.total_score == pytest.approx(exhaustive_result.total_score)
-
-
-# -----------------------------------------------------------------------------
 # Independent validity checks (not calling the same helper being tested)
 # -----------------------------------------------------------------------------
 
@@ -456,24 +345,6 @@ def test_canonical_result_independent_validity_checks():
     assert by_task[prep.id].planned_end <= by_task[dependent.id].planned_start  # dependency order
 
     assert result.total_score == pytest.approx(round(sum(p.score for p in result.placements), 2))
-
-
-def test_legacy_result_independent_validity_checks(make_day_schedule, make_task, make_fixed_block):
-    tasks = [make_task("A", duration=45, dependencies=[]), make_task("B", duration=13, dependencies=["A"])]
-    fixed = make_fixed_block("Busy", start=200, end=260)
-    schedule = make_day_schedule(day_start=0, day_end=1440, tasks=tasks, fixed_blocks=[fixed])
-
-    result = optimize_day_schedule(schedule, date=1)
-
-    intervals = sorted((t.time_window.start_time, t.time_window.end_time) for t in result.scheduled_tasks)
-    for (_, end), (next_start, _) in zip(intervals, intervals[1:]):
-        assert end <= next_start
-
-    for start, end in intervals:
-        assert 0 <= start < end <= 1440
-
-    by_name = {t.name: t for t in result.scheduled_tasks}
-    assert by_name["A"].time_window.end_time <= by_name["B"].time_window.start_time
 
 
 # -----------------------------------------------------------------------------

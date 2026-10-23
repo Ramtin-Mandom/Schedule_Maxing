@@ -1,41 +1,16 @@
 """
 optimizer.py
 
-Greedy Optimizer v1: the frozen baseline scheduling algorithm. This is the
-protected implementation for Milestone 0 -- behavior here should not change
-except for the narrowly-scoped fixes documented below. This module also
-hosts the canonical day engine added by Task 4 (see "Canonical day engine"
-below) -- evolving this module in place, per that task's instruction, rather
-than building a separate optimizer stack.
+The canonical day engine: generate_day_schedule places one day's flexible
+tasks around its fixed blocks under hard constraints (day window, fixed
+blocks, durations, deadlines, required work), scored by app.reward, for every
+scheduling mode (docs/scheduling-modes.md). evaluate_day_output reports a
+generated day's final reward and mode metrics.
 
-Important behavior (Greedy Optimizer v1, legacy):
-    - Fixed blocks are validated (start < end, inside the day window, no
-      overlaps with each other) via app.constraints.validate_fixed_blocks
-      before scheduling begins; an invalid fixed block raises ValueError.
-    - Fixed tasks are placed first.
-    - Movable tasks are placed in the valid slot with the highest reward score.
-    - Existing dependencies are respected.
-    - Missing dependencies are ignored, as requested.
-    - Reward weights/preferences come from reward.load_reward_settings(), which
-      reads config/task_preference.yaml by default (see reward.py's module
-      docstring for the full discovery precedence) unless an explicit
-      config_path is passed.
-
-combine_fixed_and_optimized_scheduled_tasks and optimize_day_schedule remain
-exactly as before -- temporary compatibility adapters that the still-legacy
-CLI (app/main.py) and desktop UI (app/app.py) keep calling unchanged.
-
-Task 6 / Schedule Maxing v2 replaced *how* both this module's placement
-search (_best_candidate_for_task) and the canonical engine's
-(_best_candidate_for_canonical_task) find a task's best feasible placement:
-neither scores every feasible minute anymore. See the "Shared event-search
-machinery" section below for the analytic candidate derivation and its
-rounding-aware tie-breaking, and each function's own
-*_exhaustive counterpart (test/benchmark-only) for the independent oracle
-that validates it. Greedy Optimizer v1's documented 30-minute lattice and
-scoring behavior, and the canonical engine's documented precise_greedy/
-adhd_friendly behavior, are unchanged by this -- only the search that finds
-a placement within those rules is faster.
+Placement search does not score every feasible minute: see the "Shared
+event-search machinery" section for the analytic candidate derivation and
+its rounding-aware tie-breaking, and _best_candidate_for_canonical_task_exhaustive
+(test/benchmark-only) for the independent oracle that validates it.
 """
 
 from __future__ import annotations
@@ -44,20 +19,11 @@ import math
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from pathlib import Path
 from types import SimpleNamespace
 from collections.abc import Mapping
-from typing import Any, Callable
+from typing import Callable
 
-from app.constraints import validate_fixed_blocks
-from app.models import DayScheduleOutput, ScheduledTask, TimeWindow
-
-try:
-    from app.models import UnscheduledTask
-except ImportError:
-    UnscheduledTask = None  # type: ignore
-
-from app.pert import assert_pert_constraints, compute_required_closure, get_dependency_end_time, has_cycle_by_id
+from app.pert import compute_required_closure, has_cycle_by_id
 from app.planning.models import DaySchedule as CanonicalDaySchedule
 from app.planning.models import DayScheduleOutput as CanonicalDayScheduleOutput
 from app.planning.models import FixedBlock as CanonicalFixedBlock
@@ -67,535 +33,22 @@ from app.planning.models import TaskRegistry, UnscheduledEntry, UnscheduledReaso
 from app.planning.models import preferred_third_bounds
 from app.planning.preferences import DayPreferences, OptimizerMode, day_preferences_to_reward_settings, to_legacy_scoring_task
 from app.planning.time import MINUTES_PER_DAY
-from app.reward import RewardSettings, _preferred_window_for_task, calculate_task_score, load_reward_settings
-
-
-TIME_SLOT_MINUTES = 30
-
-
-def optimize_day_schedule(
-    day_schedule: Any,
-    date: int | None = None,
-    config_path: str | Path | None = None,
-) -> DayScheduleOutput:
-    """
-    Optimize one day of scheduling.
-
-    Parameters
-    ----------
-    day_schedule:
-        Your DaySchedule object. Expected fields:
-            - time_window
-            - fixed_blocks
-            - tasks
-
-    date:
-        Optional date/day number. If not provided, this function tries to read
-        `day_schedule.date`, then falls back to 1.
-
-    config_path:
-        Optional direct path to task_prefrence.yaml.
-
-    Returns
-    -------
-    DayScheduleOutput
-        Final scheduled tasks, total score, and unscheduled tasks when supported
-        by your model.
-    """
-
-    if not validate_fixed_blocks(day_schedule):
-        raise ValueError(
-            "Invalid fixed blocks: each fixed block must have start_time < end_time, "
-            "fit inside the day window, and not overlap any other fixed block."
-        )
-
-    settings = load_reward_settings(config_path)
-
-    day_start = int(_get(_get(day_schedule, "time_window"), "start_time", 0))
-    day_end = int(_get(_get(day_schedule, "time_window"), "end_time", 1440))
-
-    fixed_tasks = _build_fixed_scheduled_tasks(day_schedule)
-    movable_tasks = [
-        task
-        for task in list(_get(day_schedule, "tasks", []))
-        if not bool(_get(task, "fixed", False))
-    ]
-
-    scheduled_tasks: list[Any] = sorted(
-        fixed_tasks,
-        key=lambda task: _get(_get(task, "time_window"), "start_time", 0),
-    )
-
-    unscheduled: list[Any] = []
-    remaining = movable_tasks[:]
-
-    # Validate the dependency graph before scheduling. Missing dependency names
-    # are ignored inside pert.py, but real dependency cycles are invalid.
-    assert_pert_constraints(movable_tasks)
-
-    # Repeatedly schedule the best currently feasible task.
-    # This lets dependencies become available as their prerequisite tasks are placed.
-    while remaining:
-        best_task = None
-        best_candidate = None
-        best_score = float("-inf")
-
-        made_progress = False
-
-        for task in remaining:
-            dependency_end = get_dependency_end_time(
-                task=task,
-                all_tasks=movable_tasks,
-                scheduled_tasks=scheduled_tasks,
-            )
-
-            # If real dependencies exist but are not scheduled yet, wait.
-            # Missing dependency names are ignored inside pert.py.
-            if dependency_end is None:
-                continue
-
-            candidate = _best_candidate_for_task(
-                task=task,
-                scheduled_tasks=scheduled_tasks,
-                day_start=day_start,
-                day_end=day_end,
-                earliest_start=dependency_end,
-                settings=settings,
-            )
-
-            if candidate is None:
-                continue
-
-            candidate_start, candidate_end, candidate_score = candidate
-
-            if candidate_score > best_score:
-                best_task = task
-                best_candidate = (candidate_start, candidate_end)
-                best_score = candidate_score
-
-        if best_task is not None and best_candidate is not None:
-            start_time, end_time = best_candidate
-            scheduled = _make_scheduled_task(best_task, start_time, end_time, best_score)
-            scheduled_tasks.append(scheduled)
-            scheduled_tasks.sort(key=lambda item: _get(_get(item, "time_window"), "start_time", 0))
-            remaining.remove(best_task)
-            made_progress = True
-
-        if made_progress:
-            continue
-
-        # If no task can progress, either there is no space or there are dependency cycles.
-        # Missing dependencies are ignored, but cycles between real tasks cannot be resolved.
-        for task in remaining:
-            reason = "not enough valid space or unresolved dependency cycle"
-            unscheduled.append(_make_unscheduled_task(task, reason))
-        break
-
-    # Final safety check: the produced schedule should still respect real
-    # dependencies. This catches dependency-order bugs without changing scoring.
-    assert_pert_constraints(movable_tasks, scheduled_tasks)
-
-    total_score = round(sum(float(_get(task, "score", 0.0)) for task in scheduled_tasks), 2)
-    output_date = date if date is not None else int(_get(day_schedule, "date", 1))
-
-    return _make_day_schedule_output(
-        date=output_date,
-        total_score=total_score,
-        scheduled_tasks=scheduled_tasks,
-        unscheduled_tasks=unscheduled,
-    )
-
-
-def combine_fixed_and_optimized_scheduled_tasks(
-    *,
-    date: int,
-    day_schedule: Any,
-    config_path: str | Path | None = None,
-) -> DayScheduleOutput:
-    """Backward-compatible entry point used by ``app.main`` and ``app.app``."""
-    return optimize_day_schedule(
-        day_schedule,
-        date=date,
-        config_path=config_path,
-    )
-
-
-def _best_candidate_for_task_exhaustive(
-    task: Any,
-    scheduled_tasks: list[Any],
-    day_start: int,
-    day_end: int,
-    earliest_start: int,
-    settings: RewardSettings,
-) -> tuple[int, int, float] | None:
-    """
-    Exhaustive reference for Greedy Optimizer v1: probes every 30-minute
-    lattice point _best_candidate_for_task itself would ever generate
-    (identical snapping/skip-if-occupied logic), scored with the real,
-    unmodified calculate_task_score.
-
-    Test/benchmark-only: optimize_day_schedule never calls this (see
-    _best_candidate_for_task, its production replacement, and
-    tests/test_optimizer_differential.py's spy test asserting so). Kept
-    deliberately independent of the shared event-search machinery -- see
-    that module section's docstring -- so it cannot share a bug with the
-    code it exists to validate.
-    """
-    duration = int(_get(task, "duration", 0))
-
-    if duration <= 0:
-        return None
-
-    first_start = max(day_start, earliest_start)
-
-    # Snap to the next 30-minute slot.
-    if first_start % TIME_SLOT_MINUTES != 0:
-        first_start += TIME_SLOT_MINUTES - (first_start % TIME_SLOT_MINUTES)
-
-    latest_start = day_end - duration
-
-    best_candidate = None
-    best_score = float("-inf")
-
-    for start_time in range(first_start, latest_start + 1, TIME_SLOT_MINUTES):
-        end_time = start_time + duration
-
-        if _overlaps_any(start_time, end_time, scheduled_tasks):
-            continue
-
-        previous_task, next_task = _neighbors_for_candidate(start_time, end_time, scheduled_tasks)
-
-        score = calculate_task_score(
-            task,
-            start_time,
-            previous_task=previous_task,
-            next_task=next_task,
-            settings=settings,
-        )
-
-        if score > best_score:
-            best_score = score
-            best_candidate = (start_time, end_time, score)
-
-    return best_candidate
-
-
-def _placed_from_legacy_scheduled_tasks(scheduled_tasks: list[Any]) -> list["_Placed"]:
-    """
-    Adapts Greedy Optimizer v1's legacy scheduled_tasks (fixed blocks and
-    already-placed movable tasks, each duck-typed with
-    .time_window.start_time/end_time/.category/.tag) into the same _Placed
-    shape the canonical engine's free-interval/event-search machinery uses
-    (see _Placed and _best_start_in_free_interval), so both call sites share
-    that machinery instead of maintaining two implementations.
-    """
-    placed: list[_Placed] = []
-    for item in scheduled_tasks:
-        window = _get(item, "time_window", None)
-        placed.append(
-            _Placed(
-                start=int(_get(window, "start_time", 0)),
-                end=int(_get(window, "end_time", 0)),
-                name=str(_get(item, "name", "")),
-                category=str(_get(item, "category", "other")),
-                tag=str(_get(item, "tag", "")),
-                task_id=None,
-                score=float(_get(item, "score", 0.0)),
-                fixed=bool(_get(item, "fixed", False)),
-            )
-        )
-    return placed
-
-
-def _best_candidate_for_task(
-    task: Any,
-    scheduled_tasks: list[Any],
-    day_start: int,
-    day_end: int,
-    earliest_start: int,
-    settings: RewardSettings,
-) -> tuple[int, int, float] | None:
-    """
-    Find this task's best-scoring valid 30-minute-lattice placement, via the
-    shared free-interval/event-search machinery (_best_start_in_free_interval)
-    instead of scoring every lattice point while skipping occupied ones
-    inline. Greedy Optimizer v1's own 30-minute lattice, its snapping
-    behavior, and its "no day_start/day_end passed to calculate_task_score"
-    contract (short_gap_bonus/adhd_mode are never active here) are
-    unchanged -- see _best_candidate_for_task_exhaustive, this function's
-    independent reference.
-    """
-    duration = int(_get(task, "duration", 0))
-    if duration <= 0:
-        return None
-
-    first_start = max(day_start, earliest_start)
-    latest_start = day_end - duration
-    if latest_start < first_start:
-        return None
-
-    placed = _placed_from_legacy_scheduled_tasks(scheduled_tasks)
-    ordered = sorted(placed, key=lambda item: item.start)
-
-    best: tuple[int, int, float] | None = None
-    best_score = float("-inf")
-
-    cursor = day_start
-    previous_item: _Placed | None = None
-
-    for item in [*ordered, None]:
-        interval_end = item.start if item is not None else day_end
-        interval_start = cursor
-
-        candidate = _best_start_in_free_interval(
-            interval_start=interval_start,
-            interval_end=interval_end,
-            duration=duration,
-            first_start=first_start,
-            latest_start=latest_start,
-            previous_item=previous_item,
-            next_item=item,
-            scoring_task=task,
-            settings=settings,
-            adhd_mode=False,
-            day_start=None,
-            day_end=None,
-            lattice_step=TIME_SLOT_MINUTES,
-            lattice_anchor=0,
-        )
-        if candidate is not None and candidate[2] > best_score:
-            best_score = candidate[2]
-            best = candidate
-
-        if item is not None:
-            cursor = max(cursor, item.end)
-            previous_item = item
-
-    return best
-
-
-def _dependency_end_time(task: Any, scheduled_tasks: list[Any]) -> int | None:
-    """
-    Return the earliest start requirement caused by already-known dependencies.
-
-    Missing dependencies are ignored.
-
-    Returns:
-        - max dependency end time if all real dependencies are already scheduled
-        - 0 if there are no dependencies or all dependency names are missing
-        - None if a real dependency exists but has not been scheduled yet
-    """
-
-    dependency_names = _normalize_dependencies(_get(task, "dependencies", []))
-
-    if not dependency_names:
-        return 0
-
-    all_scheduled_names = {str(_get(item, "name", "")) for item in scheduled_tasks}
-
-    # These are all task names visible in the current scheduled list.
-    # If a dependency is not found here yet, it might either be missing or unscheduled.
-    dependency_end = 0
-
-    for dependency_name in dependency_names:
-        matching = [
-            item
-            for item in scheduled_tasks
-            if str(_get(item, "name", "")) == dependency_name
-        ]
-
-        if matching:
-            dependency_window = _get(matching[0], "time_window", None)
-            dependency_end = max(dependency_end, int(_get(dependency_window, "end_time", 0)))
-            continue
-
-        # Missing dependency is ignored.
-        # A real-but-unscheduled dependency will be handled by the optimizer naturally
-        # if it appears later in remaining tasks. Since this helper does not know
-        # remaining task names, the caller chooses task order by repeated passes.
-        if dependency_name not in all_scheduled_names:
-            continue
-
-    return dependency_end
-
-
-def _build_fixed_scheduled_tasks(day_schedule: Any) -> list[Any]:
-    fixed_scheduled_tasks: list[Any] = []
-
-    for fixed_block in list(_get(day_schedule, "fixed_blocks", [])):
-        time_window = _get(fixed_block, "time_window", None)
-        fixed_scheduled_tasks.append(
-            _make_scheduled_task(
-                source=fixed_block,
-                start_time=int(_get(time_window, "start_time", 0)),
-                end_time=int(_get(time_window, "end_time", 0)),
-                score=0.0,
-            )
-        )
-
-    for task in list(_get(day_schedule, "tasks", [])):
-        if not bool(_get(task, "fixed", False)):
-            continue
-
-        start_time = int(_get(task, "start_time", 0))
-        end_time = int(_get(task, "end_time", start_time + int(_get(task, "duration", 0))))
-
-        fixed_scheduled_tasks.append(
-            _make_scheduled_task(
-                source=task,
-                start_time=start_time,
-                end_time=end_time,
-                score=0.0,
-            )
-        )
-
-    fixed_scheduled_tasks.sort(
-        key=lambda task: _get(_get(task, "time_window"), "start_time", 0)
-    )
-    return fixed_scheduled_tasks
-
-
-def _make_scheduled_task(source: Any, start_time: int, end_time: int, score: float) -> Any:
-    return ScheduledTask(
-        name=str(_get(source, "name", "")),
-        category=str(_get(source, "category", "other")),
-        tag=str(_get(source, "tag", "")),
-        time_window=TimeWindow(start_time=start_time, end_time=end_time),
-        score=round(float(score), 2),
-    )
-
-
-def _make_unscheduled_task(task: Any, reason: str) -> Any:
-    if UnscheduledTask is None:
-        return {
-            "name": str(_get(task, "name", "")),
-            "reason": reason,
-        }
-
-    try:
-        return UnscheduledTask(
-            name=str(_get(task, "name", "")),
-            reason=reason,
-        )
-    except TypeError:
-        return {
-            "name": str(_get(task, "name", "")),
-            "reason": reason,
-        }
-
-
-def _make_day_schedule_output(
-    date: int,
-    total_score: float,
-    scheduled_tasks: list[Any],
-    unscheduled_tasks: list[Any],
-) -> DayScheduleOutput:
-    try:
-        return DayScheduleOutput(
-            date=date,
-            total_score=total_score,
-            scheduled_tasks=scheduled_tasks,
-            unscheduled_tasks=unscheduled_tasks,
-        )
-    except TypeError:
-        # Backward compatibility if your DayScheduleOutput model does not
-        # have `unscheduled_tasks` yet.
-        return DayScheduleOutput(
-            date=date,
-            total_score=total_score,
-            scheduled_tasks=scheduled_tasks,
-        )
-
-
-def _neighbors_for_candidate(
-    start_time: int,
-    end_time: int,
-    scheduled_tasks: list[Any],
-) -> tuple[Any | None, Any | None]:
-    previous_task = None
-    next_task = None
-
-    for task in sorted(
-        scheduled_tasks,
-        key=lambda item: _get(_get(item, "time_window"), "start_time", 0),
-    ):
-        task_window = _get(task, "time_window", None)
-        task_start = int(_get(task_window, "start_time", 0))
-        task_end = int(_get(task_window, "end_time", 0))
-
-        if task_end <= start_time:
-            previous_task = task
-        elif task_start >= end_time and next_task is None:
-            next_task = task
-            break
-
-    return previous_task, next_task
-
-
-def _overlaps_any(start_time: int, end_time: int, scheduled_tasks: list[Any]) -> bool:
-    for task in scheduled_tasks:
-        task_window = _get(task, "time_window", None)
-        other_start = int(_get(task_window, "start_time", 0))
-        other_end = int(_get(task_window, "end_time", 0))
-
-        if start_time < other_end and other_start < end_time:
-            return True
-
-    return False
-
-
-def _normalize_dependencies(dependencies: Any) -> list[str]:
-    if dependencies is None:
-        return []
-
-    if isinstance(dependencies, str):
-        if not dependencies.strip():
-            return []
-
-        # Supports "A;B", "A,B", or "A-B".
-        separators = [";", ",", "-"]
-        result = [dependencies]
-
-        for separator in separators:
-            if separator in dependencies:
-                result = dependencies.split(separator)
-                break
-
-        return [item.strip() for item in result if item.strip()]
-
-    if isinstance(dependencies, list):
-        return [str(item).strip() for item in dependencies if str(item).strip()]
-
-    return []
-
-
-def _get(obj: Any, key: str, default: Any = None) -> Any:
-    if obj is None:
-        return default
-
-    if isinstance(obj, dict):
-        return obj.get(key, default)
-
-    return getattr(obj, key, default)
+from app.reward import RewardSettings, _preferred_window_for_task, calculate_task_score
 
 
 # =============================================================================
-# Canonical day engine (Task 4 / Schedule Maxing v2)
+# Canonical day engine
 # =============================================================================
 #
-# generate_day_schedule is the new public entry point: it accepts a canonical
+# generate_day_schedule is the public entry point: it accepts a canonical
 # DaySchedule (app.planning.models) and a resolved DayPreferences
 # (app.planning.preferences), and returns a canonical DayScheduleOutput.
-# Greedy Optimizer v1 above is untouched and remains the CLI/UI's compatibility
-# path until Task 6 rewires them.
 #
 # Internally, everything is scheduled in integer minutes relative to the
 # day's own local window start (offset 0 == day_window's start instant),
 # converted back to aware UTC datetimes only when building the final
-# ScheduledTask placements. This lets candidate generation and scoring reuse
-# the same integer-minute machinery as Greedy Optimizer v1 (via the
-# app.planning.preferences adapter) while the public contract stays fully
-# canonical (real dates, aware instants, stable UUID identity).
+# ScheduledTask placements, so the public contract stays fully canonical
+# (real dates, aware instants, stable UUID identity).
 #
 # Mode-specific candidate generation (see _candidate_starts):
 #   precise_greedy, early_finish, night_owl, catch_up
@@ -625,8 +78,8 @@ class MandatoryTaskSchedulingError(ValueError):
     its full prerequisite closure) exactly once.
 
     `failures` gives one MandatoryTaskFailure per affected task_id. This is
-    deliberately a ValueError subclass (matching Greedy Optimizer v1's own
-    fixed-block-validation errors) so existing `except ValueError` callers
+    deliberately a ValueError subclass (matching the fixed-block validation
+    errors) so existing `except ValueError` callers
     still catch it, while `.failures` gives structured detail a caller that
     wants it can inspect.
 
@@ -663,8 +116,8 @@ class MandatoryTaskFailure:
 class _Placed:
     """One already-placed interval (fixed block or scheduled flexible task)
     inside the canonical engine's search, in day-relative integer minutes.
-    Exposes the same `.time_window.start_time/end_time`-shaped attributes
-    Greedy Optimizer v1's helpers use, plus canonical identity/score."""
+    Exposes `.time_window.start_time/end_time` for the reward's neighbour
+    scoring, plus canonical identity/score."""
 
     __slots__ = ("start", "end", "time_window", "name", "category", "tag", "task_id", "score", "fixed")
 
@@ -815,7 +268,7 @@ def _candidate_starts(
 
 
 # =============================================================================
-# Shared event-search machinery (Task 6 / Schedule Maxing v2)
+# Shared event-search machinery
 # =============================================================================
 #
 # _best_start_in_free_interval replaces "score every feasible minute" with a
@@ -824,15 +277,13 @@ def _candidate_starts(
 # (rounded) app.reward.calculate_task_score -- see _event_breakpoints'
 # docstring for exactly which reward components drive which breakpoints, and
 # _earliest_best_in_continuous_range for how rounding-aware ties are
-# resolved without scanning every minute. Both the canonical engine
-# (_best_candidate_for_canonical_task) and Greedy Optimizer v1
-# (_best_candidate_for_task) share this machinery; only their lattice
-# (precise/1-minute vs 30-minute) and neighbor-adapter plumbing differ.
+# resolved without scanning every minute. The search runs unrestricted
+# (one-minute) or on a lattice (adhd_friendly's quarter hour).
 #
-# The _exhaustive counterparts kept alongside each production function are
-# deliberately independent of this machinery (see their own docstrings) --
-# they exist purely so tests/benchmarks have an oracle that cannot share a
-# bug with the code it is meant to validate.
+# _best_candidate_for_canonical_task_exhaustive is deliberately independent
+# of this machinery (see its own docstring) -- it exists purely so
+# tests/benchmarks have an oracle that cannot share a bug with the code it is
+# meant to validate.
 
 
 def _next_lattice_offset(first_start: int, step: int, anchor_local_minute: int) -> int:
@@ -840,12 +291,8 @@ def _next_lattice_offset(first_start: int, step: int, anchor_local_minute: int) 
     Generalizes _next_quarter_hour_offset to an arbitrary grid step and
     anchor (the local wall-clock minute that offset 0 corresponds to):
     the smallest offset >= first_start that lands on the step-minute grid
-    relative to that anchor. Legacy's 30-minute grid anchors at 0 (absolute
-    minute 0, no wall-clock concept -- matches Greedy Optimizer v1's
-    existing snapping exactly, since 1440 is an exact multiple of every
-    supported step so the extra day-wraparound this performs is a no-op for
-    legacy's already-unwrapped minute values). adhd_friendly's quarter-hour
-    grid anchors at day_window_start_minute (local midnight-relative), via
+    relative to that anchor. adhd_friendly's quarter-hour grid anchors at
+    day_window_start_minute (local midnight-relative), via
     _next_quarter_hour_offset itself.
     """
     local_minute = (anchor_local_minute + first_start) % MINUTES_PER_DAY
@@ -1466,7 +913,7 @@ def _run_greedy_tier(
 ) -> tuple[dict[uuid.UUID, tuple[int, int, float]], list[uuid.UUID]]:
     """
     Repeatedly place the best-scoring currently-feasible task from
-    `task_ids` (mirrors Greedy Optimizer v1's own repeated-best-pick loop).
+    `task_ids`.
     `task_bonuses` (Catch-Up) is added to a task's candidate score only when
     choosing which task to place next -- a task-wide constant cannot change
     where a task goes -- and the stored score stays the insertion score.

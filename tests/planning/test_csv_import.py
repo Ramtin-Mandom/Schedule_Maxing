@@ -15,7 +15,6 @@ import pytest
 
 from app.execution.service import ExecutionService
 from app.planning.application import PlanningService
-from app.planning.compat import import_legacy_csv_rows
 from app.planning.csv_import import CsvImportError, parse_legacy_csv, parse_legacy_csv_file
 from app.planning.errors import DuplicateEntityError, EntityInUseError, InvalidEntityError
 from app.planning.models import ScheduledTask
@@ -135,10 +134,6 @@ def test_overlapping_fixed_blocks_in_the_file_are_errors() -> None:
 def test_missing_dependency_is_an_error_not_silently_dropped() -> None:
     [issue] = issues("1,Review,study,,false,540,600,30,5,Nonexistent Task\n")
     assert "'Nonexistent Task'" in issue and "does not match" in issue
-    # The standalone compat adapter keeps its legacy drop-and-report behavior.
-    rows = [dict(zip(HEADER.strip().split(","), "1,Review,study,,false,540,600,30,5,Nonexistent Task".split(",")))]
-    result = import_legacy_csv_rows(rows, anchor_date=ANCHOR, tz_name="UTC")[1]
-    assert [d.kind for d in result.diagnostics] == ["missing"]
 
 
 def test_ambiguous_duplicate_names_are_errors() -> None:
