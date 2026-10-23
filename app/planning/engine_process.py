@@ -99,12 +99,16 @@ class EngineProcess:
             self._failed = True
 
     def shutdown(self) -> None:
-        """Stop the worker process (it finishes a call already running); later calls run in-process."""
+        """
+        Stop the worker process and wait until it and the pool's manager thread have ended (it finishes a
+        call already running, such as warm_up()'s), so closing the storage leaves nothing running; later
+        calls run in-process.
+        """
         with self._lock:
             self._closed = True
             executor, self._executor = self._executor, None
         if executor is not None:
-            executor.shutdown(wait=False, cancel_futures=True)
+            executor.shutdown(wait=True, cancel_futures=True)
 
 
 def _is_engine_error(error: BaseException) -> bool:
