@@ -36,7 +36,7 @@ def test_load_reward_settings_defaults_when_no_file_found(tmp_path) -> None:
     # Discovery is anchored to project_root's own config/ directory, not
     # cwd, so isolation from this repo's real config/task_preference.yaml
     # requires an explicit (guaranteed-empty) project_root -- chdir alone
-    # would not do it (see test_optimizer.py's isolation fixture comment).
+    # would not do it.
     assert load_reward_settings(project_root=tmp_path) == RewardSettings()
 
 
@@ -563,30 +563,5 @@ def test_calculate_schedule_score_matches_manual_sum() -> None:
     assert total == expected
 
 
-def test_calculate_schedule_score_keeps_existing_score_for_scheduled_task_objects(
-    make_scheduled_task,
-) -> None:
-    item = make_scheduled_task("Sleep", start=0, end=480, score=0.0)
-
-    total = calculate_schedule_score([item], settings=RewardSettings())
-
-    assert total == 0.0
-
-
 def test_calculate_schedule_score_empty_schedule_is_zero() -> None:
     assert calculate_schedule_score([], settings=RewardSettings()) == 0.0
-
-
-def test_calculate_schedule_score_sums_nonzero_stored_scores(make_scheduled_task) -> None:
-    """Distinct from test_calculate_schedule_score_matches_manual_sum: that test
-    exercises the recompute-from-rich-task-objects branch, while
-    test_calculate_schedule_score_keeps_existing_score_for_scheduled_task_objects
-    only ever used a stored score of 0.0, which would not catch a bug where
-    the "sum stored scores" branch silently returned 0 regardless of input.
-    """
-    item_a = make_scheduled_task("A", start=0, end=60, score=12.5)
-    item_b = make_scheduled_task("B", start=60, end=120, score=7.25)
-
-    total = calculate_schedule_score([item_a, item_b], settings=RewardSettings())
-
-    assert total == 19.75

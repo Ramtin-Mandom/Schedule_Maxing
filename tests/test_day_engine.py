@@ -2,9 +2,6 @@
 v2): generate_day_schedule, precise_greedy/adhd_friendly candidate modes,
 the bounded short-gap bonus end to end, mandatory scheduling guarantees, and
 identity/consistency.
-
-Greedy Optimizer v1's own tests (tests/test_optimizer.py) are untouched and
-continue to cover the legacy engine.
 """
 
 from __future__ import annotations
@@ -80,7 +77,7 @@ def default_prefs(**override_kwargs) -> "DayPreferences":  # noqa: F821 - forwar
 
 def zero_neighbor_effects_prefs(**extra_reward_kwargs) -> "DayPreferences":  # noqa: F821
     """Zero fragmentation/tag-relation scoring, isolating 'earliest feasible
-    slot' behavior -- same convention tests/test_optimizer.py already uses."""
+    slot' behavior."""
     return default_prefs(
         reward=RewardPreferencesOverride(weight_fragmentation_penalty=0.0, weight_tag_relation=0.0, **extra_reward_kwargs)
     )

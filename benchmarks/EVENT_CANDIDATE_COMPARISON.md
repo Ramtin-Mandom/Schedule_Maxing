@@ -96,7 +96,7 @@ Python 3.10.11, Windows-10-10.0.19045-SP0. Command:
   enabled `short_gap_bonus` all together -- still an exact match, at a real
   2.0x-3.0x reduction.
 
-## Relationship to `benchmarks/FINAL_COMPARISON.md`
+## Relationship to `benchmarks/FINAL_COMPARISON.md` (removed with Greedy v1; see git history)
 
 `FINAL_COMPARISON.md` is now historical (see the note at its top): it
 measures Greedy Optimizer v1 vs. the canonical engine from *before* this

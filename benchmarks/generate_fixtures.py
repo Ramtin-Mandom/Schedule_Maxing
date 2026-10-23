@@ -2,15 +2,15 @@
 benchmarks/generate_fixtures.py
 
 Generates the deterministic synthetic "medium" and "larger" day CSV
-fixtures used by benchmarks/optimizer_baseline.py. Uses only the
+fixtures used by the day-engine benchmarks (day_engine_baseline.py,
+event_candidate_comparison.py). Uses only the
 standard library (random with a fixed seed), matches the existing legacy
 CSV schema (see README.md's "CSV Input Format"), and writes to
 benchmarks/fixtures/.
 
 Re-running this script regenerates byte-identical output (same seed, same
 row order), so the checked-in fixtures are reproducible rather than
-one-off hand-authored files. This does not touch app/data_processor.py or
-the live CSV schema -- it only produces additional sample input files.
+one-off hand-authored files. It only produces sample input files.
 """
 
 from __future__ import annotations

@@ -53,7 +53,6 @@ from app.execution.errors import (
 from app.execution.lifecycle import TRANSITIONS, BulkOutcomeResult, OutcomeChangeError, TaskOutcome
 from app.execution.models import ExecutionStatus, TaskExecution, WorkSession
 from app.execution.service import build_canonical_execution, check_feedback
-from app.models import ScheduledTask
 from app.persistence import errors
 from app.planning.models import ScheduledTask as CanonicalScheduledTask
 from app.planning.models import Task as CanonicalTask
@@ -208,15 +207,6 @@ class DirectExecutionService:
             status=ExecutionStatus.SCHEDULED, created_at=now, updated_at=now, user_id=self._account.user_id,
         )
         return self._create(candidate, reuse_placement=False)
-
-    def create_execution_from_scheduled_task(self, scheduled_task: ScheduledTask, *, planned_date: int,
-                                             priority: int) -> TaskExecution:
-        window = scheduled_task.time_window
-        return self.create_execution(
-            task_name=scheduled_task.name, category=scheduled_task.category, tag=scheduled_task.tag,
-            planned_date=planned_date, planned_start=window.start_time, planned_end=window.end_time,
-            planned_duration=window.end_time - window.start_time, priority=priority,
-        )
 
     def get_or_create_execution(self, *, task_name: str, category: str, tag: str, planned_date: int,
                                 planned_start: int, planned_end: int, planned_duration: int,

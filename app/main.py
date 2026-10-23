@@ -104,48 +104,6 @@ def minutes_to_24_hour_time(minutes: int) -> str:
     return f"{hour:02d}:{minute:02d}"
 
 
-def print_day_schedule(date: int, day_output) -> None:
-    print("=" * 60)
-    print(f"Optimized Schedule for Day {date}")
-    print("=" * 60)
-
-    print(f"Total Score: {day_output.total_score:.2f}")
-    print()
-
-    scheduled_tasks = sorted(
-        day_output.scheduled_tasks,
-        key=lambda task: task.time_window.start_time,
-    )
-
-    if not scheduled_tasks:
-        print("No tasks were scheduled.")
-    else:
-        print("Scheduled Tasks:")
-        print("-" * 60)
-
-        for task in scheduled_tasks:
-            start = minutes_to_time(task.time_window.start_time)
-            end = minutes_to_time(task.time_window.end_time)
-
-            print(f"{start} - {end}")
-            print(f"  Task:     {task.name}")
-            print(f"  Category: {task.category}")
-            print(f"  Tag:      {task.tag}")
-            print(f"  Score:    {task.score:.2f}")
-            print("-" * 60)
-
-    if day_output.unscheduled_tasks:
-        print()
-        print("Unscheduled Tasks:")
-        print("-" * 60)
-
-        for task in day_output.unscheduled_tasks:
-            print(f"- {task.name}")
-            print(f"  reason: {task.reason}")
-            print("-" * 60)
-    print()
-
-
 def export_day_schedule_to_csv(day_output, output_path: Path) -> None:
     """
     Exports the final schedule into 30-minute time blocks.

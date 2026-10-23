@@ -19,7 +19,6 @@ from app.execution.service import (
     compute_active_duration_minutes,
     compute_start_delay_minutes,
 )
-from app.models import ScheduledTask, TimeWindow
 from tests.execution.conftest import make_execution_kwargs
 
 
@@ -59,31 +58,6 @@ def test_create_execution_starts_scheduled_with_unique_id(service_with_clock: Ex
     assert first.id != second.id
     assert first.task_name == "Study Math"
     assert first.created_at == first.updated_at
-
-
-def test_create_execution_from_scheduled_task_derives_duration(service_with_clock: ExecutionService) -> None:
-    scheduled_task = ScheduledTask(
-        name="Study Math",
-        category="study",
-        tag="math",
-        time_window=TimeWindow(start_time=540, end_time=660),
-        score=42.0,
-    )
-
-    execution = service_with_clock.create_execution_from_scheduled_task(
-        scheduled_task, planned_date=1, priority=8
-    )
-
-    assert execution.planned_start == 540
-    assert execution.planned_end == 660
-    assert execution.planned_duration == 120
-    assert execution.priority == 8
-    assert execution.planned_date == 1
-
-
-# ----------------------------------------------------------------------
-# Valid transitions
-# ----------------------------------------------------------------------
 
 
 def test_start_opens_a_session_and_sets_in_progress(service_with_clock: ExecutionService) -> None:

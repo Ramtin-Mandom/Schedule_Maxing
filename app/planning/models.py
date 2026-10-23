@@ -1,22 +1,14 @@
 """
 app/planning/models.py
 
-Canonical planning models for Schedule Maxing v2.
+Canonical planning models: the one representation of "a task", "a fixed
+block" and "a scheduled placement" that every consumer builds on.
 
-This is a *new*, parallel domain model, not a replacement for
-app/models.py. app/models.py remains the documented legacy input/output
-compatibility layer during migration: the existing CLI (app/main.py), the
-desktop UI (app/app.py), and Greedy Optimizer v1 (app/optimizer.py) keep
-using it unchanged. Canonical consumers introduced by later milestones must
-build on the models here rather than growing a second, competing
-representation of "a task" or "a scheduled placement".
-
-Key differences from the legacy models:
+Key properties:
     - Every entity has a stable UUID identity that survives serialization,
-      edits, and repeated optimization (app/models.py's Task/ScheduledTask
-      have no identity at all -- they are matched by name).
+      edits, and repeated optimization.
     - Calendar dates are real `datetime.date` values (see
-      app.planning.compat for the explicit legacy day-index <-> date
+      app.planning.compat for the legacy CSV day-index <-> date
       conversion), not abstract 1-based day integers.
     - A placement (ScheduledTask) stores a reference to its Task (task_id)
       plus aware UTC instants and a timezone identifier; it does not copy
@@ -583,8 +575,7 @@ class FixedBlock(BaseModel):
     user_id: uuid.UUID | None = None
     label: str = Field(min_length=1)
     #: What kind of commitment this is (e.g. "sleep", "food", "event"). The
-    #: default mirrors app.models.FixedBlock's legacy default, so blocks
-    #: created before categories existed stay valid.
+    #: default ("fixed") keeps blocks created before categories existed valid.
     category: str = Field(default="fixed", min_length=1)
     #: What completing it is worth (like Task.points). 0 for a block saved before fixed blocks had points.
     points: int = Field(default=0, ge=0, le=MAX_TASK_POINTS)

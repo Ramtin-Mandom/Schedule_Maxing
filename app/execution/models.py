@@ -3,9 +3,8 @@ models.py
 
 Pydantic models for the execution-tracking subsystem.
 
-This is a separate concern from app/models.py and app/planning/models.py:
-those describe the scheduling *plan* (legacy Task/FixedBlock/DaySchedule,
-and canonical Task/ScheduledTask/DaySchedule respectively); the models here
+This is a separate concern from app/planning/models.py: that describes
+the scheduling *plan* (Task/ScheduledTask/DaySchedule); the models here
 describe what actually happened when a planned task was worked on. A
 TaskExecution stores a point-in-time snapshot of the planned task alongside
 its own stable id and lifecycle status, so historical records stay accurate
@@ -19,7 +18,7 @@ Legacy vs. canonical rows (Schedule Maxing v2 migration):
     - Legacy rows (task_id is None): created via
       ExecutionService.create_execution/get_or_create_execution, exactly as
       before. planned_date/planned_start/planned_end are the app's abstract
-      1-based day index and minutes-from-midnight, matching app/models.py.
+      1-based day index and minutes-from-midnight (the legacy CSV format).
       There is no recoverable real calendar date for these rows (the
       abstract day index has no anchor), so canonical_planned_date and the
       other canonical_* fields are always None here -- never guessed.
@@ -154,7 +153,7 @@ class TaskExecution(BaseModel):
     category: str
     tag: str
 
-    # Legacy abstract day-index snapshot (app/models.py's day 1, day 2, ...)
+    # Legacy abstract day-index snapshot (the legacy CSV format's day 1, day 2, ...)
     # and minutes-from-midnight. None for a canonical-only execution (no
     # legacy day-index exists for it) -- never populated by inference.
     planned_date: int | None = None

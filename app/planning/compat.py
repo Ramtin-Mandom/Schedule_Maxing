@@ -1,16 +1,10 @@
 """
 app/planning/compat.py
 
-Explicit migration adapters between the legacy scheduling models
-(app/models.py, abstract 1-based day indexes, name-based dependencies) and
-the canonical planning models (app/planning/models.py, calendar dates,
-UUID identity and dependency references).
-
-Nothing here changes app/data_processor.py, app/app.py's
-parse_dependency_string, the live CSV schema, or Greedy Optimizer v1. This
-module is additive: it gives a later milestone a single, tested place to
-convert legacy data into canonical models, instead of re-deriving parsing
-and identity rules at each call site.
+Helpers for the legacy schedule CSV format (app/planning/csv_import.py and
+the schedule pages): abstract 1-based day indexes and minutes-from-midnight
+converted to calendar dates and aware instants, and name-based dependency
+references resolved to task ids.
 
 Legacy day-index contract:
     day 1 == anchor_date
@@ -20,13 +14,8 @@ calendar date for a legacy day index from today's date (see
 app.planning.time and the milestone's time-handling rules).
 
 Identity contract:
-    Legacy CSV rows and in-memory legacy Task/FixedBlock objects have no
-    stable identity. Every conversion in this module mints a fresh UUID per
-    legacy row/object, once, for that import. Re-running a conversion on
-    the same (ID-less) legacy source produces a *new* set of IDs -- stable
-    identity is only promised across edits/reimports of an already-
-    canonical document (see PlanningDocument in app/planning/models.py),
-    never across independent reimports of the same legacy CSV.
+    Legacy CSV rows have no stable identity: an import mints a fresh UUID
+    per row, so re-importing the same file produces a new set of IDs.
 
 Dependency resolution contract (see resolve_legacy_dependency_field):
     1. An explicit semicolon-separated reference list is always honored
@@ -48,37 +37,16 @@ Dependency resolution contract (see resolve_legacy_dependency_field):
     the current day: a reference to a task that is genuinely known (e.g.
     from a wider multi-day planning request) but happens to live outside
     the day currently being converted is therefore not misreported as
-    "missing" as long as the caller includes it in `known_names`. This
-    module's own day-scoped helpers (`convert_legacy_day_schedule`,
-    `import_legacy_csv_rows`) only see one day's names; a future
-    request-level importer that has visibility across days should build
-    its own wider `known_names` map and call resolve_legacy_dependency_field
-    directly for cross-day references.
+    "missing" as long as the caller includes it in `known_names`.
 """
 
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date as date_
 from datetime import datetime, timedelta
 
-from app import models as legacy_models
-from app.planning.models import (
-    DaySchedule as CanonicalDaySchedule,
-)
-from app.planning.models import (
-    FixedBlock as CanonicalFixedBlock,
-)
-from app.planning.models import (
-    LocalTimeWindow,
-)
-from app.planning.models import (
-    Task as CanonicalTask,
-)
-from app.planning.models import (
-    TaskRegistry,
-)
 from app.planning.time import LocalDayWindow, MINUTES_PER_DAY, UnsupportedSchedulingWindowError
 
 
@@ -92,14 +60,6 @@ def legacy_day_to_date(day: int, anchor_date: date_) -> date_:
     if day < 1:
         raise ValueError(f"legacy day index must be >= 1, got {day}")
     return anchor_date + timedelta(days=day - 1)
-
-
-def date_to_legacy_day(target: date_, anchor_date: date_) -> int:
-    """Inverse of legacy_day_to_date. Raises if target precedes anchor_date."""
-    delta = (target - anchor_date).days
-    if delta < 0:
-        raise ValueError(f"{target} is before anchor_date {anchor_date}; no valid legacy day index")
-    return delta + 1
 
 
 def _window_from_legacy_minutes(
@@ -250,204 +210,3 @@ def resolve_legacy_dependency_field(
 # -----------------------------------------------------------------------------
 # Legacy in-memory DaySchedule -> canonical DaySchedule
 # -----------------------------------------------------------------------------
-
-
-@dataclass
-class LegacyImportResult:
-    day_schedule: CanonicalDaySchedule
-    task_ids_by_name: dict[str, list[uuid.UUID]]
-    diagnostics: list[DependencyDiagnostic] = field(default_factory=list)
-
-
-def _convert_fixed_blocks(
-    fixed_blocks: list[legacy_models.FixedBlock],
-    target_date: date_,
-    tz_name: str,
-) -> list[CanonicalFixedBlock]:
-    converted: list[CanonicalFixedBlock] = []
-    for block in fixed_blocks:
-        window = _window_from_legacy_minutes(
-            target_date, tz_name, block.time_window.start_time, block.time_window.end_time
-        )
-        start_utc, end_utc = window.to_utc_instants()
-        converted.append(
-            CanonicalFixedBlock(
-                label=block.name,
-                category=block.category or "fixed",
-                planned_date=target_date,
-                timezone=tz_name,
-                planned_start=start_utc,
-                planned_end=end_utc,
-            )
-        )
-    return converted
-
-
-def convert_legacy_day_schedule(
-    legacy_day: legacy_models.DaySchedule,
-    *,
-    day_index: int,
-    anchor_date: date_,
-    tz_name: str,
-) -> LegacyImportResult:
-    """
-    Convert an in-memory legacy DaySchedule (as produced by
-    app.data_processor.load_schedule_from_csv or built up by app.app's
-    ScheduleState) into a canonical DaySchedule.
-
-    Legacy Task.dependencies here is whatever app/data_processor.py already
-    parsed (its existing "-"-only split), so an already-mis-split
-    hyphenated dependency name cannot be recovered at this stage. Prefer
-    import_legacy_csv_rows, which applies the improved matching rules
-    directly to the raw, unsplit CSV field, when the raw CSV is available.
-    """
-    target_date = legacy_day_to_date(day_index, anchor_date)
-
-    fixed_blocks = _convert_fixed_blocks(legacy_day.fixed_blocks, target_date, tz_name)
-
-    flexible_tasks = [task for task in legacy_day.tasks if not task.fixed]
-
-    task_by_id: dict[uuid.UUID, CanonicalTask] = {}
-    known_names: dict[str, list[uuid.UUID]] = {}
-    entries: list[tuple[uuid.UUID, legacy_models.Task]] = []
-
-    for legacy_task in flexible_tasks:
-        task_id = uuid.uuid4()
-        entries.append((task_id, legacy_task))
-        known_names.setdefault(legacy_task.name, []).append(task_id)
-
-        task_by_id[task_id] = CanonicalTask(
-            id=task_id,
-            name=legacy_task.name,
-            category=legacy_task.category,
-            tags=[legacy_task.tag] if legacy_task.tag else [],
-            estimated_duration_minutes=legacy_task.duration,
-            priority=legacy_task.priority,
-            preferred_time_window=LocalTimeWindow(
-                start_minute=legacy_task.preference_time.start_time,
-                end_minute=min(legacy_task.preference_time.end_time, MINUTES_PER_DAY),
-            ),
-            preferred_dates=[target_date],
-        )
-
-    diagnostics: list[DependencyDiagnostic] = []
-    for task_id, legacy_task in entries:
-        dependency_ids, diags = _resolve_reference_list(legacy_task.name, legacy_task.dependencies, known_names)
-        diagnostics.extend(diags)
-        task_by_id[task_id] = task_by_id[task_id].model_copy(update={"dependency_ids": dependency_ids})
-
-    registry = TaskRegistry(tasks=task_by_id)
-    day_schedule = CanonicalDaySchedule(
-        date=target_date,
-        timezone=tz_name,
-        fixed_blocks=fixed_blocks,
-        task_ids=[task_id for task_id, _ in entries],
-        tasks=registry,
-    )
-
-    return LegacyImportResult(day_schedule=day_schedule, task_ids_by_name=known_names, diagnostics=diagnostics)
-
-
-# -----------------------------------------------------------------------------
-# Raw legacy CSV rows -> canonical DaySchedule (new import adapter)
-# -----------------------------------------------------------------------------
-
-
-def _import_legacy_csv_day(
-    day_rows: list[dict[str, str]],
-    *,
-    day_index: int,
-    anchor_date: date_,
-    tz_name: str,
-) -> LegacyImportResult:
-    target_date = legacy_day_to_date(day_index, anchor_date)
-
-    fixed_blocks: list[CanonicalFixedBlock] = []
-    task_by_id: dict[uuid.UUID, CanonicalTask] = {}
-    known_names: dict[str, list[uuid.UUID]] = {}
-    ordered_task_rows: list[tuple[uuid.UUID, dict[str, str]]] = []
-
-    for row in day_rows:
-        is_fixed = row["fixed"].strip().lower() == "true"
-
-        if is_fixed:
-            window = _window_from_legacy_minutes(
-                target_date, tz_name, int(row["start_time"]), int(row["end_time"])
-            )
-            start_utc, end_utc = window.to_utc_instants()
-            fixed_blocks.append(
-                CanonicalFixedBlock(
-                    label=row["name"],
-                    category=(row.get("category") or "").strip() or "fixed",
-                    planned_date=target_date,
-                    timezone=tz_name,
-                    planned_start=start_utc,
-                    planned_end=end_utc,
-                )
-            )
-            continue
-
-        task_id = uuid.uuid4()
-        tag = (row.get("tag") or "").strip()
-        task_by_id[task_id] = CanonicalTask(
-            id=task_id,
-            name=row["name"],
-            category=row["category"],
-            tags=[tag] if tag else [],
-            estimated_duration_minutes=int(row["duration"]),
-            priority=int(row["priority"]),
-            preferred_time_window=LocalTimeWindow(
-                start_minute=int(row["start_time"]),
-                end_minute=min(int(row["end_time"]), MINUTES_PER_DAY),
-            ),
-            preferred_dates=[target_date],
-        )
-        known_names.setdefault(row["name"], []).append(task_id)
-        ordered_task_rows.append((task_id, row))
-
-    diagnostics: list[DependencyDiagnostic] = []
-    for task_id, row in ordered_task_rows:
-        raw_field = row.get("dependencies", "") or ""
-        dependency_ids, diags = resolve_legacy_dependency_field(row["name"], raw_field, known_names)
-        diagnostics.extend(diags)
-        task_by_id[task_id] = task_by_id[task_id].model_copy(update={"dependency_ids": dependency_ids})
-
-    registry = TaskRegistry(tasks=task_by_id)
-    day_schedule = CanonicalDaySchedule(
-        date=target_date,
-        timezone=tz_name,
-        fixed_blocks=fixed_blocks,
-        task_ids=[task_id for task_id, _ in ordered_task_rows],
-        tasks=registry,
-    )
-
-    return LegacyImportResult(day_schedule=day_schedule, task_ids_by_name=known_names, diagnostics=diagnostics)
-
-
-def import_legacy_csv_rows(
-    rows: list[dict[str, str]],
-    *,
-    anchor_date: date_,
-    tz_name: str,
-) -> dict[int, LegacyImportResult]:
-    """
-    Convert legacy schedule CSV rows (the same row shape as
-    app.data_processor.read_csv_rows) into one canonical DaySchedule per
-    legacy day index found in the rows.
-
-    This is a new, additive import path -- it does not read from or write
-    to app/data_processor.py, and the live CSV schema is unchanged. Each
-    day is converted independently in a two-pass process: pass 1 mints a
-    fresh UUID and canonical Task for every flexible-task row (and a
-    canonical FixedBlock for every fixed row); pass 2 resolves each
-    flexible task's raw `dependencies` field into dependency_ids via
-    resolve_legacy_dependency_field.
-    """
-    rows_by_day: dict[int, list[dict[str, str]]] = {}
-    for row in rows:
-        rows_by_day.setdefault(int(row["date"]), []).append(row)
-
-    return {
-        day_index: _import_legacy_csv_day(day_rows, day_index=day_index, anchor_date=anchor_date, tz_name=tz_name)
-        for day_index, day_rows in rows_by_day.items()
-    }
