@@ -5,6 +5,13 @@ the status bar redrawing only what changed (real windows).
 
 from __future__ import annotations
 
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+import time
+
 import pytest
 
 from app.ui.activity import Activity
@@ -16,6 +23,29 @@ def app(tmp_path, dialogs):  # noqa: F811 - the fixture imported above
     window = open_app(tmp_path / "app.db", tmp_path, build_pages=False)
     yield window
     close_app(window)
+
+
+@pytest.fixture
+def window_manager(tmp_path):
+    """
+    A real minimize needs a window manager. On an X display without one (CI's xvfb-run), Openbox runs for
+    this test only (installed by .github/workflows/ci.yml); where one already runs, Openbox exits at once.
+    """
+    if not sys.platform.startswith("linux") or not os.environ.get("DISPLAY") or shutil.which("openbox") is None:
+        yield
+        return
+    ready = tmp_path / "openbox-started"
+    manager = subprocess.Popen(["openbox", "--startup", f"touch {shlex.quote(str(ready))}"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    deadline = time.monotonic() + 10
+    while not ready.exists() and manager.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    try:
+        yield
+    finally:
+        if manager.poll() is None:
+            manager.terminate()
+            manager.wait(timeout=10)
 
 
 def test_minimizing_pauses_the_status_poll_and_restoring_reads_once(app, monkeypatch) -> None:
@@ -48,7 +78,7 @@ def test_another_application_in_front_slows_the_status_poll(app, monkeypatch) ->
     assert scheduled[-1] == 4000
 
 
-def test_the_window_iconified_for_real_is_minimized(app) -> None:
+def test_the_window_iconified_for_real_is_minimized(window_manager, app) -> None:  # the manager starts first
     app.deiconify()
     pump(app)
     app.iconify()

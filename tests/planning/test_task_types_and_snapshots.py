@@ -90,7 +90,8 @@ def test_new_tasks_get_distinct_types_and_never_group_by_name(service) -> None:
     assert renamed.task_type_id == first.task_type_id
     with pytest.raises(InvalidReferenceError):
         service.create_task(task("Stray", task_type_id=uuid.uuid4()))
-    assert [t.name for t in service.list_tasks()] == ["Reading!", "Reading", "Reading (evening)"]
+    # (Sorted: the fixed clock gives all three the same created_at, so list_tasks' tie-break is the random id.)
+    assert sorted(t.name for t in service.list_tasks()) == ["Reading", "Reading (evening)", "Reading!"]
 
 
 def test_a_task_never_references_another_accounts_type(connection) -> None:
