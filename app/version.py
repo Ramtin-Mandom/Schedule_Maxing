@@ -9,7 +9,7 @@ so a release is: change this line, tag `v<version>`.
 Standard library only; importing it has no side effects.
 """
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 #: The name shown to people (window title, installer, Start Menu).
 APP_NAME = "Schedule Maxing"

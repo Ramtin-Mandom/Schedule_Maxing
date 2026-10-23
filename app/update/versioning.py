@@ -4,7 +4,7 @@ app/update/versioning.py
 Application versions for the updater: `MAJOR.MINOR.PATCH`, compared as
 numbers (1.10.0 is newer than 1.9.9; a string comparison would say the
 opposite). A leading "v" is accepted, as in a release tag. Anything else --
-a pre-release or build suffix ("1.3.0-rc1", "1.3.0+build5", "1.3"), text
+a pre-release or build suffix ("9.9.9-rc1", "9.9.9+build5", "9.9"), text
 around the number -- is not a stable version: parse_version() returns None
 and such a release is never offered.
 """
