@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import multiprocessing
+import threading
 import uuid
 from concurrent.futures import Future
 from concurrent.futures.process import BrokenProcessPool
@@ -55,6 +57,22 @@ def test_an_engine_error_keeps_its_type_and_the_process(monkeypatch) -> None:
 def test_a_shut_down_engine_runs_calls_here(monkeypatch) -> None:
     engine = EngineProcess()
     engine.shutdown()
+    assert engine(lambda: 5) == 5 and engine.remote_calls == 0
+
+
+def _background_threads() -> set[threading.Thread]:
+    return {thread for thread in threading.enumerate() if thread is not threading.main_thread()}
+
+
+@pytest.mark.slow
+def test_shutting_down_a_starting_process_leaves_no_thread_or_process_behind() -> None:
+    before = _background_threads()
+    engine = EngineProcess()
+    engine.warm_up()  # the worker is still starting: what closing the app right after the window appears meets
+    assert _background_threads() - before  # the pool's manager thread is running
+    engine.shutdown()
+    assert _background_threads() - before == set()
+    assert multiprocessing.active_children() == []
     assert engine(lambda: 5) == 5 and engine.remote_calls == 0
 
 
