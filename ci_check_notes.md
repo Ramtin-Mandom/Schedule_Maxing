@@ -34,7 +34,17 @@ work it out again from failure logs.
 
 ## Pending
 
-(none)
+### 2026-10-23: ML duration predictor removed (engine-remake, uncommitted)
+- Changed: deleted `app/productivity/ml_*.py`, `predictor_comparison_cli.py`, `tests/productivity/test_ml_*.py`,
+  `ml_fixtures.py`; removed `ProductivityService.predict_duration_comparison`, the controller method of the same
+  name, `DurationPredictionComparison`, `settings.ML_MODEL_FILENAME`/`ML_MODEL_META_FILENAME`; dropped pandas,
+  scikit-learn and joblib from `requirements-desktop.txt` and their pins (plus numpy, scipy, threadpoolctl, pytz,
+  python-dateutil, six) from `requirements.lock`; the self-test no longer checks them.
+- Intent: the owner does not plan machine learning on the data (ADR-037 superseded).
+- Depends on it: `packaging/windows/check_bundle.py` required modules, `ScheduleMaxing.spec` excludes,
+  `tests/test_startup_cost.py` (ML test removed, startup test renamed), `tests/backend/test_planning_api.py`.
+- CI risk: dependency boundary -- CI and the Windows build must reinstall from the requirement files; the bundle
+  check no longer expects sklearn/pandas.
 
 ## Checked
 

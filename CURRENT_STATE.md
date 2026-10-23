@@ -7,10 +7,10 @@ feature's state changes, and do not rewrite the file only to move the date. Arch
 
 | | |
 |---|---|
-| Generated | 2026-10-22 |
-| Commit | `f5d91aa` ("perf(ui): opt-in light caching keeps only Day and the open section built"), plus an uncommitted refinement: light caching keeps only Day and the shown page |
-| Branch | `optimization`, ahead of `main` (`664de0e`, pull request #22: budgeting, updater edits, Ruff fix, certifi bump) by a knowledge-base sync and the round-3 performance work with its documentation ([docs/desktop-performance-round3.md](docs/desktop-performance-round3.md)) |
-| App version | 1.2.0 (`app/version.py`); backend API version 1.0.0 (`backend/app.py`) |
+| Generated | 2026-10-23 |
+| Commit | `dfd53d6` ("Release 1.3.0", tag `v1.3.0`), plus the uncommitted removal of the ML duration predictor (ADR-046) |
+| Branch | `engine-remake`, at `main` (pull request #23 merged the round-3 performance work, light caching, the engine-process close wait and CI test fixes; all five CI jobs passed) |
+| App version | 1.3.0 (`app/version.py`); backend API version 1.0.0 (`backend/app.py`) |
 | Local schema | SQLite v18 (`app/execution/db.py`); server Alembic head `0020_budget_future_items` |
 
 **How to read the evidence.** *Verified* means a test or check was run in this session and passed.
@@ -27,7 +27,7 @@ FastAPI/PostgreSQL account server.
 
 | Subsystem | Operational? | Basis |
 |---|---|---|
-| Desktop app (local SQLite) | Yes | The dev suite passed except two tests that also fail before round 3 (section C); the affected real-window modules passed (section D) |
+| Desktop app (local SQLite) | Yes | The dev suite passed on the ML-removal tree (2026-10-23, section D); the affected real-window modules passed in round 3 |
 | Scheduling engines and modes | Yes | Engine, mode and baseline tests passed |
 | Execution tracking and analytics | Yes | Execution and productivity tests passed |
 | Sync client ↔ backend | Yes, against an in-process backend | `tests/sync` (system tier) passed in the full suite. No live server was contacted |
@@ -56,7 +56,7 @@ FastAPI/PostgreSQL account server.
 | Productivity tracker (General / Specific / Project) | Implemented | `app/productivity/tracker.py`, `app/ui/productivity_page.py` | `tests/productivity/test_tracker*.py`, `tests/ui/test_productivity_page.py` | |
 | Schedule follow-through (cohort) report | Partially Implemented | `app/productivity/schedule_cohort.py`; `GET /planning/analytics/schedule-cohort` | `tests/productivity/test_schedule_cohort*.py` | The desktop panel (`app/ui/cohort_view.py`) is not reachable, although `docs/desktop-day.md` still describes it |
 | Historical duration suggestion (median) | Partially Implemented | `app/productivity/prediction.py`, `app/ui/duration_suggestion.py` | `tests/productivity/test_prediction.py`, `tests/ui/test_task_editor_widgets.py` | The widget is not used by the task form; the README still lists it as a feature |
-| ML duration predictor | Implemented (CLI only, gated) | `app/productivity/ml_*.py`, `predictor_comparison_cli.py` | `tests/productivity/test_ml_*.py` | Kept out of the UI by design |
+| ML duration predictor | Removed (2026-10-23, ADR-046) | — | — | Only the median predictor remains; pandas, scikit-learn and joblib are no longer dependencies |
 | Settings, preferences and task-data reset | Implemented | `app/ui/pages.py: SettingsPage`, `settings_controller.py`, `app/planning/task_data_reset.py` | `tests/ui/test_settings_*.py`, `tests/planning/test_reset.py` | |
 | How to Use guide and About | Implemented | `app/ui/guide_page.py`; About is a `PlaceholderPage` holding the version text | `tests/ui/test_guide.py` | Settings, Account and How to Use share one sidebar item with a top bar (`app/ui/shell.py: GroupBar`) |
 | Budgeting: balance (saved as today's; every manual change kept), income/expense entries, recurrence, occurrence edits, Stats with History and the 90-day forecast, Future (income ideas, wishlist) | Implemented (desktop) | `app/budget/`, `app/ui/budget_*.py`, `app/ui/day_money.py`, `app/persistence/budget.py`, `backend/resources.py` (`BUDGET_*`), local schema v17-v18, server revisions 0019-0020 | `tests/budget/*`, `tests/execution/test_migration_v17.py`, `test_migration_v18.py`, `tests/backend/test_budget_api.py`, `tests/sync/test_budget_sync.py`, `tests/direct/test_direct_budget.py`, `tests/ui/test_budget_controller.py`, `tests/ui/test_budget_page.py` | Local, direct and synced storage, REST CRUD; the local web profile has no budget routes |
@@ -97,13 +97,13 @@ FastAPI/PostgreSQL account server.
 | Regeneration does not cancel the `scheduled` execution of a placement it replaces | Low | Rescheduling | `docs/execution-rescheduling.md` §10 |
 | On DST days, timeline positions are elapsed minutes while labels show wall-clock times | Low | Day and Week views | `docs/desktop-day.md`, `docs/desktop-calendar.md` |
 | `keep_local` is not possible for a record deleted on the server; diverged execution history must be resolved with `accept_remote` | Low (by design) | Sync | README "Current Limitations" |
-| Desktop dependencies have lower bounds only, so a fresh install can get a newer CustomTkinter than the one tested | Low | `requirements-desktop.txt` | `docs/desktop-web-boundaries.md` §8 |
+| Desktop dependencies other than CustomTkinter (capped below 6 since `b5668ff`) have lower bounds only, so a fresh install can get newer versions than the ones tested | Low | `requirements-desktop.txt` | `docs/desktop-web-boundaries.md` §8; ROADMAP R5 |
 | Budget: one currency with 2 decimal places (not recorded per record); a series edit applies to the whole series (no "this and following" split); an occurrence can be moved only through the service (the forms change name, amount, category and project); a REST client's schedule edit leaves orphaned occurrence edits on the server (the expansion ignores them; the desktop service removes them) | Low (by design for now) | `app/budget/`, `app/ui/budget_page.py` | Module docstrings of `money.py`, `service.py`, `budget_controller.py` |
 | Budget statistics read at most the last 3,660 days of history; the forecast's everyday spending is a flat 15-day average of one-time expenses (no seasonality) | Low (by design) | `app/budget/stats.py` | Module docstring |
 | The Day page draws at most 40 money cards; more are reachable through the totals' dialogs | Low (by design) | `app/ui/day_money.py` | `MONEY_CARD_LIMIT` |
 | The first sync of an account with a server that offers `budget` replays the whole change feed once (to pick up budget changes an older client version skipped) | Low (one-time cost) | Sync | `SyncEngine.pull_budget_history` |
 | `tests/test_desktop_isolation.py::test_python_m_app_app_launches_offline_and_closes_cleanly` fails when start-up is slow: its probe closes the app 1.5 s after the main loop starts, and the first layout pass then ends inside CustomTkinter's title-bar update (`TclError: application has been destroyed`) | Low (test timing) | Launch probe (`tests/isolation_probe.py`) | **Verified failure** on 2026-10-20 on the clean commit `f20cf0b` as well (start-up took 10-18 s on this machine); it passed in the run of 2026-10-19, and **passed** on 2026-10-20 with the round-3 start-up (the constructor now takes about 0.7 s) -- possibly resolved, the probe's timing is unchanged |
-| Two dev-suite tests fail on this machine: `test_a_balance_without_transactions_stays_flat` (the forecast's `zero_day` is None, the test expects tomorrow) and `test_new_tasks_get_distinct_types_and_never_group_by_name` (type label order) | Unknown (not investigated) | `app/budget/stats.py`, task types | **Verified failure** on 2026-10-21 on `257d0e8` and `bec7ad0` alike; on `bdc67f6` only the budget test failed (the task-types one looks order- or timing-dependent); both **passed** in the `pytest -m dev` run of 2026-10-21 on the light-caching tree (`f5d91aa`), so the budget one may depend on the date |
+| Two dev-suite tests fail on this machine: `test_a_balance_without_transactions_stays_flat` (the forecast's `zero_day` is None, the test expects tomorrow) and `test_new_tasks_get_distinct_types_and_never_group_by_name` (type label order) | Unknown (not investigated) | `app/budget/stats.py`, task types | **Verified failure** on 2026-10-21 on `257d0e8` and `bec7ad0` alike; on `bdc67f6` only the budget test failed (the task-types one looks order- or timing-dependent); both **passed** in the `pytest -m dev` run of 2026-10-21 on the light-caching tree (`f5d91aa`), so the budget one may depend on the date. The task-types test's order dependence was fixed in `b7ac7a4` (it compares sorted names); both **passed** again on 2026-10-23 |
 | A page is built the first time it is shown (0.1-0.4 s once per page and workspace; Week is pre-built in idle time); after a window resize the shown page keeps its old size for 120 ms before it is laid out at the new one; returning to a page other than Day or the page left last (or to that one after 30 s) costs a re-layout of 0.2-0.7 s (it was detached into its own window) | Low (by design) | `app/ui/pages.py: DeferredPage`, `app/ui/shell.py: PAGE_SETTLE_MS`, `DETACH_AFTER_MS` | docs/desktop-performance-round3.md |
 | With the opt-in Settings choice "Light caching" (ADR-045), only Day and the shown page stay built: returning to any other page (Settings <-> Account <-> How to Use too) rebuilds it (Week/Month ~0.8 s instead of ~60 ms), and its scroll position, unsaved input and Productivity's report cache are lost; in exchange ~15 MB less memory and ~2,200 fewer native windows after visiting every page | Low (by design, off by default) | `app/ui/shell.py: AppShell.set_light_caching`, `app/ui/pages.py: DeferredPage.release` | docs/desktop-performance-round3.md ("Addendum: light caching") |
 | Dragging the window still costs dwm.exe work for every visible native child window (the Day page has ~435: form, buttons and navigation are CustomTkinter, 2-3 each) | Low | Desktop UI | docs/desktop-performance-round3.md "Round 3b", ADR-043 |
@@ -112,7 +112,7 @@ FastAPI/PostgreSQL account server.
 
 ## D. Testing and quality
 
-Test layout: 221 `test_*.py` modules under `tests/`, with tiers assigned automatically (`tests/test_tiers.py`).
+Test layout: 214 `test_*.py` modules under `tests/`, with tiers assigned automatically (`tests/test_tiers.py`).
 
 | Command | Purpose |
 |---|---|
@@ -123,6 +123,17 @@ Test layout: 221 `test_*.py` modules under `tests/`, with tiers assigned automat
 | `python -m compileall .` | Compile check |
 | `ruff check .` | Lint |
 | `python -m benchmarks.scheduling_mode_baseline --check` | Engine baseline drift (not run by CI) |
+
+Results of the ML-removal session (2026-10-23, Windows 10, `.venv` with Python 3.10.11, `dfd53d6` plus the
+uncommitted removal):
+
+| Check | Result |
+|---|---|
+| `pytest -m dev` | **Passed:** 2183 passed, 2 skipped, 401 deselected, 2 warnings (228 s) |
+| `pytest -m dev tests/test_packaging_config.py tests/test_startup_cost.py tests/ui/test_productivity_controller.py tests/productivity` | **Passed:** 213 |
+| `tests/test_startup_cost.py::test_importing_the_desktop_loads_no_deferred_page` (slow) and `tests/backend/test_planning_api.py::test_generation_needs_no_desktop_packages` (system) | **Passed** |
+| `ruff check .` | **Passed** |
+| Pull request #23 CI on GitHub (`test`, `security-scan`, `desktop-only`, `direct-desktop`, `postgres`) | **Passed** (read with `gh`; the ML removal is not in CI yet) |
 
 Results of the round-3 session (2026-10-20/21, Windows 10, `.venv` with Python 3.10.11, commit `bec7ad0`;
 the round-3b rows are on `bdc67f6`):
@@ -170,7 +181,8 @@ checklist is in `docs/windows-distribution.md`).
 
 ## F. Immediate technical priorities
 
-1. Confirm the CI result of pull request #22 on GitHub, then release (bump `app/version.py`, tag) ([ROADMAP](ROADMAP.md) M1).
+1. Commit the ML removal (ADR-046) through a pull request and check CI against its `ci_check_notes.md` entry; a
+   Windows build should confirm the smaller bundle and the self-test without pandas/scikit-learn.
 2. Run and confirm the first real backend deployment, then the smoke check (M4).
 3. Correct the documentation that contradicts the code (M2), and decide what happens to the unreachable UI
    modules (R3).

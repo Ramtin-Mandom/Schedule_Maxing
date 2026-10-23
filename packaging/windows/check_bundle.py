@@ -68,7 +68,7 @@ def check_modules(pyz: Path) -> list[str]:
         root = name.split(".")[0]
         if root in FORBIDDEN_MODULES or any(name == bad or name.startswith(bad + ".") for bad in FORBIDDEN_APP_MODULES):
             problems.append(f"forbidden module packaged: {name}")
-    for needed in ("app.desktop", "app.app", "app.selftest", "app.execution.db", "customtkinter", "sklearn", "pandas",
+    for needed in ("app.desktop", "app.app", "app.selftest", "app.execution.db", "customtkinter",
                    "keyring.backends.Windows"):
         if needed not in names:
             problems.append(f"missing module: {needed}")

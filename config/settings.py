@@ -121,7 +121,7 @@ def default_user_data_dir(
 
 
 # Directory for local runtime data (the application SQLite database holding
-# execution history *and* persisted planning data, plus the ML artifact).
+# execution history *and* persisted planning data).
 # Defaults to the per-user application-data directory above. Override with
 # the SCHEDULE_MAXING_DATA_DIR environment variable (unchanged from earlier
 # milestones); code that opens the database can also inject an explicit
@@ -171,10 +171,6 @@ DEFAULT_TIMEZONE = resolve_default_timezone()
 # SCHEDULE_MAXING_DATA_DIR overrides keep pointing at the same file.
 EXECUTION_DB_FILENAME = "executions.db"
 
-# Persisted ML duration-predictor artifact (see app/productivity/ml_persistence.py).
-# Lives alongside the execution database under the same DATA_DIR.
-ML_MODEL_FILENAME = "ml_duration_model.joblib"
-ML_MODEL_META_FILENAME = "ml_duration_model.meta.json"
 # The synchronization backend (app/sync, docs/sync-protocol.md): the Schedule
 # Maxing API. The app still works fully offline -- nothing is sent until an
 # account signs in on the Account page. SCHEDULE_MAXING_BACKEND_URL names

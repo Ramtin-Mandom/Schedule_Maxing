@@ -312,7 +312,6 @@ The local task-execution domain, used by both the desktop UI and the CLI report 
 
 Turns execution history into statistics and predictions: `data_prep.py` (flattens executions into analysis-ready records), `stats.py`/`segments.py` (aggregate statistics and groupings, each carrying its own sample count and evidence label), `prediction.py` (the median duration estimator and its documented fallback hierarchy — the production predictor), `insights.py` (structured, template-generated observations), `trends.py` (recent-vs-baseline comparison), `reporting.py` (the `ProductivityService` boundary and report/dashboard bundles), `exporters.py`, and `report_cli.py` (`python -m app.productivity.report_cli`).
 
-The evidence-gated ML duration predictor (see [Evidence-gated ML duration predictor](#evidence-gated-ml-duration-predictor-experimental-disabled-by-default)) lives in its own small, focused modules: `ml_features.py` (leakage-safe feature construction), `ml_split.py` (chronological train/test splitting), `ml_model.py` (the sklearn `Pipeline` definition and fitting), `ml_metrics.py` (MAE/median-AE/tolerance-rate calculations), `ml_evaluation.py` (the three-way comparison and activation gate), `ml_persistence.py` (saving/loading the model artifact, never raising), `ml_prediction.py` (the runtime, fail-safe prediction path), and `predictor_comparison_cli.py` (`python -m app.productivity.predictor_comparison_cli`).
 
 ---
 
@@ -518,7 +517,7 @@ To run only the desktop app and CLI (no web server, database server, or browser 
 pip install -r requirements-desktop.txt
 ```
 
-The desktop runtime needs `pydantic`, `PyYAML`, `customtkinter`, `pandas`, `scikit-learn`, `joblib`, `keyring` (saved sign-in), and `tzdata` (time zones on Windows). See [docs/desktop-web-boundaries.md](docs/desktop-web-boundaries.md) for how the desktop and the optional web components are kept apart.
+The desktop runtime needs `pydantic`, `PyYAML`, `customtkinter`, `keyring` (saved sign-in), and `tzdata` (time zones on Windows). See [docs/desktop-web-boundaries.md](docs/desktop-web-boundaries.md) for how the desktop and the optional web components are kept apart.
 
 ---
 
@@ -700,18 +699,9 @@ Execution history and persisted planning data (tasks, projects, fixed blocks, ge
 
 Override the directory with the `SCHEDULE_MAXING_DATA_DIR` environment variable (unchanged), or pass an explicit path (`get_connection(db_path=...)`, `--db-path` on the CLIs). The database and its schema are created and migrated automatically the first time the app or a CLI opens it.
 
-**Existing repository-local database (before Milestone 2 the default was `<project root>/data/executions.db`).** On the first default open (no explicit path, no `SCHEDULE_MAXING_DATA_DIR`), if that file exists and the per-user database does not, it is **copied** to the per-user location with SQLite's backup API (read-only on the source; written to a temporary file and only then linked into place) and then migrated there; a warning is logged. The original file is never modified, moved, or deleted — it stays behind as a backup you can remove yourself. If both files exist, nothing is copied or merged: the per-user database is used and the old one is left untouched. To keep using the old file in place instead, set `SCHEDULE_MAXING_DATA_DIR=<project root>/data`. An ML duration model saved under the old `data/` (`ml_duration_model.joblib` plus its `.meta.json`) is adopted the same way the first time it is loaded from the default location:
-
-- it is copied, never moved;
-- it is copied only as a complete pair;
-- an existing file is never overwritten;
-- nothing is copied when `SCHEDULE_MAXING_DATA_DIR` is set.
-
-See `app/productivity/ml_artifact_migration.py`.
+**Existing repository-local database (before Milestone 2 the default was `<project root>/data/executions.db`).** On the first default open (no explicit path, no `SCHEDULE_MAXING_DATA_DIR`), if that file exists and the per-user database does not, it is **copied** to the per-user location with SQLite's backup API (read-only on the source; written to a temporary file and only then linked into place) and then migrated there; a warning is logged. The original file is never modified, moved, or deleted — it stays behind as a backup you can remove yourself. If both files exist, nothing is copied or merged: the per-user database is used and the old one is left untouched. To keep using the old file in place instead, set `SCHEDULE_MAXING_DATA_DIR=<project root>/data`.
 
 `.gitignore` excludes `data/` and every SQLite file and side file (`*.db`, `*.sqlite`, `*.sqlite3`, `*-journal`, `*-wal`, `*-shm`), so none is ever committed.
-
-If you run `python -m app.productivity.predictor_comparison_cli --save-model` and the ML activation gate passes, the trained model is saved in the same directory as `ml_duration_model.joblib` plus a `ml_duration_model.meta.json` sidecar.
 
 ### Recording execution (desktop UI)
 
@@ -733,32 +723,7 @@ Figures are recomputed from saved records; reopening a completion removes its co
 
 In the task-entry form, once you've filled in a category and start time, click **Suggest duration from history** to see a historical prediction alongside your own entered duration, with the evidence behind it (e.g. "Based on 12 completed study tasks in the morning" or "Not enough history yet — using your original estimate"). The suggestion is never applied automatically — click **Use suggestion** to fill it into the (still freely editable) duration field yourself.
 
-This suggestion always comes from the median predictor described above (`app/productivity/prediction.py`) — it is the safe default and the only predictor the UI currently reads from. See the next section for an optional, separately evaluated machine-learning predictor that can only replace it once it has proven itself on your own real history.
-
-### Evidence-gated ML duration predictor (experimental, disabled by default)
-
-Alongside the median predictor, this repo includes an optional scikit-learn regression model, evaluated honestly against both the median predictor and your own original estimate before it is ever allowed to make a real prediction. This is not a claim that ML is better — it is a mechanism for finding out, on your own history, whether it actually is.
-
-**What it's allowed to see.** Only information known before a task begins: planned duration, category, tag, priority, planned start time (and the time-of-day bucket derived from it), day of week, and historical median-duration aggregates computed only from tasks completed *before* the task being predicted (a strict, chronologically-ordered "no future data" rule — see `app/productivity/ml_features.py`). It never sees actual duration, focus/energy/interruption feedback, or completion outcome as an input.
-
-**How it's evaluated.** `app/productivity/ml_evaluation.py` sorts your completed, plausible-duration history chronologically and splits it into a training set and a held-out test set by time (the most recent `--test-fraction`, default 20%) — never a random split. All three approaches are then scored on the exact same held-out test rows:
-- your original estimate,
-- the median predictor (re-run per test row using only the history that existed strictly before that row, so it doesn't get to "see" the test set either),
-- the ML model (an sklearn `Pipeline` — median/most-frequent imputation, one-hot encoding with unknown categories handled safely, and `Ridge` regression — trained only on the training rows).
-
-Reported for each: mean absolute error, median absolute error, percentage of predictions within 15 and within 30 minutes, sample counts, and the exact chronological cutoff.
-
-**Activation rule.** ML can only become active when *both* are true: your history clears configurable, conservative minimum-sample thresholds (defaults: 40 total / 25 train / 10 test observations), and its held-out mean absolute error is strictly lower than the median predictor's held-out mean absolute error on that same test set. If either condition fails, ML stays disabled and every prediction keeps coming from the median predictor — nothing about the existing "Suggest duration from history" behavior changes. The concrete numbers behind every enable/reject decision are recorded, never asserted without evidence.
-
-**Reproducing it yourself:**
-
-```bash
-python -m app.productivity.predictor_comparison_cli
-```
-
-Add `--format json` for machine-readable output, `--db-path` to point at a different execution database, `--min-total-samples`/`--min-train-samples`/`--min-test-samples`/`--test-fraction` to adjust the gate, and `--save-model` to persist the trained model (as `ml_duration_model.joblib` + `ml_duration_model.meta.json` under the same local data directory as `executions.db`) so it can be used at runtime — only written when the activation gate actually passes. Run `python -m app.productivity.predictor_comparison_cli --help` for the full list.
-
-On a fresh install (no completed execution history yet), this correctly reports "insufficient history" and leaves ML disabled — that is the expected, honest result, not an error.
+This suggestion always comes from the median predictor described above (`app/productivity/prediction.py`), the only duration predictor in the project.
 
 ### Exporting and resetting your data
 
@@ -989,7 +954,6 @@ The desktop task form no longer creates repeating tasks (1.1.0); existing, impor
 - The backend supports SMTP-based password recovery, rotating native refresh credentials, session revocation and database-backed rate limits. Account deletion and email verification are not provided. Tombstones and the change log are not compacted.
 - History deletion through the service layer synchronizes as deletion of the account's executions; Settings offers the broader Reset all task data operation.
 - Legacy schedule CSVs carry no ids, so they are always imported as new records. Only the stored-planning CSV keeps ids.
-- The ML duration predictor is evidence-gated and, on a typical personal-scale history, is expected to stay disabled (the stock test fixture's 19 completed tasks are well below its default 40/25/10 sample thresholds) — this is by design, not a defect. It is not wired into the desktop UI; use `python -m app.productivity.predictor_comparison_cli` to evaluate and, if it qualifies, persist it.
 - The event-based candidate search's rounding-aware tie-breaking (see "Exact event-based candidate search" above) relies on the real, rounded `calculate_task_score` staying monotonic across an analytically-derived region; this holds exactly for real-number arithmetic and is validated empirically (fuzz-tested and differentially tested against an independent exhaustive reference across tens of thousands of scenarios, with zero mismatches found) rather than machine-checked for every possible floating-point evaluation order at astronomically extreme weight magnitudes.
 
 ### Milestone 4 desktop presentation
@@ -1077,7 +1041,6 @@ Possible next steps:
 - Add drag-and-drop task editing in the UI.
 - Feed productivity-derived duration predictions back into the optimizer as an opt-in input (currently the suggestion is shown but never applied automatically).
 - Add a real calendar-date mapping for the abstract day-index schedule model in the *legacy* pipeline (largely superseded by the canonical layer's real `datetime.date`, but the legacy `app/models.py` path itself still uses abstract day indexes).
-- If real usage history grows enough to clear the ML activation gate, surface the comparison result (and, once it wins honestly, the ML suggestion itself) in the desktop UI's duration-suggestion widget alongside the median predictor.
 - Implement project archiving; project CRUD, assignment and recurring series ([docs/recurrence.md](docs/recurrence.md)) are already available.
 
 ---
@@ -1097,7 +1060,7 @@ The project has these parts:
   - the stored-planning CSV imports back with the same ids.
 - **Server backend (Milestone 3):** FastAPI + PostgreSQL, with accounts (Argon2, JWT), per-user versioned records, soft deletion, and a commit-ordered change feed. See [docs/backend.md](docs/backend.md). [docs/render-deployment.md](docs/render-deployment.md) describes manual deployment; service availability is not guaranteed by this checkout.
 - **Offline-first sync (Milestone 3):** retries are safe, conflicts are stored and resolved explicitly, and guest data is adopted during account creation, while existing-account sign-in offers explicit association. See [docs/sync-protocol.md](docs/sync-protocol.md).
-- **Also:** reward-based optimization, PERT-style dependency handling (name- and id-based), personal productivity analytics, and an evidence-gated experimental ML duration predictor.
+- **Also:** reward-based optimization, PERT-style dependency handling (name- and id-based), and personal productivity analytics.
 
 Automated coverage includes native desktop workflows (`python -m pytest`, which needs no external server, Docker, or PostgreSQL; native widget tests require a display). Real PostgreSQL verification is optional and explicit: see [docs/backend.md](docs/backend.md#tests). Remaining roadmap items include project archiving. See [testing](docs/testing.md) for verification commands and [Windows distribution](docs/windows-distribution.md) for installer, release and updater checks. Milestone reports record historical checks.
 

@@ -13,8 +13,8 @@ The desktop app never imports the backend and keeps working offline without
 any backend setting. The backend in turn imports only the pure canonical
 models (`app/planning/models.py`, `preferences.py`, `provenance.py`,
 `fixed_block_rules.py`, `app/execution/models.py`,
-`lifecycle.py`) and the reward-settings loader the YAML template needs. It never imports Tk, the local
-SQLite layer, pandas, or scikit-learn. A test checks this.
+`lifecycle.py`) and the reward-settings loader the YAML template needs. It never imports Tk or the local
+SQLite layer. A test checks this.
 
 ## Package choices
 

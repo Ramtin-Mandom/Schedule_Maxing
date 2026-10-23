@@ -1,7 +1,6 @@
 """
 What the desktop does NOT do while it starts (docs/desktop-performance-round3.md):
-importing app.app loads no machine-learning stack and none of the pages that are
-built on first show, and the credential store is found only when it is needed.
+importing app.app loads none of the pages that are built on first show, and the credential store is found only when it is needed.
 """
 
 from __future__ import annotations
@@ -17,29 +16,21 @@ from app.sync.credentials import LazyVault, MemoryVault
 
 ROOT = Path(__file__).resolve().parents[1]
 
-#: Loaded the first time an ML report is computed (in a worker), never by start-up.
-ML_MODULES = ("sklearn", "scipy", "pandas", "joblib")
-#: Pages built on first show (app/ui/pages.py DeferredPage) are imported then, too.
+#: Pages built on first show (app/ui/pages.py DeferredPage) are imported only then.
 DEFERRED_PAGE_MODULES = ("app.ui.calendar_page", "app.ui.planning_pages", "app.ui.productivity_page",
                          "app.ui.budget_page", "app.ui.guide_page", "app.ui.account_page")
 
 
 @pytest.mark.slow
-def test_importing_the_desktop_loads_no_ml_stack_and_no_deferred_page() -> None:
+def test_importing_the_desktop_loads_no_deferred_page() -> None:
     code = (
         "import sys, app.app\n"
-        f"print(sorted(m for m in sys.modules if m.split('.')[0] in {ML_MODULES!r} or m in {DEFERRED_PAGE_MODULES!r}"
+        f"print(sorted(m for m in sys.modules if m in {DEFERRED_PAGE_MODULES!r}"
         " or m.split('.')[0] == 'keyring'))"
     )
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "[]"
-
-
-def test_the_ml_stack_still_loads_when_a_model_is_used() -> None:
-    from app.productivity import ml_model
-
-    assert ml_model.Ridge.__module__.startswith("sklearn")  # the trainer itself imports it as before
 
 
 def test_a_lazy_vault_finds_the_store_once_on_first_use() -> None:

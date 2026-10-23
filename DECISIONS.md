@@ -54,7 +54,7 @@ decision was made.
 | ADR-034 | One planning time zone; DST-transition and overnight windows are refused | Accepted |
 | ADR-035 | Points replace priority, and task kinds are Flexible, Fixed and To Do | Accepted |
 | ADR-036 | Analytics are recomputed from records; executions snapshot task fields | Accepted |
-| ADR-037 | The ML duration predictor is evidence-gated and kept out of the UI | Accepted |
+| ADR-037 | The ML duration predictor is evidence-gated and kept out of the UI | Superseded by ADR-046 |
 | ADR-038 | The local web profile listens on loopback only, behind a session guard | Accepted |
 | ADR-039 | Budget records: a separate domain, integer minor units, expanded recurrence, optional sync feature | Accepted |
 | ADR-040 | Budget forecast: a balance snapshot plus a 15-day one-time spending average; future items are not transactions | Accepted |
@@ -63,6 +63,7 @@ decision was made.
 | ADR-043 | Long lists and static text use one-window light widgets | Accepted |
 | ADR-044 | The desktop runs the day engine in a separate process | Accepted |
 | ADR-045 | Light caching: an opt-in mode that keeps only Day and the shown page built | Accepted |
+| ADR-046 | No machine learning: the ML duration predictor and its dependencies are removed | Accepted |
 
 ---
 
@@ -483,13 +484,14 @@ decision was made.
 
 ### ADR-037 — The ML duration predictor is evidence-gated and kept out of the UI
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-046](#adr-046--no-machine-learning-the-ml-duration-predictor-and-its-dependencies-are-removed)
+  (2026-10-23). The record below is historical.
 - **Context:** Personal-scale history is small.
 - **Decision:** A scikit-learn model is enabled only above sample thresholds, evaluated against the median predictor on a chronological split, and reachable only through the comparison CLI.
 - **Rationale:** The README says it "is expected to stay disabled" on typical data — "by design, not a defect".
 - **Alternatives:** Not documented.
 - **Consequences:** scikit-learn and pandas are still desktop dependencies.
-- **Relevant files:** `app/productivity/ml_*.py`, `predictor_comparison_cli.py`.
+- **Relevant files:** none remain: the ML modules and the comparison CLI under app/productivity were deleted (ADR-046; see git history before it).
 - **Evidence:** README "Current Limitations".
 
 ### ADR-038 — The local web profile listens on loopback only, behind a session guard
@@ -592,3 +594,14 @@ decision was made.
 - **Consequences:** A trade of memory and window weight for slower returns to every page but Day, switching between Settings, Account and How to Use included. State held only by a page's widgets (scroll position, Productivity's report cache, unsaved form input) is lost when it is released.
 - **Relevant files:** `app/ui/shell.py`, `app/ui/pages.py`, `app/ui/ui_settings.py`, `app/app.py`.
 - **Evidence:** `tests/ui/test_deferred_pages.py` (light caching tests); docs/desktop-performance-round3.md ("Addendum: light caching").
+
+### ADR-046 — No machine learning: the ML duration predictor and its dependencies are removed
+
+- **Status:** Accepted (2026-10-23; supersedes [ADR-037](#adr-037--the-ml-duration-predictor-is-evidence-gated-and-kept-out-of-the-ui))
+- **Context:** The evidence-gated scikit-learn predictor (ADR-037) was reachable only through a CLI and was expected to stay disabled on personal-scale history, yet pandas, scikit-learn and joblib (with NumPy and SciPy) were desktop dependencies and most of the packaged size.
+- **Decision:** Remove the app/productivity ML modules (ml_*.py) and its predictor-comparison CLI, `ProductivityService.predict_duration_comparison` and its controller method, the ML artifact settings, and the pandas, scikit-learn and joblib requirements. Duration prediction is the median-based predictor (`app/productivity/prediction.py`) only.
+- **Rationale:** The owner does not plan to do machine learning with the data.
+- **Alternatives:** Keeping the gated experiment (rejected by the owner). Not otherwise recorded.
+- **Consequences:** A lighter desktop install and bundle; a model file left in the data folder by an earlier version is no longer read. Bringing ML back would mean restoring the modules and dependencies from git history.
+- **Relevant files:** `app/productivity/reporting.py`, `app/ui/productivity_controller.py`, `requirements-desktop.txt`, `requirements.lock`, `app/selftest.py`, `packaging/windows/check_bundle.py`, `packaging/windows/ScheduleMaxing.spec`.
+- **Evidence:** The owner's request in the 2026-10-23 session; `ci_check_notes.md` Pending entry "ML duration predictor removed".

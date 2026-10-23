@@ -29,7 +29,8 @@ updater, and the CI, release and deploy workflows.
 ### M1. Make the in-progress 1.2.0 debug branch releasable
 
 - **Priority:** High
-- **Status:** In progress. Pull request #21 merged the branch into `main` (including the build script's
+- **Status:** Complete (verified 2026-10-23): pull request #23 merged with all five CI jobs green, and
+  1.3.0 was released from `main` (`dfd53d6`, tag `v1.3.0`). Earlier: pull request #21 merged the branch into `main` (including the build script's
   Python 3.10 check); pull request #22 merged the remaining updater edits and the Ruff fix. `ruff check .`
   is clean on `664de0e` (verified 2026-10-20); the pull request's CI results were not checked here.
 - **Objective:** Commit a green change through a pull request so that CI, and then a release, can use it.
@@ -38,9 +39,9 @@ updater, and the CI, release and deploy workflows.
   `app/ui/ui_settings.py`, `packaging/windows/build_windows.ps1`, and their tests.
 - **Deliverables:**
   - [x] Fix Ruff F841 at `app/ui/update_view.py:130`: `release` is assigned but never used (`800996f`).
-  - [ ] Run `pytest -m dev` and `ruff check .`, then open a pull request (CI runs only on pull requests).
-    Pull request #22 is merged; confirm its five CI jobs passed.
-  - [ ] When releasing: bump `app/version.py` and tag `v<version>`.
+  - [x] Run `pytest -m dev` and `ruff check .`, then open a pull request (CI runs only on pull requests).
+    Pull request #23 passed `test`, `security-scan`, `desktop-only`, `direct-desktop` and `postgres`.
+  - [x] When releasing: bump `app/version.py` and tag `v<version>` (1.3.0, `v1.3.0`).
 - **Acceptance criteria:** All five CI jobs pass on the pull request; `ruff check .` is clean.
 - **Testing:** `pytest -m dev`, `ruff check .`, `tests/update/`, `tests/test_transport_security.py`,
   `tests/test_packaging_config.py`.
@@ -184,8 +185,7 @@ Items the repository names as future work or as "not yet" limitations, in priori
   - more detailed reasons for unscheduled tasks;
   - warnings for ignored missing dependencies (legacy pipeline);
   - drag-and-drop editing;
-  - opt-in use of predicted durations;
-  - showing ML predictions in the UI once the evidence gate passes.
+  - opt-in use of predicted durations.
 - **Complexity:** Varies.
 
 ### M10. Budgeting beyond the desktop
@@ -226,7 +226,7 @@ These come from this analysis. None of them has been approved.
 - **Status:** Python 3.10 is pinned everywhere (ADR-002). Its upstream security support is scheduled to end
   in October 2026 (PEP 619).
 - **Proposal:** Pick a newer version and change all workflows, `build_windows.ps1` and its test, and the
-  `.venv` in one change. Re-check PyInstaller, CustomTkinter and the scikit-learn wheels.
+  `.venv` in one change. Re-check PyInstaller and CustomTkinter.
 - **Risks:** Changes in bundling behavior; checks needed on a clean Windows machine.
 - **Complexity:** Medium.
 
@@ -267,8 +267,9 @@ These come from this analysis. None of them has been approved.
 ### R5. Tighten the desktop dependency bounds
 
 - **Priority:** Low
-- **Status:** `requirements-desktop.txt` has lower bounds only. `docs/desktop-web-boundaries.md` §8 records
-  that a fresh install resolved CustomTkinter 6.0.0 while the development environment has 5.2.2.
+- **Status:** Partially addressed: CustomTkinter is now capped below 6 (`b5668ff`); the other entries in
+  `requirements-desktop.txt` have lower bounds only. `docs/desktop-web-boundaries.md` §8 records that a fresh
+  install had resolved CustomTkinter 6.0.0 while the development environment has 5.2.2.
   `requirements.lock` exists for the security scan, but the build does not use it.
 - **Proposal:** Build the installer from the lock file, or add upper bounds, so released builds can be
   reproduced.

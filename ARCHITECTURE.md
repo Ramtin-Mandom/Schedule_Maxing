@@ -5,7 +5,7 @@ System-level view of Schedule Maxing. For file-level navigation and change impac
 reasons behind the structure see [DECISIONS.md](DECISIONS.md). Detailed contracts live in `docs/` and are
 linked where relevant rather than repeated.
 
-Verified against commit `f5d91aa` (app version 1.2.0) on 2026-10-22.
+Verified against commit `dfd53d6` (app version 1.3.0) plus the uncommitted ML removal on 2026-10-23.
 
 ## 1. What the system is
 
@@ -23,8 +23,7 @@ Three deployable parts, all Python 3.10, in one repository:
 | Backend API (FastAPI) | Render web service (manual or CI deployment) | `uvicorn --factory backend.app:create_app` (`backend/main.py` also exposes `app`) | PostgreSQL (SQLAlchemy 2 + Alembic) |
 | Optional local web profile | Loopback on the user's machine | `python -m app.web` | The same local SQLite as the desktop (never at the same time) |
 
-Also present: a CLI (`python -m app.main`), productivity CLIs (`app/productivity/report_cli.py`,
-`predictor_comparison_cli.py`), operator tools in `backend/` (`migrate`, `maintenance`, `inspect_db`,
+Also present: a CLI (`python -m app.main`), productivity CLIs (`app/productivity/report_cli.py`), operator tools in `backend/` (`migrate`, `maintenance`, `inspect_db`,
 `smoke_check`, `email_diagnostic`) and offline benchmarks (`benchmarks/`).
 
 Not in this repository: an Android client (mentioned in the README's author note only) and the browser web
@@ -38,7 +37,6 @@ UI (`docs/web-api.md` is the API contract it would be built against; `app/web` c
 | Desktop UI | CustomTkinter on Tk, plus `ttk.Treeview` | `requirements-desktop.txt` |
 | Domain models | Pydantic v2 | `app/models.py`, `app/planning/models.py`, `app/execution/models.py` |
 | Local storage | `sqlite3` (stdlib), hand-written ordered migrations | `app/execution/db.py` |
-| Analytics / ML | pandas, scikit-learn, joblib (ML is evidence-gated and not wired into the UI) | `app/productivity/` |
 | Credentials on device | `keyring` (OS credential store) | `app/sync/credentials.py` |
 | Client HTTP | Standard library only: `http.client` with one keep-alive connection (sync), `urllib` (updater) | `app/sync/transport.py`, `app/update/transport.py` |
 | Server | FastAPI, Starlette, Uvicorn | `requirements-backend.txt` |
@@ -119,7 +117,7 @@ so the same rules run on both sides.
 | Engine | Greedy Optimizer v1 (frozen legacy baseline) and the canonical minute-precise day engine; mode objectives | `app/optimizer.py`, `app/mode_objectives.py`, `app/planning/catch_up.py` |
 | Application | Persisted planning (CRUD, ranges, rescheduling, resets, CSV), the scheduling workflow, recurrence, freshness | `app/planning/application.py`, `workflow.py`, `service.py`, `allocation.py`, `series.py`, `provenance.py`, `csv_*.py` |
 | Execution | Lifecycle rules (shared with the server), execution persistence, fixed-block and direct completions | `app/execution/` |
-| Analytics | Statistics, tracker (awards, points), schedule cohort, day summaries, median predictor, gated ML | `app/productivity/` |
+| Analytics | Statistics, tracker (awards, points), schedule cohort, day summaries, median predictor | `app/productivity/` |
 | Budget | Balance, income/expense entries with recurrence, occurrence edits, range expansion and totals in integer minor units, history statistics and the 90-day forecast (`stats.py`), income ideas and the wishlist; never read by constraints, reward or engines (a project link is a reference only) | `app/budget/` (storage: `repository.py` local, `app/persistence/budget.py` direct) |
 | Sync client | Dirty tracking, outbox, shadows, conflicts, push/pull, credentials | `app/sync/` |
 | UI | Pages/views draw; controllers/models hold UI logic and call services | `app/ui/`, `app/app.py` |
@@ -148,13 +146,12 @@ so the same rules run on both sides.
   results handed back by a main-thread `after` poll, and results of a previous workspace or destroyed page
   dropped. Workers never touch Tk. `SyncService` runs its own daemon thread with interval and exponential
   backoff. `app/ui/tk_lifecycle.py` moves cyclic garbage collection onto the Tk thread while windows live.
-- **Start-up sequence.** `app.app` imports no machine-learning stack (scikit-learn, scipy, pandas and joblib
-  load only when a model is trained or loaded) and none of the non-Day page modules. The constructor opens
+- **Start-up sequence.** `app.app` imports none of the non-Day page modules. The constructor opens
   storage, builds the shell and the Day page only; every other page (Week, Month, Projects, Productivity,
   Budgeting, Settings, Account, How to Use, About) is a `DeferredPage` (`app/ui/pages.py`) built, with its
   module, the first time it is shown. The Day page reads its date in a worker; CustomTkinter shows the window
   when `mainloop()` starts. The OS credential store is found on first use or by a background prefetch 1.5 s
-  later (`LazyVault`), and the first background sync waits 3 s (ADR-041).
+  later (`LazyVault`; no prefetch when no backend is configured), and the first background sync waits 3 s (ADR-041).
 - **Activity and periodic work.** `app/ui/activity.py` (Tk-free) turns the root's focus/map events into
   focused / unfocused / minimized; `ACTIVITY_POLICIES` sets the status-bar poll (4 s / 15 s / paused), the GC
   timer's interval and `SyncService.set_activity` (sync interval 60 s / 300 s, no pending looks while
@@ -173,7 +170,8 @@ so the same rules run on both sides.
   but Day is destroyed instead (`DeferredPage.release`) and built again on its next show (ADR-045).
 - **Engine process.** A schedule generation runs in a worker thread, but its day-engine calls run in one
   separate spawned process (`app/planning/engine_process.py`, ADR-044), so their CPU never holds the GIL the
-  Tk thread needs; everything that touches the database stays in the thread.
+  Tk thread needs; everything that touches the database stays in the thread. `EngineProcess.shutdown` waits
+  for the process (and a call already running) to end, so closing the storage leaves nothing running.
 - **Error handling.** Startup failures show a "Database Unavailable" panel rather than a scheduler that
   cannot save. `app/desktop.py` installs log files and exception hooks (`app/logging_setup.py`, with secret
   scrubbing) because the packaged app has no console.
@@ -277,8 +275,7 @@ flowchart LR
 - `ProductivityService` (`app/productivity/reporting.py`) is the analytics boundary; the tracker
   (`tracker.py`) feeds the Productivity page's General / Specific / Project sections. Analytics compute from
   authoritative records every time; there is no stored counter.
-- The ML duration predictor is evidence-gated and only reachable through
-  `python -m app.productivity.predictor_comparison_cli`.
+- There is no machine learning: duration prediction is the median-based predictor only (ADR-046).
 
 ## 8. Accounts, authentication and synchronization
 
