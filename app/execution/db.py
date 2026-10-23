@@ -223,11 +223,38 @@ class LegacyAdoptionError(StorageError):
 
 
 class TransactionState:
-    """Per-connection lock plus SAVEPOINT nesting depth (see module docstring)."""
+    """
+    Per-connection lock plus SAVEPOINT nesting depth (see module docstring),
+    and `commits`: how many outermost transaction() blocks committed a change
+    -- local edits, sync applies, imports (a block that wrote no row, such as
+    a load that only reads inside a transaction, does not count). Commit
+    listeners are called after each such COMMIT, on the committing thread,
+    still holding the connection's lock: they must be quick and must not
+    touch Tk (SyncService only sets an event).
+    """
 
     def __init__(self) -> None:
         self.lock = threading.RLock()
         self.savepoint_depth = 0
+        self.commits = 0
+        self._listeners: list[Callable[[], None]] = []
+
+    def add_commit_listener(self, listener: Callable[[], None]) -> None:
+        self._listeners.append(listener)
+
+    def remove_commit_listener(self, listener: Callable[[], None]) -> None:
+        try:
+            self._listeners.remove(listener)
+        except ValueError:
+            pass
+
+    def _committed(self) -> None:
+        self.commits += 1
+        for listener in tuple(self._listeners):
+            try:
+                listener()
+            except Exception:  # noqa: BLE001 - a listener never undoes or fails a commit
+                logger.exception("A commit listener failed")
 
 
 class AppConnection(sqlite3.Connection):
@@ -241,6 +268,24 @@ class AppConnection(sqlite3.Connection):
 def transaction_state_for(connection: sqlite3.Connection) -> TransactionState | None:
     """The connection's shared TransactionState, or None for a plain sqlite3.Connection."""
     return getattr(connection, "transaction_state", None)
+
+
+def data_version(connection: sqlite3.Connection) -> int | None:
+    """
+    A number that changes whenever this connection may have changed stored
+    data: committed transaction() blocks plus every row changed by any
+    statement (sqlite3's total_changes, which also counts writes made outside
+    transaction()). Equal numbers mean nothing was written in between, so a
+    page may keep what it last read; a rolled-back write only causes one
+    needless re-read. Cheap (no query, no lock). None without an AppConnection.
+    """
+    state = transaction_state_for(connection)
+    if state is None:
+        return None
+    try:
+        return state.commits + connection.total_changes
+    except sqlite3.ProgrammingError:  # closed
+        return None
 
 
 def _resolve_state(connection: sqlite3.Connection, state: TransactionState | None) -> TransactionState:
@@ -273,6 +318,7 @@ def transaction(connection: sqlite3.Connection, state: TransactionState | None =
     state = _resolve_state(connection, state)
     with state.lock:
         if not connection.in_transaction:
+            changes = connection.total_changes
             connection.execute("BEGIN IMMEDIATE")
             try:
                 yield connection
@@ -281,6 +327,8 @@ def transaction(connection: sqlite3.Connection, state: TransactionState | None =
                 if connection.in_transaction:
                     connection.execute("ROLLBACK")
                 raise
+            if connection.total_changes != changes:  # a read-only unit of work (e.g. a load) is not a change
+                state._committed()
             return
 
         state.savepoint_depth += 1

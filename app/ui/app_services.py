@@ -62,6 +62,7 @@ from app.execution.db import (
     IntegrityCheckError,
     MigrationError,
     NewerSchemaError,
+    data_version,
     get_connection,
     resolve_db_path,
     transaction_state_for,
@@ -73,7 +74,9 @@ from app.execution.service import ExecutionService
 from app.budget.repository import BudgetRepository
 from app.budget.service import BudgetService
 from app.ui.budget_controller import BudgetController
+from app.planning import engine_process as engine_runner
 from app.planning.application import PlanningService
+from app.planning.engine_process import EngineProcess
 from app.planning.repository import PlanningRepository
 from app.planning.scope import OwnerScope
 from app.planning.time import validate_timezone
@@ -122,6 +125,8 @@ class AppServices:
     #: "local" (this SQLite database); app/ui/direct_services.DirectAppServices is "postgres".
     storage_mode: str = field(default="local", init=False)
     closed: bool = field(default=False, init=False)
+    #: The separate process running the day engine (open_app_services(engine_process=True)), else None.
+    engine: EngineProcess | None = field(default=None, init=False, repr=False)
     _switch_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     # ------------------------------------------------------------------
@@ -176,6 +181,15 @@ class AppServices:
             self.workspace = Workspace(scope=scope, epoch=self.workspace.epoch + 1)
             return self.workspace
 
+    def data_version(self) -> tuple[int, int] | None:
+        """
+        Changes whenever stored data may have changed (any commit or write on the shared connection: local
+        edits, a sync's applies, imports) or the workspace switched. Cheap: no query, no lock
+        (app/ui/page_freshness.py). None once closed.
+        """
+        version = None if self.closed else data_version(self.connection)
+        return None if version is None else (version, self.workspace.epoch)
+
     def workspace_guard(self) -> Callable[[], bool]:
         """For run_in_background(still_current=...): true while the workspace is the one current now."""
         epoch = self.workspace.epoch
@@ -204,6 +218,9 @@ class AppServices:
         if not finished:
             logger.warning("Waiting to close the database: %d background task(s) are still running.", self.registry.active)
             return False  # a waiting network worker may still need SQLite after it receives its response
+        if self.engine is not None:  # every generation has finished: no worker waits for the engine process
+            self.engine.shutdown()
+            engine_runner.install(None)
 
         state = transaction_state_for(self.connection)
         acquired = state.lock.acquire(timeout=timeout) if state is not None else True
@@ -285,9 +302,15 @@ def open_app_services(
     backend_url: str | None = None,
     background_sync: bool = True,
     transport_factory: Callable[[str], SyncTransport] = HttpTransport,
+    sync_start_delay: float = 0.0,
+    engine_process: bool = False,
 ) -> AppServices:
     """
     Open the application database and build the shared controllers.
+    sync_start_delay: seconds before the background sync's first run (the
+    desktop lets its window appear first; Sync now does not wait).
+    engine_process: run the day engine of schedule generations in a separate
+    process (app/planning/engine_process.py; stopped by close()).
 
     Raises (after closing anything it opened) if the database is in use by
     another Schedule Maxing process (DatabaseInUseError), cannot be
@@ -308,7 +331,8 @@ def open_app_services(
         # SCHEDULE_MAXING_BACKEND_URL names another or turns it off), else one saved by an older version.
         backend_url = backend_url or settings.BACKEND_URL or SyncStore(connection).setting(BACKEND_URL_SETTING)
         # "Keep me signed in" lives in the system credential store; never with an injected test transport.
-        vault = credentials.system_vault() if transport_factory is HttpTransport else None
+        # Found on first use (or by AppServices.prefetch_credentials), not while the window is being built.
+        vault = credentials.LazyVault() if transport_factory is HttpTransport else None
         sync_service = SyncService(connection, _sync_transport(backend_url, transport_factory), vault=vault)
         scope = sync_service.workspace_scope()
         planning_controller, execution_controller, productivity_controller = _build_controllers(
@@ -339,8 +363,11 @@ def open_app_services(
         instance_lock=lock,
     )
     registry.result_guard = services.workspace_guard  # background results never cross a workspace switch
+    if engine_process:
+        services.engine = EngineProcess()
+        engine_runner.install(services.engine)
     if background_sync:
-        services.sync_service.start()  # a no-op without a configured backend
+        services.sync_service.start(initial_delay=sync_start_delay)  # a no-op without a configured backend
     return services
 
 

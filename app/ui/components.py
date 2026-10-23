@@ -34,6 +34,7 @@ import customtkinter as ctk
 from app.ui.paint_widgets import AppScrollableFrame, AppOptionMenu
 
 from app.ui import theme
+from app.ui.light_widgets import LightFrame, LightLabel
 
 # -----------------------------------------------------------------------------
 # Fonts and focus
@@ -41,8 +42,38 @@ from app.ui import theme
 
 
 def font(size: int = theme.SIZE_BODY, weight: str = "normal") -> ctk.CTkFont:
-    """A font that follows CustomTkinter's widget scaling (the interface scale)."""
-    return ctk.CTkFont(size=size, weight=weight)
+    """
+    A font that follows CustomTkinter's widget scaling (the interface scale), shared per (size, weight):
+    creating a Tk named font costs about a millisecond, and pages ask for the same few hundreds of times.
+    Widgets only read it (each draws a scaled copy); a caller that would change one needs its own CTkFont.
+    The cache belongs to the Tk interpreter the fonts are made in (tkinter's default root, as for any
+    CTkFont), so it ends with that window.
+    """
+    root = tk._default_root
+    if root is None:
+        return ctk.CTkFont(size=size, weight=weight)
+    cache = root.__dict__.setdefault("_app_font_cache", {})
+    shared = cache.get((size, weight))
+    if shared is None:
+        shared = cache[(size, weight)] = _SharedFont(size=size, weight=weight)
+    return shared
+
+
+class _SharedFont(ctk.CTkFont):
+    """
+    A CTkFont used by many widgets: each registers a size callback and removes it when destroyed, so
+    they are kept in a dict (insertion-ordered, O(1) removal) instead of CTk's list (O(n) per removal).
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._size_configure_callback_list = {}  # iterated by CTkFont.configure: the callbacks, in order
+
+    def add_size_configure_callback(self, callback: Callable) -> None:
+        self._size_configure_callback_list[callback] = None
+
+    def remove_size_configure_callback(self, callback: Callable) -> None:
+        self._size_configure_callback_list.pop(callback, None)
 
 
 def focus_target(widget) -> tk.Misc:
@@ -140,20 +171,18 @@ class Card(ctk.CTkFrame):
         super().__init__(parent, **kwargs)
 
 
-class SectionTitle(ctk.CTkFrame):
-    """A heading with an optional one-line explanation."""
+class SectionTitle(LightFrame):
+    """A heading with an optional one-line explanation (plain Tk text: three native windows, not eight)."""
 
     def __init__(self, parent, title: str, subtitle: str = "", *, wraplength: int = 0) -> None:
-        super().__init__(parent, fg_color="transparent")
+        super().__init__(parent)
         self.columnconfigure(0, weight=1)
-        self.title_label = ctk.CTkLabel(self, text=title, font=font(theme.SIZE_HEADING, "bold"),
-                                        text_color=theme.TEXT_PRIMARY, anchor="w")
+        self.title_label = LightLabel(self, title, size=theme.SIZE_HEADING, weight="bold")
         self.title_label.grid(row=0, column=0, sticky="ew")
         self.subtitle_label = None
         if subtitle:
-            self.subtitle_label = ctk.CTkLabel(self, text=subtitle, font=font(theme.SIZE_SMALL),
-                                               text_color=theme.TEXT_MUTED, anchor="w", justify="left",
-                                               wraplength=wraplength)
+            self.subtitle_label = LightLabel(self, subtitle, size=theme.SIZE_SMALL, text_color=theme.TEXT_MUTED,
+                                             wraplength=wraplength)
             self.subtitle_label.grid(row=1, column=0, sticky="ew", pady=(2, 0))
 
 
@@ -164,8 +193,7 @@ class Notice(ctk.CTkFrame):
         super().__init__(parent, corner_radius=theme.RADIUS_CONTROL, border_width=1)
         self.columnconfigure(0, weight=1)
         self.tone: str | None = None
-        self.label = ctk.CTkLabel(self, text="", anchor="w", justify="left", wraplength=wraplength,
-                                  font=font(theme.SIZE_SMALL))
+        self.label = LightLabel(self, "", size=theme.SIZE_SMALL, wraplength=wraplength)
         self.label.grid(row=0, column=0, sticky="ew", padx=(12, 6), pady=8)
         self.dismiss_button = None
         if dismissible:
@@ -182,7 +210,8 @@ class Notice(ctk.CTkFrame):
         tone_style = theme.TONES[tone]
         self.tone = tone
         self.configure(fg_color=tone_style.background, border_color=tone_style.border)
-        self.label.configure(text=f"{tone_style.label}: {message}", text_color=tone_style.foreground)
+        self.label.configure(text=f"{tone_style.label}: {message}", text_color=tone_style.foreground,
+                             fg_color=tone_style.background)
         if self._removed:  # grid_remove() remembered where the caller placed it
             self._removed = False
             self.grid()
@@ -235,16 +264,15 @@ class StateView(ctk.CTkFrame):
 # -----------------------------------------------------------------------------
 
 
-class LabeledEntry(ctk.CTkFrame):
-    """A visible label, its entry, an optional hint, and an inline error message."""
+class LabeledEntry(LightFrame):
+    """A visible label, its entry, an optional hint, and an inline error message (plain Tk text around the entry)."""
 
     def __init__(self, parent, label: str, variable: tk.StringVar | None = None, *, placeholder: str = "",
                  hint: str = "", width: int = 0, wraplength: int = 280) -> None:
-        super().__init__(parent, fg_color="transparent")
+        super().__init__(parent)
         self.columnconfigure(0, weight=1)
         self.variable = variable or tk.StringVar()
-        self.label = ctk.CTkLabel(self, text=label, text_color=theme.TEXT_MUTED, font=font(theme.SIZE_SMALL, "bold"),
-                                  anchor="w")
+        self.label = LightLabel(self, label, size=theme.SIZE_SMALL, weight="bold", text_color=theme.TEXT_MUTED)
         self.label.grid(row=0, column=0, sticky="ew", pady=(0, 4))
         options = dict(textvariable=self.variable, placeholder_text=placeholder or None, height=theme.CONTROL_HEIGHT,
                        corner_radius=theme.RADIUS_CONTROL, border_color=theme.CARD_BORDER, fg_color=theme.INPUT_BG,
@@ -259,11 +287,11 @@ class LabeledEntry(ctk.CTkFrame):
         self.label.bind("<Button-1>", lambda _e: self.entry.focus_set(), add="+")
         self.hint_label = None
         if hint:
-            self.hint_label = ctk.CTkLabel(self, text=hint, text_color=theme.TEXT_MUTED, font=font(theme.SIZE_CAPTION),
-                                           anchor="w", justify="left", wraplength=wraplength)
+            self.hint_label = LightLabel(self, hint, size=theme.SIZE_CAPTION, text_color=theme.TEXT_MUTED,
+                                         wraplength=wraplength)
             self.hint_label.grid(row=2, column=0, sticky="ew")
-        self.error_label = ctk.CTkLabel(self, text="", text_color=theme.TONES["error"].foreground,
-                                        font=font(theme.SIZE_CAPTION), anchor="w", justify="left", wraplength=wraplength)
+        self.error_label = LightLabel(self, "", size=theme.SIZE_CAPTION, text_color=theme.TONES["error"].foreground,
+                                      wraplength=wraplength)
         self.error = ""
 
     def _ring(self, focused: bool) -> None:
@@ -286,18 +314,17 @@ class LabeledEntry(ctk.CTkFrame):
             self.error_label.grid_remove()
 
 
-class LabeledSelect(ctk.CTkFrame):
-    """A visible label and a keyboard-operable drop-down of fixed choices."""
+class LabeledSelect(LightFrame):
+    """A visible label and a keyboard-operable drop-down of fixed choices (plain Tk text above the menu)."""
 
     def __init__(self, parent, label: str, values: Sequence[str], variable: tk.StringVar | None = None, *,
                  command: Callable[[str], None] | None = None, width: int = 0) -> None:
-        super().__init__(parent, fg_color="transparent")
+        super().__init__(parent)
         self.columnconfigure(0, weight=1)
         self.values = list(values)
         self.variable = variable or tk.StringVar(value=self.values[0] if self.values else "")
         self._command = command
-        self.label = ctk.CTkLabel(self, text=label, text_color=theme.TEXT_MUTED, font=font(theme.SIZE_SMALL, "bold"),
-                                  anchor="w")
+        self.label = LightLabel(self, label, size=theme.SIZE_SMALL, weight="bold", text_color=theme.TEXT_MUTED)
         self.label.grid(row=0, column=0, sticky="ew", pady=(0, 4))
         options = dict(variable=self.variable, values=self.values, command=self._changed, height=theme.CONTROL_HEIGHT,
                        corner_radius=theme.RADIUS_CONTROL, fg_color=theme.INPUT_BG, button_color=theme.SECONDARY_BG,

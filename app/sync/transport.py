@@ -3,8 +3,9 @@ app/sync/transport.py
 
 How the sync client talks to the backend. SyncEngine only uses the small
 SyncTransport interface, so tests inject in-process or failing transports.
-HttpTransport uses the standard library (urllib) with request timeouts: the
-desktop app gains no network dependency.
+HttpTransport uses the standard library (http.client) with request timeouts:
+the desktop app gains no network dependency. It keeps one HTTP(S) keep-alive
+connection, so a sync's requests share one TLS handshake (see HttpTransport).
 
 Failures are classified, because they are handled differently:
     TransportError       network trouble, timeouts, HTTP 5xx: retry later (backoff)
@@ -27,20 +28,22 @@ whatever its source -- the built-in one, SCHEDULE_MAXING_BACKEND_URL, a saved
 setting or the Account page): https:// to any host, http:// only to this
 computer (localhost or a loopback IP address, for a development server). An
 address with a user name or password, a query, a fragment or anything
-malformed is refused. TLS certificates are verified with the system's trust
-store (never disabled), and no redirect is ever followed: urllib would resend
-the Authorization header -- and re-issue the request -- to wherever a
-redirect points.
+malformed is refused. TLS certificates and host names are verified with the
+system's trust store (never disabled), and no redirect is ever followed: a
+3xx answer is a ProtocolError, so the Authorization header is never resent
+to wherever a redirect points.
 """
 
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import json
+import select
 import socket
 import ssl
-import urllib.error
-import urllib.request
+import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -323,11 +326,29 @@ def validate_backend_url(url: str) -> str:
     return url.rstrip("/")
 
 
-class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
-    """No redirect is followed: the 3xx answer surfaces as an HTTPError (see _send)."""
+#: Methods that may be sent once more when a reused keep-alive connection turns out to be closed: they have
+#: no side effect, or the same one twice. POST and PATCH are never resent.
+IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
+#: A kept connection idle longer than this is replaced before use. Servers close idle keep-alive connections
+#: (uvicorn after 5 s), and a request written into one that is just closing fails.
+KEEPALIVE_IDLE_S = 4.0
+#: What writing to or reading from a keep-alive connection the server has already closed raises.
+_DROPPED = (http.client.RemoteDisconnected, BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
+
+class _TrustStoreUnavailable(Exception):
+    """The system's certificate store could not be loaded (no TLS context): nothing was sent."""
+
+
+def _closed_by_server(connection: http.client.HTTPConnection) -> bool:
+    """An idle kept socket that is readable has been closed by the server (or holds data nobody asked for)."""
+    sock = connection.sock
+    if sock is None:
+        return False
+    try:
+        return bool(select.select([sock], [], [], 0)[0])
+    except (OSError, ValueError):
+        return True
 
 
 class HttpTransport:
@@ -336,17 +357,59 @@ class HttpTransport:
     of a minute to start answering (a Render free web service does). So the
     first request, and the first after a failure, is preceded by GET /health
     with this longer timeout; requests themselves keep the short `timeout`.
-    Only that side-effect-free probe waits longer: no request is ever resent.
+    Only that side-effect-free probe waits longer: no request is ever resent,
+    except the one case below.
+
+    Connections: one keep-alive HTTP(S) connection per transport, made on the
+    first request (TLS is set up then, not while the local database opens:
+    a machine with a broken certificate store still works offline) and kept
+    while requests follow each other -- a sync's capability, push and pull
+    requests share one TLS handshake. It is used by one thread at a time (a
+    lock); a request made while another thread uses it gets a connection of
+    its own for that request. A kept connection that the server closed, or
+    that was idle for KEEPALIVE_IDLE_S, is replaced before the request is
+    written; if a reused one still turns out to be closed, only an idempotent
+    request (IDEMPOTENT_METHODS) is sent again, once, on a new connection --
+    a POST is reported as a TransportError and retried by the sync backoff.
     """
 
     def __init__(self, base_url: str, *, timeout: float = 10.0, wake_timeout: float = 75.0) -> None:
         self.base_url = validate_backend_url(base_url)
-        # Set up TLS on the first network request, not while the local database is opening.
-        # A machine with a broken certificate store must still be able to work offline.
-        self._opener = None
+        parts = urlsplit(self.base_url)
+        self._https = parts.scheme == "https"
+        self._host, self._port = parts.hostname, parts.port
+        self._prefix = parts.path  # e.g. "/api" of https://example.com/api
+        self._context: ssl.SSLContext | None = None
+        self._connection: http.client.HTTPConnection | None = None
+        self._last_used = 0.0
+        self._lock = threading.Lock()
+        #: Connections made (a kept one counts once): how well keep-alive works, for tests and diagnostics.
+        self.connections_opened = 0
         self._timeout = timeout
         self._wake_timeout = max(timeout, wake_timeout)
         self._awake = False
+
+    def close(self) -> None:
+        """Close the kept connection (the next request opens a new one)."""
+        with self._lock:
+            self._drop()
+
+    def _drop(self) -> None:
+        connection, self._connection = self._connection, None
+        if connection is not None:
+            connection.close()
+
+    def _new_connection(self, timeout: float) -> http.client.HTTPConnection:
+        self.connections_opened += 1
+        if not self._https:
+            return http.client.HTTPConnection(self._host, self._port, timeout=timeout)
+        if self._context is None:
+            try:
+                # Certificate and host name verification stay on (the default context checks both).
+                self._context = ssl.create_default_context()
+            except OSError as error:  # e.g. a broken Windows certificate store
+                raise _TrustStoreUnavailable() from error
+        return http.client.HTTPSConnection(self._host, self._port, timeout=timeout, context=self._context)
 
     def _request(self, method: str, path: str, token: str | None, body: dict | None) -> dict:
         if not self._awake:
@@ -362,34 +425,82 @@ class HttpTransport:
 
     def _send(self, method: str, path: str, token: str | None, body: dict | None, timeout: float) -> dict:
         data = json.dumps(body).encode("utf-8") if body is not None else None
-        request = urllib.request.Request(self.base_url + path, data=data, method=method)
-        request.add_header("Accept", "application/json")
+        headers = {"Accept": "application/json"}
         if data is not None:
-            request.add_header("Content-Type", "application/json")
+            headers["Content-Type"] = "application/json"
         if token is not None:
-            request.add_header("Authorization", f"Bearer {token}")
+            headers["Authorization"] = f"Bearer {token}"
         try:
-            if self._opener is None:
-                # Certificate and host name verification stay on; redirects are refused.
-                self._opener = urllib.request.build_opener(
-                    _RefuseRedirects, urllib.request.HTTPSHandler(context=ssl.create_default_context()))
-            with self._opener.open(request, timeout=timeout) as response:
-                return json.loads(response.read().decode("utf-8") or "{}")
-        except urllib.error.HTTPError as error:
-            if 300 <= error.code < 400:
-                raise ProtocolError("The backend answered with a redirect, which is never followed. Check the "
-                                    "backend address.", status=error.code, code="redirect_refused") from None
+            if self._lock.acquire(blocking=False):
+                try:
+                    status, raw = self._exchange_kept(method, self._prefix + path, data, headers, timeout)
+                finally:
+                    self._lock.release()
+            else:  # another thread is using the kept connection: this request gets one of its own
+                connection = self._new_connection(timeout)
+                try:
+                    status, raw = self._exchange(connection, method, self._prefix + path, data, headers)
+                finally:
+                    connection.close()
+        except _TrustStoreUnavailable:
+            raise TransportError("Could not set up a secure connection to the backend on this computer.") from None
+        except (OSError, http.client.HTTPException) as error:  # DNS, refused, TLS, timeouts, dropped connections
+            raise TransportError(f"Could not reach the backend: {_describe(error, timeout)}.") from None
+        if 300 <= status < 400:
+            raise ProtocolError("The backend answered with a redirect, which is never followed. Check the "
+                                "backend address.", status=status, code="redirect_refused")
+        if not 200 <= status < 300:
             try:
-                payload = json.loads(error.read().decode("utf-8") or "{}")
+                payload = json.loads(raw.decode("utf-8") or "{}")
             except (ValueError, UnicodeDecodeError):
                 payload = None
-            raise _classify(error.code, payload) from None
-        except (urllib.error.URLError, socket.timeout, TimeoutError, ConnectionError) as error:
-            raise TransportError(f"Could not reach the backend: {_describe(error, timeout)}.") from None
-        except OSError:
-            raise TransportError("Could not set up a secure connection to the backend on this computer.") from None
-        except ValueError:
+            raise _classify(status, payload)
+        try:
+            return json.loads(raw.decode("utf-8") or "{}")
+        except (ValueError, UnicodeDecodeError):
             raise TransportError("The backend returned an unreadable response.") from None
+
+    def _exchange_kept(self, method: str, target: str, data: bytes | None, headers: dict,
+                       timeout: float) -> tuple[int, bytes]:
+        """One request on the kept connection (the caller holds the lock); see the class docstring."""
+        connection = self._connection
+        if connection is not None and (connection.sock is None  # the server said Connection: close
+                                       or time.monotonic() - self._last_used > KEEPALIVE_IDLE_S
+                                       or _closed_by_server(connection)):
+            self._drop()
+            connection = None
+        reused = connection is not None
+        if connection is None:
+            connection = self._connection = self._new_connection(timeout)
+        else:
+            connection.timeout = timeout
+            if connection.sock is not None:
+                connection.sock.settimeout(timeout)
+        try:
+            answer = self._exchange(connection, method, target, data, headers)
+        except _DROPPED:
+            self._drop()
+            if not (reused and method in IDEMPOTENT_METHODS):
+                raise
+            connection = self._connection = self._new_connection(timeout)  # once, on a new connection
+            try:
+                answer = self._exchange(connection, method, target, data, headers)
+            except BaseException:
+                self._drop()
+                raise
+        except BaseException:
+            self._drop()  # a half-read answer must never be read by the next request
+            raise
+        self._last_used = time.monotonic()
+        return answer
+
+    @staticmethod
+    def _exchange(connection: http.client.HTTPConnection, method: str, target: str, data: bytes | None,
+                  headers: dict) -> tuple[int, bytes]:
+        connection.request(method, target, body=data, headers=headers)
+        response = connection.getresponse()
+        raw = response.read()  # all of it: the connection is then ready for the next request (or closed)
+        return response.status, raw
 
     def login(self, email: str, password: str) -> LoginResult:
         return login_via(self._request, email, password)

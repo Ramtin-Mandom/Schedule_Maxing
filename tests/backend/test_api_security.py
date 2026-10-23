@@ -14,6 +14,7 @@ import uuid
 import jwt
 import pytest
 from fastapi.testclient import TestClient
+from jwt.warnings import InsecureKeyLengthWarning
 from sqlalchemy import func, select
 
 from backend import models
@@ -173,9 +174,11 @@ def test_access_tokens_are_validated_for_key_algorithm_issuer_audience_expiry_an
 
     assert status(issue_access_token(user_id, settings, clock()).token) == 200  # the control
     sub = str(user_id)
+    with pytest.warns(InsecureKeyLengthWarning):  # the real key, deliberately with an algorithm it is too short for
+        another_algorithm = forged(settings, clock, sub=sub, algorithm="HS512")
     bad = {
         "another key": forged(settings, clock, sub=sub, key="k" * 40),
-        "another algorithm": forged(settings, clock, sub=sub, algorithm="HS512"),
+        "another algorithm": another_algorithm,
         "another issuer": forged(settings, clock, sub=sub, iss="someone-else"),
         "another audience": forged(settings, clock, sub=sub, aud="another-api"),
         "no audience": forged(settings, clock, sub=sub, aud=None),

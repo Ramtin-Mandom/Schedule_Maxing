@@ -24,8 +24,8 @@ import customtkinter as ctk
 from app.budget.models import BudgetKind
 from app.ui import theme
 from app.ui.budget_controller import BudgetDayView, DayItem
-from app.ui.budget_page import EXPENSE_COLOR, INCOME_COLOR
 from app.ui.components import LabeledEntry, ModalDialog, font
+from app.ui.theme import EXPENSE_COLOR, INCOME_COLOR
 from app.ui.paint_widgets import AppScrollableFrame
 
 #: A transaction card is this narrow (logical px); its name is cut to fit.

@@ -24,7 +24,8 @@ import customtkinter as ctk
 
 from app.execution.lifecycle import TaskOutcome
 from app.ui import theme
-from app.ui.components import AppButton, Card, Notice, SectionTitle, Tooltip, font, focus_target
+from app.ui.components import Card, Notice, SectionTitle, Tooltip, font, focus_target
+from app.ui.light_widgets import LightButton, LightFrame, LightLabel
 from app.ui.layout import Coalescer
 from app.ui.shell_state import LayoutMode
 from app.ui.task_status import COLUMN_TITLES, COLUMNS, StatusBoard, StatusCard
@@ -283,9 +284,9 @@ class TaskStatusBoard(Card):
             if control is None:
                 continue
             text, target, tip = control
-            button = AppButton(frame, text, lambda target=target: self._on_move(widgets["card"], target), variant="ghost",
-                               width=34, height=30, font=font(theme.SIZE_HEADING, "bold"),
-                               style=dict(text_color=style.text, border_color=style.text))
+            # Light widgets: a card is 7 native windows instead of 16 (app/ui/light_widgets.py).
+            button = LightButton(frame, text, lambda target=target: self._on_move(widgets["card"], target),
+                                 variant="ghost", size=theme.SIZE_HEADING, padx=8, pady=2, text_color=style.text)
             button.grid(row=0, column=column, padx=6, pady=6, sticky="ns")
             Tooltip(button, f"{tip}: {card.name}")
             widgets["left" if column == 0 else "right"] = button
@@ -293,15 +294,13 @@ class TaskStatusBoard(Card):
                 focus_target(button).bind(f"<{key}>", lambda event, direction=direction,
                                           side="left" if column == 0 else "right":
                                           self._focus_card(widgets["card"], direction, side), add="+")
-        text = ctk.CTkFrame(frame, fg_color="transparent")
+        text = LightFrame(frame)
         text.grid(row=0, column=1, sticky="ew", padx=(0 if left else 10, 0 if right else 10), pady=6)
         text.columnconfigure(0, weight=1)
-        name = ctk.CTkLabel(text, text=card.name, font=font(theme.SIZE_BODY, "bold"), text_color=style.text, anchor="w",
-                          justify="left", wraplength=wrap)
+        name = LightLabel(text, card.name, weight="bold", text_color=style.text, wraplength=wrap)
         name.grid(row=0, column=0, sticky="ew")
         note = f" · {card.status_note}" if card.status_note else ""
-        detail = ctk.CTkLabel(text, text=card.detail + note, font=font(theme.SIZE_CAPTION), text_color=style.text, anchor="w",
-                            justify="left", wraplength=wrap)
+        detail = LightLabel(text, card.detail + note, size=theme.SIZE_CAPTION, text_color=style.text, wraplength=wrap)
         detail.grid(row=1, column=0, sticky="ew")
         widgets["labels"] = [name, detail]
         return widgets

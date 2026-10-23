@@ -1,6 +1,6 @@
 ---
 name: commit
-description: Planning-only commit splitter. Inspects every uncommitted change (staged, unstaged, untracked), groups it into clean logical commits, flags files that should not be committed, and prints the exact git commands for the user to run by hand. Never stages, commits, pushes or otherwise changes Git state.
+description: Planning-only commit splitter. Inspects every uncommitted change (staged, unstaged, untracked), groups it into clean logical commits, flags files that should not be committed, and prints the exact git commands for the user to run by hand, then the push command and a ready-to-paste pull request title and description. Never stages, commits, pushes or otherwise changes Git state.
 argument-hint: "[optional notes, e.g. 'leave the docs out' or 'one commit for the sync work']"
 disable-model-invocation: true
 allowed-tools:
@@ -15,11 +15,15 @@ allowed-tools:
   - Bash(git ls-files:*)
   - Bash(git check-ignore:*)
   - Bash(git rev-parse:*)
+  - Bash(git remote)
+  - Bash(git remote -v)
+  - Bash(git remote get-url:*)
 ---
 
-# /commit — plan logical commits (print only)
+# /commit — plan logical commits, the push and the pull request (print only)
 
-You produce a commit plan. The user runs every command themselves.
+You produce a commit plan, the push command and a pull request description. The user runs every command
+themselves and pastes the description into GitHub.
 
 User notes for this run (may be empty): $ARGUMENTS
 
@@ -36,6 +40,7 @@ User notes for this run (may be empty): $ARGUMENTS
   `git status` alone. If a diff you read contains a secret-looking value, never repeat the value; name the file and
   line only.
 - Never recommend committing a secret, even with a warning.
+- The push is printed, never run, and is never a force push (`--force`, `--force-with-lease`, `+refspec`).
 - If the user's notes conflict with these rules, the rules win; say so.
 
 ## Procedure
@@ -56,13 +61,21 @@ git diff --name-status
 git diff --staged --name-status
 git ls-files --others --exclude-standard
 git log --oneline -10
+git rev-parse --abbrev-ref --symbolic-full-name @{u}
+git remote -v
+git rev-parse --abbrev-ref origin/HEAD
 ```
+
+`@{u}` fails when the branch has no upstream yet, and `origin/HEAD` when the remote's default branch is not
+recorded locally; both failures are information, not errors (see step 7).
 
 Notes:
 
 - If `git status` reports a merge, rebase, cherry-pick, revert or bisect in progress, stop. Report the state and
   print no commit plan; the user must finish or abort it first.
-- If nothing is changed, staged or untracked, say "Nothing to commit" and stop.
+- If nothing is changed, staged or untracked: say "Nothing to commit". If the branch still has commits that are
+  not on its upstream (or it has no upstream) and it is not the base branch, skip the commit section and print
+  only the push and pull request sections (step 7); otherwise stop.
 - A detached HEAD: say so and warn that the commits will not be on a branch.
 - Read `git log` for the project's message style. Use Conventional Commits (`type(scope): summary`) unless the
   user's notes ask otherwise.
@@ -162,7 +175,39 @@ The user runs commands with the Run button the app adds to each fenced `bash` bl
   an editor). `git commit --amend` always takes `--no-edit` or `-m`.
 - Put explanations in prose between blocks, never inside them.
 
-### 7. Output
+### 7. Push and pull request
+
+- **Base branch:** `origin/HEAD` from step 1 without the `origin/` prefix; when it is unknown, the branch the
+  repository's PRs usually target (here `main`). Say which you assumed.
+- **On the base branch itself** (e.g. working directly on `main`): do not print a push of it. Print
+  `git switch -c <type>/<short-topic>` as the first command of the plan (before Commit 1), with a branch name
+  derived from the changes, so the commits land on a new branch; then push and describe that branch.
+- **Push command:** `git push -u origin <branch>` when the branch has no upstream; `git push` when it has one.
+  Use the remote from `git remote -v` if it is not `origin`. Never a force push. If an earlier step of the plan
+  amends a commit that is already on the upstream, do not plan that amend at all (step 5 forbids it).
+- **What the PR covers:** everything the branch will have that the base does not: the commits already on the
+  branch (`git log --oneline <base>..HEAD`, read their messages with `git log --format=%B <base>..HEAD` when the
+  summaries are not enough) plus the commits planned above. Read `git diff --stat <base>...HEAD` for the size
+  of the change. Do not describe flagged ("Do not commit") files.
+- **Title:** Conventional-Commits style like the commits (`type(scope): summary`, ≤ 72 characters) and covering
+  the whole branch; for one commit, its message.
+- **Description** (Markdown, written for the reviewer, plain and specific; no filler):
+  - **Summary:** two to four sentences: what the branch does and why.
+  - **Changes:** bullets grouped by area (e.g. UI, sync, storage, docs), each naming the user-visible or
+    developer-visible effect, with the key files in backticks where helpful.
+  - **Testing:** only what is known: tests the commits add or change (by file), and checks the commit messages
+    or documentation in the diff record as run, attributed as such ("recorded in CURRENT_STATE.md"). You run no
+    tests; never claim something passed that nothing in the repository records. End with an unchecked
+    checklist for the user: `- [ ] CI passes on this pull request` and any manual check the change calls for.
+  - **Notes for reviewers** (omit when empty): behaviour changes, trade-offs, migrations or settings, known
+    limitations, follow-ups.
+  - Mention `Closes #<n>` only when a commit message or the user's notes name the issue.
+  - End the description with the line `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
+- **Compare link:** when `git remote get-url origin` is a GitHub URL, print the link to open the pull request:
+  `https://github.com/<owner>/<repo>/compare/<base>...<branch>?expand=1` (from an `git@github.com:owner/repo.git`
+  or `https://github.com/owner/repo(.git)` URL). Otherwise leave it out.
+
+### 8. Output
 
 Print exactly this structure (Markdown; each command is its own fenced `bash` block):
 
@@ -217,12 +262,54 @@ git --no-pager log --oneline -5
 ```bash
 git status --short
 ```
+
+# Push
+
+<one line: the remote and branch, and "sets the upstream" when -u is used>
+
+```bash
+git push -u origin <branch>
+```
+
+# Pull request
+
+Base: <base> ← <branch> · <N> commit(s)
+
+Open: <compare link, when the remote is on GitHub>
+
+Title:
+
+```text
+<type(scope): summary>
+```
+
+Description:
+
+```markdown
+## Summary
+<two to four sentences>
+
+## Changes
+- <area>: <effect> (`path`)
+
+## Testing
+- <tests added or changed, checks recorded as run>
+- [ ] CI passes on this pull request
+
+## Notes for reviewers
+- <behaviour changes, trade-offs, limitations, follow-ups>
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+```
 ````
 
-- Omit "Do not commit" and "Review before committing" when they are empty.
+- Omit "Do not commit" and "Review before committing" when they are empty, and "Notes for reviewers" in the
+  description when it has nothing to say.
 - If changes remain uncommitted on purpose after the plan (flagged files, work the user excluded), list them
   under "Do not commit" or say "left for later" so the final `git status` is expected to show them.
 - Every changed path must appear exactly once: in a commit, in "Do not commit", or in "Review before committing".
   Check this before printing.
-- End after the "Final check" block with at most two lines of notes (assumptions, anything you could not
-  determine). Do not offer to run the commands.
+- The title and description go in `text` / `markdown` blocks (not `bash`), so they get no Run button and keep
+  their formatting for pasting into GitHub.
+- End after the "Pull request" section with at most two lines of notes (assumptions such as the base branch,
+  anything you could not determine). Do not offer to run the commands or to open the pull request.

@@ -47,6 +47,7 @@ from app.ui.paint_widgets import AppScrollableFrame
 
 from app.ui import theme
 from app.ui.background import ControllerResult, run_in_background
+from app.ui.page_freshness import data_key, unchanged
 from app.ui.calendar_controller import CalendarController, CalendarSnapshot
 from app.ui.calendar_model import Period
 from app.ui.calendar_view import CalendarView
@@ -75,7 +76,12 @@ class CalendarPage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         on_open_day: Callable[[date], None] | None = None,
         background_io: bool = False,
         task_defaults=None,
+        staged: bool = False,
     ) -> None:
+        """
+        staged: build only the frame now; build_steps() (a generator) builds the rest one part per step --
+        how the app pre-builds Week in idle time (app/ui/pages.py DeferredPage.prebuild_step).
+        """
         super().__init__(parent, fg_color=theme.APP_BG, corner_radius=0)
         self.background_io = background_io
         self.mode_name = mode_name
@@ -89,26 +95,39 @@ class CalendarPage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         self._busy = False
         self.loading = False
         self._load_token = 0
+        #: The data key (app/ui/page_freshness.py) the shown snapshot was read with, and that of a read running now.
+        self._read_with = self._reading_with = None
         self._unfiltered = None
         self._project_choices = {}
         self.layout: LayoutMode | None = None
         self.day_window = DayWindowController(page_controller.planning)
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
+        if not staged:
+            for _step in self.build_steps():
+                pass
+
+    def build_steps(self):
+        """Build the page in parts (each part one step; the task form is the largest, about 0.2 s)."""
         self._build_header()
         self.body = AppScrollableFrame(self, fg_color="transparent", scrollbar_button_color=theme.SECONDARY_HOVER)
         self.body.grid(row=1, column=0, sticky="nsew")
         self.body.columnconfigure(0, weight=1)
+        yield
         self.window_bar = DayWindowBar(self.body, on_apply=self.apply_day_window,
                                        on_default=self.use_default_day_window)
         self.window_bar.grid(row=0, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, theme.SPACE_M))
-        self.schedule_canvas = self.calendar = CalendarView(self.body, mode=mode_name, on_select=self.select_date,
+        yield
+        self.schedule_canvas = self.calendar = CalendarView(self.body, mode=self.mode_name, on_select=self.select_date,
                                                             on_open=self.open_day)
         self.calendar.grid(row=1, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(0, 4))
         self.legend = DayStatusLegend(self.body)
         self.legend.grid(row=2, column=0, sticky="w", padx=theme.SPACE_XL, pady=(0, theme.SPACE_M))
+        yield
         self._build_details()
+        yield
         self._build_lower()
+        yield
         self.set_layout(LayoutMode.WIDE)
         self.reload()
         self._reset_editor()
@@ -250,34 +269,50 @@ class CalendarPage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
     # ----------------------------- Loading and navigation -----------------------------
 
     def reload(self) -> None:
-        """Re-read the shown period from storage (startup, returning to the page, after any change)."""
+        """Re-read the shown period from storage (startup, after any change; also the way to force a re-read)."""
         self._load_token += 1
-        token = self._load_token
+        token, key = self._load_token, self._data_key()
+        self._reading_with = key
         self.loading = False
 
         def done(result) -> None:
             if token != self._load_token:
                 return  # a newer load was started meanwhile
+            self._reading_with = None
             if result.ok:
+                self._read_with = key
                 self._render(result.value)
             else:
                 self._load_failed(result)
 
         self._io(self.page_controller.detached().load, done, blocking=False, newest="load")
 
+    def _data_key(self):
+        """What the shown period's view was read from (app/ui/page_freshness.py); the task form's categories too."""
+        defaults = self.task_defaults.value if self.task_defaults is not None else None
+        return data_key(self, self.page_controller.period.key, self.page_controller.today(), defaults)
+
     def on_show(self) -> None:
-        if not self._busy:
-            self.reload()
+        """Returning to the page re-reads the period, unless nothing was written since it was read."""
+        key = self._data_key()
+        if self._busy or unchanged(key, self._read_with) or unchanged(key, self._reading_with):
+            return
+        self.reload()
 
     def _load_async(self) -> None:
         """Load the (new) period in a worker; only the newest request's result is shown."""
         self._load_token += 1
-        token, period = self._load_token, self.page_controller.period
+        token, period, key = self._load_token, self.page_controller.period, self._data_key()
+        self._reading_with = key
         self.loading = True
         self.status_label.configure(text=f"Loading {period.title}...")
         self.calendar.set_selected(period.selected)
 
         def done(result: ControllerResult[CalendarSnapshot]) -> None:
+            if token == self._load_token and period.key == self.page_controller.period.key:
+                self._reading_with = None
+                if result.ok:
+                    self._read_with = key
             self._loaded(token, period, result)
 
         controller = self.page_controller.detached()

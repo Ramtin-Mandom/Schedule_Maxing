@@ -42,8 +42,9 @@ checked separately by the operator.
 ## Historical plans and verification
 
 `milestone-*` plans, prompt collections and completion reports, the
-`next-milestone-prompts/` collection, `productivity-redesign-plan.md`, and
-`desktop-responsiveness-*` reports preserve the scope, findings and checks of
+`next-milestone-prompts/` collection, `productivity-redesign-plan.md`, the
+`desktop-responsiveness-*` reports and
+[desktop-performance-round3.md](desktop-performance-round3.md) preserve the scope, findings and checks of
 particular development batches. They are not current feature inventories or
 instructions to implement pending work. Later implementation may supersede
 limitations or proposed work in them; use the guides above for current behavior.

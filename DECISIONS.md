@@ -58,6 +58,11 @@ decision was made.
 | ADR-038 | The local web profile listens on loopback only, behind a session guard | Accepted |
 | ADR-039 | Budget records: a separate domain, integer minor units, expanded recurrence, optional sync feature | Accepted |
 | ADR-040 | Budget forecast: a balance snapshot plus a 15-day one-time spending average; future items are not transactions | Accepted |
+| ADR-041 | The background sync cadence follows the desktop window's activity | Accepted |
+| ADR-042 | Local SQLite keeps the rollback journal: WAL evaluated and not adopted; no new indexes | Accepted |
+| ADR-043 | Long lists and static text use one-window light widgets | Accepted |
+| ADR-044 | The desktop runs the day engine in a separate process | Accepted |
+| ADR-045 | Light caching: an opt-in mode that keeps only Day and the shown page built | Accepted |
 
 ---
 
@@ -81,7 +86,7 @@ decision was made.
 - **Alternatives:** Not documented.
 - **Consequences:** Moving to a newer Python means changing every workflow and the build script together.
 - **Relevant files:** `.github/workflows/*.yml`, `packaging/windows/build_windows.ps1`, `tests/test_packaging_config.py`.
-- **Evidence:** `test_build_script_requires_the_python_that_ci_tests_with`; the skill note in `.claude/skills/schedule-maxing-debugging/SKILL.md`. The build-script change is uncommitted at this snapshot.
+- **Evidence:** `test_build_script_requires_the_python_that_ci_tests_with`; the skill note in `.claude/skills/schedule-maxing-debugging/SKILL.md`. The build-script change is committed in `0ec34de`.
 
 ### ADR-003 — Hard constraints decide validity; reward only ranks valid placements
 
@@ -527,3 +532,63 @@ decision was made.
 - **Consequences:** The forecast has no seasonality. Two devices converting the same wishlist item offline produce one expense record and an explicit conflict (ADR-014), never two expenses.
 - **Relevant files:** `app/budget/stats.py`, `app/budget/service.py`, `app/budget/models.py`, `app/ui/budget_controller.py`.
 - **Evidence:** `tests/budget/test_budget_stats.py`, `tests/budget/test_budget_future.py`, `tests/sync/test_budget_sync.py`.
+
+### ADR-041 — The background sync cadence follows the desktop window's activity
+
+- **Status:** Accepted
+- **Context:** The sync loop ran every 60 s and looked at the pending count every 5 s whether or not anyone used the window; the status bar re-read the sync status every 4 s, also while minimized (docs/desktop-performance-round3.md).
+- **Decision:**
+  - The desktop reports its window's activity -- focused, unfocused (visible, another application in front) or minimized (iconified) -- from the root's focus and map events (`app/ui/activity.py`, `ACTIVITY_POLICIES`) through the thread-safe `SyncService.set_activity`.
+  - Interval: 60 s while focused, 300 s otherwise (`background_interval`). Minimized: no pending-count looks. Regaining focus syncs at once when the last successful sync is older than 60 s.
+  - A local commit (a `TransactionState` commit listener) is pushed 2.5 s after the last one (`edit_debounce`); the pending count is skipped when nothing was written since it was last counted (`db.data_version`).
+  - The status bar polls every 4 s focused, 15 s unfocused, never while minimized (one read on restore).
+  - The first background run waits 3 s after start-up (`start(initial_delay=...)`), so it does not compete with building the window.
+- **Rationale:** Near-zero work while the app is not in use, without weakening durability: pending records stay in the durable outbox and the next run pushes them; Sync now and the backoff are unchanged.
+- **Alternatives:** A fixed slower interval (later uploads while in use); stopping sync entirely while minimized (pending edits could wait indefinitely).
+- **Consequences:** While unfocused or minimized, another device's changes arrive up to 5 minutes later. The sync protocol is unchanged.
+- **Relevant files:** `app/sync/service.py`, `app/ui/activity.py`, `app/app.py`, `app/execution/db.py`.
+- **Evidence:** `tests/test_sync_activity.py`, `tests/ui/test_activity.py`, `tests/ui/test_activity_window.py`, `tests/sync/test_local_first_accounts.py::test_the_idle_loop_notices_new_pending_work_without_a_request`.
+
+### ADR-042 — Local SQLite keeps the rollback journal: WAL evaluated and not adopted; no new indexes
+
+- **Status:** Accepted
+- **Context:** Round 3 evaluated `journal_mode=WAL`, `synchronous=NORMAL`, `cache_size`, `temp_store=MEMORY` and `busy_timeout` on the app's real write and read paths (200 tasks).
+- **Decision:** `get_connection` is unchanged: rollback journal, default synchronous, no extra pragmas, and no index added.
+- **Rationale:** WAL + NORMAL made a task save about 3x faster (median 3.2 -> 0.95 ms) but every write already runs off the Tk thread, so no UI latency changes; a schedule generation went 621 -> 605 ms. In exchange WAL keeps `-wal`/`-shm` files beside the database, makes the documented restore (copy a backup over `executions.db`) unsafe while a stale `-wal` exists, and makes a plain file copy of a running database miss recent commits. The other pragmas showed no measurable effect (the default 5 s busy timeout already applies). EXPLAIN QUERY PLAN of the Day/Week snapshot reads and the status read showed scans only of the workspace's own tasks, which those reads need in full (the date filter is an expression over preferred dates), and one executions count; a Day load takes about 13 ms in a worker and a status read about 0.05 ms.
+- **Alternatives:** WAL with updated restore instructions (revisit if sync applies or imports become write-bound); `CREATE INDEX IF NOT EXISTS` outside the migrations (rejected: indexes belong in versioned migrations, ADR-009).
+- **Consequences:** No storage-format change in round 3.
+- **Relevant files:** `app/execution/db.py`, `app/execution/backup.py`.
+- **Evidence:** docs/desktop-performance-round3.md (SQLite section).
+
+### ADR-043 — Long lists and static text use one-window light widgets
+
+- **Status:** Accepted
+- **Context:** Moving the window made dwm.exe use 22-24% of one core on the Day page (200 tasks), against 7-10% for an empty window of the same size. The cost follows the number of visible native child windows: Tk gives every widget one, and a CustomTkinter widget is two or three (frame, drawing canvas, inner label). 400 items as CTk buttons (1203 windows) cost 35%, the same items drawn on one Canvas 5% (docs/desktop-performance-round3.md, "Round 3b").
+- **Decision:** `app/ui/light_widgets.py` (`LightFrame`, `LightLabel`, `LightButton`): plain Tk widgets, one native window each, registered with CustomTkinter's appearance and scaling trackers so they follow light/dark and the interface size, with AppButton's keyboard behaviour (Tab focus ring, Enter/Space). They are used for the available-task chips, the status-board cards, `SectionTitle`, the captions/hints/errors of `LabeledEntry`/`LabeledSelect` and `Notice` text. Interactive inputs (entries, menus, primary buttons) stay CustomTkinter.
+- **Rationale:** Measured: Day page 556 -> 435 native windows, dwm.exe while moving ~23% -> ~16% of one core; a card is 7 windows instead of 16.
+- **Alternatives:** `WS_EX_COMPOSITED` on the window (Tk repaints endlessly with it); drawing every list on one Canvas (the largest saving, but loses per-item focus and widget-level tests; a later option for very long lists); converting every CTk widget (changes the look of the whole app).
+- **Consequences:** List buttons have square corners and ghost buttons no outline. A new long list should use the light widgets; a page's native-window count is the measure to watch. Hidden child windows cost as much as visible ones, so the shell keeps only the home page (Day) and the page left last attached while hidden, and detaches every other built hidden page into a withdrawn window of its own (`AppShell._hide`/`_detach`, `wm manage`) -- the page left last too after 30 s hidden -- only when no idle callback is pending (a `wm` command runs them all at once); showing a detached page again costs a re-layout of 0.2-0.7 s. Opening every page left the window with 3,847 native child windows before this bound and 454 after it.
+- **Relevant files:** `app/ui/light_widgets.py`, `app/ui/components.py`, `app/ui/day_page.py`, `app/ui/task_status_board.py`.
+- **Evidence:** `tests/ui/test_light_widgets.py`; the dwm.exe measurements above.
+
+### ADR-044 — The desktop runs the day engine in a separate process
+
+- **Status:** Accepted
+- **Context:** A schedule generation's day engine is CPU-bound Python running in a worker thread; it shares the GIL with the Tk thread.
+- **Decision:** `app/planning/engine_process.py`: one spawned worker process (`ProcessPoolExecutor`) runs only the pure engine call (`workflow._generate_date` -> `run_engine(generate_selected_day, ...)`). Reading inputs, reservations, the stale checks and the save stay in the worker thread, which waits for the result. Installed by the desktop's `open_app_services(engine_process=...)` from `settings.GENERATION_PROCESS` (on by default; `SCHEDULE_MAXING_GENERATION_PROCESS=off`), warmed up after start-up, shut down when storage closes. A broken process or an undeliverable answer falls back to the same call in the thread for the rest of the session; an engine error keeps its type.
+- **Rationale:** Heartbeat lateness during a 200-task generation: p95 26-41 -> 15 ms. The engine is deterministic (ADR-007), so the process gives the same result, verified by `tests/test_engine_process.py`.
+- **Alternatives:** Keep the thread (round 3 measured no stall caused by the engine itself; the worst stall is rendering the result); moving the whole generation (it needs the database connection, ADR-008/010).
+- **Consequences:** One extra Python process while the desktop runs. Packaged builds rely on `multiprocessing.freeze_support()` in `packaging/windows/launcher.py`. The test suite turns the process off except in its own tests.
+- **Relevant files:** `app/planning/engine_process.py`, `app/planning/workflow.py`, `app/ui/app_services.py`, `config/settings.py`, `packaging/windows/launcher.py`.
+- **Evidence:** `tests/test_engine_process.py`; docs/desktop-performance-round3.md ("Round 3b").
+
+### ADR-045 — Light caching: an opt-in mode that keeps only Day and the shown page built
+
+- **Status:** Accepted
+- **Context:** By default every page stays built once opened (hidden pages are detached, ADR-043), so returning to one is quick, but a session that visited every page holds ~3,200 Tk widgets and ~2,650 native windows.
+- **Decision:** Settings -> Appearance -> "Light caching" (`UISettings.light_caching`, off by default, saved in the device's UI settings file beside the database). While it is on, `AppShell` keeps built only the home page (Day) and the shown page -- the other pages of its group (Settings | Account | How to Use) are not kept either; every other built `DeferredPage` is released (`DeferredPage.release`) once the shell is quiet, its widgets destroyed innermost first in ~12 ms slices, and built anew on its next show (dates come back from `ShellState`). The idle Week pre-build is skipped.
+- **Rationale:** Measured after opening every page: 3,246 -> 462 widgets, 2,659 -> 411 native windows, 89 -> 74-78 MB private memory, main-window child windows 673 -> 403, dwm.exe while moving ~10-25% lower (noisy). Switching to Day is unchanged (~50 ms).
+- **Alternatives:** Making it the default (rejected: returning to Week/Month costs ~0.8 s instead of ~60 ms, Settings ~0.43 s instead of 0.15 s); keeping the shown page's whole group built (the first version, superseded the same day: the user wanted only Day kept); releasing in one block (90-350 ms freezes).
+- **Consequences:** A trade of memory and window weight for slower returns to every page but Day, switching between Settings, Account and How to Use included. State held only by a page's widgets (scroll position, Productivity's report cache, unsaved form input) is lost when it is released.
+- **Relevant files:** `app/ui/shell.py`, `app/ui/pages.py`, `app/ui/ui_settings.py`, `app/app.py`.
+- **Evidence:** `tests/ui/test_deferred_pages.py` (light caching tests); docs/desktop-performance-round3.md ("Addendum: light caching").

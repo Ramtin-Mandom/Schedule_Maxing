@@ -40,6 +40,8 @@ class UISettings:
     check_for_updates: bool = True
     skipped_version: str | None = None
     last_update_check: str | None = None
+    #: Light caching (app/ui/shell.py AppShell.set_light_caching): only Day and the shown page stay built.
+    light_caching: bool = False
 
     def with_appearance(self, appearance: str) -> "UISettings":
         if appearance not in APPEARANCES:
@@ -50,6 +52,9 @@ class UISettings:
         if ui_scale not in SCALES:
             raise ValueError(f"the interface scale must be one of {SCALES}")
         return replace(self, ui_scale=ui_scale)
+
+    def with_light_caching(self, on: bool) -> "UISettings":
+        return replace(self, light_caching=bool(on))
 
 
 def settings_path_for(db_path: str | Path) -> Path:
@@ -82,6 +87,8 @@ class UISettingsStore:
             else defaults.check_for_updates,
             skipped_version=data.get("skipped_version") if isinstance(data.get("skipped_version"), str) else None,
             last_update_check=data.get("last_update_check") if isinstance(data.get("last_update_check"), str) else None,
+            light_caching=data["light_caching"] if isinstance(data.get("light_caching"), bool)
+            else defaults.light_caching,
         )
 
     def save(self, settings: UISettings) -> bool:

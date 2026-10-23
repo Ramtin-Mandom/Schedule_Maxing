@@ -15,6 +15,7 @@ the same editor for the default (user) layer.
 
 from __future__ import annotations
 
+import time
 import tkinter as tk
 from collections.abc import Callable
 
@@ -27,6 +28,7 @@ from app.ui import theme
 from app.ui.background import WRITE_LANE, run_io
 from app.ui.clock_input import ClockInput
 from app.ui.components import AppButton, LabeledEntry, ModalDialog, Notice, font
+from app.ui.light_widgets import LightButton, LightFrame, LightLabel
 from app.ui.preferences_model import FieldInput, PreferenceRow
 
 _STATE_WORDS = {"set": "set here", "inherited": "inherited", "cleared": "cleared here"}
@@ -42,14 +44,20 @@ class PreferencesEditor(AppScrollableFrame):
         self._on_save, self._on_inherit, self._on_clear = on_save, on_inherit, on_clear
         self.rows: dict[str, PreferenceRow] = {}
         self.inputs: dict[str, tuple[LabeledEntry | ClockInput, ...]] = {}
-        self.buttons: dict[str, dict[str, AppButton]] = {}
-        self.error_labels: dict[str, ctk.CTkLabel] = {}
-        self.value_labels: dict[str, ctk.CTkLabel] = {}
+        self.buttons: dict[str, dict[str, LightButton]] = {}
+        self.error_labels: dict[str, LightLabel] = {}
+        self.value_labels: dict[str, LightLabel] = {}
         #: The widgets of each row and where it sits, so an unchanged row is kept instead of rebuilt.
         self._frames: dict[str, ctk.CTkFrame] = {}
         self._grid_rows: dict[str, int] = {}
         #: How many rows the last render() had to build (the rest were kept).
         self.rows_built = 0
+        #: A full build still adding rows (in BUILD_SLICE_SECONDS slices): its pending timer and what is left.
+        self._build_timer = None
+        self._build_rest: tuple[list, int] | None = None
+
+    #: A full build adds rows for at most this long per Tk callback, then lets input and painting run.
+    BUILD_SLICE_SECONDS = 0.008
 
     def render(self, rows: list[PreferenceRow]) -> None:
         """
@@ -58,11 +66,14 @@ class PreferencesEditor(AppScrollableFrame):
         again -- the page is revisited, or one value was saved -- only rows
         whose content changed are rebuilt; an unchanged row just gets its
         stored value back in its inputs and its error cleared, exactly what a
-        rebuild would show.
+        rebuild would show. A full build adds its rows in short slices on the
+        Tk thread (first rows first), so the page stays responsive meanwhile;
+        a newer render() replaces an unfinished one.
         """
         previous = self.rows
-        same_layout = bool(previous) and [(row.spec.key, row.spec.group) for row in rows] == [
-            (row.spec.key, row.spec.group) for row in previous.values()]
+        same_layout = (bool(previous) and self._build_timer is None
+                       and [(row.spec.key, row.spec.group) for row in rows]
+                       == [(row.spec.key, row.spec.group) for row in previous.values()])
         if not same_layout:
             self._build_all(rows)
             return
@@ -78,6 +89,7 @@ class PreferencesEditor(AppScrollableFrame):
             self._place(row, self._grid_rows[key])
 
     def _build_all(self, rows: list[PreferenceRow]) -> None:
+        self._cancel_build()
         for child in self.winfo_children():
             child.destroy()
         self.rows = {row.spec.key: row for row in rows}
@@ -88,15 +100,55 @@ class PreferencesEditor(AppScrollableFrame):
         self._frames.clear()
         self._grid_rows.clear()
         self.rows_built = 0
-        grid_row, group = 0, None
+        plan, grid_row, group = [], 0, None
         for row in rows:
             if row.spec.group != group:
                 group = row.spec.group
-                ctk.CTkLabel(self, text=group, font=font(theme.SIZE_BODY, "bold"), text_color=theme.TEXT_PRIMARY,
-                             anchor="w").grid(row=grid_row, column=0, sticky="ew", padx=4, pady=(12, 2))
+                plan.append((grid_row, group))
                 grid_row += 1
-            self._place(row, grid_row)
+            plan.append((grid_row, row))
             grid_row += 1
+        self._build_slice(plan)
+
+    def _build_slice(self, plan: list, start: int = 0, *, budget: float | None = None) -> None:
+        self._build_timer = self._build_rest = None
+        deadline = time.perf_counter() + (self.BUILD_SLICE_SECONDS if budget is None else budget)
+        index = start
+        while index < len(plan):
+            grid_row, item = plan[index]
+            if isinstance(item, str):  # a group heading
+                LightLabel(self, item, weight="bold").grid(row=grid_row, column=0, sticky="ew", padx=4, pady=(12, 2))
+            else:
+                self._place(item, grid_row)
+            index += 1
+            if time.perf_counter() >= deadline and index < len(plan):
+                self._build_rest = (plan, index)
+                self._build_timer = self.after_idle(lambda: self._build_slice(plan, index))
+                return
+
+    def finish(self) -> None:
+        """Build the rows still missing now (before reading or restoring every row's input)."""
+        rest = self._build_rest
+        if rest is not None:
+            self._cancel_build()
+            self._build_slice(*rest, budget=float("inf"))
+
+    def _cancel_build(self) -> None:
+        timer, self._build_timer, self._build_rest = self._build_timer, None, None
+        if timer is not None:
+            try:
+                self.after_cancel(timer)
+            except tk.TclError:
+                pass
+
+    @property
+    def building(self) -> bool:
+        """True while a full build is still adding rows."""
+        return self._build_timer is not None
+
+    def destroy(self) -> None:
+        self._cancel_build()
+        super().destroy()
 
     def _place(self, row: PreferenceRow, grid_row: int) -> None:
         frame = self._row(row)
@@ -105,25 +157,25 @@ class PreferencesEditor(AppScrollableFrame):
         self.rows_built += 1
 
     def _row(self, row: PreferenceRow) -> ctk.CTkFrame:
+        """One field's row. Its text, inner frames and buttons are light widgets (one native window each):
+        a page of rows was ~1,450 native windows, which every move of the application window had to handle."""
         key, spec = row.spec.key, row.spec
         frame = ctk.CTkFrame(self, fg_color=theme.SUBTLE_BG, corner_radius=theme.RADIUS_CONTROL)
         frame.columnconfigure(0, weight=1)
-        ctk.CTkLabel(frame, text=spec.label, font=font(theme.SIZE_SMALL, "bold"), text_color=theme.TEXT_PRIMARY,
-                     anchor="w").grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(8, 0))
-        ctk.CTkLabel(frame, text=spec.help, font=font(theme.SIZE_CAPTION), text_color=theme.TEXT_MUTED, anchor="w",
-                     justify="left", wraplength=420).grid(row=1, column=0, columnspan=2, sticky="ew", padx=10)
+        LightLabel(frame, spec.label, size=theme.SIZE_SMALL, weight="bold").grid(
+            row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(8, 0))
+        LightLabel(frame, spec.help, size=theme.SIZE_CAPTION, text_color=theme.TEXT_MUTED, wraplength=420).grid(
+            row=1, column=0, columnspan=2, sticky="ew", padx=10)
         state = _STATE_WORDS[row.state]
-        value = ctk.CTkLabel(frame, text=f"Uses: {row.effective_text} — {row.source} ({state})",
-                             font=font(theme.SIZE_CAPTION), text_color=theme.TEXT_PRIMARY, anchor="w", justify="left",
-                             wraplength=420)
+        value = LightLabel(frame, f"Uses: {row.effective_text} — {row.source} ({state})", size=theme.SIZE_CAPTION,
+                           wraplength=420)
         value.grid(row=2, column=0, columnspan=2, sticky="ew", padx=10, pady=(2, 0))
         self.value_labels[key] = value
         if row.state != "inherited":
-            ctk.CTkLabel(frame, text=f"Without this override: {row.inherited_text}", font=font(theme.SIZE_CAPTION),
-                         text_color=theme.TEXT_MUTED, anchor="w").grid(row=3, column=0, columnspan=2, sticky="ew",
-                                                                      padx=10)
+            LightLabel(frame, f"Without this override: {row.inherited_text}", size=theme.SIZE_CAPTION,
+                       text_color=theme.TEXT_MUTED).grid(row=3, column=0, columnspan=2, sticky="ew", padx=10)
 
-        inputs = ctk.CTkFrame(frame, fg_color="transparent")
+        inputs = LightFrame(frame)
         inputs.grid(row=4, column=0, columnspan=2, sticky="ew", padx=6, pady=(2, 6))
         inputs.columnconfigure((0, 1), weight=1)
         if isinstance(row.edit, tuple):
@@ -141,23 +193,20 @@ class PreferencesEditor(AppScrollableFrame):
             entry.grid(row=0, column=0, sticky="ew", padx=4)
             self.inputs[key] = (entry,)
 
-        actions = ctk.CTkFrame(frame, fg_color="transparent")
+        actions = LightFrame(frame)
         actions.grid(row=5, column=0, columnspan=2, sticky="w", padx=8, pady=(2, 8))
-        buttons = {"save": AppButton(actions, "Save", lambda: self.save(key), height=30, width=70)}
-        buttons["inherit"] = AppButton(actions, "Use inherited", lambda: self._on_inherit(key), variant="ghost",
-                                       height=30, width=110)
+        buttons = {"save": LightButton(actions, "Save", lambda: self.save(key), variant="primary", padx=14)}
+        buttons["inherit"] = LightButton(actions, "Use inherited", lambda: self._on_inherit(key), variant="ghost")
         if row.state == "inherited":
             buttons["inherit"].configure(state="disabled")
         if spec.clearable:
-            buttons["clear"] = AppButton(actions, "No preference", lambda: self._on_clear(key), variant="ghost",
-                                         height=30, width=110)
+            buttons["clear"] = LightButton(actions, "No preference", lambda: self._on_clear(key), variant="ghost")
             if row.state == "cleared":
                 buttons["clear"].configure(state="disabled")
         for column, button in enumerate(buttons.values()):
             button.grid(row=0, column=column, padx=(4, 0))
         self.buttons[key] = buttons
-        error = ctk.CTkLabel(frame, text="", font=font(theme.SIZE_CAPTION), text_color=theme.DANGER, anchor="w",
-                             justify="left", wraplength=520)
+        error = LightLabel(frame, "", size=theme.SIZE_CAPTION, text_color=theme.DANGER, wraplength=520)
         error.grid(row=6, column=0, columnspan=2, sticky="ew", padx=10)
         self.error_labels[key] = error
         for field in self.inputs[key]:
@@ -250,9 +299,11 @@ class DayPreferencesDialog(ModalDialog):
             self.editor.show_error(key, result.error or "Not saved.")
             self.notice.show("error", f"Not saved: {result.error}")
             return
+        self.editor.finish()
         pending = {name: self.editor.value_of(name) for name in self.editor.inputs}
 
         def restore() -> None:
+            self.editor.finish()  # every row exists before the typed values go back in
             for name, value in pending.items():
                 if name in self.editor.inputs:
                     self.editor.set_input(name, value)

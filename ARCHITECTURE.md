@@ -5,7 +5,7 @@ System-level view of Schedule Maxing. For file-level navigation and change impac
 reasons behind the structure see [DECISIONS.md](DECISIONS.md). Detailed contracts live in `docs/` and are
 linked where relevant rather than repeated.
 
-Verified against commit `f20cf0b` plus the uncommitted budgeting work (app version 1.2.0) on 2026-10-19.
+Verified against commit `f5d91aa` (app version 1.2.0) on 2026-10-22.
 
 ## 1. What the system is
 
@@ -40,7 +40,7 @@ UI (`docs/web-api.md` is the API contract it would be built against; `app/web` c
 | Local storage | `sqlite3` (stdlib), hand-written ordered migrations | `app/execution/db.py` |
 | Analytics / ML | pandas, scikit-learn, joblib (ML is evidence-gated and not wired into the UI) | `app/productivity/` |
 | Credentials on device | `keyring` (OS credential store) | `app/sync/credentials.py` |
-| Client HTTP | Standard library `urllib` only (sync and updater) | `app/sync/transport.py`, `app/update/transport.py` |
+| Client HTTP | Standard library only: `http.client` with one keep-alive connection (sync), `urllib` (updater) | `app/sync/transport.py`, `app/update/transport.py` |
 | Server | FastAPI, Starlette, Uvicorn | `requirements-backend.txt` |
 | Server storage | SQLAlchemy 2, Alembic, psycopg 3; SQLite only for the ordinary test suite | `requirements-database.txt`, `backend/database.py` |
 | Server auth | argon2-cffi (Argon2id), PyJWT (HS256 access tokens), pyotp (TOTP), cryptography (Fernet for MFA secrets) | `backend/passwords.py`, `backend/security.py`, `backend/mfa.py` |
@@ -93,7 +93,7 @@ flowchart TB
     EXE --> SQLITE
     PROD --> SQLITE
     SYNC --> SQLITE
-    SYNC -- "HTTPS JSON (urllib)" --> API
+    SYNC -- "HTTPS JSON (http.client keep-alive)" --> API
     UPD -- HTTPS --> GH
     API --> MUT --> PG
     API --> SREPO --> PG
@@ -148,6 +148,32 @@ so the same rules run on both sides.
   results handed back by a main-thread `after` poll, and results of a previous workspace or destroyed page
   dropped. Workers never touch Tk. `SyncService` runs its own daemon thread with interval and exponential
   backoff. `app/ui/tk_lifecycle.py` moves cyclic garbage collection onto the Tk thread while windows live.
+- **Start-up sequence.** `app.app` imports no machine-learning stack (scikit-learn, scipy, pandas and joblib
+  load only when a model is trained or loaded) and none of the non-Day page modules. The constructor opens
+  storage, builds the shell and the Day page only; every other page (Week, Month, Projects, Productivity,
+  Budgeting, Settings, Account, How to Use, About) is a `DeferredPage` (`app/ui/pages.py`) built, with its
+  module, the first time it is shown. The Day page reads its date in a worker; CustomTkinter shows the window
+  when `mainloop()` starts. The OS credential store is found on first use or by a background prefetch 1.5 s
+  later (`LazyVault`), and the first background sync waits 3 s (ADR-041).
+- **Activity and periodic work.** `app/ui/activity.py` (Tk-free) turns the root's focus/map events into
+  focused / unfocused / minimized; `ACTIVITY_POLICIES` sets the status-bar poll (4 s / 15 s / paused), the GC
+  timer's interval and `SyncService.set_activity` (sync interval 60 s / 300 s, no pending looks while
+  minimized; ADR-041). CustomTkinter's tracker loops are slowed once at start-up
+  (`tk_lifecycle.tune_customtkinter_loops`).
+- **Redraw avoidance.** `AppServices.data_version()` (the connection's change count plus the workspace epoch)
+  lets Day, Week/Month, Projects and Productivity skip re-reading and re-rendering on show when nothing was
+  written since their last read (`app/ui/page_freshness.py`). The shown page is placed in the shell's page
+  area at a fixed size that follows the window only after it kept its size for 120 ms (`PAGE_SETTLE_MS`), so a
+  drag-resize lays the page out once. Week is pre-built in idle time, one part per Tk callback
+  (`DeferredPage.prebuild_step`, `ScheduleOptimizerApp._prebuild`).
+- **Native-window budget.** Every Tk widget is a Win32 child window and moving the window costs dwm.exe work
+  per child window, hidden ones included; long lists and static text use the one-window widgets of
+  `app/ui/light_widgets.py`, and hidden pages other than Day and the page left last are detached into a
+  withdrawn window of their own (`AppShell._hide`, ADR-043). With the opt-in light caching, every hidden page
+  but Day is destroyed instead (`DeferredPage.release`) and built again on its next show (ADR-045).
+- **Engine process.** A schedule generation runs in a worker thread, but its day-engine calls run in one
+  separate spawned process (`app/planning/engine_process.py`, ADR-044), so their CPU never holds the GIL the
+  Tk thread needs; everything that touches the database stays in the thread.
 - **Error handling.** Startup failures show a "Database Unavailable" panel rather than a scheduler that
   cannot save. `app/desktop.py` installs log files and exception hooks (`app/logging_setup.py`, with secret
   scrubbing) because the packaged app has no console.
@@ -298,7 +324,8 @@ sequenceDiagram
 
 - **Desktop configuration** (`config/settings.py`): `SCHEDULE_MAXING_DATA_DIR`, `SCHEDULE_MAXING_TIMEZONE`,
   `SCHEDULE_MAXING_BACKEND_URL`, `SCHEDULE_MAXING_UPDATE_REPOSITORY`, `SCHEDULE_MAXING_UPDATE_CHECK`,
-  `SCHEDULE_MAXING_STORAGE`, `SCHEDULE_MAXING_ENV_FILE`. Reward defaults come from
+  `SCHEDULE_MAXING_STORAGE`, `SCHEDULE_MAXING_ENV_FILE`, `SCHEDULE_MAXING_GENERATION_PROCESS` (`off`: the day
+  engine runs in the worker thread instead of its own process, ADR-044). Reward defaults come from
   `config/task_preference.yaml` read through `app.runtime.resource_path`. Appearance and task-form defaults
   are per-device JSON files (`app/ui/ui_settings.py`, `app/ui/task_defaults.py`).
 - **Backend configuration** comes only from environment variables (`backend/settings.py`, never a `.env`

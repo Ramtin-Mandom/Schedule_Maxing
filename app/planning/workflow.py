@@ -160,6 +160,7 @@ from app.planning.preferences import (
 )
 from app.planning.provenance import GenerationRecord, StaleReason, classify_generation, inputs_fingerprint, placements_digest
 from app.planning.series import ExpansionResult, expand_occurrences
+from app.planning.engine_process import run_engine
 from app.planning.service import generate_selected_day
 from app.planning.time import AmbiguousLocalTimeError, UnsupportedSchedulingWindowError
 
@@ -838,9 +839,10 @@ def _generate_date(
             placements=replaceable, total_score=compute_total_score(replaceable),
         ) if replaceable else None
     bonuses, explanations = _catch_up_bonuses(inputs, day, sub_allocation)
-    generated, _ = generate_selected_day(
-        sub_allocation, day, tasks, {day: preferences}, {day: [*blocks, *busy]}, previous_result=previous,
-        external_dependency_satisfaction=satisfaction, task_bonuses=bonuses,
+    # The pure engine call: in the desktop's engine process when one is installed (app/planning/engine_process.py).
+    generated, _ = run_engine(
+        generate_selected_day, sub_allocation, day, tasks, {day: preferences}, {day: [*blocks, *busy]},
+        previous_result=previous, external_dependency_satisfaction=satisfaction, task_bonuses=bonuses,
     )
     if explanations:
         # A bounded explanation on each new Catch-Up placement (never the history itself; well under 4 KiB).
