@@ -42,6 +42,7 @@ from backend.resources import (
     ProjectOut,
     ProjectUpdate,
     TaskCreate,
+    LEGACY_TASK_WIRE_FIELDS,
     TaskFields,
     TaskOut,
     TaskUpdate,
@@ -72,7 +73,8 @@ class RecordKind:
 
 
 def _task_model(owner, record_id, payload) -> Task:
-    return Task(id=record_id, user_id=owner, **payload.model_dump(include=set(TaskFields.model_fields)))
+    return Task(id=record_id, user_id=owner,
+                **payload.model_dump(include=set(TaskFields.model_fields) - LEGACY_TASK_WIRE_FIELDS))
 
 
 def _block_model(owner, record_id, payload) -> FixedBlock:

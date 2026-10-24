@@ -42,7 +42,7 @@ def test_the_direct_workflow_survives_signing_out_and_in(backend, engine, clock,
     alice = account(backend, "alice@example.com")
     planning, executions, productivity = controllers(alice, clock, str(tmp_path))
     tasks = {name: ok(planning.add_or_update_task(Task(user_id=alice.user_id, name=name, category="study",
-                                                       estimated_duration_minutes=60, priority=5, required_date=MON)))
+                                                       estimated_duration_minutes=60, required_date=MON)))
              for name in ("Finish", "Skip", "Cancel", "Untouched", "Move")}
     ok(planning.schedule_range(MON, MON, scope=RangeScope.ELIGIBLE))
     service = alice.planning_service()

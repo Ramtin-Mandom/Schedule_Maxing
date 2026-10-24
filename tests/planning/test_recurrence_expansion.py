@@ -21,13 +21,11 @@ from app.planning import series as series_ops
 from app.planning import workflow
 from app.planning.application import PlanningService, RangeScope
 from app.planning.errors import (
-    EntityInUseError,
     InvalidEntityError,
     InvalidReferenceError,
     RecurrenceLimitError,
     ScopeError,
 )
-from app.planning.external_dependencies import ExternalDependencyState
 from app.planning.models import LocalTimeWindow, OccurrenceState, RecurrenceSpec, ScheduledTask, Task
 from app.planning.recurrence import occurrence_task_id
 from app.planning.repository import PlanningRepository
@@ -40,7 +38,7 @@ SUN = MON + timedelta(days=6)
 def make_series(name: str = "Gym", frequency: str = "weekly", start: date = MON, tz: str = "UTC", **fields) -> Task:
     rule = {key: fields.pop(key) for key in ("interval", "weekdays", "day_of_month", "end_date", "count")
             if key in fields}
-    return Task(name=name, category="exercise", estimated_duration_minutes=45, priority=6,
+    return Task(name=name, category="exercise", estimated_duration_minutes=45,
                 recurrence=RecurrenceSpec(frequency=frequency, start_date=start, timezone=tz, **rule), **fields)
 
 
@@ -140,8 +138,8 @@ def test_the_database_keeps_one_record_per_series_and_slot(service: PlanningServ
     [occurrence] = series_ops.expand_occurrences(service, MON, MON).created
     raw = sqlite3.connect(str(tmp_path / "app.db"))
     with pytest.raises(sqlite3.IntegrityError):  # even a writer that bypasses the derived id
-        raw.execute("INSERT INTO tasks (id, name, category, estimated_duration_minutes, priority, required, created_at, "
-                    "updated_at, version, series_id, occurrence_slot) VALUES (?, 'Dup', 'x', 5, 5, 0, 'n', 'n', 1, ?, ?)",
+        raw.execute("INSERT INTO tasks (id, name, category, estimated_duration_minutes, required, created_at, "
+                    "updated_at, version, series_id, occurrence_slot) VALUES (?, 'Dup', 'x', 5, 0, 'n', 'n', 1, ?, ?)",
                     (str(uuid.uuid4()), str(gym.id), MON.isoformat()))
     raw.close()
     assert [task.id for task in occurrences(service, gym)] == [occurrence.id]
@@ -179,9 +177,9 @@ def test_two_connections_expanding_the_same_slots_concurrently_converge(tmp_path
 
 
 def test_legacy_templates_need_configuration_and_their_placements_map_to_occurrences(service: PlanningService) -> None:
-    legacy = service.create_task(Task(name="Standup", category="work", estimated_duration_minutes=15, priority=5,
+    legacy = service.create_task(Task(name="Standup", category="work", estimated_duration_minutes=15,
                                       recurrence=RecurrenceSpec(frequency="weekly", weekdays=[0])))
-    other = service.create_task(Task(name="Other", category="work", estimated_duration_minutes=15, priority=5))
+    other = service.create_task(Task(name="Other", category="work", estimated_duration_minutes=15))
     assert legacy.needs_configuration
 
     def legacy_placement(day: date, hour: int) -> ScheduledTask:
@@ -209,90 +207,6 @@ def test_legacy_templates_need_configuration_and_their_placements_map_to_occurre
     assert not [p for p in service.placements_for_date(MON) if p.task_id == legacy.id]
 
 
-def test_recurring_dependencies_resolve_the_same_slot_and_materialize_prerequisites(service: PlanningService) -> None:
-    warm = service.create_task(make_series(name="Warm up", frequency="daily", start=MON - timedelta(days=7)))
-    gym = service.create_task(make_series(weekdays=[0, 2], dependency_ids=[warm.id]))
-    result = series_ops.expand_occurrences(service, MON, MON + timedelta(days=2), series_ids=[gym.id])
-    by_slot = {(task.series_id, task.occurrence_slot): task for task in result.created}
-    for day in (MON, MON + timedelta(days=2)):
-        assert by_slot[(gym.id, day)].dependency_ids == [occurrence_task_id(warm.id, day)]
-        assert (warm.id, day) in by_slot  # the prerequisite of that slot was materialized with it
-    assert (warm.id, MON + timedelta(days=1)) not in by_slot  # only what the requested series needed
-
-    # The occurrences plan as concrete tasks: same date, prerequisite first.
-    outcome = workflow.generate(service, range_start=MON, range_end=MON, timezone_name="UTC")
-    placed = {p.task_id: p for p in outcome.outputs[MON].placements}
-    assert placed[occurrence_task_id(warm.id, MON)].planned_end <= placed[occurrence_task_id(gym.id, MON)].planned_start
-
-
-def test_unsupported_recurring_dependencies_are_refused_with_useful_errors(service: PlanningService) -> None:
-    daily_berlin = service.create_task(make_series(name="Berlin", frequency="daily", tz="Europe/Berlin"))
-    monthly = service.create_task(make_series(name="Monthly", frequency="monthly"))
-    with pytest.raises(InvalidReferenceError, match="time zone"):
-        service.create_task(make_series(name="Gym", dependency_ids=[daily_berlin.id]))
-    with pytest.raises(InvalidReferenceError, match="different cadences"):
-        service.create_task(make_series(name="Gym", dependency_ids=[monthly.id]))
-    with pytest.raises(InvalidReferenceError, match="concrete occurrence"):
-        service.create_task(Task(name="One-off", category="work", estimated_duration_minutes=30, priority=5,
-                                 dependency_ids=[monthly.id]))
-    a = service.create_task(make_series(name="A", frequency="daily"))
-    b = service.create_task(make_series(name="B", frequency="daily", dependency_ids=[a.id]))
-    with pytest.raises(InvalidEntityError, match="cycle"):
-        service.update_task(a.model_copy(update={"dependency_ids": [b.id]}), expected_version=a.version)
-
-    # A one-off task depends on one concrete occurrence instead -- that is allowed.
-    [first] = series_ops.expand_occurrences(service, MON, MON, series_ids=[monthly.id]).created
-    report = service.create_task(Task(name="Report", category="work", estimated_duration_minutes=30, priority=5,
-                                      dependency_ids=[first.id]))
-    assert report.dependency_ids == [first.id]
-
-
-def test_a_prerequisite_without_that_slot_leaves_the_slot_unmaterialized_and_reported(service: PlanningService) -> None:
-    warm = service.create_task(make_series(name="Warm up", frequency="daily", end_date=MON + timedelta(days=1)))
-    gym = service.create_task(make_series(frequency="daily", dependency_ids=[warm.id]))
-    result = series_ops.expand_occurrences(service, MON, MON + timedelta(days=3), series_ids=[gym.id])
-    assert sorted(task.occurrence_slot for task in result.created if task.series_id == gym.id) == [
-        MON, MON + timedelta(days=1)]
-    unresolved = [problem for problem in result.problems if problem.code == "dependency_unresolved"]
-    assert [problem.slot for problem in unresolved] == [MON + timedelta(days=2), MON + timedelta(days=3)]
-    assert "has no occurrence" in unresolved[0].message
-
-
-def test_skipping_a_prerequisite_occurrence_blocks_its_dependent_explicitly(service: PlanningService) -> None:
-    warm = service.create_task(make_series(name="Warm up", frequency="daily"))
-    gym = service.create_task(make_series(frequency="daily", dependency_ids=[warm.id]))
-    series_ops.expand_occurrences(service, MON, MON)
-    prerequisite = service.get_task(occurrence_task_id(warm.id, MON))
-    series_ops.delete_occurrence(service, prerequisite.id, expected_version=prerequisite.version, skip=True)  # allowed
-
-    dependent = service.get_task(occurrence_task_id(gym.id, MON))
-    assert dependent.dependency_ids == [prerequisite.id]
-    external = service.external_dependencies([dependent], MON, MON, "UTC")
-    assert external[prerequisite.id].state == ExternalDependencyState.MISSING
-    allocation = workflow.preview_allocation(service, MON, MON, scope=RangeScope.PLANNED, timezone_name="UTC").allocation
-    assert dependent.id in {entry.task_id for entry in allocation.unallocated}
-    # An ordinary dependency still blocks deleting its target.
-    errand = service.create_task(Task(name="Errand", category="work", estimated_duration_minutes=30, priority=5))
-    service.create_task(Task(name="After errand", category="work", estimated_duration_minutes=30, priority=5,
-                             dependency_ids=[errand.id]))
-    with pytest.raises(EntityInUseError):
-        service.delete_task(errand.id, expected_version=errand.version)
-
-
-def test_a_legacy_dependency_on_a_series_definition_reports_it_instead_of_scheduling_it(
-    service: PlanningService,
-) -> None:
-    target = service.create_task(Task(name="Template", category="work", estimated_duration_minutes=30, priority=5))
-    stored = service.create_task(Task(name="Dependent", category="work", estimated_duration_minutes=30, priority=5,
-                                      required_date=MON, dependency_ids=[target.id]))
-    # The edge predates the target becoming a (legacy) recurring template: it is kept, and explained when it blocks.
-    service.update_task(target.model_copy(update={"recurrence": RecurrenceSpec(frequency="daily")}),
-                        expected_version=target.version)
-    external = service.external_dependencies([service.get_task(stored.id)], MON, MON, "UTC")
-    assert external[target.id].state == ExternalDependencyState.SERIES
-    assert "occurrences" in external[target.id].explanation()
-
-
 def test_daylight_saving_days_and_impossible_local_times_are_reported_never_shifted(service: PlanningService) -> None:
     service.create_task(make_series(
         name="Night", frequency="daily", start=date(2026, 3, 7), tz="America/New_York",
@@ -316,6 +230,6 @@ def test_owners_see_and_expand_only_their_own_series(service: PlanningService) -
     created = series_ops.expand_occurrences(as_alice, MON, MON + timedelta(days=1)).created
     assert {task.user_id for task in created} == {alice} and {task.series_id for task in created} == {gym.id}
     assert as_bob.get_tasks_including_deleted([created[0].id]) == {}
-    stray = series_ops.occurrence_for(gym, MON + timedelta(days=5), [], datetime.now(timezone.utc))
+    stray = series_ops.occurrence_for(gym, MON + timedelta(days=5), datetime.now(timezone.utc))
     with pytest.raises((InvalidReferenceError, InvalidEntityError, ScopeError)):
         as_bob.materialize_occurrences([stray.model_copy(update={"user_id": bob})])

@@ -48,7 +48,7 @@ def ok(result):
 
 def add(controller, name: str, *, duration: int = 60, priority: int = 5, **extra) -> Task:
     return ok(controller.add_or_update_task(Task(name=name, category="study", estimated_duration_minutes=duration,
-                                                 priority=priority, **extra)))
+                                                 **extra)))
 
 
 def block(day: date, start_hour: int, hours: int, label: str = "Class", tz: str = "UTC") -> FixedBlock:
@@ -95,7 +95,7 @@ def test_incremental_generation_adds_work_around_kept_placements(services) -> No
     ok(controller.generate(MON, MON))
     kept = placements(services)[essay.id]
 
-    urgent = add(controller, "Urgent", priority=10, preferred_dates=[MON])
+    urgent = add(controller, "Urgent", preferred_dates=[MON])
     outcome = ok(controller.generate(MON, MON, mode=GenerationMode.INCREMENTAL))
 
     now = placements(services)
@@ -132,7 +132,7 @@ def test_full_regeneration_never_moves_work_whose_execution_started(services) ->
     execution = ok(services.execution_controller.get_or_create_canonical_execution(essay, started))
     ok(services.execution_controller.start(execution.id))
 
-    other = add(controller, "Other", priority=10, preferred_dates=[MON])
+    other = add(controller, "Other", preferred_dates=[MON])
     outcome = ok(controller.generate(MON, MON))  # full, protect_history (the default)
     now = placements(services)
     assert now[essay.id] == started and started.id in outcome.kept_ids[MON]
@@ -141,17 +141,17 @@ def test_full_regeneration_never_moves_work_whose_execution_started(services) ->
     assert restored.id == execution.id  # the history still points at the kept placement
 
 
-def test_fixed_blocks_and_dependencies_constrain_the_generated_day(services) -> None:
+def test_fixed_blocks_constrain_the_generated_day(services) -> None:
     controller = services.planning_controller
     ok(controller.save_fixed_block(block(MON, 0, 12, "Morning")))
     first = add(controller, "Draft", preferred_dates=[MON])
-    second = add(controller, "Revise", preferred_dates=[MON], dependency_ids=[first.id], priority=9)
+    second = add(controller, "Revise", preferred_dates=[MON])
 
     ok(controller.generate(MON, MON))
     now = placements(services)
     noon = datetime(2026, 9, 21, 12, tzinfo=timezone.utc)
     assert all(placement.planned_start >= noon for placement in now.values())
-    assert now[second.id].planned_start >= now[first.id].planned_end
+    assert {first.id, second.id} <= set(now)
 
 
 def test_deadlines_are_judged_in_the_planning_timezone(tmp_path: Path) -> None:
@@ -211,7 +211,7 @@ def test_reset_is_previewed_then_confirmed_and_keeps_defaults_and_history(servic
 
     preview = ok(controller.reset_preview(MON, MON))
     assert essay.id in preview.task_ids and undated.id not in preview.task_ids
-    assert placement.id in preview.placements_with_history_ids and not preview.blocked
+    assert placement.id in preview.placements_with_history_ids
     assert ok(controller.get_task(essay.id)) is not None  # previewing wrote nothing
 
     refused = controller.reset_range(MON, MON, confirmation="0" * 64)

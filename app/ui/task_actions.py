@@ -128,7 +128,7 @@ class TaskFormActions:
             draft = controller.draft_for(ref)
             if not draft.ok:
                 return draft, None
-            return draft, controller.editor_options(ref, category=draft.value.category,
+            return draft, controller.editor_options(category=draft.value.category,
                                                     project_id=draft.value.project_id)
 
         self._io(work, lambda loaded: self._edit_loaded(ref, loaded))
@@ -150,7 +150,7 @@ class TaskFormActions:
         self._reset_editor()
 
     def _reset_editor(self) -> None:
-        """A blank form for this page's date, with current choices (dependencies, projects, categories)."""
+        """A blank form for this page's date, with current choices (projects, categories, task types)."""
 
         token = self._next_options()
 

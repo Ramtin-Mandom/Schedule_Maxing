@@ -102,7 +102,7 @@ def test_the_event_search_and_its_exhaustive_reference_agree_on_preferred_thirds
     prefs = default_prefs()
     for preferred in PreferredTime:
         task = make_task("T", duration=45).model_copy(update={"preferred_time": preferred})
-        args = (task, [], 1440, 0, OptimizerMode.PRECISE_GREEDY, 0, day_preferences_to_reward_settings(prefs), prefs,
+        args = (task, [], 1440, OptimizerMode.PRECISE_GREEDY, 0, day_preferences_to_reward_settings(prefs), prefs,
                 None)
         assert _best_candidate_for_canonical_task(*args) == _best_candidate_for_canonical_task_exhaustive(*args)
 

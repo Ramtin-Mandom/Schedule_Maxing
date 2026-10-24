@@ -21,12 +21,10 @@ The record stores two digests:
       unchanged content never makes a schedule stale; recurrence fields that
       are unset are left out, so tasks fingerprint exactly as they did before
       recurrence expansion; the range's series definitions are included
-      although only their occurrences are scheduled), their dependency ids,
-      the fixed blocks of every date of the range, the fully resolved
-      DayPreferences of every date of the range (YAML -> user -> date,
-      including optimizer_mode, i.e. the engine mode), and the resolved state
-      of every dependency outside the range (see
-      app/planning/external_dependencies.py). The whole range is included,
+      although only their occurrences are scheduled), the fixed blocks of
+      every date of the range, and the fully resolved DayPreferences of every
+      date of the range (YAML -> user -> date, including optimizer_mode, i.e.
+      the engine mode). The whole range is included,
       not just the one date, because allocation decides which date each task
       lands on from the range as a whole: an edit to any task of the range
       can move work onto or off any of its dates. This deliberately
@@ -64,14 +62,14 @@ from pydantic import BaseModel, Field, field_validator
 from app.planning.models import FixedBlock, ScheduledTask, Task
 from app.planning.preferences import DayPreferences, OptimizerMode
 
-#: Bump whenever the fingerprint recipe below changes.
-FINGERPRINT_VERSION = 1
+#: Bump whenever the fingerprint recipe below changes. 2: tasks no longer carry priority or dependencies,
+#: dependencies outside the range are no longer resolved, and a task's points (now the first allocation key)
+#: are hashed (saved days show as out of date once).
+FINGERPRINT_VERSION = 2
 
 #: Fields that describe a record's bookkeeping rather than its scheduling content.
-#: Not scheduling inputs: audit fields, the owner, and a task's points (analytics only -- changing them must not
-#: make a saved schedule look out of date, and adding the field left every existing fingerprint unchanged).
-#: Likewise a task's type (identity for analytics) and a placement's planning snapshot.
-_NON_CONTENT_FIELDS = {"created_at", "updated_at", "version", "deleted_at", "user_id", "points", "task_type_id"}
+#: Not scheduling inputs: audit fields, the owner, and a task's type (identity for analytics).
+_NON_CONTENT_FIELDS = {"created_at", "updated_at", "version", "deleted_at", "user_id", "task_type_id"}
 
 
 class StaleReason(str, Enum):
@@ -155,13 +153,10 @@ def inputs_fingerprint(
     tasks: Iterable[Task],
     fixed_blocks: Iterable[FixedBlock],
     preferences_by_date: Mapping[date_, DayPreferences],
-    external_dependencies: Mapping[uuid.UUID, object],
 ) -> str:
     """
     The documented inputs fingerprint (see the module docstring). Order
-    independent: collections are sorted by id/date. `external_dependencies`
-    values are app.planning.external_dependencies.ExternalDependency (typed
-    loosely here to keep this module free of that import).
+    independent: collections are sorted by id/date.
     """
     payload = {
         "fingerprint_version": FINGERPRINT_VERSION,
@@ -174,10 +169,6 @@ def inputs_fingerprint(
         "preferences": {
             day.isoformat(): preferences.model_dump(mode="json")
             for day, preferences in sorted(preferences_by_date.items())
-        },
-        "external_dependencies": {
-            str(task_id): dependency.fingerprint_payload()
-            for task_id, dependency in sorted(external_dependencies.items(), key=lambda item: str(item[0]))
         },
     }
     return _digest(payload)

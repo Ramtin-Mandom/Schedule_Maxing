@@ -16,7 +16,7 @@ def test_build_observations_all_time_includes_everything(repository: ExecutionRe
     service = ExecutionService(repository, clock=clock)
     service.create_execution(
         task_name="A", category="study", tag="math", planned_date=1,
-        planned_start=540, planned_end=600, planned_duration=60, priority=5,
+        planned_start=540, planned_end=600, planned_duration=60,
     )
 
     observations = build_observations(repository, period="all_time")
@@ -28,13 +28,13 @@ def test_build_observations_last_7_days_excludes_old_records(repository: Executi
     service = ExecutionService(repository, clock=clock)
     service.create_execution(
         task_name="Old", category="study", tag="math", planned_date=1,
-        planned_start=540, planned_end=600, planned_duration=60, priority=5,
+        planned_start=540, planned_end=600, planned_duration=60,
     )
 
     clock.advance(timedelta(days=10))
     service.create_execution(
         task_name="Recent", category="study", tag="math", planned_date=2,
-        planned_start=540, planned_end=600, planned_duration=60, priority=5,
+        planned_start=540, planned_end=600, planned_duration=60,
     )
 
     reference_now = clock()
@@ -48,7 +48,7 @@ def test_implausible_duration_is_flagged_not_dropped(repository: ExecutionReposi
     service = ExecutionService(repository, clock=clock)
     execution = service.create_execution(
         task_name="Marathon", category="study", tag="math", planned_date=1,
-        planned_start=540, planned_end=600, planned_duration=60, priority=5,
+        planned_start=540, planned_end=600, planned_duration=60,
     )
     service.start(execution.id)
     clock.advance(timedelta(minutes=MAX_PLAUSIBLE_DURATION_MINUTES + 60))
@@ -67,7 +67,7 @@ def test_plausible_duration_is_not_flagged(repository: ExecutionRepository) -> N
     service = ExecutionService(repository, clock=clock)
     execution = service.create_execution(
         task_name="Normal", category="study", tag="math", planned_date=1,
-        planned_start=540, planned_end=600, planned_duration=60, priority=5,
+        planned_start=540, planned_end=600, planned_duration=60,
     )
     service.start(execution.id)
     clock.advance(timedelta(minutes=65))
@@ -82,7 +82,7 @@ def test_start_delay_recovered_for_skipped_after_starting(repository: ExecutionR
     service = ExecutionService(repository, clock=clock)
     execution = service.create_execution(
         task_name="Skipped", category="study", tag="math", planned_date=1,
-        planned_start=540, planned_end=600, planned_duration=60, priority=5,  # planned 09:00
+        planned_start=540, planned_end=600, planned_duration=60, # planned 09:00
     )
     service.start(execution.id)  # actually started at 09:20 -> 20 minutes late
     clock.advance(timedelta(minutes=5))
@@ -100,7 +100,7 @@ def test_start_delay_is_none_for_never_started_execution(repository: ExecutionRe
     service = ExecutionService(repository, clock=clock)
     execution = service.create_execution(
         task_name="Untouched", category="study", tag="math", planned_date=1,
-        planned_start=540, planned_end=600, planned_duration=60, priority=5,
+        planned_start=540, planned_end=600, planned_duration=60,
     )
     service.skip(execution.id)  # scheduled -> skipped, no session ever created
 
@@ -114,13 +114,13 @@ def test_days_override_takes_precedence_over_period(repository: ExecutionReposit
     service = ExecutionService(repository, clock=clock)
     service.create_execution(
         task_name="Old", category="study", tag="math", planned_date=1,
-        planned_start=540, planned_end=600, planned_duration=60, priority=5,
+        planned_start=540, planned_end=600, planned_duration=60,
     )
 
     clock.advance(timedelta(days=20))
     service.create_execution(
         task_name="Recent", category="study", tag="math", planned_date=2,
-        planned_start=540, planned_end=600, planned_duration=60, priority=5,
+        planned_start=540, planned_end=600, planned_duration=60,
     )
 
     reference_now = clock()
@@ -138,12 +138,12 @@ def test_days_none_falls_back_to_period(repository: ExecutionRepository) -> None
     service = ExecutionService(repository, clock=clock)
     service.create_execution(
         task_name="Old", category="study", tag="math", planned_date=1,
-        planned_start=540, planned_end=600, planned_duration=60, priority=5,
+        planned_start=540, planned_end=600, planned_duration=60,
     )
     clock.advance(timedelta(days=10))
     service.create_execution(
         task_name="Recent", category="study", tag="math", planned_date=2,
-        planned_start=540, planned_end=600, planned_duration=60, priority=5,
+        planned_start=540, planned_end=600, planned_duration=60,
     )
 
     # days omitted (None) -> behaves exactly like the original period-only API.

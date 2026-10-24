@@ -88,7 +88,7 @@ def _generate(tmp_path, name: str, *, process: bool):
         for index in range(12):
             assert services.planning_controller.add_or_update_task(Task(
                 id=uuid.uuid5(uuid.NAMESPACE_URL, f"engine:{index}"), name=f"Task {index}", category="study",
-                estimated_duration_minutes=20 + index * 5, priority=1 + index % 10, preferred_dates=[day])).ok
+                estimated_duration_minutes=20 + index * 5, preferred_dates=[day])).ok
         controller = DayScheduleController(services.planning_controller, anchor_date=day, timezone="UTC",
                                            today=lambda: day)
         assert controller.make_schedule().ok

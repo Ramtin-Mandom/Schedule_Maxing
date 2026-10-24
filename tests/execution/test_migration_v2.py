@@ -170,7 +170,6 @@ def test_upgrade_preserves_snapshot_fields_and_feedback(tmp_path: Path) -> None:
         assert dict(row)["task_name"] == "Old Task"
         assert dict(row)["category"] == "study"
         assert dict(row)["planned_duration"] == 60
-        assert dict(row)["priority"] == 8
         assert dict(row)["focus_rating"] == 4
         assert dict(row)["note"] == "a legacy note"
     finally:
@@ -240,9 +239,9 @@ def test_status_check_constraint_now_accepts_cancelled(tmp_path: Path) -> None:
         # Would raise sqlite3.IntegrityError against the old (pre-migration)
         # CHECK constraint, which only listed the original five statuses.
         conn.execute(
-            "INSERT INTO executions (id, task_name, category, tag, planned_duration, priority, "
-            "status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
-            ("cancelled-1", "Cancelled Task", "study", "", 30, 5, "cancelled",
+            "INSERT INTO executions (id, task_name, category, tag, planned_duration, "
+            "status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+            ("cancelled-1", "Cancelled Task", "study", "", 30, "cancelled",
              "2024-01-01T00:00:00+00:00", "2024-01-01T00:00:00+00:00"),
         )
         conn.commit()

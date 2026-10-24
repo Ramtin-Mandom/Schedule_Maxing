@@ -1,15 +1,12 @@
 """
 app/planning/preferences.py
 
-Canonical per-day scheduling preferences (Task 3 / Schedule Maxing v2) and
-an adapter bridging them to the existing, frozen Greedy Optimizer v1 reward
-engine (app/reward.py).
+Canonical per-day scheduling preferences, and the adapter that turns a
+day's resolved preferences into the RewardSettings the day engine scores
+with (app/reward.py).
 
-This module does not implement optimizer modes or day allocation -- that is
-Task 4/5's job. It only resolves *what a given day's preferences are* and
-gives a way to turn them into the legacy RewardSettings shape so
-calculate_task_score/calculate_schedule_score (untouched) can already be
-exercised against per-day canonical preferences today.
+This module does not implement optimizer modes or day allocation. It only
+resolves *what a given day's preferences are*.
 
 Layering model (built-in defaults -> YAML template -> optional user-level
 overrides -> date-specific overrides; since Milestone 3 the user and date
@@ -26,7 +23,7 @@ this module itself stays storage-free):
         - key present with a real value: this layer sets/overrides that
           category's value from this point up (an explicit multiplier of
           0.0 is a real, deliberate value -- "give this category no
-          priority boost at all" -- not treated as "unset").
+          weight at all" -- not treated as "unset").
         - key present with value None: this layer explicitly *clears* any
           value set by a lower layer for that category, reverting it to
           "unset" (so a still-higher layer, or the neutral fallback if none
@@ -390,8 +387,7 @@ class DayPreferences(BaseModel):
     dict means "no explicit preference at any layer"; callers read a
     multiplier through effective_category_multiplier (neutral 1.0
     fallback) and a preferred window via .get(category) (None = no
-    preference, matching legacy calculate_task_score's own "no preferred
-    window" case).
+    preference).
     """
 
     date: date_
@@ -553,40 +549,22 @@ def day_preferences_overrides_from_reward_settings(settings: RewardSettings) -> 
 
 
 # -----------------------------------------------------------------------------
-# Adapter: DayPreferences -> legacy app.reward.RewardSettings, and a
-# canonical-Task -> legacy-scoring-shape helper, so the existing
-# (Milestone-0-frozen) calculate_task_score/calculate_schedule_score can be
-# exercised against canonical per-day preferences today, without changing
-# app/optimizer.py (that wiring is Task 4's job).
+# Adapter: DayPreferences -> app.reward.RewardSettings, and the preferred
+# window of a canonical Task (the day engine builds its ScoringTask from it).
 # -----------------------------------------------------------------------------
 
 
 def day_preferences_to_reward_settings(day_preferences: DayPreferences) -> RewardSettings:
     """
-    Adapt resolved DayPreferences into a legacy RewardSettings instance.
+    The RewardSettings the day engine scores a day with: a brand-new
+    instance per call, never a shared global.
 
-    This is intentionally a one-way, read-only bridge: it builds and
-    returns a brand-new RewardSettings on every call and never mutates
-    app.reward or config.settings globals.
-
-    category_weights is populated directly from
-    day_preferences.category_multipliers (already fully merged/resolved);
-    a category absent from it simply relies on RewardSettings.category_weights'
-    own .get(category, 1.0) neutral fallback inside _priority_score, exactly
-    matching legacy behavior. task_weights/task_time_windows are
-    intentionally left empty here -- those are legacy per-task-name YAML
-    overrides with no canonical equivalent in this milestone; a canonical
-    task's own preferred window is resolved through
-    effective_task_preferred_window below instead, not through this
-    adapter's category_time_windows.
-
-    The formula calculate_task_score already implements --
-    priority * weight_importance * category_multiplier * task_multiplier --
-    is unchanged: a category multiplier of 1.0 here leaves the score
-    identical to task_multiplier=1.0/category_multiplier=1.0, i.e.
-    unaffected, exactly like today. weight_category_bonus continues to be
-    carried through (kept for compatibility) without being read by
-    _priority_score -- this adapter does not change that known gap.
+    category_weights is day_preferences.category_multipliers (fully merged);
+    a category absent from it scores with the neutral 1.0 (_weight_score). A
+    task's preferred window is resolved by effective_task_preferred_window
+    below and carried by its ScoringTask, so category_time_windows stays
+    empty. weight_category_bonus is carried through but read by no
+    component.
     """
     reward = day_preferences.reward
     return RewardSettings(
@@ -638,31 +616,3 @@ def effective_task_preferred_window(
     if category_window is not None:
         return {"start_time": category_window.start_minute, "end_time": category_window.end_minute}
     return None
-
-
-def to_legacy_scoring_task(
-    task,
-    day_preferences: DayPreferences,
-    *,
-    task_override: LocalTimeWindow | None = None,
-) -> dict:
-    """
-    Build the dict shape app.reward.calculate_task_score expects (via its
-    duck-typed _get helper) from a canonical Task, with its preferred
-    window resolved through effective_task_preferred_window.
-
-    This does not resolve a placement/start time -- callers pass
-    start_time to calculate_task_score separately, exactly as today; this
-    only bridges *task* fields (name/category/tag/duration/preference
-    window), not scheduling. Neither the task's legacy priority nor its
-    points are passed: a placement's score is its quality, not the task's
-    worth, so every task scores as the reward's neutral priority (1).
-    """
-    return {
-        "name": task.name,
-        "category": task.category,
-        "tag": task.tags[0] if task.tags else "",
-        "duration": task.estimated_duration_minutes,
-        "fixed": False,
-        "preference_time": effective_task_preferred_window(task, day_preferences, task_override=task_override),
-    }

@@ -33,10 +33,9 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
         "Schedule Maxing turns a list of things to do into a realistic plan for each day. You tell it what is "
         "fixed (classes, work, meals, sleep) and what is flexible (study, errands, exercise). It keeps the fixed "
         "blocks exactly where they are and places the flexible tasks into the free time around them, choosing "
-        "the times that score best for your priorities and preferences.",
-        "Rules are never bent to get a better score: tasks never overlap fixed blocks or each other, stay inside "
-        "the day window, and come after the tasks they depend on. When something does not fit, it is left "
-        "unscheduled and you are told why.",
+        "the times that score best for your preferences.",
+        "Rules are never bent to get a better score: tasks never overlap fixed blocks or each other and stay "
+        "inside the day window. When something does not fit, it is left unscheduled and you are told why.",
         "The app knows today's date from your computer's clock and time zone. You never type today's date.",
         "A first day, start to finish:",
         (
@@ -154,15 +153,16 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
             "For a flexible task, name, category, duration (like 45 min or 1 h 15 min) and a preferred time are "
             "all you need.",
             "Points (0 to 1000, default 1) is what finishing it is worth to you, for every type; the - and + "
-            "buttons change it by 10. It is counted in your productivity statistics when you complete it and "
-            "never changes where the scheduler puts a task.",
+            "buttons change it by 10. It is counted in your productivity statistics when you complete it. When "
+            "a date cannot fit every task, the tasks with more points get it first; points never change the "
+            "time a task gets.",
             "Category and Project sit side by side. Without a category the task is saved as other. Project starts "
             "at None and lists your projects; a task with a project also appears in that project's task list.",
             "Times are entered as [hour] : [minute] [AM/PM]. Type the hour (1-12) and minute (00-59); click the "
             "AM/PM button, or type a or p, to switch. An end time of 12:00 AM means midnight at the end of the day.",
             "Required: the task must be scheduled; if it cannot be, the schedule is not saved and you are told why.",
-            "The form has no advanced settings. A task that already has a deadline, dependencies, a task type "
-            "or a repeat rule (an older or imported one) keeps them when you edit it.",
+            "The form has no advanced settings. A task that already has a deadline, a task type or a repeat "
+            "rule (an older or imported one) keeps them when you edit it.",
             "Removing a task, a fixed block or a To Do removes everything recorded for it too: its scheduled "
             "entries, its completion and its points.",
             "Use default values fills in the name (if empty), duration and points of the chosen "
@@ -219,20 +219,15 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
         "task's preferred time (Early, Mid or Late) wherever that is possible, and then gives each remaining "
         "time a score for how good the placement is:",
         (
-            "the category's importance (times the weight Settings calls Priority weight);",
+            "the category's importance (times the weight Settings calls Task weight);",
             "a bonus for being inside, or close to, the preferred time;",
             "a bonus for being near tasks with the same or related tags;",
             "a penalty for leaving awkward small gaps (the fragmentation penalty).",
         ),
         "The highest-scoring valid time wins. The weights are in Settings under Default scheduling preferences.",
         "Points are different: they are your own value for a task (set in the form), counted when you complete "
-        "it. The scheduler never reads them, and its score is never your points.",
-    )),
-    GuideSection("dependencies", "Dependencies", (
-        "A task that depends on another (set in an imported file or an older version) is only "
-        "scheduled after that task has finished. Dependencies are kept by task, not by name, so tasks with the "
-        "same name stay distinct. Circular dependencies (A needs B, B needs A) cannot be scheduled; Make "
-        "Schedule and planning report them so you can remove one.",
+        "it. They never change a placement's score or time, and its score is never your points. But when a "
+        "date, week or month cannot fit every task, the tasks with more points get a date first.",
     )),
     GuideSection("make_schedule", "Make Schedule and the scheduling engine", (
         "On the Day page, Make Schedule places the date's flexible tasks. The Engine choice beside it decides "
@@ -255,7 +250,7 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
     )),
     GuideSection("scheduled_unscheduled", "Scheduled and unscheduled tasks", (
         "Scheduled tasks appear on the timeline at their exact times. A task the scheduler could not place "
-        "(no free time long enough, outside its date, waiting on a dependency) stays in Available tasks with "
+        "(no free time long enough, outside its date) stays in Available tasks with "
         "the reason from the last run. It is not lost: free up time, shorten it or widen the day window, then "
         "Make Schedule again. A required task that cannot be placed stops the run, and nothing is saved.",
         "An unscheduled task is never counted as Uncompleted: it was never on the schedule.",
@@ -383,7 +378,6 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
             "Kept: tasks with no date, tasks planned on other dates, projects (with their milestones and task "
             "defaults), your default preferences and everything recorded on other dates.",
             "Repeating tasks are kept; only their entries on the reset dates go.",
-            "A reset is refused, with nothing deleted, while tasks outside the dates depend on tasks inside them.",
         ),
         "Settings > Reset All Task Data removes everything at once: all tasks, fixed blocks, projects, schedules "
         "and completion history -- from your account on the server and every device when you are signed in, "

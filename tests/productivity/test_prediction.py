@@ -32,7 +32,6 @@ def _completed(
         task_name="task",
         category=category,
         tag="tag",
-        priority=5,
         status=ExecutionStatus.COMPLETED,
         planned_date=1,
         planned_start=0,

@@ -10,6 +10,7 @@ import time
 
 import pytest
 
+from app.planning.models import Project
 from app.planning.csv_import import ImportMode, parse_legacy_csv
 from app.planning.preferences import PreferenceOverrides
 from app.sync.engine import ConflictResolutionError
@@ -200,14 +201,14 @@ def test_a_stale_push_becomes_a_conflict_that_keeps_both_sides(synced_pair) -> N
     _edit(a, task.id, name="A's name")
     a.sync_now()
     _edit(b, task.id, name="B's name")
-    _edit(b, other.id, priority=9)  # an unrelated change still goes through
+    _edit(b, other.id, points=9)  # an unrelated change still goes through
 
     report = b.sync_now()
     assert report.conflicts == 1
     [conflict] = b.sync.list_conflicts()
     assert conflict.kind == "push_conflict" and conflict.base_version == 1
     assert conflict.local_record["name"] == "B's name" and conflict.remote_record["name"] == "A's name"
-    assert server.get("alice@example.com", f"/tasks/{other.id}")["priority"] == 9
+    assert server.get("alice@example.com", f"/tasks/{other.id}")["points"] == 9
     assert b.planning.get_task(task.id).name == "B's name"  # local intent preserved
 
     b.reopen()  # conflicts are durable, and a blocked record is not retried automatically
@@ -223,20 +224,20 @@ def test_a_stale_push_becomes_a_conflict_that_keeps_both_sides(synced_pair) -> N
 
 def test_keep_local_can_conflict_again_and_accept_remote_replaces_the_local_record(synced_pair) -> None:
     server, a, b, task, _ = synced_pair
-    _edit(a, task.id, priority=2)
+    _edit(a, task.id, points=2)
     a.sync_now()
-    _edit(b, task.id, priority=3)
+    _edit(b, task.id, points=3)
     b.sync_now()
     [first] = b.sync.list_conflicts()
     b.sync.resolve_conflict(first.id, "keep_local")
-    _edit(a, task.id, priority=4)  # A changes it again before B retries
+    _edit(a, task.id, points=4)  # A changes it again before B retries
     a.sync_now()
 
     b.sync_now()
     [second] = b.sync.list_conflicts()
-    assert second.id != first.id and second.remote_record["priority"] == 4
+    assert second.id != first.id and second.remote_record["points"] == 4
     b.sync.resolve_conflict(second.id, "accept_remote")
-    assert b.planning.get_task(task.id).priority == 4
+    assert b.planning.get_task(task.id).points == 4
     assert b.sync_now().pushed == 0 and b.dirty() == []
     assert len(b.sync.list_conflicts(status=None)) == 2  # the audit of both decisions stays
 
@@ -289,15 +290,18 @@ def test_a_pulled_change_never_overwrites_a_pending_local_change(synced_pair) ->
 
 def test_a_rejected_operation_is_recorded_although_the_server_rolled_it_back(synced_pair) -> None:
     server, a, b, task, other = synced_pair
-    dependent = a.add_task("Needs Shared", dependency_ids=[task.id])
+    project = a.planning.create_project(Project(name="Shared project"))
     a.sync_now()
-    # B has not seen the dependent, and deletes the task it depends on.
-    b.planning.delete_task(task.id, expected_version=b.planning.get_task(task.id).version)
+    b.sync_now()
+    a.add_task("In the project", project_id=project.id)
+    a.sync_now()
+    # B has not seen the project's task, and deletes the project.
+    b.planning.delete_project(project.id, expected_version=b.planning.get_project(project.id).version)
 
     b.sync_now()
     [conflict] = b.sync.list_conflicts()
-    assert conflict.error["code"] == "in_use" and dependent.id
-    assert server.get("alice@example.com", f"/tasks/{task.id}")["deleted_at"] is None  # nothing changed there
+    assert conflict.error["code"] == "in_use"
+    assert server.get("alice@example.com", f"/projects/{project.id}")["deleted_at"] is None  # nothing changed there
     b.reopen()
     assert b.sync.list_conflicts()[0].id == conflict.id
 
@@ -362,5 +366,5 @@ def test_an_unconfigured_service_never_starts_a_thread(tmp_path) -> None:
 def _task(name: str):
     from app.planning.models import Task
 
-    return Task(name=name, category="study", estimated_duration_minutes=30, priority=5)
+    return Task(name=name, category="study", estimated_duration_minutes=30)
 

@@ -154,7 +154,6 @@ class ExecutionService:
         planned_start: int,
         planned_end: int,
         planned_duration: int,
-        priority: int,
     ) -> TaskExecution:
         """Create a new execution in 'scheduled' status, snapshotting the given planned task fields."""
         now = self._now_iso()
@@ -167,7 +166,6 @@ class ExecutionService:
             planned_start=planned_start,
             planned_end=planned_end,
             planned_duration=planned_duration,
-            priority=priority,
             status=ExecutionStatus.SCHEDULED,
             created_at=now,
             updated_at=now,
@@ -186,7 +184,6 @@ class ExecutionService:
         planned_start: int,
         planned_end: int,
         planned_duration: int,
-        priority: int,
     ) -> TaskExecution:
         """
         Return an existing execution with this exact planned snapshot
@@ -229,7 +226,6 @@ class ExecutionService:
             planned_start=planned_start,
             planned_end=planned_end,
             planned_duration=planned_duration,
-            priority=priority,
         )
 
     # ------------------------------------------------------------------
@@ -256,7 +252,7 @@ class ExecutionService:
         *is* available and "re-selecting the same placement reuses its
         execution" is the desired behavior.
 
-        task_name/category/tag/priority/planned_duration are still
+        task_name/category/tag/planned_duration are still
         populated here as a historical snapshot of the Task's *current*
         values at creation time -- see the module and
         app/execution/models.py docstrings for why that snapshot exists
@@ -673,7 +669,6 @@ def build_canonical_execution(
         planned_start=None,
         planned_end=None,
         planned_duration=planned_duration_minutes,
-        priority=task.priority,
         points=task.points,
         status=ExecutionStatus.SCHEDULED,
         created_at=now_iso,

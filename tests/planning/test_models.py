@@ -31,7 +31,7 @@ UTC_NOW = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
 
 
 def _task(**overrides) -> Task:
-    defaults = dict(name="Study", category="study", estimated_duration_minutes=60, priority=5)
+    defaults = dict(name="Study", category="study", estimated_duration_minutes=60)
     defaults.update(overrides)
     return Task(**defaults)
 
@@ -81,13 +81,6 @@ def test_task_duration_must_be_positive():
         _task(estimated_duration_minutes=0)
 
 
-def test_task_priority_must_be_in_range():
-    with pytest.raises(ValidationError):
-        _task(priority=11)
-    with pytest.raises(ValidationError):
-        _task(priority=0)
-
-
 def test_task_optional_project_and_user_ids():
     project_id = uuid.uuid4()
     user_id = uuid.uuid4()
@@ -100,19 +93,6 @@ def test_task_project_and_user_ids_default_to_none():
     task = _task()
     assert task.project_id is None
     assert task.user_id is None
-
-
-def test_task_cannot_depend_on_itself():
-    task_id = uuid.uuid4()
-    with pytest.raises(ValidationError):
-        Task(
-            id=task_id,
-            name="Study",
-            category="study",
-            estimated_duration_minutes=30,
-            priority=1,
-            dependency_ids=[task_id],
-        )
 
 
 def test_task_required_flag_and_required_date():
@@ -419,7 +399,7 @@ def test_project_optional_user_id_and_description():
 
 
 def test_planning_document_round_trip_preserves_ids_dates_and_metadata():
-    task = _task(name="Study Math", tags=["math"], priority=8)
+    task = _task(name="Study Math", tags=["math"])
     registry = TaskRegistry()
     registry.add(task)
     schedule = DaySchedule(date=date(2024, 6, 1), timezone="America/New_York", task_ids=[task.id], tasks=registry)
@@ -435,4 +415,3 @@ def test_planning_document_round_trip_preserves_ids_dates_and_metadata():
     assert restored_task is not None
     assert restored_task.name == "Study Math"
     assert restored_task.tags == ["math"]
-    assert restored_task.priority == 8

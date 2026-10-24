@@ -65,7 +65,7 @@ from app.planning.models import OCCURRENCE_TOMBSTONE_STATES, PlacementRemovalRea
 from app.planning.time import elapsed_minutes
 from backend import models, snapshots
 from backend.errors import ApiError, invalid_reference, not_found, version_conflict
-from backend.executions import EXECUTIONS, ActionIn, ExecutionCreate, FeedbackIn
+from backend.executions import EXECUTIONS, LEGACY_EXECUTION_WIRE_FIELDS, ActionIn, ExecutionCreate, FeedbackIn
 from backend.resources import ResourceSpec, live
 
 Clock = Callable[[], datetime]
@@ -285,7 +285,7 @@ class Mutator:
         if not payload.historical_reference:
             self._check_execution_links(payload)
 
-        fields = payload.model_dump(exclude={"id", "sessions", "status"})
+        fields = payload.model_dump(exclude={"id", "sessions", "status", *LEGACY_EXECUTION_WIRE_FIELDS})
         linked_task_id, linked_placement_id = self._execution_links(payload)
         row = models.Execution(
             user_id=self.user_id, id=record_id, created_at=self.now, updated_at=self.now, version=1,

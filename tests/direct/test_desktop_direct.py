@@ -87,8 +87,7 @@ def test_two_accounts_and_stale_worker_results(desktop) -> None:
     services, account = desktop
     sign_in(services, account, "alice@example.com")
     alice_planning = services.planning_controller
-    created = alice_planning.add_or_update_task(Task(name="Alice's", category="c", estimated_duration_minutes=30,
-                                                     priority=5)).value
+    created = alice_planning.add_or_update_task(Task(name="Alice's", category="c", estimated_duration_minutes=30)).value
     alice_guard = services.workspace_guard()  # a worker started now, under Alice
 
     assert account.sign_out().ok
@@ -240,13 +239,13 @@ def test_reset_all_task_data_in_direct_storage_is_one_transaction_for_the_signed
 
     sign_in(services, account, "other@example.com")
     assert services.planning_controller.add_or_update_task(Task(
-        name="Someone else's", category="study", estimated_duration_minutes=30, priority=5)).ok
+        name="Someone else's", category="study", estimated_duration_minutes=30)).ok
     account.sign_out()
     services.switch_workspace()
     sign_in(services, account, "ada@example.com")
     planning = services.planning_controller
     assert planning.add_or_update_task(Task(name="Mine", category="study", estimated_duration_minutes=30,
-                                            priority=5, preferred_dates=[MON])).ok
+                                            preferred_dates=[MON])).ok
     assert planning.set_user_overrides(PreferenceOverrides(day_window=DayWindowSpec(start_minute=480,
                                                                                      end_minute=1200))).ok
     result = TaskDataResetController(services).reset()

@@ -91,7 +91,7 @@ def _check_storage_and_scheduling() -> dict:
         restart = existed and set(TASK_NAMES) <= names
         if not restart:
             form = {"day": "1", "category": "study", "tag": "selftest", "fixed": "False", "start_time": "480",
-                    "end_time": "1200", "duration": "60", "priority": "5"}
+                    "end_time": "1200", "duration": "60"}
             for name in TASK_NAMES:
                 created = page.submit_task_form({**form, "name": name})
                 assert created.ok, created.error

@@ -227,8 +227,6 @@ class TaskKind(str, Enum):
 #: Task.points: the default of a new task, and the largest value accepted.
 DEFAULT_TASK_POINTS = 1
 MAX_TASK_POINTS = 1000
-#: Task.priority of a task saved without one. Priority is a legacy stored field: no scheduler reads it.
-DEFAULT_TASK_PRIORITY = 5
 #: Task.estimated_duration_minutes of a To Do. A To Do has no duration; storage requires a positive value, so
 #: this placeholder is stored and never shown, scheduled or counted as planned time.
 TODO_PLACEHOLDER_MINUTES = 1
@@ -259,12 +257,11 @@ class ProjectTaskDefaults(BaseModel):
     """
 
     duration_minutes: int | None = Field(default=None, ge=1, le=1440)
-    priority: int | None = Field(default=None, ge=1, le=10)
     points: int | None = Field(default=None, ge=0, le=MAX_TASK_POINTS)
 
     @property
     def configured(self) -> bool:
-        return any(value is not None for value in (self.duration_minutes, self.priority, self.points))
+        return any(value is not None for value in (self.duration_minutes, self.points))
 
 
 class Project(BaseModel):
@@ -406,8 +403,6 @@ class Task(BaseModel):
     kind: TaskKind = TaskKind.FLEXIBLE
 
     estimated_duration_minutes: int = Field(gt=0)
-    #: Legacy: kept for records, files and clients that carry it. Not a scheduling input any more.
-    priority: int = Field(default=DEFAULT_TASK_PRIORITY, ge=1, le=10)
     #: The user's own productivity value of the task (the task form's "Points"): what finishing it is worth to
     #: them, for analytics. Not a scheduling input and unrelated to a placement's optimizer `score`.
     points: int = Field(default=DEFAULT_TASK_POINTS, ge=0, le=MAX_TASK_POINTS)
@@ -424,8 +419,6 @@ class Task(BaseModel):
     #: Legacy: a custom preferred window saved or imported before Early / Mid / Late. The task form no longer
     #: sets one; it only scores a task that has no preferred_time (which always takes precedence).
     preferred_time_window: LocalTimeWindow | None = None
-
-    dependency_ids: list[uuid.UUID] = Field(default_factory=list)
 
     deadline: datetime | None = None
 
@@ -479,12 +472,6 @@ class Task(BaseModel):
     @classmethod
     def _timestamps_aware(cls, value: datetime | None) -> datetime | None:
         return _utc_timestamp(value)
-
-    @model_validator(mode="after")
-    def _validate_no_self_dependency(self) -> "Task":
-        if self.id in self.dependency_ids:
-            raise ValueError("a task cannot depend on itself")
-        return self
 
     @model_validator(mode="after")
     def _validate_todo(self) -> "Task":
@@ -797,8 +784,6 @@ def project_scheduled_task_display(
 
 class UnscheduledReasonCode(str, Enum):
     NO_VALID_SLOT = "no_valid_slot"
-    DEPENDENCY_CYCLE = "dependency_cycle"
-    DEPENDENCY_UNRESOLVED = "dependency_unresolved"
     REQUIRED_DATE_CONFLICT = "required_date_conflict"
     WINDOW_UNSUPPORTED = "window_unsupported"
     OTHER = "other"

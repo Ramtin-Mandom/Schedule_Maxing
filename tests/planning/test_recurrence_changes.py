@@ -49,7 +49,7 @@ class World:
     def series(self, **rule) -> Task:
         spec = RecurrenceSpec(**{"frequency": "daily", "start_date": MON, "timezone": "UTC", **rule})
         return self.planning.create_task(Task(name="Walk", category="exercise", estimated_duration_minutes=30,
-                                              priority=5, recurrence=spec))
+                                              recurrence=spec))
 
     def expand(self, first: date, last: date):
         return series_ops.expand_occurrences(self.planning, first, last)
@@ -107,7 +107,7 @@ def test_this_occurrence_marks_it_modified_and_series_wide_edits_leave_it_and_hi
 def test_an_ordinary_update_of_an_occurrence_marks_it_modified_and_its_identity_never_changes(world: World) -> None:
     walk = world.series()
     [occurrence] = world.expand(day(0), day(0)).created
-    saved = world.planning.update_task(occurrence.model_copy(update={"priority": 9}), expected_version=1)
+    saved = world.planning.update_task(occurrence.model_copy(update={"points": 90}), expected_version=1)
     assert saved.occurrence_state == OccurrenceState.MODIFIED
     with pytest.raises((InvalidEntityError, ValueError)):
         world.planning.update_task(saved.model_copy(update={"occurrence_slot": day(1)}), expected_version=saved.version)
@@ -122,7 +122,7 @@ def test_this_and_later_splits_atomically_with_lineage_and_no_duplicate_slots(wo
     world.schedule(day(4))
     world.complete(world.occurrence(walk, day(4)))  # a later occurrence already done
     modified = world.occurrence(walk, day(5))
-    series_ops.edit_occurrence(world.planning, modified.model_copy(update={"priority": 2}),
+    series_ops.edit_occurrence(world.planning, modified.model_copy(update={"points": 20}),
                                expected_version=modified.version)
     stored = world.planning.get_task(walk.id)
 
@@ -193,7 +193,7 @@ def test_stale_scoped_changes_change_nothing(world: World) -> None:
     walk = world.series()
     world.expand(day(0), day(2))
     stored = world.planning.get_task(walk.id)
-    world.planning.update_task(stored.model_copy(update={"priority": 7}), expected_version=stored.version)
+    world.planning.update_task(stored.model_copy(update={"points": 70}), expected_version=stored.version)
     before = [tuple(row) for row in world.connection.execute("SELECT * FROM tasks ORDER BY id")]
     with pytest.raises(VersionConflictError):
         series_ops.edit_series(world.planning, stored.model_copy(update={"name": "X"}), expected_version=stored.version,
@@ -251,7 +251,7 @@ def test_a_moved_occurrence_cannot_take_a_second_placement(world: World) -> None
 
 def test_a_legacy_template_placement_still_moves_only_within_its_own_date(world: World) -> None:
     legacy = world.planning.create_task(Task(name="Standup", category="work", estimated_duration_minutes=15,
-                                             priority=5, recurrence=RecurrenceSpec(frequency="daily")))
+                                             recurrence=RecurrenceSpec(frequency="daily")))
     placement = ScheduledTask(task_id=legacy.id, planned_date=day(0), timezone="UTC", planned_start=at(9, day(0)),
                               planned_end=at(9, day(0)) + timedelta(minutes=15))
     [stored] = world.planning.replace_placements(day(0), day(0), [placement]).placements

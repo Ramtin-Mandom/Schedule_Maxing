@@ -54,7 +54,7 @@ def plan(planning_repository: PlanningRepository):
 
     def make(name: str = "Study", hour: int = 9, day_offset: int = 0, task: Task | None = None, **task_fields):
         if task is None:
-            task = Task(name=name, category="study", estimated_duration_minutes=60, priority=5, **task_fields)
+            task = Task(name=name, category="study", estimated_duration_minutes=60, **task_fields)
             planning_repository.insert_task(task)
         start = T0.replace(hour=hour) + timedelta(days=day_offset)
         placement = ScheduledTask(task_id=task.id, planned_date=start.date(), timezone="UTC", planned_start=start,

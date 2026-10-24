@@ -7,9 +7,10 @@ PlanningService on a temporary database file (never the real data dir).
 from __future__ import annotations
 
 import threading
-import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
+
+import uuid
 
 import pytest
 
@@ -49,8 +50,8 @@ def controller(db_path, tmp_path):
         connection.close()
 
 
-def make_task(name="Task", *, duration=60, priority=5, category="study") -> Task:
-    return Task(name=name, category=category, estimated_duration_minutes=duration, priority=priority)
+def make_task(name="Task", *, duration=60, category="study") -> Task:
+    return Task(name=name, category=category, estimated_duration_minutes=duration)
 
 
 # -----------------------------------------------------------------------------
@@ -130,7 +131,7 @@ def test_allocation_level_mandatory_failure_is_visible_in_allocation_result(cont
     date at all, so generating that date later simply finds nothing to do
     for it (not a day-scheduler error)."""
     too_long_required = Task(
-        name="TooLong", category="study", estimated_duration_minutes=2000, priority=5, required=True,
+        name="TooLong", category="study", estimated_duration_minutes=2000, required=True,
     )
     controller.add_or_update_task(too_long_required)
 
@@ -153,7 +154,7 @@ def test_generation_level_mandatory_failure_surfaces_through_controller_result(c
 
     day = date(2024, 6, 3)
     required_task = Task(
-        name="Fragmented", category="study", estimated_duration_minutes=1000, priority=5, required=True,
+        name="Fragmented", category="study", estimated_duration_minutes=1000, required=True,
     )
     controller.add_or_update_task(required_task)
     blocker = FixedBlock(
@@ -323,7 +324,7 @@ def test_failed_task_write_changes_nothing_and_invalidates_nothing(controller: P
     assigned_date, _ = _generated_week(controller, task)
 
     result = controller.add_or_update_task(Task(
-        name="Broken", category="study", estimated_duration_minutes=30, priority=5, dependency_ids=[uuid.uuid4()],
+        name="Broken", category="study", estimated_duration_minutes=30, project_id=uuid.uuid4(),
     ))
 
     assert not result.ok
@@ -361,30 +362,17 @@ def test_returned_models_are_snapshots(controller: PlanningController) -> None:
     saved = controller.add_or_update_task(task).value
 
     saved.name = "mutated"
-    controller.get_task(task.id).value.priority = 10
+    controller.get_task(task.id).value.points = 10
     controller.list_tasks().value[0].tags.append("mutated")
     task.name = "mutated input"
 
     stored = controller.get_task(task.id).value
-    assert (stored.name, stored.priority, stored.tags) == ("Original", 5, [])
-
-
-def test_deleting_a_task_others_depend_on_is_a_structured_failure(controller: PlanningController) -> None:
-    dependency = make_task("Dependency")
-    dependent = Task(name="Dependent", category="study", estimated_duration_minutes=30, priority=5,
-                     dependency_ids=[dependency.id])
-    assert controller.add_or_update_tasks([dependent, dependency]).ok
-
-    result = controller.remove_task(dependency.id, expected_version=dependency.version)
-
-    assert not result.ok
-    assert "depend" in result.error
-    assert controller.get_task(dependency.id).value is not None
+    assert (stored.name, stored.points, stored.tags) == ("Original", task.points, [])
 
 
 def test_allocation_only_considers_tasks_eligible_for_the_range(controller: PlanningController) -> None:
     this_week = make_task("This week")
-    next_week = Task(name="Next week", category="study", estimated_duration_minutes=60, priority=5,
+    next_week = Task(name="Next week", category="study", estimated_duration_minutes=60,
                      required=True, required_date=date(2024, 6, 12))
     controller.add_or_update_tasks([this_week, next_week])
 

@@ -154,7 +154,7 @@ preview's fingerprint: if the inputs changed since, `409 inputs_changed`).
   interval, version, execution links) and only new work -- tasks allocated to
   the date that are not scheduled anywhere yet -- is fitted around it. If a
   kept placement no longer fits (task deleted or moved, duration changed,
-  window, fixed block, engine mode, deadline or dependency change), the
+  window, fixed block, engine mode or deadline change), the
   response is `409 regenerate_required` with `problems` and nothing is
   saved; the user must choose an explicit `mode: full` regeneration. The same
   answer comes from either mode when a *manual* placement no longer fits.
@@ -165,8 +165,8 @@ preview's fingerprint: if the inputs changed since, `409 inputs_changed`).
   date writes nothing for every date.
 - Concurrency: the engine runs outside any write transaction; the save then
   re-reads every input under the user's write lock and compares fingerprints
-  and placement versions. Any change since (task, fixed block, preference,
-  external dependency, placement, manual intent, execution state, or a
+  and placement versions. Any change since (task -- its points included --,
+  fixed block, preference, placement, manual intent, execution state, or a
   placement kept outside the generated dates) is `409 inputs_changed` /
   `409 version_conflict`, and the previous schedule stays untouched.
 - A required task that cannot be placed is `422 generation_failed` with
@@ -193,8 +193,8 @@ planned on those dates, their placements on *other* dates
 layers (those dates then inherit again). Also: `placements_with_history_ids` /
 `tasks_with_history_ids` (execution history is always kept),
 `protected_recurring_task_ids` (recurring templates are never deleted by a
-range reset), `blocking_dependents` / `blocked` (a task outside the range
-depends on one inside: the reset will be refused), and `token`.
+range reset), and `token`. (`blocking_dependents` and `blocked` are gone:
+tasks have no dependencies since ADR-048.)
 
 Commit `{start_date, end_date, confirmation: <token>}` -> `ResetResultOut`
 (`deleted` per kind). If anything in the previewed set changed, `409` and
@@ -209,7 +209,7 @@ contract is [execution-rescheduling.md](execution-rescheduling.md)). Body:
 `{base_version, planned_date, timezone, planned_start, planned_end,
 replacement_id?}`. The destination is checked with the scheduling rules
 (day window, fixed blocks, other placements, the task's estimate, required
-date, deadline, engine mode, dependencies and dependents; a recurring
+date, deadline, engine mode; a recurring
 template's placement stays on its date). Answer: `{previous, replacement,
 cancelled_execution_id}` -- `previous` is the tombstone with the original
 plan, `removal_reason: "rescheduled"` and `superseded_by_id`. Refusals

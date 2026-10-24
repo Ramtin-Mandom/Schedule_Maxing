@@ -44,12 +44,12 @@ DAY_START = datetime(2024, 6, 3, 0, 0, tzinfo=timezone.utc)
 
 
 def make_task(
-    name="Task", *, duration=60, priority=5, category="study", tags=None, required=False,
-    dependency_ids=None, deadline=None, preferred_time_window=None, required_date=None, task_id=None,
+    name="Task", *, duration=60, category="study", tags=None, required=False,
+    deadline=None, preferred_time_window=None, required_date=None, task_id=None,
 ):
     kwargs = dict(
-        name=name, category=category, tags=tags or [], estimated_duration_minutes=duration, priority=priority,
-        required=required, dependency_ids=dependency_ids or [], deadline=deadline,
+        name=name, category=category, tags=tags or [], estimated_duration_minutes=duration,
+        required=required, deadline=deadline,
         preferred_time_window=preferred_time_window, required_date=required_date,
     )
     if task_id is not None:
@@ -84,7 +84,7 @@ def prefs(mode=OptimizerMode.PRECISE_GREEDY, day_window=None, **reward_kwargs):
 
 
 def placed(start, end, category="other", tag=""):
-    return _Placed(start=start, end=end, name="N", category=category, tag=tag, task_id=uuid.uuid4(), score=0.0, fixed=False)
+    return _Placed(start=start, end=end, category=category, tag=tag, task_id=uuid.uuid4(), score=0.0, fixed=False)
 
 
 # -----------------------------------------------------------------------------
@@ -132,7 +132,7 @@ def test_canonical_per_task_parity_across_durations_and_modes(duration, mode):
     placed_items = [placed(0, 60, category="study", tag="math"), placed(500, 560, category="work", tag="")]
 
     kwargs = dict(
-        task=task, placed=placed_items, day_total_minutes=1440, earliest_start=0, mode=mode,
+        task=task, placed=placed_items, day_total_minutes=1440, mode=mode,
         day_window_start_minute=day_preferences.day_window.start_minute, settings=settings,
         day_preferences=day_preferences, deadline_offset=None,
     )
@@ -158,7 +158,7 @@ def test_canonical_per_task_parity_non_midnight_day_and_short_gap_bonus():
     placed_items = [placed(0, 100), placed(150, 600)]
 
     kwargs = dict(
-        task=task, placed=placed_items, day_total_minutes=600, earliest_start=0, mode=OptimizerMode.ADHD_FRIENDLY,
+        task=task, placed=placed_items, day_total_minutes=600, mode=OptimizerMode.ADHD_FRIENDLY,
         day_window_start_minute=480, settings=settings, day_preferences=day_preferences, deadline_offset=None,
     )
     event = _best_candidate_for_canonical_task(**kwargs)
@@ -183,7 +183,7 @@ def test_canonical_per_task_parity_signed_weights_and_near_cancelling_slopes():
     placed_items = [placed(0, 100)]
 
     kwargs = dict(
-        task=task, placed=placed_items, day_total_minutes=1440, earliest_start=0, mode=OptimizerMode.ADHD_FRIENDLY,
+        task=task, placed=placed_items, day_total_minutes=1440, mode=OptimizerMode.ADHD_FRIENDLY,
         day_window_start_minute=0, settings=settings, day_preferences=day_preferences, deadline_offset=None,
     )
     event = _best_candidate_for_canonical_task(**kwargs)
@@ -198,7 +198,7 @@ def test_canonical_per_task_parity_no_feasible_candidates():
     settings = optimizer_module.day_preferences_to_reward_settings(day_preferences)
 
     kwargs = dict(
-        task=task, placed=[placed(0, 1440)], day_total_minutes=1440, earliest_start=0,
+        task=task, placed=[placed(0, 1440)], day_total_minutes=1440,
         mode=OptimizerMode.PRECISE_GREEDY, day_window_start_minute=0, settings=settings,
         day_preferences=day_preferences, deadline_offset=None,
     )
@@ -231,14 +231,14 @@ def _assert_canonical_results_match(event_result, exhaustive_result):
 
 
 @pytest.mark.parametrize("mode", [OptimizerMode.PRECISE_GREEDY, OptimizerMode.ADHD_FRIENDLY])
-def test_full_greedy_parity_mixed_required_optional_dependencies(mode):
+def test_full_greedy_parity_mixed_required_optional(mode):
     day_preferences = prefs(mode=mode, weight_tag_relation=2.0, weight_fragmentation_penalty=-4.0)
     prep = make_task("Prep", duration=30, tags=["math"])
-    dependent = make_task("Dependent", duration=45, required=True, dependency_ids=[prep.id], tags=["math"])
+    dependent = make_task("Dependent", duration=45, required=True, tags=["math"])
     optional_a = make_task(
-        "OptA", duration=60, priority=8, preferred_time_window=LocalTimeWindow(start_minute=300, end_minute=400)
+        "OptA", duration=60, preferred_time_window=LocalTimeWindow(start_minute=300, end_minute=400)
     )
-    optional_b = make_task("OptB", duration=13, priority=3, category="work")
+    optional_b = make_task("OptB", duration=13, category="work")
     fixed = make_fixed("Lunch", 700, 760)
 
     schedule = make_day_schedule([prep, dependent, optional_a, optional_b], fixed_blocks=[fixed])
@@ -265,7 +265,7 @@ def test_full_greedy_parity_near_full_day_and_fragmentation():
     day_preferences = prefs(weight_fragmentation_penalty=-6.0, min_gap_between_tasks_minutes=20)
     fixed_blocks = [make_fixed("Sleep", 0, 480), make_fixed("Lunch", 720, 760), make_fixed("Dinner", 1080, 1140)]
     tasks = [
-        make_task(f"T{i}", duration=17 + i * 3, priority=(i % 10) + 1, category=["study", "work", "chores"][i % 3])
+        make_task(f"T{i}", duration=17 + i * 3, category=["study", "work", "chores"][i % 3])
         for i in range(10)
     ]
     schedule = make_day_schedule(tasks, fixed_blocks=fixed_blocks)
@@ -323,7 +323,7 @@ def test_full_greedy_parity_non_midnight_quarter_hour_alignment():
 def test_canonical_result_independent_validity_checks():
     day_preferences = prefs(weight_tag_relation=2.0)
     prep = make_task("Prep", duration=30)
-    dependent = make_task("Dependent", duration=30, required=True, dependency_ids=[prep.id])
+    dependent = make_task("Dependent", duration=30, required=True)
     fixed = make_fixed("Busy", 200, 260)
     schedule = make_day_schedule([prep, dependent], fixed_blocks=[fixed])
 
@@ -342,7 +342,6 @@ def test_canonical_result_independent_validity_checks():
 
     by_task = {p.task_id: p for p in result.placements}
     assert dependent.id in by_task and prep.id in by_task
-    assert by_task[prep.id].planned_end <= by_task[dependent.id].planned_start  # dependency order
 
     assert result.total_score == pytest.approx(round(sum(p.score for p in result.placements), 2))
 
@@ -368,7 +367,7 @@ def test_event_search_substantially_reduces_scorer_calls_on_a_large_sparse_inter
         return real_score(*args, **kwargs)
 
     kwargs = dict(
-        task=task, placed=[], day_total_minutes=1440, earliest_start=0, mode=OptimizerMode.PRECISE_GREEDY,
+        task=task, placed=[], day_total_minutes=1440, mode=OptimizerMode.PRECISE_GREEDY,
         day_window_start_minute=0, settings=settings, day_preferences=day_preferences, deadline_offset=None,
     )
 

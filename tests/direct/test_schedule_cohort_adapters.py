@@ -35,7 +35,7 @@ def build(planning, executions, clock, owner) -> None:
     for name, day, hour in (("Done", MON, 9), ("Skip", MON, 10), ("Untouched", MON, 11), ("Working", MON, 12),
                             ("Cancel", MON, 13), ("Moved", MON, 14), ("Future", WED, 9)):
         task = planning.create_task(Task(user_id=owner, name=name, category="study" if hour < 12 else "admin",
-                                         estimated_duration_minutes=60, priority=5))
+                                         estimated_duration_minutes=60))
         placement = ScheduledTask(task_id=task.id, user_id=owner, planned_date=day, timezone=VAN,
                                   planned_start=local_hour(day, hour), planned_end=local_hour(day, hour + 1),
                                   task_category=task.category, created_at=clock.now, updated_at=clock.now)

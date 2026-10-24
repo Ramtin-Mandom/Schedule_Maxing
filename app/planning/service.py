@@ -7,31 +7,7 @@ Scheduler), for exactly one selected date, using an AllocationResult's
 assignments to determine which tasks belong to that date.
 
 This module never optimizes any date other than the one explicitly
-selected -- not the rest of the week/month, and not a dependency's own
-date (a same-day dependency is scheduled by that same
-generate_day_schedule call, since it is naturally part of the same day's
-task set; an earlier-date dependency is passed through as external
-context, never re-optimized here).
-
-Cross-day dependency contract: a dependency allocated to an earlier date is
-treated as satisfied from the very start of the selected day's local
-window (a deliberately conservative synthetic instant -- allocation itself
-never computes a real completion time, only a date, so this is the
-earliest safe assumption rather than a guess at an exact instant). A
-dependency allocated to a later date, left unallocated, or referencing
-unresolved external context blocks its dependent, exactly matching
-app.optimizer.generate_day_schedule's own contract for
-external_dependency_ends.
-
-Dependencies outside the allocation (Milestone 3): the caller may pass
-external_dependency_satisfaction -- {dependency id: (satisfied date,
-satisfied instant)} for dependencies it resolved from persisted state (a
-completion, or an earlier generated placement; see
-app/planning/external_dependencies.py). One satisfied on an earlier date is
-treated like an earlier-date allocated dependency (satisfied from the day's
-start); one satisfied on the selected date is satisfied from its real
-instant, rounded up to the next whole minute (never earlier than the day's
-start); one satisfied only later is left out, so it blocks.
+selected.
 
 Result staleness: DayResultStatus/SelectedDayState provide a minimal,
 explicit policy: a generated result is tied to the AllocationResult.id it
@@ -54,12 +30,11 @@ import uuid
 from dataclasses import dataclass
 from collections.abc import Mapping
 from datetime import date as date_
-from datetime import datetime, timedelta
+from datetime import timedelta
 from enum import Enum
 
 from app.optimizer import generate_day_schedule
 from app.planning.allocation import AllocationResult
-from app.planning.external_dependencies import ceil_to_minute
 from app.planning.models import DaySchedule, DayScheduleOutput, FixedBlock, TaskRegistry
 from app.planning.preferences import DayPreferences
 from app.planning.provenance import StaleReason
@@ -120,7 +95,6 @@ def generate_selected_day(
     fixed_blocks_by_date: dict[date_, list[FixedBlock]] | None = None,
     *,
     previous_result: DayScheduleOutput | None = None,
-    external_dependency_satisfaction: Mapping[uuid.UUID, tuple[date_, datetime]] | None = None,
     task_bonuses: Mapping[uuid.UUID, float] | None = None,
 ) -> tuple[DayScheduleOutput, SelectedDayState]:
     """
@@ -148,30 +122,8 @@ def generate_selected_day(
         tasks=tasks,
     )
 
-    day_start_utc, _ = preferences.to_local_day_window().to_utc_instants()
-
-    external_dependency_ends = {}
-    for task_id in todays_task_ids:
-        task = tasks.get(task_id)
-        for dependency_id in task.dependency_ids:
-            dependency_date = allocation.assignments.get(dependency_id)
-            if dependency_date is not None and dependency_date < selected_date:
-                external_dependency_ends[dependency_id] = day_start_utc
-            # A same-date dependency is already part of todays_task_ids and
-            # is resolved locally by generate_day_schedule; a later-date or
-            # unallocated dependency is intentionally left out here, so it
-            # blocks this task exactly as generate_day_schedule's own
-            # contract requires.
-            elif dependency_date is None and dependency_id in (external_dependency_satisfaction or {}):
-                satisfied_date, satisfied_at = external_dependency_satisfaction[dependency_id]
-                if satisfied_date < selected_date:
-                    external_dependency_ends[dependency_id] = day_start_utc
-                elif satisfied_date == selected_date:
-                    external_dependency_ends[dependency_id] = max(day_start_utc, ceil_to_minute(satisfied_at))
-
     result = generate_day_schedule(
-        day_schedule, preferences, previous_result=previous_result, external_dependency_ends=external_dependency_ends,
-        task_bonuses=task_bonuses,
+        day_schedule, preferences, previous_result=previous_result, task_bonuses=task_bonuses,
     )
 
     state = SelectedDayState(

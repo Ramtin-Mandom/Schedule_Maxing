@@ -7,7 +7,6 @@ close/reopen durability, atomic multi-row writes, and date-range queries.
 
 from __future__ import annotations
 
-import sqlite3
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -33,19 +32,16 @@ NY = ZoneInfo("America/New_York")
 
 def full_task(**overrides) -> Task:
     """A task with every optional field populated."""
-    dependency = overrides.pop("dependency_ids", [])
     defaults = dict(
         user_id=uuid.uuid4(),
         name="Write report",
         category="work",
         tags=["writing", "deep", "writing"],  # order and duplicates preserved
         estimated_duration_minutes=95,
-        priority=9,
         required=True,
         required_date=date(2024, 6, 5),
         preferred_dates=[date(2024, 6, 5), date(2024, 6, 3)],
         preferred_time_window=LocalTimeWindow(start_minute=540, end_minute=1440),
-        dependency_ids=dependency,
         deadline=datetime(2024, 6, 5, 17, 30, 15, 123456, tzinfo=NY),  # non-UTC offset, microseconds
         recurrence=RecurrenceSpec(frequency=RecurrenceFrequency.WEEKLY, interval=2, weekdays=[4, 0], count=6),
         created_at=datetime(2024, 5, 1, 8, 0, 0, 1, tzinfo=timezone.utc),
@@ -57,7 +53,7 @@ def full_task(**overrides) -> Task:
 
 
 def minimal_task(**overrides) -> Task:
-    defaults = dict(name="Minimal", category="misc", estimated_duration_minutes=15, priority=1)
+    defaults = dict(name="Minimal", category="misc", estimated_duration_minutes=15)
     defaults.update(overrides)
     return Task(**defaults)
 
@@ -85,11 +81,8 @@ def block_on(day: date, hour: int, *, label: str = "Class", minutes: int = 60, t
 
 
 def test_full_task_round_trip_is_exact(planning_repository: PlanningRepository) -> None:
-    dependency = minimal_task(name="Dependency")
-    task = full_task(dependency_ids=[dependency.id])
-    with planning_repository.transaction():
-        planning_repository.insert_task(dependency)
-        planning_repository.insert_task(task)
+    task = full_task()
+    planning_repository.insert_task(task)
 
     loaded = planning_repository.get_task(task.id)
 
@@ -109,7 +102,7 @@ def test_minimal_task_round_trip_keeps_nullable_fields_null(planning_repository:
     assert loaded.user_id is None and loaded.project_id is None
     assert loaded.required_date is None and loaded.deadline is None
     assert loaded.preferred_time_window is None and loaded.recurrence is None
-    assert loaded.tags == [] and loaded.preferred_dates == [] and loaded.dependency_ids == []
+    assert loaded.tags == [] and loaded.preferred_dates == []
 
 
 @pytest.mark.parametrize(
@@ -128,9 +121,7 @@ def test_recurrence_variants_round_trip(planning_repository: PlanningRepository,
 
 
 def test_task_fields_are_stored_relationally_not_as_blobs(planning_repository: PlanningRepository, connection) -> None:
-    dependency = minimal_task(name="Dependency")
-    task = full_task(dependency_ids=[dependency.id])
-    planning_repository.insert_task(dependency)
+    task = full_task()
     planning_repository.insert_task(task)
     task_id = str(task.id)
 
@@ -145,9 +136,6 @@ def test_task_fields_are_stored_relationally_not_as_blobs(planning_repository: P
     assert [r[0] for r in connection.execute(
         "SELECT preferred_date FROM task_preferred_dates WHERE task_id = ? ORDER BY position", (task_id,)
     )] == ["2024-06-05", "2024-06-03"]
-    assert [r[0] for r in connection.execute(
-        "SELECT depends_on_task_id FROM task_dependencies WHERE task_id = ?", (task_id,)
-    )] == [str(dependency.id)]
     assert [r[0] for r in connection.execute(
         "SELECT weekday FROM task_recurrence_weekdays WHERE task_id = ? ORDER BY weekday", (task_id,)
     )] == [0, 4]
@@ -238,7 +226,7 @@ def test_independent_close_and_reopen_restores_everything(db_path: Path) -> None
     repository = PlanningRepository(connection)
     project = Project(name="P")
     dependency = minimal_task(name="Dep", project_id=project.id)
-    task = full_task(dependency_ids=[dependency.id], project_id=project.id)
+    task = full_task(project_id=project.id)
     block = block_on(date(2024, 6, 3), 7)
     placement = placement_for(task, date(2024, 6, 5), 9, optimization_metadata={"k": "v"})
     with repository.transaction():
@@ -273,22 +261,6 @@ def test_multi_row_write_rolls_back_entirely_after_an_injected_failure(
 
     for table in ("tasks", "task_tags", "task_preferred_dates", "task_recurrence_weekdays"):
         assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
-
-
-def test_deferred_foreign_keys_allow_any_order_but_fail_at_commit_when_missing(
-    planning_repository: PlanningRepository, connection
-) -> None:
-    dependency = minimal_task(name="Dep")
-    dependent = minimal_task(name="Dependent", dependency_ids=[dependency.id])
-    with planning_repository.transaction():
-        planning_repository.insert_task(dependent)  # before its dependency: fine inside one transaction
-        planning_repository.insert_task(dependency)
-    assert planning_repository.get_task(dependent.id).dependency_ids == [dependency.id]
-
-    orphan = minimal_task(name="Orphan", dependency_ids=[uuid.uuid4()])
-    with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
-        planning_repository.insert_task(orphan)
-    assert planning_repository.get_task(orphan.id) is None
 
 
 def test_soft_deleting_a_task_hides_it_but_keeps_its_row_and_children(

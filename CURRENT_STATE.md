@@ -8,10 +8,10 @@ feature's state changes, and do not rewrite the file only to move the date. Arch
 | | |
 |---|---|
 | Generated | 2026-10-23 |
-| Commit | `dfd53d6` ("Release 1.3.0", tag `v1.3.0`), plus the uncommitted removal of the ML duration predictor (ADR-046) |
+| Commit | `f47a080` (Greedy Optimizer v1 removed, ADR-047) and the commit after it: task dependencies and priority removed everywhere, points-first allocation, typed reward (ADR-048, ADR-049); on top of `dfd53d6` ("Release 1.3.0", tag `v1.3.0`) and the ML-predictor removal (ADR-046) |
 | Branch | `engine-remake`, at `main` (pull request #23 merged the round-3 performance work, light caching, the engine-process close wait and CI test fixes; all five CI jobs passed) |
 | App version | 1.3.0 (`app/version.py`); backend API version 1.0.0 (`backend/app.py`) |
-| Local schema | SQLite v18 (`app/execution/db.py`); server Alembic head `0020_budget_future_items` |
+| Local schema | SQLite v19 (`app/execution/db.py`); server Alembic head `0021_drop_priority_and_dependencies` (deploy it together with this client) |
 
 **How to read the evidence.** *Verified* means a test or check was run in this session and passed.
 *Verified failure* means a check was run and failed. *Code-inspected* means the implementation was read
@@ -28,7 +28,7 @@ FastAPI/PostgreSQL account server.
 | Subsystem | Operational? | Basis |
 |---|---|---|
 | Desktop app (local SQLite) | Yes | The dev suite passed on the ML-removal tree (2026-10-23, section D); the affected real-window modules passed in round 3 |
-| Scheduling engines and modes | Yes | Engine, mode and baseline tests passed |
+| Scheduling engines and modes | Yes | Engine, mode and baseline tests passed; `scheduling_mode_baseline --check` passes (day results unchanged by ADR-048/049) |
 | Execution tracking and analytics | Yes | Execution and productivity tests passed |
 | Sync client ↔ backend | Yes, against an in-process backend | `tests/sync` (system tier) passed in the full suite. No live server was contacted |
 | Backend API | Yes on SQLite in tests | `tests/backend` passed in the full suite. PostgreSQL was not tested here |
@@ -41,15 +41,16 @@ FastAPI/PostgreSQL account server.
 |---|---|---|---|---|
 | Canonical day engine (minute-precise greedy) | Implemented | `app/optimizer.py: generate_day_schedule` | `tests/test_day_engine.py`, `test_optimizer_candidates.py`, `test_optimizer_differential.py` (dev suite, passed) | No global-optimum guarantee |
 | Five scheduling modes | Implemented | `app/planning/preferences.py`, `app/mode_objectives.py`, `app/planning/catch_up.py` | `tests/test_scheduling_modes.py` (passed) | Normal, ADHD, Early Finish, Night Owl, Catch-Up |
-| Greedy Optimizer v1 (legacy baseline) | Implemented | `app/optimizer.py: optimize_day_schedule` | `tests/test_optimizer.py` (passed) | Frozen; used by the legacy path and benchmarks |
-| Week/month task-to-date allocation | Implemented | `app/planning/allocation.py`, `workflow.py` | `tests/planning/test_allocation*.py` (passed) | The Week and Month pages no longer have a range Make Schedule; `PlanningController.schedule_range` and the CLI still offer it |
-| Freshness and provenance (stale detection) | Implemented | `app/planning/provenance.py` | `tests/planning/test_workflow.py` (passed) | Any input change in the range marks the day stale |
-| Task form: Flexible / Fixed / To Do with points | Implemented | `app/ui/task_editor.py`, `task_form_model.py` | `tests/ui/test_task_form_model.py` (passed) | Since 1.1.0 there are no priority, deadline, dependency or repeat controls; existing values are kept and honored |
-| Dependencies and deadlines | Partially Implemented | `app/pert.py`, `app/planning/allocation.py`, engine | `tests/test_pert.py`, planning tests (passed) | Enforced by the engine and by CSV import; the desktop form cannot set them (by design, since 1.1.0) |
+| Greedy Optimizer v1 (legacy baseline) | Removed (2026-10-23, ADR-047) | — | — | The canonical day engine is the only engine |
+| Week/month task-to-date allocation | Implemented | `app/planning/allocation.py`, `workflow.py` | `tests/planning/test_allocation*.py` (passed) | Points first, then deadline (ADR-049). The Week and Month pages no longer have a range Make Schedule; `PlanningController.schedule_range` and the CLI still offer it |
+| Freshness and provenance (stale detection) | Implemented | `app/planning/provenance.py` | `tests/planning/test_workflow.py` (passed) | Any input change in the range marks the day stale, a task's points included (`FINGERPRINT_VERSION` 2: every day saved before is stale once) |
+| Task form: Flexible / Fixed / To Do with points | Implemented | `app/ui/task_editor.py`, `task_form_model.py` | `tests/ui/test_task_form_model.py` (passed) | Since 1.1.0 there are no priority, deadline, dependency or repeat controls; existing deadlines and repeat rules are kept and honored |
+| Deadlines | Partially Implemented | `app/planning/allocation.py`, engine | planning and engine tests (passed) | Enforced by allocation and the engine; the desktop form cannot set them (by design, since 1.1.0) |
+| Task dependencies and priority | Removed (2026-10-23, ADR-048) | — | `tests/execution/test_migration_v19.py`, `tests/backend/test_migrations.py` | Dropped from local schema v19 and server revision 0021; the sync wire still carries `priority` 5 and `dependency_ids` [] for 1.3.0 clients; CSV `priority`/`dependencies` columns import and are ignored |
 | Recurring series | Partially Implemented | `app/planning/recurrence.py`, `series.py` | `tests/planning/test_recurrence_*.py` (passed) | Expansion, edits and sync work. The desktop form no longer creates new series (`docs/desktop-task-form.md`) |
 | Projects and milestones | Implemented | `app/ui/planning_pages.py`, `projects_controller.py` | `tests/ui/test_projects_allocation.py`, `test_project_details.py` | Project archiving: Not Implemented |
 | Manual placements and explicit rescheduling | Implemented | `app/planning/workflow.py: reschedule_placement`, `PlanningService.apply_reschedule` | `tests/planning/test_explicit_rescheduling.py`, `test_manual_placements.py` | |
-| CSV import and export (legacy and canonical v2) | Implemented | `app/planning/csv_*.py` | `tests/planning/test_csv_*.py`, `tests/test_import_safety.py` | Legacy CSV rows always import as new records |
+| CSV import and export (legacy and canonical format 3; format 2 still imports) | Implemented | `app/planning/csv_*.py` | `tests/planning/test_csv_*.py`, `tests/test_import_safety.py` | Legacy CSV rows always import as new records |
 | Execution tracking (lifecycle, sessions) | Implemented | `app/execution/service.py`, `lifecycle.py` | `tests/execution/*` (passed) | |
 | Fixed-block and To Do completion; Day board | Implemented | `app/execution/fixed_block_completion.py`, `app/ui/day_page.py` | `tests/ui/test_day_*.py`, `tests/execution/test_task_outcomes.py` | |
 | Execution feedback (focus, energy, interruptions) | Partially Implemented | `ExecutionService.record_feedback`, `app/ui/execution_controller.py` | Code-inspected | `app/ui/feedback_dialog.py` exists but the running app never opens it |
@@ -60,7 +61,7 @@ FastAPI/PostgreSQL account server.
 | Settings, preferences and task-data reset | Implemented | `app/ui/pages.py: SettingsPage`, `settings_controller.py`, `app/planning/task_data_reset.py` | `tests/ui/test_settings_*.py`, `tests/planning/test_reset.py` | |
 | How to Use guide and About | Implemented | `app/ui/guide_page.py`; About is a `PlaceholderPage` holding the version text | `tests/ui/test_guide.py` | Settings, Account and How to Use share one sidebar item with a top bar (`app/ui/shell.py: GroupBar`) |
 | Budgeting: balance (saved as today's; every manual change kept), income/expense entries, recurrence, occurrence edits, Stats with History and the 90-day forecast, Future (income ideas, wishlist) | Implemented (desktop) | `app/budget/`, `app/ui/budget_*.py`, `app/ui/day_money.py`, `app/persistence/budget.py`, `backend/resources.py` (`BUDGET_*`), local schema v17-v18, server revisions 0019-0020 | `tests/budget/*`, `tests/execution/test_migration_v17.py`, `test_migration_v18.py`, `tests/backend/test_budget_api.py`, `tests/sync/test_budget_sync.py`, `tests/direct/test_direct_budget.py`, `tests/ui/test_budget_controller.py`, `tests/ui/test_budget_page.py` | Local, direct and synced storage, REST CRUD; the local web profile has no budget routes |
-| Local SQLite storage, migrations v1→v18, backups, instance lock | Implemented | `app/execution/db.py`, `backup.py`, `instance_lock.py` | `tests/execution/test_db.py`, `test_migration_v*.py`, `test_backup.py` | |
+| Local SQLite storage, migrations v1→v19 (v19 needs SQLite 3.35+), backups, instance lock | Implemented | `app/execution/db.py`, `backup.py`, `instance_lock.py` | `tests/execution/test_db.py`, `test_migration_v*.py`, `test_backup.py` | |
 | Offline-first sync client | Implemented | `app/sync/` | `tests/sync/*` (full suite), `tests/test_sync_activity.py`, `tests/test_transport_keepalive.py` | Live server Unverified. Cadence follows the window's activity (60 s focused, 300 s otherwise, edits pushed 2.5 s after the last commit; ADR-041); one keep-alive HTTPS connection per transport |
 | Desktop start-up and idle behaviour (round 3) | Implemented | `app/app.py`, `app/ui/pages.py` (`DeferredPage`, stepped pre-build), `app/ui/activity.py`, `app/ui/page_freshness.py`, `app/ui/shell.py` (page size, detached hidden pages), `app/ui/light_widgets.py`, `app/sync/credentials.py` (`LazyVault`), `app/planning/engine_process.py` | `tests/test_startup_cost.py`, `tests/ui/test_deferred_pages.py`, `test_activity*.py`, `test_page_freshness*.py`, `test_light_widgets.py`, `tests/test_engine_process.py` | Probe: first paint 5.5-5.8 s -> 1.1-1.2 s, minimized 60 s with no status poll, resize p95 330-460 -> ~100 ms, generation p95 ~15 ms; dwm.exe while dragging the Day page ~23% -> ~16% of a core ([docs/desktop-performance-round3.md](docs/desktop-performance-round3.md)). Physical dragging with a mouse Unverified |
 | Light caching (opt-in, Settings -> Appearance; ADR-045) | Implemented | `app/ui/shell.py` (`set_light_caching`, `kept_pages`, `_release_when_quiet`), `app/ui/pages.py` (`DeferredPage.release`, Settings checkbox), `app/ui/ui_settings.py` (`light_caching`), `app/app.py` | `tests/ui/test_deferred_pages.py` (light caching tests), `tests/ui/test_shell_foundation.py` | **Verified** by those tests. Scratch probe: after every page, 3,246 -> 462 widgets, 89 -> 74-78 MB; returning to a page other than Day costs a first-visit build (section C) |
@@ -88,11 +89,9 @@ FastAPI/PostgreSQL account server.
 | Issue | Severity | Affected | Evidence |
 |---|---|---|---|
 | An intermittent `TclError: invalid command name "tcl_findLibrary"` in one real-window test per run | Medium | Real-window test tier | Documented in `docs/testing.md` "Known flaky test"; cause unknown |
-| UI modules that nothing reaches: `feedback_dialog.py`, `cohort_view.py`, `duration_suggestion.py`, and the `RewardConfigPage` class in `app/app.py` | Low (dead code and missing UI for supported features) | `app/ui/`, `app/app.py` | **Verified:** no production module imports or instantiates them (repository search) |
+| UI modules that nothing reaches: `feedback_dialog.py`, `cohort_view.py`, `duration_suggestion.py` | Low (dead code and missing UI for supported features) | `app/ui/`, `app/app.py` | **Verified:** no production module imports or instantiates them (repository search) |
 | Documentation contradicts the code: README says email verification is not provided; `docs/ci-cd.md` and README say CI runs on every push with four jobs; `docs/desktop-day.md` describes removed Productivity sections; the skill mentions Android | Low | Docs | **Verified** against `backend/verification*.py`, `ci.yml` (5 jobs, `pull_request` and `workflow_dispatch` only), `app/ui/productivity_page.py` |
-| Legacy CSV loader splits a dependency name on hyphens | Low (legacy path only) | `app/data_processor.py` | Pinned as current behavior by `tests/test_data_processor.py` |
-| `weight_category_bonus` is loaded but unused in scoring | Low | `app/reward.py` | Pinned by `tests/test_reward.py` |
-| Simulated-annealing settings exist but no engine uses them | Low | `config/settings.py` | **Verified** by search |
+| `weight_category_bonus` is loaded but unused in scoring (kept: it is stored in the preferences) | Low | `app/reward.py` | Pinned by `tests/test_reward.py` |
 | Reasons for unplaced tasks are not stored; after a restart only their count is known | Low | Day page | `docs/desktop-day.md` "Limitations" |
 | Regeneration does not cancel the `scheduled` execution of a placement it replaces | Low | Rescheduling | `docs/execution-rescheduling.md` §10 |
 | On DST days, timeline positions are elapsed minutes while labels show wall-clock times | Low | Day and Week views | `docs/desktop-day.md`, `docs/desktop-calendar.md` |

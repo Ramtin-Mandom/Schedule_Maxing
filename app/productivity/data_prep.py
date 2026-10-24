@@ -90,7 +90,6 @@ class Observation(BaseModel):
     task_name: str
     category: str
     tag: str
-    priority: int
     status: ExecutionStatus
 
     planned_date: int | None
@@ -177,7 +176,6 @@ def _to_observation(execution: TaskExecution, repository: ExecutionRepository) -
         task_name=execution.task_name,
         category=execution.category,
         tag=execution.tag,
-        priority=execution.priority,
         status=execution.status,
         planned_date=execution.planned_date,
         planned_start=effective_start,

@@ -17,7 +17,6 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.planning.models import (
-    DEFAULT_TASK_PRIORITY,
     TODO_PLACEHOLDER_MINUTES,
     FixedBlock,
     PreferredTime,
@@ -172,7 +171,6 @@ def test_a_minute_precise_task_is_built_from_the_form() -> None:
     assert task.estimated_duration_minutes == 13 and task.kind == TaskKind.FLEXIBLE
     # The form's one preferred time is a third of the day; it never sets a custom window or a priority.
     assert task.preferred_time == PreferredTime.LATE and task.preferred_time_window is None
-    assert task.priority == DEFAULT_TASK_PRIORITY
     assert task.preferred_dates == [DAY] and task.required_date is None and task.tags == ["reading", "deep"]
     pinned = build_task(valid_draft(pin_to_date=True, required=True), timezone_name="UTC")
     assert pinned.required_date == DAY and pinned.required and pinned.preferred_dates == []
@@ -247,7 +245,7 @@ def test_blocks_are_exact_and_may_end_at_the_following_midnight() -> None:
 
 def test_editing_keeps_recurrence_hidden_fields_and_unknown_categories() -> None:
     project = uuid.uuid4()
-    stored = Task(name="Gym", category="Volunteering", estimated_duration_minutes=45, priority=4,
+    stored = Task(name="Gym", category="Volunteering", estimated_duration_minutes=45,
                   preferred_dates=[DAY, DAY + timedelta(days=2)], tags=["a", "b", "c"], project_id=project,
                   recurrence=RecurrenceSpec(frequency=RecurrenceFrequency.WEEKLY, weekdays=[0, 2]), version=3)
     draft = draft_from_task(stored, "UTC")
@@ -350,21 +348,15 @@ def test_fixed_block_refusals_write_nothing_and_name_the_other_block(services) -
     assert not invalid.ok and set(invalid.cause.errors) == {"end"}
 
 
-def test_duplicate_names_references_by_id_and_edits_that_keep_everything(services) -> None:
+def test_project_references_by_id_and_edits_that_keep_everything(services) -> None:
     controller = page(services)
     project = services.planning_controller._service.create_project(Project(name="Thesis"))
-    ok(controller.save_draft(valid_draft(name="Study")))
-    ok(controller.save_draft(valid_draft(name="Study", date=(DAY + timedelta(days=1)).isoformat())))
     options = ok(controller.editor_options())
-    labels = [choice.label for choice in options.dependencies]
-    assert len(labels) == 2 and len(set(labels)) == 2  # duplicate names are told apart
     assert [choice.label for choice in options.projects] == ["Thesis"]
 
-    first = options.dependencies[0].id
-    ok(controller.save_draft(valid_draft(name="Review", dependency_ids=(first,), project_id=project.id)))
+    ok(controller.save_draft(valid_draft(name="Review", project_id=project.id)))
     review = next(t for t in ok(services.planning_controller.list_tasks()) if t.name == "Review")
-    assert review.dependency_ids == [first] and review.project_id == project.id
-    assert all(choice.id != review.id for choice in ok(controller.editor_options(rows(controller)["Review (The)"])).dependencies)
+    assert review.project_id == project.id
 
     # A recurring template with more fields than the form shows keeps all of them through an edit.
     services.planning_controller._service.update_task(
@@ -375,15 +367,15 @@ def test_duplicate_names_references_by_id_and_edits_that_keep_everything(service
     ok(controller.save_draft(TaskDraft(**{**draft.__dict__, "duration": "1 h 13 min"}), editing=ref))
     saved = ok(services.planning_controller.get_task(review.id))
     assert saved.estimated_duration_minutes == 73 and saved.recurrence.frequency == RecurrenceFrequency.DAILY
-    assert saved.tags == ["x", "y", "z"] and saved.dependency_ids == [first] and saved.project_id == project.id
+    assert saved.tags == ["x", "y", "z"] and saved.project_id == project.id
 
 
-def test_stale_versions_type_changes_and_deletes_with_dependents_are_refused(services) -> None:
+def test_stale_versions_and_type_changes_are_refused(services) -> None:
     controller = page(services)
     ok(controller.save_draft(valid_draft(name="Base")))
     ref = rows(controller)["Base"]
     task = ok(services.planning_controller.get_task(ref.id))
-    ok(services.planning_controller.add_or_update_task(task.model_copy(update={"priority": 2}),
+    ok(services.planning_controller.add_or_update_task(task.model_copy(update={"points": 20}),
                                                        expected_version=task.version))  # changed elsewhere
     stale = controller.save_draft(valid_draft(name="Base renamed"), editing=ref)
     assert not stale.ok and ok(services.planning_controller.get_task(ref.id)).name == "Base"
@@ -391,25 +383,19 @@ def test_stale_versions_type_changes_and_deletes_with_dependents_are_refused(ser
     fresh = rows(controller)["Base"]
     converted = controller.save_draft(block_draft("Base", "9:00 AM", "10:00 AM"), editing=fresh)
     assert not converted.ok and "cannot become a fixed block" in converted.error
-
-    ok(controller.save_draft(valid_draft(name="After", dependency_ids=(fresh.id,))))
     assert "saved schedule entries, completions and points are removed with it" in ok(controller.delete_description(fresh))
-    refused = controller.delete(rows(controller)["Base"])
-    assert not refused.ok and "After" in refused.error and "depend" in refused.error
-    assert "Base" in rows(controller)
 
 
 def test_an_account_workspace_owns_new_records_and_never_offers_other_owners(services) -> None:
     alice = uuid.uuid4()
     services.planning_service.create_task(Task(name="Someone else's", category="study",
-                                               estimated_duration_minutes=10, priority=1, user_id=uuid.uuid4()))
+                                               estimated_duration_minutes=10, user_id=uuid.uuid4()))
     services.switch_workspace(OwnerScope.account(alice))
     controller = page(services)
     ok(controller.save_draft(valid_draft(name="Mine")))
     ok(controller.save_draft(block_draft("My block", "8:00 AM", "8:13 AM")))
     assert {t.user_id for t in ok(services.planning_controller.list_tasks())} == {alice}
     assert [b.user_id for b in ok(services.planning_controller.get_fixed_blocks(DAY))] == [alice]
-    assert [c.label for c in ok(controller.editor_options()).dependencies] == ["Mine (Wed Sep 23)"]
 
 
 def test_a_block_in_another_timezone_is_edited_in_its_own_zone(services) -> None:

@@ -11,7 +11,7 @@ import pytest
 
 from app.execution.service import ExecutionService
 from app.planning.application import PlanningService
-from app.planning.errors import EntityInUseError, VersionConflictError
+from app.planning.errors import VersionConflictError
 from app.planning.models import FixedBlock, Project, RecurrenceSpec, ScheduledTask, Task
 from app.planning.preferences import DayWindowSpec, OptimizerMode, PreferenceOverrides
 from app.planning.provenance import GenerationRecord
@@ -21,7 +21,7 @@ MON, TUE, WED, NEXT_MON = date(2026, 9, 21), date(2026, 9, 22), date(2026, 9, 23
 
 
 def task(name: str, **extra) -> Task:
-    return Task(name=name, category="study", estimated_duration_minutes=60, priority=5, **extra)
+    return Task(name=name, category="study", estimated_duration_minutes=60, **extra)
 
 
 def placement(t: Task, day: date, hour: int = 9) -> ScheduledTask:
@@ -93,7 +93,6 @@ def test_preview_lists_exactly_what_the_reset_touches(planning_service: Planning
     assert preview.counts == {"placements": 4, "cascade_placements": 1, "schedule_generations": 2,
                               "fixed_blocks": 2, "tasks": 2, "date_preferences": 1}
     assert preview.placements_with_history_ids == [p["mon"].id] and preview.tasks_with_history_ids == [world["mon"].id]
-    assert not preview.blocked
 
 
 def test_reset_applies_the_preview_and_restores_inherited_date_preferences(
@@ -144,21 +143,6 @@ def test_a_stale_confirmation_deletes_nothing(planning_service: PlanningService,
     with pytest.raises(VersionConflictError, match="changed since the reset was previewed"):
         planning_service.reset_range(MON, TUE, confirmation=preview.token)
     assert (all_rows(connection), dirty(connection)) == before
-
-
-def test_a_dependency_refusal_rolls_back_the_whole_reset(planning_service: PlanningService, world, connection) -> None:
-    preview = planning_service.reset_preview(MON, TUE)
-    # After the preview (the previewed records are unchanged), a task outside the range starts depending on one inside.
-    planning_service.create_task(task("Follow-up", required_date=WED, dependency_ids=[world["mon"].id]))
-    assert planning_service.reset_preview(MON, TUE).token == preview.token
-    before = (all_rows(connection), dirty(connection))
-
-    with pytest.raises(EntityInUseError):
-        planning_service.reset_range(MON, TUE, confirmation=preview.token)
-
-    assert (all_rows(connection), dirty(connection)) == before  # preference layers and placements included
-    assert planning_service.date_preferences(MON) is not None
-    assert planning_service.reset_preview(MON, TUE).blocked
 
 
 def test_reset_of_an_empty_range_is_a_confirmed_no_op(planning_service: PlanningService, connection) -> None:

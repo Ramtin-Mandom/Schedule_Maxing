@@ -3,7 +3,7 @@ app/planning/csv_import.py
 
 The transactional CSV import boundary for persisted planning data
 (Milestone 2). A legacy schedule CSV (the established `date,name,category,
-tag,fixed,start_time,end_time,duration,priority,dependencies` format, see
+tag,fixed,start_time,end_time,duration[,priority,dependencies]` format, see
 samples/inputs/) is parsed and validated *completely* into canonical
 models first; only then is the whole result written through
 PlanningService.apply_import in one transaction. Invalid input writes
@@ -18,24 +18,12 @@ Conversion reuses the app.planning.compat contract unchanged:
     - a flexible row becomes a Task with preferred_dates=[its date] and its
       window as preferred_time_window; a fixed row becomes a FixedBlock
       whose category is the row's category ("fixed" when empty);
-    - the `dependencies` field is interpreted by
-      compat.resolve_legacy_dependency_field (semicolon lists, whole-field
-      match that preserves hyphenated names, then an unambiguous hyphen
-      split).
+    - the `priority` and `dependencies` columns of older files are optional
+      and ignored (tasks have neither).
 
-Stricter than the standalone compat adapters (which keep their legacy
-"drop and report" behavior for their own callers):
-    - relationships are resolved across the complete import: a reference is
-      matched against the same day's task names first and, only if that
-      name does not occur on that day, against every day of the file
-      (cross-day references); a name that is still ambiguous (duplicated) or
-      missing is an import *error*, never guessed and never silently
-      dropped. Dependencies on already-stored tasks are not resolved by
-      name (the file cannot name them unambiguously).
-    - a self-reference or a dependency cycle among the imported tasks, a
-      fixed block overlapping another in the file (or, for append, a stored
-      block on the same date), and any malformed value are errors, reported
-      with the CSV line number.
+A fixed block overlapping another in the file (or, for append, a stored
+block on the same date) and any malformed value are errors, reported with
+the CSV line number.
 Times are not forced onto the desktop form's 30-minute grid: the canonical
 engine is minute-precise.
 
@@ -55,8 +43,7 @@ Modes (ImportMode):
       placements, fixed blocks, and tasks planned in that span; undated
       tasks and anything outside the span are kept), then adds the import.
       Execution history is never deleted; placements it references are
-      reported. If a task outside the span depends on one inside it, the
-      whole import is refused.
+      reported.
 """
 
 from __future__ import annotations
@@ -69,14 +56,13 @@ from datetime import date as date_
 from enum import Enum
 from pathlib import Path
 
-from app.pert import has_cycle_by_id
-from app.planning.compat import legacy_day_to_date, legacy_minutes_to_utc, resolve_legacy_dependency_field
+from app.planning.compat import legacy_day_to_date, legacy_minutes_to_utc
 from app.planning.errors import PlanningError
 from app.planning.models import FixedBlock, LocalTimeWindow, Task
 from app.planning.time import MINUTES_PER_DAY, validate_timezone
 
 REQUIRED_COLUMNS = ("date", "name", "category", "fixed", "start_time", "end_time")
-FLEXIBLE_COLUMNS = ("duration", "priority")
+FLEXIBLE_COLUMNS = ("duration",)
 MAX_REPORTED_ERRORS = 20
 
 
@@ -173,7 +159,7 @@ def parse_legacy_csv(text: str, *, anchor_date: date_, timezone: str, source: st
         raise CsvImportError([ImportIssue(1, f"missing required column(s): {', '.join(missing_columns)}")])
 
     issues: list[ImportIssue] = []
-    tasks: list[tuple[int, date_, Task, str]] = []  # (line, date, task, raw dependencies)
+    tasks: list[tuple[int, date_, Task]] = []  # (line, date, task)
     blocks: list[tuple[int, FixedBlock]] = []
 
     for index, raw_row in enumerate(reader):
@@ -190,30 +176,26 @@ def parse_legacy_csv(text: str, *, anchor_date: date_, timezone: str, source: st
             blocks.append((line, parsed))
         else:
             task, day = parsed
-            tasks.append((line, day, task, row.get("dependencies", "")))
+            tasks.append((line, day, task))
 
     if not tasks and not blocks and not issues:
         issues.append(ImportIssue(None, "the CSV contains no rows"))
 
     issues.extend(_overlapping_blocks(blocks))
-    resolved_tasks = _resolve_dependencies(tasks, issues)
-
-    if not issues and has_cycle_by_id({task.id: task for task in resolved_tasks}):
-        issues.append(ImportIssue(None, "the dependencies among the imported tasks form a cycle"))
 
     if issues:
         raise CsvImportError(sorted(issues, key=lambda issue: (issue.line is None, issue.line or 0)))
 
-    dates = [day for _, day, _, _ in tasks] + [block.planned_date for _, block in blocks]
+    dates = [day for _, day, _ in tasks] + [block.planned_date for _, block in blocks]
     return ParsedImport(
         anchor_date=anchor_date,
         timezone=timezone,
         start_date=min(dates),
         end_date=max(dates),
-        tasks=resolved_tasks,
+        tasks=[task for _, _, task in tasks],
         fixed_blocks=[block for _, block in blocks],
         source=source,
-        lines_by_task_id={task.id: line for line, _, task, _ in tasks},
+        lines_by_task_id={task.id: line for line, _, task in tasks},
     )
 
 
@@ -280,11 +262,9 @@ def _parse_row(row: dict[str, str], anchor_date: date_, timezone: str) -> FixedB
     category = row.get("category", "")
     if not category:
         raise _RowError("category is required for a flexible task")
-    duration, priority = _int(row, "duration"), _int(row, "priority")
+    duration = _int(row, "duration")
     if duration <= 0:
         raise _RowError(f"duration must be greater than 0, got {duration}")
-    if not 1 <= priority <= 10:
-        raise _RowError(f"priority must be between 1 and 10, got {priority}")
     tag = row.get("tag", "")
     try:
         task = Task(
@@ -292,7 +272,6 @@ def _parse_row(row: dict[str, str], anchor_date: date_, timezone: str) -> FixedB
             category=category,
             tags=[tag] if tag else [],
             estimated_duration_minutes=duration,
-            priority=priority,
             preferred_time_window=LocalTimeWindow(start_minute=start, end_minute=end),
             preferred_dates=[day],
         )
@@ -323,30 +302,3 @@ def _overlapping_blocks(blocks: list[tuple[int, FixedBlock]]) -> list[ImportIssu
                     line, f"fixed block {later.label!r} overlaps fixed block {earlier.label!r} on {later.planned_date}"
                 ))
     return issues
-
-
-def _resolve_dependencies(tasks: list[tuple[int, date_, Task, str]], issues: list[ImportIssue]) -> list[Task]:
-    """Same-day names first, then the whole file; ambiguous/missing/self references are issues."""
-    all_days: dict[str, list[uuid.UUID]] = {}
-    by_day: dict[date_, dict[str, list[uuid.UUID]]] = {}
-    for _, day, task, _ in tasks:
-        all_days.setdefault(task.name, []).append(task.id)
-        by_day.setdefault(day, {}).setdefault(task.name, []).append(task.id)
-
-    resolved: list[Task] = []
-    for line, day, task, raw_dependencies in tasks:
-        same_day = by_day[day]
-        scoped = {name: same_day.get(name, ids) for name, ids in all_days.items()}
-        dependency_ids, diagnostics = resolve_legacy_dependency_field(task.name, raw_dependencies, scoped)
-        for diagnostic in diagnostics:
-            reason = (
-                "matches more than one imported task with that name; rename the tasks so the reference is unique"
-                if diagnostic.kind == "ambiguous"
-                else "does not match any task in this file"
-            )
-            issues.append(ImportIssue(line, f"dependency {diagnostic.raw_reference!r} of {task.name!r} {reason}"))
-        if task.id in dependency_ids:
-            issues.append(ImportIssue(line, f"task {task.name!r} depends on itself"))
-            dependency_ids = [dependency for dependency in dependency_ids if dependency != task.id]
-        resolved.append(task.model_copy(update={"dependency_ids": list(dict.fromkeys(dependency_ids))}))
-    return resolved

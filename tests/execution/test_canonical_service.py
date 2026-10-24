@@ -52,7 +52,6 @@ def make_task(planning_repository: PlanningRepository):
             name="Study Math",
             category="study",
             estimated_duration_minutes=60,
-            priority=8,
             preferred_time_window=LocalTimeWindow(start_minute=540, end_minute=660),
         )
         defaults.update(overrides)
@@ -92,7 +91,7 @@ def make_placement(planning_repository: PlanningRepository):
 def test_create_canonical_execution_snapshots_task_fields(
     service_with_clock: ExecutionService, make_task, make_placement
 ) -> None:
-    task = make_task(name="Study Math", category="study", tags=["math"], priority=9)
+    task = make_task(name="Study Math", category="study", tags=["math"])
     placement = make_placement(
         task, start=datetime(2024, 6, 3, 9, 0, tzinfo=timezone.utc), end=datetime(2024, 6, 3, 10, 0, tzinfo=timezone.utc)
     )
@@ -104,7 +103,6 @@ def test_create_canonical_execution_snapshots_task_fields(
     assert execution.task_name == "Study Math"
     assert execution.category == "study"
     assert execution.tag == "math"
-    assert execution.priority == 9
     assert execution.planned_duration == 60
     assert execution.status == ExecutionStatus.SCHEDULED
     assert execution.canonical_planned_start == datetime(2024, 6, 3, 9, 0, tzinfo=timezone.utc)
@@ -431,7 +429,7 @@ def test_task_only_execution_has_no_start_delay_when_no_planned_start_exists(
 def test_list_executions_returns_both_legacy_and_canonical_rows(service_with_clock: ExecutionService, make_task) -> None:
     legacy = service_with_clock.create_execution(
         task_name="Legacy Task", category="study", tag="math",
-        planned_date=1, planned_start=540, planned_end=600, planned_duration=60, priority=5,
+        planned_date=1, planned_start=540, planned_end=600, planned_duration=60,
     )
     task = make_task(name="Canonical Task")
     canonical = service_with_clock.create_canonical_execution(task)

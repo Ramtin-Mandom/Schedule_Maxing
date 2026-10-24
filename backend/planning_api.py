@@ -94,7 +94,15 @@ from app.planning.preferences import (
 from app.planning.time import AmbiguousLocalTimeError, UnsupportedSchedulingWindowError, validate_timezone
 from app.productivity.schedule_cohort import ScheduleCohortReport, read_schedule_cohort_report
 from backend.errors import ApiError
-from backend.resources import FixedBlockOut, PlacementOut, PreferenceOut, ProjectOut, TaskFields, TaskOut
+from backend.resources import (
+    LEGACY_TASK_WIRE_FIELDS,
+    FixedBlockOut,
+    PlacementOut,
+    PreferenceOut,
+    ProjectOut,
+    TaskFields,
+    TaskOut,
+)
 
 #: The largest canonical CSV one upload may carry.
 MAX_CSV_BYTES = 5 * 1024 * 1024
@@ -352,9 +360,6 @@ class ResetPreviewOut(BaseModel):
     placements_with_history_ids: list[uuid.UUID]
     tasks_with_history_ids: list[uuid.UUID]
     protected_recurring_task_ids: list[uuid.UUID]
-    #: Task to delete -> tasks outside the reset that depend on it; non-empty means the reset will be refused.
-    blocking_dependents: dict[uuid.UUID, list[uuid.UUID]]
-    blocked: bool
     token: str
 
 
@@ -567,7 +572,7 @@ def reset_preview_out(preview: ResetPreview) -> ResetPreviewOut:
         date_preference_ids=preview.date_preference_ids, placements_with_history_ids=preview.placements_with_history_ids,
         tasks_with_history_ids=preview.tasks_with_history_ids,
         protected_recurring_task_ids=preview.protected_recurring_task_ids,
-        blocking_dependents=preview.blocking_dependents, blocked=preview.blocked, token=preview.token,
+        token=preview.token,
     )
 
 
@@ -792,7 +797,7 @@ def _edited(stored: Task | None, fields: TaskFields, record_id: uuid.UUID) -> Ta
     """`stored` with the request's content; recurrence fields the request omits keep their stored values."""
     if stored is None:
         raise EntityNotFoundError("task", record_id)
-    sent = fields.model_dump(include=fields.model_fields_set & set(TaskFields.model_fields))
+    sent = fields.model_dump(include=fields.model_fields_set & (set(TaskFields.model_fields) - LEGACY_TASK_WIRE_FIELDS))
     try:
         return Task.model_validate({**stored.model_dump(), **sent})
     except ValueError as error:

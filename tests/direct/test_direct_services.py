@@ -30,7 +30,7 @@ from app.execution.models import ExecutionStatus
 from app.planning import workflow
 from app.planning.application import RangeScope
 from app.planning.errors import InvalidReferenceError, VersionConflictError
-from app.planning.models import FixedBlock, LocalTimeWindow, RecurrenceSpec, Task
+from app.planning.models import FixedBlock, LocalTimeWindow, Project, RecurrenceSpec, Task
 from app.planning.preferences import OptimizerMode, PreferenceOverrides, RewardPreferencesOverride
 from backend import models
 from backend.database import session_factory
@@ -41,7 +41,7 @@ MONDAY = date(2026, 3, 2)
 
 def task(owner, name: str = "Study", **values) -> Task:
     return Task(user_id=owner.user_id, name=name, category=values.pop("category", "study"),
-                estimated_duration_minutes=values.pop("minutes", 60), priority=values.pop("priority", 5), **values)
+                estimated_duration_minutes=values.pop("minutes", 60), **values)
 
 
 def block(owner, label: str = "Sleep", start: int = 0, end: int = 7) -> FixedBlock:
@@ -65,7 +65,7 @@ def test_planning_preferences_and_generation_round_trip(alice, clock) -> None:
     planning = alice.planning_service()
     first = planning.create_task(task(alice, "Read", tags=["deep", "deep"], preferred_dates=[MONDAY, MONDAY],
                                       preferred_time_window=LocalTimeWindow(start_minute=540, end_minute=720)))
-    second = planning.create_task(task(alice, "Write", dependency_ids=[first.id], required_date=MONDAY,
+    second = planning.create_task(task(alice, "Write", required_date=MONDAY,
                                        recurrence=None, minutes=30))
     weekly = planning.create_task(task(alice, "Gym", recurrence=RecurrenceSpec(frequency="weekly", weekdays=[4, 0])))
     planning.create_fixed_block(block(alice))
@@ -75,7 +75,7 @@ def test_planning_preferences_and_generation_round_trip(alice, clock) -> None:
 
     assert planning.get_task(first.id).tags == ["deep", "deep"]
     assert planning.get_task(first.id).preferred_dates == [MONDAY, MONDAY]
-    assert planning.get_task(second.id).dependency_ids == [first.id]
+    assert planning.get_task(second.id).required_date == MONDAY
     assert planning.get_task(weekly.id).recurrence.weekdays == [0, 4]
     assert planning.user_preferences().overrides == overrides and saved.version == 1
     assert planning.resolve_preferences([MONDAY], "UTC")[MONDAY].optimizer_mode == OptimizerMode.ADHD_FRIENDLY
@@ -140,8 +140,9 @@ def test_execution_lifecycle_and_productivity_round_trip(alice, clock) -> None:
 def test_two_users_never_see_or_reference_each_other(alice, bob) -> None:
     mine = alice.planning_service().create_task(task(alice, "Alice's"))
     assert bob.planning_service().list_tasks() == [] and bob.planning_service().get_task(mine.id) is None
+    alices_project = alice.planning_service().create_project(Project(name="Alice's", user_id=alice.user_id))
     with pytest.raises(InvalidReferenceError):
-        bob.planning_service().create_task(task(bob, "Bob's", dependency_ids=[mine.id]))
+        bob.planning_service().create_task(task(bob, "Bob's", project_id=alices_project.id))
     with pytest.raises(ExecutionLinkError):  # Bob cannot record work on Alice's task
         bob.execution_service().create_canonical_execution(mine)
     with pytest.raises(ExecutionLinkError):
@@ -290,8 +291,7 @@ backend.check_schema()
 backend.register(email="probe@example.com", password="correct horse battery")
 account = backend.sign_in(email="probe@example.com", password="correct horse battery")
 planning = account.planning_service()
-created = planning.create_task(Task(user_id=account.user_id, name="p", category="c", estimated_duration_minutes=5,
-                                    priority=5))
+created = planning.create_task(Task(user_id=account.user_id, name="p", category="c", estimated_duration_minutes=5))
 executions = account.execution_service()
 execution = executions.start(executions.create_canonical_execution(created).id)
 dashboard = account.productivity_service().build_dashboard()

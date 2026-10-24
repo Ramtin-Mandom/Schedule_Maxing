@@ -103,7 +103,7 @@ def calendar(services, mode: str, selected: date = WED, today: date = WED) -> Ca
 
 def add(services, name: str, day: date | None, *, window=(540, 720), duration=60, **metadata) -> Task:
     return ok(services.planning_controller.add_or_update_task(Task(
-        name=name, category="study", estimated_duration_minutes=duration, priority=5, **metadata,
+        name=name, category="study", estimated_duration_minutes=duration, **metadata,
         preferred_dates=[day] if day else [],
         preferred_time_window=LocalTimeWindow(start_minute=window[0], end_minute=window[1]))))
 
@@ -189,12 +189,3 @@ def test_reset_month_is_previewed_atomic_and_leaves_out_of_month_cells_alone(ser
     reset = ok(month.reset_period(ok(month.reset_plan())))
     assert [task.id for task in ok(services.planning_controller.list_tasks())] == [outside.id]
     assert reset.day(WED).items == [] and reset.day(date(2026, 10, 2)).items
-
-
-def test_a_week_reset_that_would_break_a_dependency_outside_it_is_refused(services) -> None:
-    inside = add(services, "Inside", WED)
-    ok(services.planning_controller.add_or_update_task(Task(
-        name="Next week", category="study", estimated_duration_minutes=30, priority=5,
-        preferred_dates=[WED + timedelta(days=7)], dependency_ids=[inside.id])))
-    plan = ok(calendar(services, "week").reset_plan())
-    assert plan.blocked and "Inside is needed by Next week" in plan.message
