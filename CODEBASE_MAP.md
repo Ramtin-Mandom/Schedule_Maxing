@@ -4,7 +4,7 @@ A navigation and change-impact guide. Use section D first: find the change you n
 "Start here" files, follow only the listed dependencies, run the listed tests. System design is in
 [ARCHITECTURE.md](ARCHITECTURE.md); feature status in [CURRENT_STATE.md](CURRENT_STATE.md).
 
-Paths verified against commit `bdc67f6` on 2026-10-21. Dependencies marked **(import)** were checked in
+Paths verified against commit `c2b19c0` on 2026-10-24. Dependencies marked **(import)** were checked in
 the source; others are call-level or conceptual relationships.
 
 ## A. Repository structure
@@ -185,7 +185,7 @@ Pure functions except `reporting.py` and `data_prep.py`.
 | Settings | `settings_controller.py`, `preferences_editor.py`, `preferences_model.py`, `ui_settings.py` |
 | Account and sync | `account_controller.py`, `account_page.py`, `conflict_view.py` |
 | Updates and guide | `update_controller.py`, `update_view.py`, `guide_page.py`, `guide_content.py` |
-| Present but not reachable from the app | `feedback_dialog.py`, `cohort_view.py`, `duration_suggestion.py`; `RewardConfigPage` class in `app/app.py` (see [CURRENT_STATE.md](CURRENT_STATE.md#c-known-bugs-and-limitations)) |
+| Present but not reachable from the app | `feedback_dialog.py`, `cohort_view.py`, `duration_suggestion.py` (see [CURRENT_STATE.md](CURRENT_STATE.md#c-known-bugs-and-limitations)) |
 
 ### C.7 Backend (`backend/`)
 
