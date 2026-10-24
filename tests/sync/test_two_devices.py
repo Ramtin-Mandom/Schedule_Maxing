@@ -139,7 +139,7 @@ def test_preferences_categories_and_schedule_freshness(pair) -> None:
     assert b.controller.day_state(MON).value.status == DayResultStatus.STALE
 
 
-def test_rescheduling_cleanup_and_outside_dependencies_sync(pair) -> None:
+def test_rescheduling_cleanup_and_completed_work_sync(pair) -> None:
     server, a, b = pair
     a.sign_in("alice@example.com")
     b.sign_in("alice@example.com")
@@ -165,20 +165,21 @@ def test_rescheduling_cleanup_and_outside_dependencies_sync(pair) -> None:
     assert {occurrences[p.task_id].occurrence_slot for p in daily_placements} == {p.planned_date for p in daily_placements}
     assert len(b.planning.occurrences_of_series([daily.id])[daily.id]) == 7  # never a second occurrence of a slot
 
-    # A dependency completed on B and synced satisfies a dependent scheduled next week on A.
-    prerequisite = b.add_task("Prerequisite", required_date=MON)
+    # Work completed on B syncs to A before A schedules the next week.
+    finished_task = b.add_task("Finished", required_date=MON)
     assert b.controller.schedule_range(MON, MON, scope=RangeScope.ELIGIBLE).ok
-    [done] = [p for p in b.planning.placements_for_date(MON) if p.task_id == prerequisite.id]
-    execution = b.executions.get_or_create_canonical_execution(prerequisite, done)
+    [done] = [p for p in b.planning.placements_for_date(MON) if p.task_id == finished_task.id]
+    execution = b.executions.get_or_create_canonical_execution(finished_task, done)
     b.executions.start(execution.id)
     completed = b.executions.complete(execution.id)
     b.sync_now()
     a.sync_now()
     finished = completed.actual_final_end_at.date()  # the real completion instant (the device clock)
     next_monday = finished + timedelta(days=7 - finished.weekday())
-    dependent = a.add_task("Dependent", required_date=next_monday)
+    assert a.executions.get_execution(execution.id).status.value == "completed"
+    next_task = a.add_task("Next", required_date=next_monday)
     run = a.controller.schedule_range(next_monday, next_monday + timedelta(days=6), scope=RangeScope.ELIGIBLE).value
-    assert run.allocation.assignments.get(dependent.id) == next_monday
+    assert run.allocation.assignments.get(next_task.id) == next_monday
 
 
 def _placement(task_id, day: date, hour: int):

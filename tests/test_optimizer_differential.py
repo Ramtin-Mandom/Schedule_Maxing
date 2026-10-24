@@ -234,14 +234,14 @@ def _assert_canonical_results_match(event_result, exhaustive_result):
 def test_full_greedy_parity_mixed_required_optional(mode):
     day_preferences = prefs(mode=mode, weight_tag_relation=2.0, weight_fragmentation_penalty=-4.0)
     prep = make_task("Prep", duration=30, tags=["math"])
-    dependent = make_task("Dependent", duration=45, required=True, tags=["math"])
+    required_task = make_task("Required", duration=45, required=True, tags=["math"])
     optional_a = make_task(
         "OptA", duration=60, preferred_time_window=LocalTimeWindow(start_minute=300, end_minute=400)
     )
     optional_b = make_task("OptB", duration=13, category="work")
     fixed = make_fixed("Lunch", 700, 760)
 
-    schedule = make_day_schedule([prep, dependent, optional_a, optional_b], fixed_blocks=[fixed])
+    schedule = make_day_schedule([prep, required_task, optional_a, optional_b], fixed_blocks=[fixed])
 
     event_result = generate_day_schedule(schedule, day_preferences)
     exhaustive_result = _canonical_exhaustive_run(schedule, day_preferences)
@@ -323,9 +323,9 @@ def test_full_greedy_parity_non_midnight_quarter_hour_alignment():
 def test_canonical_result_independent_validity_checks():
     day_preferences = prefs(weight_tag_relation=2.0)
     prep = make_task("Prep", duration=30)
-    dependent = make_task("Dependent", duration=30, required=True)
+    required_task = make_task("Required", duration=30, required=True)
     fixed = make_fixed("Busy", 200, 260)
-    schedule = make_day_schedule([prep, dependent], fixed_blocks=[fixed])
+    schedule = make_day_schedule([prep, required_task], fixed_blocks=[fixed])
 
     result = generate_day_schedule(schedule, day_preferences)
 
@@ -341,7 +341,7 @@ def test_canonical_result_independent_validity_checks():
         assert day_start_utc <= start < end <= day_end_utc  # day bounds
 
     by_task = {p.task_id: p for p in result.placements}
-    assert dependent.id in by_task and prep.id in by_task
+    assert required_task.id in by_task and prep.id in by_task
 
     assert result.total_score == pytest.approx(round(sum(p.score for p in result.placements), 2))
 

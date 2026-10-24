@@ -225,13 +225,13 @@ def test_independent_close_and_reopen_restores_everything(db_path: Path) -> None
     connection = get_connection(db_path)
     repository = PlanningRepository(connection)
     project = Project(name="P")
-    dependency = minimal_task(name="Dep", project_id=project.id)
+    minimal = minimal_task(name="Minimal", project_id=project.id)
     task = full_task(project_id=project.id)
     block = block_on(date(2024, 6, 3), 7)
     placement = placement_for(task, date(2024, 6, 5), 9, optimization_metadata={"k": "v"})
     with repository.transaction():
         repository.insert_project(project)
-        repository.insert_task(dependency)
+        repository.insert_task(minimal)
         repository.insert_task(task)
         repository.insert_fixed_block(block)
         repository.insert_placement(placement)
@@ -241,7 +241,7 @@ def test_independent_close_and_reopen_restores_everything(db_path: Path) -> None
     try:
         repository = PlanningRepository(reopened)
         assert repository.list_projects() == [project]
-        assert {t.id: t for t in repository.list_tasks()} == {dependency.id: dependency, task.id: task}
+        assert {t.id: t for t in repository.list_tasks()} == {minimal.id: minimal, task.id: task}
         assert repository.list_fixed_blocks(date(2024, 6, 1), date(2024, 6, 30)) == [block]
         assert repository.list_placements(date(2024, 6, 1), date(2024, 6, 30)) == [placement]
     finally:

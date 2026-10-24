@@ -1,8 +1,7 @@
 """Recurring series on the server (docs/recurrence.md): occurrences are owner-scoped tasks whose id derives from
 (series, slot) and whose identity never changes; an older client's update cannot erase recurrence fields it
 does not know; a repeated identical occurrence create converges while a different one conflicts; suppressed
-slots arrive as tombstones and stay reserved; dependency rules (no one-off -> series edges, compatible
-cadences, no cycles, skipped prerequisites) hold; the database enforces one record per (user, series, slot);
+slots arrive as tombstones and stay reserved; the database enforces one record per (user, series, slot);
 hosted generation expands first and logs every occurrence; a cross-date reschedule returns the re-dated
 occurrence; and the server advertises the feature."""
 

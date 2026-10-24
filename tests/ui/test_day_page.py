@@ -173,7 +173,7 @@ def test_the_persisted_day_flow(tmp_path: Path, dialogs) -> None:
         close_app(app)
 
 
-def test_csv_v2_through_native_dialogs_and_the_way_back_to_week(tmp_path: Path, dialogs, monkeypatch) -> None:
+def test_canonical_csv_through_native_dialogs_and_the_way_back_to_week(tmp_path: Path, dialogs, monkeypatch) -> None:
     import app.ui.day_page as day_module
 
     exported = tmp_path / "day.csv"
