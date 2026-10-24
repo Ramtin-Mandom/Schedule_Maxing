@@ -20,10 +20,10 @@
       "unallocated_count": 0,
       "day_scheduler_call_count": 0,
       "allocate_time": {
-        "median_ms": 0.2105,
-        "min_ms": 0.1822,
-        "max_ms": 0.5335,
-        "stdev_ms": 0.108,
+        "median_ms": 0.1426,
+        "min_ms": 0.1396,
+        "max_ms": 0.1581,
+        "stdev_ms": 0.0045,
         "samples": 15
       }
     },
@@ -35,10 +35,10 @@
       "unallocated_count": 0,
       "day_scheduler_call_count": 0,
       "allocate_time": {
-        "median_ms": 0.5928,
-        "min_ms": 0.584,
-        "max_ms": 0.9481,
-        "stdev_ms": 0.0889,
+        "median_ms": 0.3824,
+        "min_ms": 0.3783,
+        "max_ms": 0.5005,
+        "stdev_ms": 0.0298,
         "samples": 15
       }
     },
@@ -50,10 +50,10 @@
       "unallocated_count": 0,
       "day_scheduler_call_count": 0,
       "allocate_time": {
-        "median_ms": 1.7207,
-        "min_ms": 1.6953,
-        "max_ms": 1.9384,
-        "stdev_ms": 0.0641,
+        "median_ms": 1.375,
+        "min_ms": 1.3669,
+        "max_ms": 1.4131,
+        "stdev_ms": 0.0123,
         "samples": 15
       }
     },
@@ -65,10 +65,10 @@
       "unallocated_count": 0,
       "day_scheduler_call_count": 0,
       "allocate_time": {
-        "median_ms": 4.4573,
-        "min_ms": 4.4133,
-        "max_ms": 5.1887,
-        "stdev_ms": 0.1889,
+        "median_ms": 3.3673,
+        "min_ms": 3.3516,
+        "max_ms": 3.7451,
+        "stdev_ms": 0.0947,
         "samples": 15
       }
     }

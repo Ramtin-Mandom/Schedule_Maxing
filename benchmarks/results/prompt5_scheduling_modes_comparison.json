@@ -2,7 +2,7 @@
   "environment": "Python 3.10.11 on Windows-10-10.0.19045-SP0",
   "note": "Objectives of different modes are not comparable on one scale; no global optimum is claimed. Normal/ADHD equality with the pre-change engine: benchmarks/scheduling_mode_baseline.py --check.",
   "scenarios": {
-    "constrained_breaks_deadlines_dependencies": {
+    "constrained_breaks_deadlines": {
       "adhd_friendly": {
         "adhd_component": 0.0,
         "baseline_reward": 20.0,
@@ -15,9 +15,9 @@
         "mode_component": 0.0,
         "objective": 20.0,
         "runtime_ms": {
-          "max": 1.217,
-          "median": 1.172,
-          "min": 1.166,
+          "max": 0.598,
+          "median": 0.577,
+          "min": 0.576,
           "runs": 5
         },
         "scheduled": 4,
@@ -40,9 +40,9 @@
         "mode_component": 2.2059,
         "objective": 22.2059,
         "runtime_ms": {
-          "max": 1.49,
-          "median": 1.357,
-          "min": 1.327,
+          "max": 0.699,
+          "median": 0.684,
+          "min": 0.681,
           "runs": 5
         },
         "scheduled": 4,
@@ -55,25 +55,25 @@
       },
       "early_finish": {
         "adhd_component": 0.0,
-        "baseline_reward": 20.0,
+        "baseline_reward": 22.0,
         "constraint_violations": 0,
         "deterministic": true,
         "first_start_minute": 0,
         "fixed_minutes": 120,
-        "idle_gap_minutes": 30,
-        "last_finish_minute": 360,
-        "mode_component": 13.8802,
-        "objective": 33.8802,
+        "idle_gap_minutes": 60,
+        "last_finish_minute": 390,
+        "mode_component": 13.5938,
+        "objective": 35.5938,
         "runtime_ms": {
-          "max": 2.289,
-          "median": 1.981,
-          "min": 1.945,
+          "max": 1.424,
+          "median": 1.418,
+          "min": 1.412,
           "runs": 5
         },
         "scheduled": 4,
         "scheduled_minutes": 210,
         "status": "generated",
-        "stored_insertion_score": 20.0,
+        "stored_insertion_score": 22.0,
         "unscheduled": 0,
         "unscheduled_minutes": 0,
         "unscheduled_reasons": []
@@ -90,9 +90,9 @@
         "mode_component": 13.9167,
         "objective": 37.9167,
         "runtime_ms": {
-          "max": 2.143,
-          "median": 2.001,
-          "min": 1.985,
+          "max": 1.497,
+          "median": 1.427,
+          "min": 1.4,
           "runs": 5
         },
         "scheduled": 4,
@@ -115,9 +115,9 @@
         "mode_component": 0.0,
         "objective": 20.0,
         "runtime_ms": {
-          "max": 1.265,
-          "median": 1.185,
-          "min": 1.134,
+          "max": 0.664,
+          "median": 0.589,
+          "min": 0.579,
           "runs": 5
         },
         "scheduled": 4,
@@ -135,9 +135,9 @@
           "no_valid_slot"
         ],
         "runtime_ms": {
-          "max": 0.05,
-          "median": 0.043,
-          "min": 0.042,
+          "max": 0.041,
+          "median": 0.036,
+          "min": 0.035,
           "runs": 5
         },
         "status": "infeasible (required work cannot fit)"
@@ -147,9 +147,9 @@
           "no_valid_slot"
         ],
         "runtime_ms": {
-          "max": 0.048,
-          "median": 0.043,
-          "min": 0.042,
+          "max": 0.04,
+          "median": 0.036,
+          "min": 0.034,
           "runs": 5
         },
         "status": "infeasible (required work cannot fit)"
@@ -159,9 +159,9 @@
           "no_valid_slot"
         ],
         "runtime_ms": {
-          "max": 0.047,
-          "median": 0.044,
-          "min": 0.042,
+          "max": 0.04,
+          "median": 0.035,
+          "min": 0.034,
           "runs": 5
         },
         "status": "infeasible (required work cannot fit)"
@@ -171,9 +171,9 @@
           "no_valid_slot"
         ],
         "runtime_ms": {
-          "max": 0.047,
-          "median": 0.044,
-          "min": 0.042,
+          "max": 0.039,
+          "median": 0.035,
+          "min": 0.034,
           "runs": 5
         },
         "status": "infeasible (required work cannot fit)"
@@ -183,9 +183,9 @@
           "no_valid_slot"
         ],
         "runtime_ms": {
-          "max": 0.079,
-          "median": 0.047,
-          "min": 0.043,
+          "max": 0.062,
+          "median": 0.04,
+          "min": 0.037,
           "runs": 5
         },
         "status": "infeasible (required work cannot fit)"
@@ -204,9 +204,9 @@
         "mode_component": 0.0,
         "objective": 120.0,
         "runtime_ms": {
-          "max": 39.739,
-          "median": 39.633,
-          "min": 39.563,
+          "max": 17.8,
+          "median": 17.533,
+          "min": 17.454,
           "runs": 5
         },
         "scheduled": 18,
@@ -231,9 +231,9 @@
         "mode_component": 16.5686,
         "objective": 148.5686,
         "runtime_ms": {
-          "max": 46.71,
-          "median": 46.176,
-          "min": 45.881,
+          "max": 20.744,
+          "median": 20.604,
+          "min": 20.383,
           "runs": 5
         },
         "scheduled": 20,
@@ -256,9 +256,9 @@
         "mode_component": 48.8021,
         "objective": 178.8021,
         "runtime_ms": {
-          "max": 48.859,
-          "median": 47.477,
-          "min": 46.766,
+          "max": 21.51,
+          "median": 21.328,
+          "min": 21.18,
           "runs": 5
         },
         "scheduled": 20,
@@ -281,9 +281,9 @@
         "mode_component": 46.9544,
         "objective": 172.9544,
         "runtime_ms": {
-          "max": 47.708,
-          "median": 47.026,
-          "min": 46.859,
+          "max": 21.48,
+          "median": 21.281,
+          "min": 20.866,
           "runs": 5
         },
         "scheduled": 20,
@@ -306,9 +306,9 @@
         "mode_component": 0.0,
         "objective": 132.0,
         "runtime_ms": {
-          "max": 50.646,
-          "median": 46.259,
-          "min": 45.799,
+          "max": 21.156,
+          "median": 20.548,
+          "min": 20.336,
           "runs": 5
         },
         "scheduled": 20,
@@ -333,9 +333,9 @@
         "mode_component": 0.0,
         "objective": 22.0,
         "runtime_ms": {
-          "max": 0.958,
-          "median": 0.903,
-          "min": 0.868,
+          "max": 0.491,
+          "median": 0.477,
+          "min": 0.456,
           "runs": 5
         },
         "scheduled": 3,
@@ -360,9 +360,9 @@
         "mode_component": 0.0,
         "objective": 22.0,
         "runtime_ms": {
-          "max": 0.903,
-          "median": 0.89,
-          "min": 0.863,
+          "max": 0.471,
+          "median": 0.457,
+          "min": 0.454,
           "runs": 5
         },
         "scheduled": 3,
@@ -387,9 +387,9 @@
         "mode_component": 13.3425,
         "objective": 35.3425,
         "runtime_ms": {
-          "max": 1.306,
-          "median": 1.278,
-          "min": 1.236,
+          "max": 0.917,
+          "median": 0.707,
+          "min": 0.692,
           "runs": 5
         },
         "scheduled": 3,
@@ -414,9 +414,9 @@
         "mode_component": 13.7138,
         "objective": 32.7138,
         "runtime_ms": {
-          "max": 1.347,
-          "median": 1.322,
-          "min": 1.274,
+          "max": 0.706,
+          "median": 0.692,
+          "min": 0.684,
           "runs": 5
         },
         "scheduled": 3,
@@ -441,9 +441,9 @@
         "mode_component": 0.0,
         "objective": 22.0,
         "runtime_ms": {
-          "max": 1.054,
-          "median": 0.985,
-          "min": 0.895,
+          "max": 0.664,
+          "median": 0.503,
+          "min": 0.477,
           "runs": 5
         },
         "scheduled": 3,
@@ -470,9 +470,9 @@
         "mode_component": 0.0,
         "objective": 32.06,
         "runtime_ms": {
-          "max": 3.758,
-          "median": 3.644,
-          "min": 3.615,
+          "max": 1.717,
+          "median": 1.692,
+          "min": 1.678,
           "runs": 5
         },
         "scheduled": 4,
@@ -495,9 +495,9 @@
         "mode_component": 0.0,
         "objective": 32.06,
         "runtime_ms": {
-          "max": 4.343,
-          "median": 4.101,
-          "min": 4.069,
+          "max": 1.869,
+          "median": 1.826,
+          "min": 1.825,
           "runs": 5
         },
         "scheduled": 4,
@@ -520,9 +520,9 @@
         "mode_component": 17.994,
         "objective": 47.404,
         "runtime_ms": {
-          "max": 5.959,
-          "median": 5.69,
-          "min": 5.613,
+          "max": 3.005,
+          "median": 2.723,
+          "min": 2.694,
           "runs": 5
         },
         "scheduled": 4,
@@ -545,9 +545,9 @@
         "mode_component": 17.8289,
         "objective": 45.0189,
         "runtime_ms": {
-          "max": 6.114,
-          "median": 5.726,
-          "min": 5.624,
+          "max": 2.849,
+          "median": 2.698,
+          "min": 2.688,
           "runs": 5
         },
         "scheduled": 4,
@@ -570,9 +570,9 @@
         "mode_component": 0.0,
         "objective": 32.06,
         "runtime_ms": {
-          "max": 4.311,
-          "median": 4.184,
-          "min": 4.068,
+          "max": 1.926,
+          "median": 1.864,
+          "min": 1.861,
           "runs": 5
         },
         "scheduled": 4,
@@ -597,9 +597,9 @@
         "mode_component": 0.0,
         "objective": 27.53,
         "runtime_ms": {
-          "max": 1.318,
-          "median": 1.272,
-          "min": 1.243,
+          "max": 0.653,
+          "median": 0.636,
+          "min": 0.633,
           "runs": 5
         },
         "scheduled": 3,
@@ -622,9 +622,9 @@
         "mode_component": 0.0,
         "objective": 27.53,
         "runtime_ms": {
-          "max": 1.367,
-          "median": 1.318,
-          "min": 1.307,
+          "max": 0.676,
+          "median": 0.666,
+          "min": 0.662,
           "runs": 5
         },
         "scheduled": 3,
@@ -647,9 +647,9 @@
         "mode_component": 11.0357,
         "objective": 38.5657,
         "runtime_ms": {
-          "max": 1.762,
-          "median": 1.694,
-          "min": 1.672,
+          "max": 0.969,
+          "median": 0.913,
+          "min": 0.884,
           "runs": 5
         },
         "scheduled": 3,
@@ -672,9 +672,9 @@
         "mode_component": 5.4375,
         "objective": 32.9675,
         "runtime_ms": {
-          "max": 1.986,
-          "median": 1.774,
-          "min": 1.698,
+          "max": 0.898,
+          "median": 0.889,
+          "min": 0.885,
           "runs": 5
         },
         "scheduled": 3,
@@ -697,9 +697,9 @@
         "mode_component": 0.0,
         "objective": 27.53,
         "runtime_ms": {
-          "max": 1.359,
-          "median": 1.322,
-          "min": 1.3,
+          "max": 0.69,
+          "median": 0.675,
+          "min": 0.673,
           "runs": 5
         },
         "scheduled": 3,
@@ -724,9 +724,9 @@
         "mode_component": 0.0,
         "objective": 36.0,
         "runtime_ms": {
-          "max": 3.604,
-          "median": 3.14,
-          "min": 3.012,
+          "max": 1.469,
+          "median": 1.439,
+          "min": 1.434,
           "runs": 5
         },
         "scheduled": 6,
@@ -749,9 +749,9 @@
         "mode_component": 0.0,
         "objective": 36.0,
         "runtime_ms": {
-          "max": 1.809,
-          "median": 1.735,
-          "min": 1.687,
+          "max": 0.896,
+          "median": 0.876,
+          "min": 0.862,
           "runs": 5
         },
         "scheduled": 6,
@@ -774,9 +774,9 @@
         "mode_component": 24.9115,
         "objective": 60.9115,
         "runtime_ms": {
-          "max": 59.061,
-          "median": 54.81,
-          "min": 54.308,
+          "max": 29.088,
+          "median": 28.246,
+          "min": 27.738,
           "runs": 5
         },
         "scheduled": 6,
@@ -799,9 +799,9 @@
         "mode_component": 24.6823,
         "objective": 60.6823,
         "runtime_ms": {
-          "max": 56.201,
-          "median": 55.067,
-          "min": 54.891,
+          "max": 28.153,
+          "median": 27.979,
+          "min": 27.696,
           "runs": 5
         },
         "scheduled": 6,
@@ -824,9 +824,9 @@
         "mode_component": 0.0,
         "objective": 36.0,
         "runtime_ms": {
-          "max": 1.755,
-          "median": 1.683,
-          "min": 1.637,
+          "max": 0.932,
+          "median": 0.885,
+          "min": 0.876,
           "runs": 5
         },
         "scheduled": 6,
