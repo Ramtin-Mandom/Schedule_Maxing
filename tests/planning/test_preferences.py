@@ -20,16 +20,15 @@ from app.planning.preferences import (
     day_preferences_to_reward_settings,
     effective_task_preferred_window,
     resolve_day_preferences,
-    to_legacy_scoring_task,
 )
 from app.planning.time import UnsupportedSchedulingWindowError
-from app.reward import RewardSettings, calculate_task_score
+from app.reward import RewardSettings, ScoringTask, calculate_task_score
 
 DAY = date(2024, 6, 3)
 
 
 def _task(**overrides) -> Task:
-    defaults = dict(name="Study", category="study", estimated_duration_minutes=60, priority=4)
+    defaults = dict(name="Study", category="study", estimated_duration_minutes=60)
     defaults.update(overrides)
     return Task(**defaults)
 
@@ -42,11 +41,11 @@ def _task(**overrides) -> Task:
 def test_neutral_multiplier_leaves_score_unchanged():
     prefs = resolve_day_preferences(date=DAY, timezone="UTC")
     settings = day_preferences_to_reward_settings(prefs)
-    task = {"fixed": False, "duration": 60, "priority": 4, "category": "health", "name": "X"}
+    task = ScoringTask(category="health", duration=60)
 
     score = calculate_task_score(task, start_time=0, settings=settings)
 
-    assert score == 4 * settings.weight_importance  # category_multiplier=1.0, task_multiplier=1.0
+    assert score == settings.weight_importance  # category_multiplier=1.0
 
 
 def test_health_1_3_override_has_exact_effect():
@@ -54,7 +53,7 @@ def test_health_1_3_override_has_exact_effect():
     boosted_prefs = resolve_day_preferences(
         date=DAY, timezone="UTC", date_overrides=PreferenceOverrides(category_multipliers={"health": 1.3})
     )
-    task = {"fixed": False, "duration": 60, "priority": 4, "category": "health", "name": "X"}
+    task = ScoringTask(category="health", duration=60)
 
     baseline_score = calculate_task_score(task, start_time=0, settings=day_preferences_to_reward_settings(baseline_prefs))
     boosted_score = calculate_task_score(task, start_time=0, settings=day_preferences_to_reward_settings(boosted_prefs))
@@ -323,8 +322,8 @@ def test_precedence_none_when_nothing_specifies_a_window():
     assert effective_task_preferred_window(task, prefs) is None
 
 
-def test_to_legacy_scoring_task_reaches_calculate_task_score():
-    task = _task(name="Study Math", category="study", tags=["math"], priority=9, preferred_time_window=None)
+def test_effective_window_and_multiplier_reach_calculate_task_score():
+    task = _task(name="Study Math", category="study", tags=["math"], preferred_time_window=None)
     prefs = resolve_day_preferences(
         date=DAY, timezone="UTC",
         date_overrides=PreferenceOverrides(
@@ -334,14 +333,14 @@ def test_to_legacy_scoring_task_reaches_calculate_task_score():
         ),
     )
 
-    scoring_task = to_legacy_scoring_task(task, prefs)
+    window = effective_task_preferred_window(task, prefs)
     settings = day_preferences_to_reward_settings(prefs)
 
-    assert scoring_task["preference_time"] == {"start_time": 480, "end_time": 600}
+    assert window == {"start_time": 480, "end_time": 600}
+    scoring_task = ScoringTask(category=task.category, duration=60, tag="math",
+                               preferred_window=(window["start_time"], window["end_time"]))
     score = calculate_task_score(scoring_task, start_time=480, settings=settings)
-    # The task's priority (9) is not a scheduling input: neutral importance * weight_importance(5) *
-    # category_multiplier(2.0) + time_bonus(10, fully inside window)
-    assert "priority" not in scoring_task
+    # weight_importance(5) * category_multiplier(2.0) + time_bonus(10, fully inside window)
     assert score == pytest.approx(5 * 2.0 + 10.0)
 
 

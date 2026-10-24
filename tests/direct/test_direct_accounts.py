@@ -141,11 +141,9 @@ def test_the_account_scope_comes_only_from_sign_in(backend, alice, bob) -> None:
     with pytest.raises(ScopeError):
         planning.scoped(OwnerScope.account(bob.user_id))
     with pytest.raises(ScopeError):  # a record claiming another owner cannot be written in this scope
-        planning.create_task(Task(user_id=bob.user_id, name="x", category="c", estimated_duration_minutes=5,
-                                  priority=5))
+        planning.create_task(Task(user_id=bob.user_id, name="x", category="c", estimated_duration_minutes=5))
 
-    task = planning.create_task(Task(user_id=alice.user_id, name="mine", category="c", estimated_duration_minutes=5,
-                                     priority=5))
+    task = planning.create_task(Task(user_id=alice.user_id, name="mine", category="c", estimated_duration_minutes=5))
     alice.sign_out()
     for call in (planning.list_tasks, alice.execution_service().list_executions, alice.profile):
         with pytest.raises(NotSignedInError):

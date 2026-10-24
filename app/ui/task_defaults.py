@@ -3,12 +3,12 @@ app/ui/task_defaults.py
 
 The task form's "Use default values" and the user's own categories, Tk-free:
 for "general" (no category chosen) and for every category, the name,
-duration, priority and points the form fills in, plus the categories added
+duration and points the form fills in, plus the categories added
 in Settings. Kept in a small JSON file next to the application database
 (task_defaults.json), like the appearance settings (app/ui/ui_settings.py):
 on this device only, never synchronized.
 
-Out of the box every set is priority 5, 60 minutes and 20 points, named
+Out of the box every set is 60 minutes and 20 points, named
 after its category ("Task" for general); only what the user changed or added
 is stored. reset() -- run by Settings' "Reset All Task Data" -- removes the
 added categories and every changed value. A missing, unreadable or
@@ -24,7 +24,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from app.planning.models import MAX_TASK_POINTS, ProjectTaskDefaults
-from app.ui.task_form_model import CATEGORIES, PRIORITIES, parse_points
+from app.ui.task_form_model import CATEGORIES, parse_points
 from app.ui.time_fields import FieldError, parse_duration
 
 logger = logging.getLogger(__name__)
@@ -38,7 +38,6 @@ MAX_CATEGORY_LENGTH = 40
 class TaskDefault:
     name: str
     duration: int = 60
-    priority: int = 5
     points: int = 20
 
 
@@ -54,33 +53,27 @@ def resolve_task_default(category_default: TaskDefault, project: ProjectTaskDefa
     return replace(
         category_default,
         duration=project.duration_minutes if project.duration_minutes is not None else category_default.duration,
-        priority=project.priority if project.priority is not None else category_default.priority,
         points=project.points if project.points is not None else category_default.points,
     )
 
 
-def parse_project_defaults(duration: str, priority: str, points: str) -> ProjectTaskDefaults:
+def parse_project_defaults(duration: str, points: str) -> ProjectTaskDefaults:
     """A project's task defaults as typed (each empty: not set); ValueError says what is wrong."""
     try:
         minutes = parse_duration(duration) if (duration or "").strip() else None
         value = parse_points(points) if (points or "").strip() else None
     except FieldError as error:
         raise ValueError(str(error)) from None
-    chosen = (priority or "").strip()
-    if chosen and chosen not in PRIORITIES:
-        raise ValueError("Choose a default priority from 1 (low) to 10 (high), or leave it empty.")
-    return ProjectTaskDefaults(duration_minutes=minutes, priority=int(chosen) if chosen else None, points=value)
+    return ProjectTaskDefaults(duration_minutes=minutes, points=value)
 
 
-def parse_default(name: str, duration: str, priority: str, points: str) -> TaskDefault:
+def parse_default(name: str, duration: str, points: str) -> TaskDefault:
     """A set of default values as typed in Settings; ValueError says what is wrong."""
     cleaned = " ".join((name or "").split())
     if not cleaned:
         raise ValueError("Enter a default name.")
-    if str(priority) not in PRIORITIES:
-        raise ValueError("Choose a priority from 1 (low) to 10 (high).")
     try:
-        return TaskDefault(cleaned, parse_duration(duration), int(priority), parse_points(points))
+        return TaskDefault(cleaned, parse_duration(duration), parse_points(points))
     except FieldError as error:
         raise ValueError(str(error)) from None
 
@@ -134,11 +127,12 @@ def defaults_path_for(db_path: str | Path) -> Path:
 def _read_default(data: object) -> TaskDefault | None:
     if not isinstance(data, dict):
         return None
-    name, duration, priority, points = (data.get(key) for key in ("name", "duration", "priority", "points"))
+    # A file written before priority was removed may still have one: it is ignored.
+    name, duration, points = (data.get(key) for key in ("name", "duration", "points"))
     valid = (isinstance(name, str) and name.strip()
-             and all(isinstance(value, int) and not isinstance(value, bool) for value in (duration, priority, points))
-             and 1 <= duration <= 1440 and 1 <= priority <= 10 and 0 <= points <= MAX_TASK_POINTS)
-    return TaskDefault(name.strip(), duration, priority, points) if valid else None
+             and all(isinstance(value, int) and not isinstance(value, bool) for value in (duration, points))
+             and 1 <= duration <= 1440 and 0 <= points <= MAX_TASK_POINTS)
+    return TaskDefault(name.strip(), duration, points) if valid else None
 
 
 class TaskDefaultsStore:

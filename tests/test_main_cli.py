@@ -181,11 +181,11 @@ def test_scheduling_stored_tasks_later_reuses_saved_placement_ids(tmp_path):
 def test_invalid_csv_exits_nonzero_and_saves_nothing(tmp_path, capsys):
     db_path = tmp_path / "app.db"
     with pytest.raises(SystemExit) as info:
-        main(["--db-path", str(db_path), "--csv", "samples/inputs/dependency_missing_reference.csv",
+        main(["--db-path", str(db_path), "--csv", "samples/inputs/fixed_blocks_overlap_invalid.csv",
               "--anchor-date", "2026-01-05", *outputs(tmp_path)])
 
     assert info.value.code == 2
-    assert "Nonexistent Task" in capsys.readouterr().out
+    assert "overlaps fixed block" in capsys.readouterr().out
     assert stored(db_path) == ([], [], [])
     assert not (tmp_path / "exact.json").exists()
 

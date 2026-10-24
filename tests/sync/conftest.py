@@ -249,7 +249,7 @@ class Device:
         return report
 
     def add_task(self, name: str = "Study", **fields) -> Task:
-        return self.planning.create_task(Task(name=name, category="study", estimated_duration_minutes=60, priority=5,
+        return self.planning.create_task(Task(name=name, category="study", estimated_duration_minutes=60,
                                               **fields))
 
     def add_block(self, day: date = MON, hour: int = 0, **fields) -> FixedBlock:

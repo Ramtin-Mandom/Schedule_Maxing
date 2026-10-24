@@ -49,7 +49,7 @@ def run(p: ScheduledTask, status: str, sessions=(), *, final=None, actual=None, 
         category="snapshot") -> ExecutionHistory:
     execution = TaskExecution(
         id=str(uuid.uuid4()), task_name="Task", category=category, tag="", planned_duration=estimate if estimate
-        is not None else round((p.planned_end - p.planned_start).total_seconds() / 60), priority=5,
+        is not None else round((p.planned_end - p.planned_start).total_seconds() / 60),
         status=ExecutionStatus(status), created_at=CREATED.isoformat(), updated_at=CREATED.isoformat(),
         task_id=p.task_id, scheduled_task_id=p.id, canonical_planned_date=p.planned_date,
         canonical_timezone=p.timezone, canonical_planned_start=p.planned_start, canonical_planned_end=p.planned_end,
@@ -329,7 +329,7 @@ def sample_report():
                       planned_date=date(2026, 3, 2), timezone=VAN, planned_start=datetime(2026, 3, 3, 7, 30, tzinfo=UTC),
                       planned_end=datetime(2026, 3, 3, 7, 50, tzinfo=UTC), task_category="study", created_at=CREATED,
                       updated_at=CREATED)
-    ex = TaskExecution(id="e1", task_name="T", category="study", tag="", planned_duration=20, priority=5,
+    ex = TaskExecution(id="e1", task_name="T", category="study", tag="", planned_duration=20,
                        status=ExecutionStatus.COMPLETED, created_at=CREATED.isoformat(), updated_at=CREATED.isoformat(),
                        task_id=task, scheduled_task_id=p.id, actual_first_start_at=datetime(2026, 3, 3, 8, tzinfo=UTC),
                        actual_final_end_at=datetime(2026, 3, 3, 8, 20, tzinfo=UTC), actual_active_duration_minutes=20.0)

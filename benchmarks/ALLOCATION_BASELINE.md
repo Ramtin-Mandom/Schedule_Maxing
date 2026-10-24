@@ -8,8 +8,8 @@ Deterministic, seeded week/month allocation benchmark for
 ## Method
 
 - Four synthetic workloads (fixed seeds `101`-`104`, `random.Random`), each
-  with a deterministic acyclic dependency graph (~15% of tasks depend on an
-  earlier-indexed task) and ~20% of tasks marked `required`:
+  with points 1-10 per task and ~20% of tasks marked `required` (tasks have
+  no dependencies since ADR-048):
   - `week_20_tasks` / `week_60_tasks`: 7 dates, 20/60 tasks.
   - `month_leap_feb_80_tasks` / `month_leap_feb_200_tasks`: February 2024
     (29 dates, a leap year, exercised deliberately), 80/200 tasks.
@@ -42,7 +42,7 @@ Deterministic, seeded week/month allocation benchmark for
   since allocation only reasons about aggregate per-date capacity in
   minutes, never minute-by-minute candidate search.
 - Growth from 20→60 tasks (same 7 dates) and 80→200 tasks (same 29 dates)
-  is worse than linear (the priority-guided topological sort and
+  is worse than linear (the points-first sort and
   date-ranking work scale with both task and date count), but remains well
   within sub-10ms territory at these sizes — no scaling concern observed
   at personal-planning scale.

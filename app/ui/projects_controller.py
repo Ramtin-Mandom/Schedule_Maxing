@@ -24,8 +24,8 @@ version read as the precondition), list and delete.
   Day page); an unscheduled one directly (app/execution/direct_completion.py),
   which the Day page then lists as completed on that date. Either way it is
   one completion: repeating the action adds nothing, and undoing withdraws it.
-- **Task defaults:** a project may configure the duration, priority and
-  points of its new tasks (Project.task_defaults; each unset by default).
+- **Task defaults:** a project may configure the duration and points of
+  its new tasks (Project.task_defaults; each unset by default).
   Precedence for a new task: what was typed, then the project's configured
   values, then the category's defaults, then the application's
   (app/ui/task_defaults.resolve_task_default).
@@ -309,12 +309,12 @@ class ProjectsController:
 
     def update(self, project_id: uuid.UUID, name: str, description: str, *, expected_version: int,
                start_date: str | date_ | None = None, estimated_end_date: str | date_ | None = None,
-               set_dates: bool = False, task_defaults: tuple[str, str, str] | None = None
+               set_dates: bool = False, task_defaults: tuple[str, str] | None = None
                ) -> ControllerResult[Project]:
         """
         Rename / re-describe a project; with set_dates also replace its planned
         span (empty: cleared), and with task_defaults -- the typed default
-        (duration, priority, points), each empty for "not set" -- the defaults
+        (duration, points), each empty for "not set" -- the defaults
         of its future tasks. Existing tasks are never changed by this.
         """
         try:
@@ -429,7 +429,7 @@ class ProjectsController:
         return datetime.now(ZoneInfo(self.timezone)).date()
 
     def editor_options(self) -> ControllerResult[EditorOptions]:
-        """The task form's choices in this workspace (categories, dependencies, task types)."""
+        """The task form's choices in this workspace (categories, projects, task types)."""
         return self._form(self.today()).editor_options()
 
     def add_task(self, project_id: uuid.UUID, draft: TaskDraft, date_text: str) -> ControllerResult[PageSnapshot]:

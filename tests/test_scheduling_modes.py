@@ -43,8 +43,6 @@ def assert_valid(output, fixed_spans, tasks) -> None:
     by_id = {task.id: task for task in tasks}
     for task_id, (start, end) in spans(output).items():
         assert end - start == by_id[task_id].estimated_duration_minutes
-        for dependency in by_id[task_id].dependency_ids:
-            assert spans(output)[dependency][1] <= start
 
 
 def gappy_day():
@@ -56,7 +54,7 @@ def gappy_day():
         make_task("B", duration=45, preferred_time_window=LocalTimeWindow(start_minute=780, end_minute=840)),
         make_task("C", duration=30, preferred_time_window=LocalTimeWindow(start_minute=1020, end_minute=1050)),
     ]
-    tasks.append(make_task("D", duration=30, dependency_ids=[tasks[0].id]))
+    tasks.append(make_task("D", duration=30))
     fixed = [make_fixed("Lunch", 720, 750)]
     return tasks, fixed
 
@@ -178,7 +176,7 @@ def test_catch_up_counts_one_outcome_per_occurrence_and_ignores_non_evidence() -
                                   timezone="UTC", planned_start=start, planned_end=start + timedelta(hours=1))
         placements[placement.id] = placement
         executions[placement.id] = ExecutionHistory(TaskExecution(
-            id=str(uuid.uuid4()), task_name="Gym", category=category or "", tag="", planned_duration=60, priority=5,
+            id=str(uuid.uuid4()), task_name="Gym", category=category or "", tag="", planned_duration=60,
             status=status, created_at=start.isoformat(), updated_at=start.isoformat(), task_id=task.id,
             scheduled_task_id=placement.id), ())
         return placement
@@ -201,7 +199,7 @@ def test_catch_up_counts_one_outcome_per_occurrence_and_ignores_non_evidence() -
 
 
 def test_catch_up_puts_a_missed_category_first_when_it_counts() -> None:
-    work, health = make_task("Report", category="study", priority=5), make_task("Gym", category="study", priority=5)
+    work, health = make_task("Report", category="study"), make_task("Gym", category="study")
     tasks = [work, health]
     prefs = flat_prefs(OptimizerMode.CATCH_UP, start_minute=0, end_minute=60)  # room for one of them
     normal = generate_day_schedule(make_day_schedule(tasks), flat_prefs(OptimizerMode.PRECISE_GREEDY,

@@ -13,12 +13,11 @@ repository-wide exploration, no unrelated refactors.
 
 | Layer | Modules | Rule |
 |---|---|---|
-| Models / data | `app/models.py`, `app/planning/models.py`, `app/execution/models.py` | |
-| Hard constraints | `app/constraints.py`, `app/planning/fixed_block_rules.py` | A hard constraint decides *whether* a placement is allowed. Never turn one into a score penalty |
-| Dependencies / PERT | `app/pert.py`, `app/planning/external_dependencies.py` | |
+| Models / data | `app/planning/models.py`, `app/execution/models.py` | Tasks have points; no priority or dependencies (ADR-048) |
+| Hard constraints | `app/optimizer.py` (engine checks), `app/planning/fixed_block_rules.py`, `app/planning/time.py` | A hard constraint decides *whether* a placement is allowed. Never turn one into a score penalty |
 | Reward / scoring | `app/reward.py`, `app/mode_objectives.py` | Decides *how good* a valid placement is |
-| Engines | `app/optimizer.py` (Greedy v1 legacy baseline + the minute-precise day engine), modes in `docs/scheduling-modes.md` | Normal, ADHD friendly, Early Finish, Night Owl, Catch-Up. Do not change baseline output unless the task says so |
-| Planning service | `app/planning/` (`service`, `application`, `allocation`, `recurrence`, `series`, `csv_import`/`csv_export`) | The persistence-backed CSV importer rejects unknown dependencies; the legacy pipeline ignores them |
+| Engines | `app/optimizer.py` (the minute-precise day engine), modes in `docs/scheduling-modes.md` | Normal, ADHD friendly, Early Finish, Night Owl, Catch-Up. Do not change baseline output unless the task says so |
+| Planning service | `app/planning/` (`service`, `application`, `allocation`, `recurrence`, `series`, `csv_import`/`csv_export`) | Allocation is points first (ADR-049); legacy CSV `priority`/`dependencies` columns are ignored |
 | Execution tracking | `app/execution/` (`service`, `lifecycle`, `db`, `backup`, `instance_lock`) | `db.py` owns local SQLite migrations; `backup.py` copies the file before any migration |
 | Productivity | `app/productivity/` | |
 | UI | `app/ui/` -- `*_page`/`*_view` draw, `*_controller`/`*_model` hold logic | UI calls domain/application services; it never reimplements scheduling or persistence |

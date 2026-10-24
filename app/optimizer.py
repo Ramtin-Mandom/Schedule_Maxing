@@ -19,11 +19,9 @@ import math
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from types import SimpleNamespace
 from collections.abc import Mapping
 from typing import Callable
 
-from app.pert import compute_required_closure, has_cycle_by_id
 from app.planning.models import DaySchedule as CanonicalDaySchedule
 from app.planning.models import DayScheduleOutput as CanonicalDayScheduleOutput
 from app.planning.models import FixedBlock as CanonicalFixedBlock
@@ -31,9 +29,14 @@ from app.planning.models import ScheduledTask as CanonicalScheduledTask
 from app.planning.models import Task as CanonicalTask
 from app.planning.models import TaskRegistry, UnscheduledEntry, UnscheduledReasonCode, compute_total_score
 from app.planning.models import preferred_third_bounds
-from app.planning.preferences import DayPreferences, OptimizerMode, day_preferences_to_reward_settings, to_legacy_scoring_task
+from app.planning.preferences import (
+    DayPreferences,
+    OptimizerMode,
+    day_preferences_to_reward_settings,
+    effective_task_preferred_window,
+)
 from app.planning.time import MINUTES_PER_DAY
-from app.reward import RewardSettings, _preferred_window_for_task, calculate_task_score
+from app.reward import RewardSettings, ScoringTask, calculate_task_score
 
 
 # =============================================================================
@@ -60,10 +63,8 @@ from app.reward import RewardSettings, _preferred_window_for_task, calculate_tas
 #                       rounded or split in either mode.
 #
 # Mandatory scheduling (see generate_day_schedule): fixed blocks, then every
-# required task plus the full transitive closure of its dependencies
-# (whether or not those prerequisites are themselves required) as one
-# "essential" tier, then optional tasks. A successful return always contains
-# every essential task_id exactly once; any other outcome raises
+# required task as one "essential" tier, then optional tasks. A successful
+# return always contains every required task_id exactly once; any other outcome raises
 # MandatoryTaskSchedulingError with structured, per-task reasons -- this
 # function never returns an apparently-successful partial schedule that is
 # silently missing a required task.
@@ -74,18 +75,16 @@ ADHD_QUARTER_HOUR_MINUTES = 15
 
 class MandatoryTaskSchedulingError(ValueError):
     """
-    Raised when generate_day_schedule cannot place every required task (and
-    its full prerequisite closure) exactly once.
+    Raised when generate_day_schedule cannot place every required task
+    exactly once.
 
     `failures` gives one MandatoryTaskFailure per affected task_id. This is
     deliberately a ValueError subclass (matching the fixed-block validation
-    errors) so existing `except ValueError` callers
-    still catch it, while `.failures` gives structured detail a caller that
-    wants it can inspect.
+    errors) so existing `except ValueError` callers still catch it, while
+    `.failures` gives structured detail a caller that wants it can inspect.
 
-    Distinct from a plain dependency-cycle ValueError (raised earlier, before
-    any placement search begins -- see generate_day_schedule) and from an
-    ordinary *optional*-task UnscheduledEntry (reported, not raised).
+    Distinct from an ordinary *optional*-task UnscheduledEntry (reported,
+    not raised).
     """
 
     def __init__(self, failures: list["MandatoryTaskFailure"]) -> None:
@@ -98,7 +97,7 @@ class MandatoryTaskSchedulingError(ValueError):
 
 @dataclass(frozen=True)
 class MandatoryTaskFailure:
-    """One required (or prerequisite-of-required) task that could not be placed."""
+    """One required task that could not be placed."""
 
     task_id: uuid.UUID
     reason_code: UnscheduledReasonCode
@@ -115,18 +114,17 @@ class MandatoryTaskFailure:
 
 class _Placed:
     """One already-placed interval (fixed block or scheduled flexible task)
-    inside the canonical engine's search, in day-relative integer minutes.
-    Exposes `.time_window.start_time/end_time` for the reward's neighbour
-    scoring, plus canonical identity/score."""
+    inside the canonical engine's search, in day-relative integer minutes: a
+    reward Neighbour (start, end, category, tag) plus canonical identity and
+    score."""
 
-    __slots__ = ("start", "end", "time_window", "name", "category", "tag", "task_id", "score", "fixed")
+    __slots__ = ("start", "end", "category", "tag", "task_id", "score", "fixed")
 
     def __init__(
         self,
         *,
         start: int,
         end: int,
-        name: str,
         category: str,
         tag: str,
         task_id: uuid.UUID | None,
@@ -135,8 +133,6 @@ class _Placed:
     ) -> None:
         self.start = start
         self.end = end
-        self.time_window = SimpleNamespace(start_time=start, end_time=end)
-        self.name = name
         self.category = category
         self.tag = tag
         self.task_id = task_id
@@ -148,13 +144,11 @@ def _to_offset(instant: datetime, day_start_utc: datetime) -> int:
     """
     Convert an aware instant to day-relative integer minutes (0 ==
     day_start_utc). Every public model feeding this (FixedBlock.planned_start/
-    planned_end, Task.deadline, an external dependency's completion instant)
-    is a plain aware datetime with no enforced whole-minute precision, but
+    planned_end, Task.deadline) is a plain aware datetime with no enforced whole-minute precision, but
     this engine's entire search operates in integer minutes -- silently
     round()-ing an instant with nonzero seconds/microseconds (nearest-minute,
     banker's rounding) could move a fixed block's reported boundary, permit
-    an overlap that the sub-minute reality does not have, or let a dependent
-    task start before its dependency instant / a deadline is actually met.
+    an overlap that the sub-minute reality does not have, or miss a deadline.
     Reject sub-minute precision explicitly instead of rounding it away.
     """
     delta = instant - day_start_utc
@@ -162,8 +156,7 @@ def _to_offset(instant: datetime, day_start_utc: datetime) -> int:
         raise ValueError(
             f"{instant.isoformat()} is not aligned to a whole minute relative to the day "
             f"window start ({day_start_utc.isoformat()}); this engine only supports "
-            "minute-precision instants for fixed blocks, deadlines, and external "
-            "dependency completion times."
+            "minute-precision instants for fixed blocks and deadlines."
         )
     return delta // timedelta(minutes=1)
 
@@ -193,7 +186,7 @@ def _validate_and_place_canonical_fixed_blocks(
             )
 
         placed.append(
-            _Placed(start=start, end=end, name=block.label, category="fixed", tag="", task_id=None, score=0.0, fixed=True)
+            _Placed(start=start, end=end, category="fixed", tag="", task_id=None, score=0.0, fixed=True)
         )
 
     placed.sort(key=lambda item: item.start)
@@ -207,11 +200,11 @@ def _validate_and_place_canonical_fixed_blocks(
 def _normalize_preferred_window(
     preference_time: dict[str, int] | None,
     day_window_start_minute: int,
-) -> dict[str, int] | None:
+) -> tuple[int, int] | None:
     """
     Convert a preferred-time window expressed in local minutes-from-midnight
-    (as produced by app.planning.preferences.to_legacy_scoring_task /
-    effective_task_preferred_window -- see LocalTimeWindow's own docstring)
+    (as produced by app.planning.preferences.effective_task_preferred_window
+    -- see LocalTimeWindow's own docstring)
     into day-window-relative offset minutes, i.e. the same coordinate system
     every candidate start/end, neighbor, and day bound already uses inside
     this engine's search (offset 0 == day_window_start_minute; see _to_offset
@@ -232,7 +225,7 @@ def _normalize_preferred_window(
     local_start = int(preference_time["start_time"])
     local_end = int(preference_time["end_time"])
     offset_start = (local_start - day_window_start_minute) % MINUTES_PER_DAY
-    return {"start_time": offset_start, "end_time": offset_start + (local_end - local_start)}
+    return offset_start, offset_start + (local_end - local_start)
 
 
 def _next_quarter_hour_offset(first_start: int, day_window_start_minute: int) -> int:
@@ -344,7 +337,7 @@ def _event_breakpoints(
     clipped_latest: int,
     previous_item: "_Placed | None",
     next_item: "_Placed | None",
-    preferred_window: dict[str, int] | None,
+    preferred_window: tuple[int, int] | None,
     settings: RewardSettings,
     adhd_mode: bool,
     day_start: int | None,
@@ -370,12 +363,11 @@ def _event_breakpoints(
         evaluated directly instead of being assumed monotonic.
 
     Reward components and their start-time dependence (see app/reward.py --
-    this is the "document every active component" accounting Task 6 asks
-    for; weight_category_bonus is inactive in _priority_score and
-    contributes no scoring dependence at all, so it needs no breakpoint):
-      - priority_score (_priority_score): constant in start_time --
-        contributes no breakpoint.
-      - time_score (_time_preference_score): a full-bonus constant while
+    weight_category_bonus is read by no component, so it needs no
+    breakpoint):
+      - weight (_weight_score): constant in start_time -- contributes no
+        breakpoint.
+      - time (_time_score): a full-bonus constant while
         [preferred_start, preferred_end-duration] fully contains the
         placement (still well-defined, just an always-false condition, when
         the task is longer than its preferred window), else a decay that is
@@ -416,8 +408,7 @@ def _event_breakpoints(
             cuts.update((lo, hi))
 
     if preferred_window is not None:
-        preferred_start = preferred_window["start_time"]
-        preferred_end = preferred_window["end_time"]
+        preferred_start, preferred_end = preferred_window
         add(preferred_start)
         add(preferred_end - duration)
         center = (preferred_start + preferred_end - duration) / 2
@@ -535,7 +526,7 @@ def _best_start_in_free_interval(
     latest_start: int,
     previous_item: "_Placed | None",
     next_item: "_Placed | None",
-    scoring_task: dict,
+    scoring_task: ScoringTask,
     settings: RewardSettings,
     adhd_mode: bool,
     day_start: int | None,
@@ -578,7 +569,7 @@ def _best_start_in_free_interval(
         start, score = _earliest_best_among(scorer, points)
         return start, start + duration, score
 
-    preferred_window = _preferred_window_for_task(scoring_task, settings)
+    preferred_window = scoring_task.preferred_window
     cuts, active_zones = _event_breakpoints(
         duration=duration,
         clipped_start=clipped_start,
@@ -646,28 +637,28 @@ def _in_preferred_range(task: CanonicalTask, start: int, day_total_minutes: int)
 
 def _canonical_scoring_task(
     task: CanonicalTask, day_preferences: DayPreferences, day_window_start_minute: int, day_total_minutes: int
-) -> dict:
+) -> ScoringTask:
     """
     The reward's view of `task` in day-relative minutes. A task with a
     preferred third scores its time preference against that third (so, when
     it must fall outside, the closest placement to it scores best); any
-    other task against its category's preferred window, if it has one.
+    other task against its own legacy window, else its category's preferred
+    window, if it has one. Neither its points nor anything else about its
+    worth is scored: a placement's score is its quality, not the task's value.
     """
-    scoring_task = to_legacy_scoring_task(task, day_preferences)
     if task.preferred_time is not None:
-        lo, hi = preferred_third_bounds(task.preferred_time, 0, day_total_minutes)
-        scoring_task["preference_time"] = {"start_time": lo, "end_time": hi}
+        window = preferred_third_bounds(task.preferred_time, 0, day_total_minutes)
     else:
-        scoring_task["preference_time"] = _normalize_preferred_window(
-            scoring_task["preference_time"], day_window_start_minute
+        window = _normalize_preferred_window(
+            effective_task_preferred_window(task, day_preferences), day_window_start_minute
         )
-    return scoring_task
+    return ScoringTask(category=task.category, duration=task.estimated_duration_minutes,
+                       tag=task.tags[0] if task.tags else "", preferred_window=window)
 
 
 def _prepare_canonical_task_search(
     task: CanonicalTask,
     day_total_minutes: int,
-    earliest_start: int,
     mode: OptimizerMode,
     day_window_start_minute: int,
     day_preferences: DayPreferences,
@@ -676,11 +667,11 @@ def _prepare_canonical_task_search(
     """
     Shared setup for both the production event search and the exhaustive
     reference: resolves duration/first_start/latest_start, builds the
-    coordinate-normalized scoring_task dict (fix A), and the adhd_mode flag.
+    coordinate-normalized ScoringTask, and the adhd_mode flag.
     Returns None immediately when the feasible range is already empty.
     """
     duration = task.estimated_duration_minutes
-    first_start = max(0, earliest_start)
+    first_start = 0
     latest_start = day_total_minutes - duration
     if deadline_offset is not None:
         latest_start = min(latest_start, deadline_offset - duration)
@@ -712,7 +703,6 @@ def _best_candidate_for_canonical_task_exhaustive(
     task: CanonicalTask,
     placed: list[_Placed],
     day_total_minutes: int,
-    earliest_start: int,
     mode: OptimizerMode,
     day_window_start_minute: int,
     settings: RewardSettings,
@@ -733,7 +723,7 @@ def _best_candidate_for_canonical_task_exhaustive(
     not share bugs with the code it is meant to validate.
     """
     prepared = _prepare_canonical_task_search(
-        task, day_total_minutes, earliest_start, mode, day_window_start_minute, day_preferences, deadline_offset
+        task, day_total_minutes, mode, day_window_start_minute, day_preferences, deadline_offset
     )
     if prepared is None:
         return None
@@ -787,7 +777,6 @@ def _best_candidate_for_canonical_task(
     task: CanonicalTask,
     placed: list[_Placed],
     day_total_minutes: int,
-    earliest_start: int,
     mode: OptimizerMode,
     day_window_start_minute: int,
     settings: RewardSettings,
@@ -797,12 +786,12 @@ def _best_candidate_for_canonical_task(
     """
     Find this task's best-scoring valid placement, pruned to free intervals
     only (never probing a minute that is already occupied) and to the
-    dependency/deadline-bound start range -- see the module docstring and
+    deadline-bound start range -- see the module docstring and
     _best_start_in_free_interval for how candidate starts are derived
     without scoring every feasible minute.
     """
     prepared = _prepare_canonical_task_search(
-        task, day_total_minutes, earliest_start, mode, day_window_start_minute, day_preferences, deadline_offset
+        task, day_total_minutes, mode, day_window_start_minute, day_preferences, deadline_offset
     )
     if prepared is None:
         return None
@@ -855,65 +844,20 @@ def _best_candidate_for_canonical_task(
     return _preferred_tier_first(search, task, full_first_start, full_latest_start, day_total_minutes)
 
 
-def _make_dependency_lookup(
-    registry: dict[uuid.UUID, CanonicalTask],
-    placed_by_task_id: dict[uuid.UUID, tuple[int, int]],
-    external_dependency_end_offsets: dict[uuid.UUID, int],
-):
-    """
-    Returns a function(task_id) -> int | None: the earliest start this
-    task's dependencies allow (0 if none), or None if not yet ready.
-
-    A dependency_id resolves, in order: already placed today (local) ->
-    supplied external context (a known task_id outside today's registry,
-    with its completion instant given by the caller) -> otherwise the task
-    is BLOCKED indefinitely. This is the canonical counterpart of legacy's
-    "missing dependency names are ignored": a canonical dependency_id is
-    never silently ignored just because it is not present locally --
-    ignoring only ever happens for legacy *name* references that generuinely
-    do not exist (see app.planning.compat), not for a known but
-    out-of-scope task_id.
-    """
-
-    def lookup(task_id: uuid.UUID) -> int | None:
-        task = registry[task_id]
-        if not task.dependency_ids:
-            return 0
-
-        latest = 0
-        for dependency_id in task.dependency_ids:
-            if dependency_id in placed_by_task_id:
-                latest = max(latest, placed_by_task_id[dependency_id][1])
-            elif dependency_id in external_dependency_end_offsets:
-                latest = max(latest, external_dependency_end_offsets[dependency_id])
-            else:
-                # Either a real local dependency not yet scheduled, or an
-                # unresolved/unknown external task_id -- either way, this
-                # task must wait rather than proceed as if unblocked.
-                return None
-
-        return latest
-
-    return lookup
-
-
 def _run_greedy_tier(
     task_ids: list[uuid.UUID],
     registry: dict[uuid.UUID, CanonicalTask],
     placed: list[_Placed],
-    placed_by_task_id: dict[uuid.UUID, tuple[int, int]],
     day_total_minutes: int,
     mode: OptimizerMode,
     day_window_start_minute: int,
     settings: RewardSettings,
     day_preferences: DayPreferences,
-    lookup,
     deadline_offsets: dict[uuid.UUID, int],
     task_bonuses: Mapping[uuid.UUID, float] | None = None,
 ) -> tuple[dict[uuid.UUID, tuple[int, int, float]], list[uuid.UUID]]:
     """
-    Repeatedly place the best-scoring currently-feasible task from
-    `task_ids`.
+    Repeatedly place the best-scoring feasible task from `task_ids`.
     `task_bonuses` (Catch-Up) is added to a task's candidate score only when
     choosing which task to place next -- a task-wide constant cannot change
     where a task goes -- and the stored score stays the insertion score.
@@ -921,9 +865,8 @@ def _run_greedy_tier(
     / Late) is chosen before any other, so weaker rewards of other tasks
     never take its place there; a task whose third is already full is
     chosen last. Without preferred thirds and bonuses the selection is
-    exactly the baseline's,
-    mutating `placed`/`placed_by_task_id` in place so later tiers and
-    dependency lookups see every placement made here. Returns
+    exactly the baseline's. Mutates `placed` in place so a later tier sees
+    every placement made here. Returns
     (task_id -> (start, end, score) for every placed task, and the task_ids
     that could not be placed).
     """
@@ -936,15 +879,10 @@ def _run_greedy_tier(
         best_score: tuple[int, float] = (-1, float("-inf"))
 
         for task_id in remaining:
-            earliest_start = lookup(task_id)
-            if earliest_start is None:
-                continue
-
             candidate = _best_candidate_for_canonical_task(
                 registry[task_id],
                 placed,
                 day_total_minutes,
-                earliest_start,
                 mode,
                 day_window_start_minute,
                 settings,
@@ -971,11 +909,10 @@ def _run_greedy_tier(
 
         placed.append(
             _Placed(
-                start=start, end=end, name=task.name, category=task.category, tag=tag,
+                start=start, end=end, category=task.category, tag=tag,
                 task_id=best_task_id, score=score, fixed=False,
             )
         )
-        placed_by_task_id[best_task_id] = (start, end)
         results[best_task_id] = (start, end, score)
         remaining.remove(best_task_id)
 
@@ -984,15 +921,8 @@ def _run_greedy_tier(
 
 def _mandatory_failure_reason(
     task_id: uuid.UUID,
-    lookup,
     deadline_offsets: dict[uuid.UUID, int],
 ) -> tuple[UnscheduledReasonCode, str]:
-    earliest = lookup(task_id)
-    if earliest is None:
-        return (
-            UnscheduledReasonCode.DEPENDENCY_UNRESOLVED,
-            "a required dependency was never scheduled, or references unresolved external context.",
-        )
     if task_id in deadline_offsets:
         return (
             UnscheduledReasonCode.WINDOW_UNSUPPORTED,
@@ -1009,7 +939,6 @@ def generate_day_schedule(
     preferences: DayPreferences,
     *,
     previous_result: CanonicalDayScheduleOutput | None = None,
-    external_dependency_ends: dict[uuid.UUID, datetime] | None = None,
     task_bonuses: Mapping[uuid.UUID, float] | None = None,
 ) -> CanonicalDayScheduleOutput:
     """
@@ -1022,18 +951,11 @@ def generate_day_schedule(
     constraints) and store each placement's final baseline reward as its
     score.
 
-    Order: validate/place fixed blocks, detect dependency cycles once,
-    schedule every required task plus its full prerequisite closure
+    Order: validate/place fixed blocks, schedule every required task
     ("essential" tier), then schedule optional tasks. Raises
-    MandatoryTaskSchedulingError if any essential task cannot be placed
+    MandatoryTaskSchedulingError if any required task cannot be placed
     (see that class and MandatoryTaskFailure). Optional tasks that cannot be
     placed are reported in the result's `unscheduled` list instead.
-
-    external_dependency_ends: task_id -> aware instant, for a dependency
-    known (from outside this call, e.g. a wider allocation) to have already
-    been satisfied at that instant. A dependency_id that is neither in
-    day_schedule's own task registry nor in this map blocks its dependent
-    task rather than being silently ignored (see _make_dependency_lookup).
 
     previous_result: when supplied, an unchanged (same task_id, same
     planned_start, same planned_end) placement reuses its previous
@@ -1055,21 +977,11 @@ def generate_day_schedule(
     day_total_minutes = _to_offset(day_end_utc, day_start_utc)
 
     placed = _validate_and_place_canonical_fixed_blocks(day_schedule.fixed_blocks, day_start_utc, day_end_utc)
-    placed_by_task_id: dict[uuid.UUID, tuple[int, int]] = {}
 
     # A To Do is a checklist item: never placed, and never reported as unscheduled.
     registry: dict[uuid.UUID, CanonicalTask] = {
         task_id: task for task_id in day_schedule.task_ids
         if not (task := day_schedule.tasks.get(task_id)).is_todo
-    }
-
-    # Detect cycles once, before any placement search begins (distinct from
-    # -- and raised earlier than -- a MandatoryTaskSchedulingError).
-    if has_cycle_by_id(registry):
-        raise ValueError("Dependency cycle detected between canonical tasks.")
-
-    external_dependency_end_offsets = {
-        task_id: _to_offset(instant, day_start_utc) for task_id, instant in (external_dependency_ends or {}).items()
     }
 
     settings = day_preferences_to_reward_settings(preferences)
@@ -1106,13 +1018,9 @@ def generate_day_schedule(
     if mismatched_required:
         raise MandatoryTaskSchedulingError(mismatched_required)
 
-    essential_ids = compute_required_closure(movable_ids, registry)
-    # compute_required_closure returns a set (no defined iteration order);
-    # derive tier order from movable_ids (the original input order) instead
-    # of iterating the set directly, so two equal-scoring essential tasks
-    # tie-break in input order rather than UUID/set-hash order.
-    essential_ordered = [task_id for task_id in movable_ids if task_id in essential_ids]
-    optional_ids = [task_id for task_id in movable_ids if task_id not in essential_ids]
+    # Tiers keep movable_ids' input order, so equal-scoring tasks tie-break in input order.
+    essential_ids = [task_id for task_id in movable_ids if registry[task_id].required]
+    optional_ids = [task_id for task_id in movable_ids if not registry[task_id].required]
 
     # Coarse, provable infeasibility checks -- see MandatoryTaskFailure's
     # proven_infeasible field. Neither check is a full bin-packing proof
@@ -1146,7 +1054,7 @@ def generate_day_schedule(
                     task_id=task_id,
                     reason_code=UnscheduledReasonCode.NO_VALID_SLOT,
                     explanation=(
-                        f"required tasks (including prerequisite closure) need {essential_total_duration} "
+                        f"required tasks need {essential_total_duration} "
                         f"minutes in total, but only {free_capacity} minutes of free capacity remain after "
                         "fixed blocks."
                     ),
@@ -1156,12 +1064,10 @@ def generate_day_schedule(
             ]
         )
 
-    lookup = _make_dependency_lookup(registry, placed_by_task_id, external_dependency_end_offsets)
-
     bonuses = task_bonuses if mode == OptimizerMode.CATCH_UP else None
     essential_results, essential_remaining = _run_greedy_tier(
-        essential_ordered, registry, placed, placed_by_task_id, day_total_minutes,
-        mode, day_window_start_minute, settings, preferences, lookup, deadline_offsets, bonuses,
+        essential_ids, registry, placed, day_total_minutes,
+        mode, day_window_start_minute, settings, preferences, deadline_offsets, bonuses,
     )
 
     if essential_remaining:
@@ -1169,18 +1075,18 @@ def generate_day_schedule(
             [
                 MandatoryTaskFailure(task_id=task_id, reason_code=reason_code, explanation=explanation, proven_infeasible=False)
                 for task_id in essential_remaining
-                for reason_code, explanation in [_mandatory_failure_reason(task_id, lookup, deadline_offsets)]
+                for reason_code, explanation in [_mandatory_failure_reason(task_id, deadline_offsets)]
             ]
         )
 
     optional_results, optional_remaining = _run_greedy_tier(
-        optional_ids, registry, placed, placed_by_task_id, day_total_minutes,
-        mode, day_window_start_minute, settings, preferences, lookup, deadline_offsets, bonuses,
+        optional_ids, registry, placed, day_total_minutes,
+        mode, day_window_start_minute, settings, preferences, deadline_offsets, bonuses,
     )
 
     unscheduled_entries = []
     for task_id in optional_remaining:
-        reason_code, explanation = _mandatory_failure_reason(task_id, lookup, deadline_offsets)
+        reason_code, explanation = _mandatory_failure_reason(task_id, deadline_offsets)
         unscheduled_entries.append(UnscheduledEntry(task_id=task_id, reason_code=reason_code, explanation=explanation))
 
     previous_placement_ids: dict[tuple[uuid.UUID, datetime, datetime], uuid.UUID] = {}
@@ -1191,8 +1097,7 @@ def generate_day_schedule(
     all_results = {**essential_results, **optional_results}
     if mode in (OptimizerMode.EARLY_FINISH, OptimizerMode.NIGHT_OWL) and all_results:
         all_results = _refine_time_objective(
-            mode, all_results, registry, movable_ids, placed, day_total_minutes, settings, preferences,
-            external_dependency_end_offsets, deadline_offsets,
+            mode, all_results, registry, movable_ids, placed, day_total_minutes, settings, preferences, deadline_offsets,
         )
     placements: list[CanonicalScheduledTask] = []
     for task_id, (start, end, score) in all_results.items():
@@ -1232,7 +1137,7 @@ def generate_day_schedule(
 
 
 def _scoring_tasks(registry: Mapping[uuid.UUID, CanonicalTask], preferences: DayPreferences,
-                   day_total_minutes: int) -> dict[uuid.UUID, dict]:
+                   day_total_minutes: int) -> dict[uuid.UUID, ScoringTask]:
     return {task_id: _canonical_scoring_task(task, preferences, preferences.day_window.start_minute, day_total_minutes)
             for task_id, task in registry.items()}
 
@@ -1240,7 +1145,7 @@ def _scoring_tasks(registry: Mapping[uuid.UUID, CanonicalTask], preferences: Day
 def _final_scores(
     starts: Mapping[uuid.UUID, int],
     registry: Mapping[uuid.UUID, CanonicalTask],
-    scoring_tasks: Mapping[uuid.UUID, dict],
+    scoring_tasks: Mapping[uuid.UUID, ScoringTask],
     fixed: list[_Placed],
     day_total_minutes: int,
     settings: RewardSettings,
@@ -1255,7 +1160,7 @@ def _final_scores(
     items = list(fixed)
     for task_id, start in starts.items():
         task = registry[task_id]
-        items.append(_Placed(start=start, end=start + task.estimated_duration_minutes, name=task.name,
+        items.append(_Placed(start=start, end=start + task.estimated_duration_minutes,
                              category=task.category, tag=task.tags[0] if task.tags else "", task_id=task_id,
                              score=0.0, fixed=False))
     items.sort(key=lambda item: (item.start, item.end))
@@ -1281,7 +1186,6 @@ def _refine_time_objective(
     day_total_minutes: int,
     settings: RewardSettings,
     preferences: DayPreferences,
-    external_ends: Mapping[uuid.UUID, int],
     deadline_offsets: Mapping[uuid.UUID, int],
 ) -> dict[uuid.UUID, tuple[int, int, float]]:
     """Repack the baseline's selected work for Early Finish / Night Owl; scores become final baseline rewards."""
@@ -1295,16 +1199,15 @@ def _refine_time_objective(
     tasks = []
     for rank, task_id in enumerate(ranked):
         task = registry[task_id]
-        dependencies = list(task.dependency_ids)
-        earliest = max([0, *(external_ends[dep] for dep in dependencies if dep in external_ends and dep not in results)])
+        earliest = 0
         latest = min(day_total_minutes, deadline_offsets.get(task_id, day_total_minutes))
         if _in_preferred_range(task, results[task_id][0], day_total_minutes):
             # Placed inside its preferred third: repacking may move it, but only within that third.
             lo, hi = _preferred_start_range(task, day_total_minutes)
-            earliest, latest = max(earliest, lo), min(latest, hi + task.estimated_duration_minutes)
+            earliest, latest = lo, min(latest, hi + task.estimated_duration_minutes)
         tasks.append(RepackTask(
             task_id=task_id, duration=task.estimated_duration_minutes, earliest=earliest, latest_finish=latest,
-            predecessors=tuple(dep for dep in dependencies if dep in results), rank=rank,
+            rank=rank,
         ))
 
     def baseline_reward(starts: Mapping[uuid.UUID, int]) -> float:
@@ -1363,7 +1266,7 @@ def evaluate_day_output(
     settings = day_preferences_to_reward_settings(preferences)
     fixed = [
         _Placed(start=_to_offset(block.planned_start, day_start_utc), end=_to_offset(block.planned_end, day_start_utc),
-                name=block.label, category=block.category, tag="", task_id=None, score=0.0, fixed=True)
+                category=block.category, tag="", task_id=None, score=0.0, fixed=True)
         for block in output.fixed_blocks
     ]
     registry: dict[uuid.UUID, CanonicalTask] = {}
@@ -1372,7 +1275,7 @@ def evaluate_day_output(
         task = output.tasks.get(placement.task_id)
         start, end = _to_offset(placement.planned_start, day_start_utc), _to_offset(placement.planned_end, day_start_utc)
         if task is None or placement.task_id in starts:
-            fixed.append(_Placed(start=start, end=end, name="", category="", tag="", task_id=None, score=0.0,
+            fixed.append(_Placed(start=start, end=end, category="", tag="", task_id=None, score=0.0,
                                  fixed=True))
             continue
         registry[placement.task_id] = task.model_copy(update={"estimated_duration_minutes": end - start})

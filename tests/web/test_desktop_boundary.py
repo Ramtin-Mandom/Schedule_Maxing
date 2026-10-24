@@ -73,7 +73,7 @@ def test_both_clients_work_in_the_devices_active_account_after_a_restart(make_lo
     try:
         assert desktop.workspace.scope == OwnerScope.account(alice)
         saved = desktop.planning_controller.add_or_update_task(
-            Task(name="From the desktop", category="study", estimated_duration_minutes=30, priority=5))
+            Task(name="From the desktop", category="study", estimated_duration_minutes=30))
         assert saved.ok and str(saved.value.user_id) == alice
         assert {t.name for t in desktop.planning_controller.list_tasks().value} == {
             "Offline", "Created while signed out", "From the desktop"}

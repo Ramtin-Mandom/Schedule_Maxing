@@ -26,7 +26,7 @@ from datetime import datetime
 from app.execution.errors import ExecutionNotFoundError
 from app.execution.lifecycle import TaskOutcome, outcome_actions
 from app.execution.models import ExecutionStatus, TaskExecution
-from app.planning.models import DEFAULT_TASK_PRIORITY, FixedBlock, fixed_block_execution_id
+from app.planning.models import FixedBlock, fixed_block_execution_id
 
 
 def build_fixed_block_execution(block: FixedBlock, *, now: datetime, user_id: uuid.UUID | None) -> TaskExecution:
@@ -38,7 +38,6 @@ def build_fixed_block_execution(block: FixedBlock, *, now: datetime, user_id: uu
         category=block.category,
         tag="",
         planned_duration=round((block.planned_end - block.planned_start).total_seconds() / 60),
-        priority=DEFAULT_TASK_PRIORITY,
         points=block.points,
         status=ExecutionStatus.SCHEDULED,
         created_at=now_iso,

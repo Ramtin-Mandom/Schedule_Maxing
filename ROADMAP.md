@@ -180,10 +180,9 @@ Items the repository names as future work or as "not yet" limitations, in priori
 - **Priority:** Low
 - **Status:** The README lists these as "Possible next steps"; they are not commitments.
 - **Items:**
-  - a simulated-annealing optimizer (its settings exist, unused, in `config/settings.py`);
+  - a simulated-annealing optimizer;
   - schedule comparison metrics;
   - more detailed reasons for unscheduled tasks;
-  - warnings for ignored missing dependencies (legacy pipeline);
   - drag-and-drop editing;
   - opt-in use of predicted durations.
 - **Complexity:** Varies.
@@ -198,6 +197,22 @@ Items the repository names as future work or as "not yet" limitations, in priori
   - [ ] Budget routes in the local web profile, if wanted.
   - [ ] Optional: "this and following" series edits, moving an occurrence from the forms.
 - **Testing:** `tests/budget/*`, `tests/ui/test_budget_*.py`.
+
+### M11. Drop the legacy `priority` / `dependency_ids` wire placeholders
+
+- **Priority:** Low
+- **Status:** Waiting. Tasks and executions have no priority or dependencies since ADR-048, but 1.3.0 clients
+  fail on a pulled record without the fields, so the server and the client still send `priority` (5) and
+  `dependency_ids` ([]) and ignore them on input.
+- **Dependencies:** Server revision `0021` deployed together with the client that removed them; no 1.3.0
+  client left (the updater moves installed clients forward).
+- **Modules:** `backend/resources.py` (`LEGACY_TASK_WIRE_FIELDS`), `backend/executions.py`
+  (`LEGACY_EXECUTION_WIRE_FIELDS`), `app/sync/mapping.py` (`_with_legacy_task_wire`), `docs/sync-protocol.md`.
+- **Deliverables:**
+  - [ ] Remove the placeholder fields and their validators from the server schemas and the client mapping.
+- **Testing:** `tests/sync/test_protocol.py`, `tests/backend/test_resources.py`, `tests/backend/test_sync_push.py`.
+- **Risks:** An old client still syncing breaks on pull.
+- **Complexity:** Small.
 - **Complexity:** Small to Medium.
 
 ---
@@ -252,12 +267,10 @@ These come from this analysis. None of them has been approved.
 
 - **Priority:** Low
 - **Status:**
-  - `app/planning/application.py` (about 2,500 lines), `app/optimizer.py` (about 2,000; two engines in one
-    module), `app/execution/db.py` (about 1,600; it owns planning and sync tables although it sits in
+  - `app/planning/application.py` (about 2,500 lines), `app/optimizer.py` (about 1,300; the canonical engine only since ADR-047), `app/execution/db.py` (about 1,600; it owns planning and sync tables although it sits in
     `execution/`), `backend/models.py` (about 1,600).
   - `app/planning/application.py` imports `app.execution.db`, which couples the two packages.
 - **Proposal:**
-  - Move the legacy Greedy v1 into its own module, behind a re-export.
   - Move the storage infrastructure into a neutral package, with shims at the old import paths.
   - Make each move behavior-preserving, guarded by the existing baselines.
 - **Risks:** Wide import changes, and moves that look like rewrites in review. Do this only with approval and

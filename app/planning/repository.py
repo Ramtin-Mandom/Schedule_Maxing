@@ -3,7 +3,7 @@ app/planning/repository.py
 
 SQLite persistence for the canonical planning models (app/planning/models.py):
 Project, Task (with its tags, preferred dates, preferred time window,
-dependencies, deadline, and recurrence rule), FixedBlock, ScheduledTask
+deadline, and recurrence rule), FixedBlock, ScheduledTask
 placements, persisted preference layers (PreferenceRecord) and schedule
 provenance (GenerationRecord). Tables are created by schema migrations v3/v4
 in app/execution/db.py -- the same database file and migration chain as
@@ -71,7 +71,7 @@ from app.execution.db import EXECUTION_LINK_VIOLATION, TransactionState, locked,
 from app.execution.lifecycle import TRANSITIONS
 from app.execution.models import CancelReason, ExecutionStatus, TaskExecution, WorkSession
 from app.planning.errors import DuplicateEntityError, InvalidEntityError, ScopeError
-from app.planning.external_dependencies import ExecutionFact
+from app.planning.execution_facts import ExecutionFact
 from app.planning.history import (
     CompletionHistory,
     ExecutionHistory,
@@ -111,7 +111,7 @@ _TASK_TYPE_COLUMNS = ("id", "user_id", "label", "created_at", "updated_at", "ver
 
 _TASK_COLUMNS = (
     "id", "user_id", "project_id", "name", "category",
-    "estimated_duration_minutes", "priority", "points", "task_type_id", "required", "required_date",
+    "estimated_duration_minutes", "points", "task_type_id", "required", "required_date",
     "preferred_window_start_minute", "preferred_window_end_minute",
     "deadline", "deadline_utc",
     "recurrence_frequency", "recurrence_interval", "recurrence_day_of_month",
@@ -448,7 +448,7 @@ class PlanningRepository:
 
     def _write_task_children(self, task: Task) -> None:
         task_id = str(task.id)
-        for table in ("task_tags", "task_preferred_dates", "task_dependencies", "task_recurrence_weekdays"):
+        for table in ("task_tags", "task_preferred_dates", "task_recurrence_weekdays"):
             self._connection.execute(f"DELETE FROM {table} WHERE task_id = ?", (task_id,))
 
         self._connection.executemany(
@@ -458,10 +458,6 @@ class PlanningRepository:
         self._connection.executemany(
             "INSERT INTO task_preferred_dates (task_id, position, preferred_date) VALUES (?, ?, ?)",
             [(task_id, position, day.isoformat()) for position, day in enumerate(task.preferred_dates)],
-        )
-        self._connection.executemany(
-            "INSERT INTO task_dependencies (task_id, position, depends_on_task_id) VALUES (?, ?, ?)",
-            [(task_id, position, str(dependency)) for position, dependency in enumerate(task.dependency_ids)],
         )
         weekdays = task.recurrence.weekdays if task.recurrence is not None else None
         self._connection.executemany(
@@ -591,23 +587,6 @@ class PlanningRepository:
     def existing_project_ids(self, project_ids: Iterable[uuid.UUID], *, include_deleted: bool = False) -> set[uuid.UUID]:
         return self._existing_ids("projects", project_ids, include_deleted)
 
-    def dependents_of(self, task_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, set[uuid.UUID]]:
-        """For each given task id that live tasks depend on: the set of live dependent task ids."""
-        ids = _ids(task_ids)
-        owner_sql, owner_params = self._owner_sql("t.user_id")
-        dependents: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
-        with self._read():
-            for chunk in _chunks(ids):
-                rows = self._connection.execute(
-                    f"SELECT d.task_id, d.depends_on_task_id FROM task_dependencies AS d "
-                    f"JOIN tasks AS t ON t.id = d.task_id "
-                    f"WHERE t.deleted_at IS NULL AND d.depends_on_task_id IN ({_placeholders(chunk)}){owner_sql}",
-                    (*chunk, *owner_params),
-                ).fetchall()
-                for row in rows:
-                    dependents[uuid.UUID(row["depends_on_task_id"])].add(uuid.UUID(row["task_id"]))
-        return dict(dependents)
-
     def _load_tasks(self, where_sql: str, params: tuple, include_deleted: bool = False) -> list[Task]:
         # Caller holds the lock. where_sql is always an internal constant.
         owner_sql, owner_params = self._owner_sql()
@@ -632,14 +611,6 @@ class PlanningRepository:
         ):
             preferred_dates[child["task_id"]].append(child["preferred_date"])
 
-        dependencies: dict[str, list[str]] = defaultdict(list)
-        for child in self._connection.execute(
-            f"SELECT task_id, depends_on_task_id FROM task_dependencies WHERE task_id IN ({subquery}) "
-            "ORDER BY task_id, position",
-            params,
-        ):
-            dependencies[child["task_id"]].append(child["depends_on_task_id"])
-
         weekdays: dict[str, list[int]] = defaultdict(list)
         for child in self._connection.execute(
             f"SELECT task_id, weekday FROM task_recurrence_weekdays WHERE task_id IN ({subquery}) "
@@ -649,7 +620,7 @@ class PlanningRepository:
             weekdays[child["task_id"]].append(child["weekday"])
 
         return [
-            _row_to_task(row, tags[row["id"]], preferred_dates[row["id"]], dependencies[row["id"]], weekdays[row["id"]])
+            _row_to_task(row, tags[row["id"]], preferred_dates[row["id"]], weekdays[row["id"]])
             for row in rows
         ]
 
@@ -999,7 +970,7 @@ class PlanningRepository:
         return found
 
     def execution_facts_for_tasks(self, task_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, list[ExecutionFact]]:
-        """Live executions of the given tasks (read-only; used to resolve external dependencies)."""
+        """Live executions of the given tasks (read-only)."""
         grouped: dict[uuid.UUID, list[ExecutionFact]] = defaultdict(list)
         owner_sql, owner_params = self._owner_sql()
         with self._read():
@@ -1247,7 +1218,6 @@ def _task_to_row(task: Task) -> tuple:
         task.name,
         task.category,
         task.estimated_duration_minutes,
-        task.priority,
         task.points,
         _str_or_none(task.task_type_id),
         int(task.required),
@@ -1278,7 +1248,7 @@ def _task_to_row(task: Task) -> tuple:
 
 
 def _row_to_task(
-    row: sqlite3.Row, tags: list[str], preferred_dates: list[str], dependency_ids: list[str], weekdays: list[int]
+    row: sqlite3.Row, tags: list[str], preferred_dates: list[str], weekdays: list[int]
 ) -> Task:
     window = None
     if row["preferred_window_start_minute"] is not None:
@@ -1306,7 +1276,6 @@ def _row_to_task(
             "category": row["category"],
             "tags": list(tags),
             "estimated_duration_minutes": row["estimated_duration_minutes"],
-            "priority": row["priority"],
             "points": row["points"],
             "kind": row["kind"],
             "preferred_time": row["preferred_time"],
@@ -1315,7 +1284,6 @@ def _row_to_task(
             "required_date": _date_or_none(row["required_date"]),
             "preferred_dates": [date_.fromisoformat(value) for value in preferred_dates],
             "preferred_time_window": window,
-            "dependency_ids": [uuid.UUID(value) for value in dependency_ids],
             "deadline": _datetime_or_none(row["deadline"]),
             "recurrence": recurrence,
             "series_id": _uuid_or_none(row["series_id"]),

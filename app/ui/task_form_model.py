@@ -15,8 +15,7 @@ optimizer's placement score, and never a scheduling priority), the date it
 is planned for (the page's selected date; an imported task may be undated),
 "pin to this date" (required_date), "required" (must be scheduled), the
 preferred time (Early / Mid / Late: a third of the day's schedulable
-window), a deadline (date and time), dependencies, a project and ordered
-tags.
+window), a deadline (date and time), a project and ordered tags.
 
 Fixed block fields: label, category, points, date, start and end.
 
@@ -36,7 +35,7 @@ task; whether the change applies to that occurrence, to it and every later
 one, or to the entire series is chosen when it is saved (recurrence_role).
 
 Edits start from the stored model and change only the form's fields, so
-recurrence, further preferred dates, tags order, dependencies, the project,
+recurrence, further preferred dates, tags order, the project,
 an unknown imported category and anything the form does not show survive.
 A category the form does not list stays selectable for that record.
 
@@ -89,8 +88,6 @@ from app.ui.time_fields import (
 
 #: The categories every form offers (a stored category outside this list is added for that record).
 CATEGORIES = ["study", "work", "class", "exercise", "sleep", "food", "event", "entertainment", "errand", "other"]
-#: The choices of the default-priority settings (a legacy value no scheduler reads; the task form has no priority).
-PRIORITIES = [str(value) for value in range(1, 11)]
 #: The form's preferred-time choices (app.planning.models.PreferredTime) and the one a new task starts with.
 PREFERRED_TIMES = tuple(value.value for value in PreferredTime)
 DEFAULT_PREFERRED_TIME = PreferredTime.MID.value
@@ -127,7 +124,6 @@ class TaskDraft:
     preferred_time: str = DEFAULT_PREFERRED_TIME
     deadline_date: str = ""
     deadline_time: str = ""
-    dependency_ids: tuple[uuid.UUID, ...] = ()
     project_id: uuid.UUID | None = None
     tags: tuple[str, ...] = ()
     #: The reusable task type (docs/productivity-redesign-plan.md): None keeps the stored type, or gives a new
@@ -243,7 +239,7 @@ def draft_from_task(task: Task, timezone_name: str, *, series: Task | None = Non
         required=task.required, pin_to_date=task.required_date is not None,
         preferred_time=task.preferred_time.value if task.preferred_time is not None else DEFAULT_PREFERRED_TIME,
         deadline_date=deadline_date, deadline_time=deadline_time,
-        dependency_ids=tuple(task.dependency_ids), project_id=task.project_id, tags=tuple(task.tags),
+        project_id=task.project_id, tags=tuple(task.tags),
         task_type_id=task.task_type_id,
         **recurrence,
     )
@@ -316,7 +312,7 @@ def build_task(draft: TaskDraft, *, timezone_name: str, existing: Task | None = 
         name=name, category=draft.category.strip(), estimated_duration_minutes=duration,
         points=points, kind=TaskKind.FLEXIBLE,
         required=draft.required, preferred_time=draft.preferred_time, deadline=deadline,
-        dependency_ids=list(dict.fromkeys(draft.dependency_ids)), project_id=draft.project_id, tags=tags,
+        project_id=draft.project_id, tags=tags,
     )
     previous_dates = list(existing.preferred_dates) if existing is not None else []
     if recurrence is not None:
@@ -536,8 +532,6 @@ class Choice:
 class EditorOptions:
     timezone: str
     categories: list[str] = field(default_factory=lambda: list(CATEGORIES))
-    #: Tasks that can be dependencies (never the edited task itself), labelled so duplicate names differ.
-    dependencies: list[Choice] = field(default_factory=list)
     projects: list[Choice] = field(default_factory=list)
     #: The workspace's reusable task types (independent of category and tags).
     task_types: list[Choice] = field(default_factory=list)

@@ -43,20 +43,14 @@ def _generate_tasks(seed: int, count: int) -> list[Task]:
     tasks = []
     for index in range(count):
         duration = rng.choice([30, 45, 60, 90, 120, 180])
-        priority = rng.randint(1, 10)
+        points = rng.randint(1, 10)
         required = rng.random() < 0.2
         tasks.append(
             Task(
                 name=f"Task {index:03d}", category=rng.choice(categories),
-                estimated_duration_minutes=duration, priority=priority, required=required,
+                estimated_duration_minutes=duration, points=points, required=required,
             )
         )
-    # Deterministic acyclic dependency edges: each task may depend on an
-    # earlier-indexed task only, so the graph is guaranteed acyclic.
-    for index, task in enumerate(tasks):
-        if index > 0 and rng.random() < 0.15:
-            dependency = tasks[rng.randint(0, index - 1)]
-            tasks[index] = task.model_copy(update={"dependency_ids": [dependency.id]})
     return tasks
 
 

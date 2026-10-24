@@ -15,7 +15,7 @@ Controls:
   Flexible: name, category, project, points, duration, preferred time
   (Early / Mid / Late), required, tags. Fixed: label, category, points,
   start, end. To Do: name, category, points, tags. There are no advanced
-  settings: no deadline, task type, dependency or repeat controls. What a
+  settings: no deadline, task type or repeat controls. What a
   stored record has of those is kept as it is when the record is edited.
 - Times (fixed-block start/end) use the
   shared [ Hour ] : [ Minute ] [ AM/PM ] input (app/ui/clock_input.py),
@@ -487,8 +487,8 @@ class TaskEditor(Card):
 
     def draft(self) -> TaskDraft:
         """
-        The form as a draft. The form has no deadline, task type, dependency or
-        repeat controls: for a record being edited those values are carried
+        The form as a draft. The form has no deadline, task type or repeat
+        controls: for a record being edited those values are carried
         unchanged from the draft it was loaded from (so saving never clears
         what is stored), and a new record has none.
         """

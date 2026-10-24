@@ -34,6 +34,38 @@ work it out again from failure logs.
 
 ## Pending
 
+### 2026-10-23: Task dependencies and priority removed everywhere; points-first allocation (engine-remake)
+- Changed: local schema v18 -> v19 (`app/execution/db.py` `_V19_STATEMENTS`: `task_dependencies` dropped, `priority`
+  dropped from `tasks` and `executions`; `ALTER TABLE ... DROP COLUMN` needs SQLite >= 3.35); server Alembic head
+  `0020` -> `0021_drop_priority_and_dependencies` (project `default_priority` too; `0016` has a frozen
+  `DEFAULT_TASK_PRIORITY`); `Task.priority`/`dependency_ids` and `TaskExecution.priority` removed (pydantic ignores
+  them if passed); deleted `app/pert.py`, `app/planning/external_dependencies.py`, six `samples/inputs/dependency_*`
+  / `priority_*` CSVs; `ExecutionFact` moved to `app/planning/execution_facts.py`. Wire placeholders kept:
+  `LEGACY_TASK_WIRE_FIELDS` (`backend/resources.py`, `app/sync/mapping.py`), `LEGACY_EXECUTION_WIRE_FIELDS`
+  (`backend/executions.py`). Canonical CSV `FORMAT_VERSION` 2 -> 3 (`IMPORTABLE_FORMAT_VERSIONS = ("2", "3")`);
+  reset preview lost `blocking_dependents`/`blocked`. `app/reward.py` rebuilt: typed `ScoringTask`/`Neighbour`;
+  removed `calculate_schedule_score`, `task_weights`, `task_time_windows`, `LEGACY_CONFIG_FILENAMES` and the legacy
+  config filenames; `preferences.to_legacy_scoring_task` deleted; `_Placed` lost `name`/`time_window`.
+  `provenance.FINGERPRINT_VERSION` 1 -> 2 and points are hashed. `allocation._allocation_order` = (-points,
+  deadline, -duration, id). UI text: Settings "Priority weight" -> "Task weight"; the guide's "dependencies"
+  section removed and its points text changed.
+- Intent: ADR-048, ADR-049 (owner chose "everywhere" and points-first allocation).
+- Depends on it: `tests/execution/test_migration_v19.py`, `tests/execution/conftest.py` (`without_dropped_columns`),
+  `tests/ui/test_data_compatibility.py`, `tests/backend/test_migrations.py`, `tests/sync/test_protocol.py`,
+  `tests/ui/test_guide.py`, `tests/ui/test_settings_*.py`, `tests/planning/test_allocation.py`,
+  `benchmarks/results/prompt1_scheduling_mode_baseline.json` (week results regenerated).
+- CI risk: SQLite version on the runner (needs >= 3.35 for DROP COLUMN; ubuntu-latest ships newer); the
+  `postgres` job runs 0021 on real PostgreSQL (not run locally).
+
+### 2026-10-23: Greedy Optimizer v1 removed (f47a080)
+- Changed: deleted `app/models.py`, `app/constraints.py`, `app/data_processor.py`, `optimize_day_schedule` and its
+  helpers, `RewardConfigPage`, the v1 tests and `benchmarks/optimizer_baseline.py`/`final_comparison.py` with
+  their results; dead `config/settings.py` constants removed.
+- Intent: ADR-047.
+- Depends on it: `packaging/windows/check_bundle.py` / `ScheduleMaxing.spec` if they name the deleted modules;
+  `tests/test_packaging_config.py`.
+- CI risk: none expected (no app path called v1).
+
 ### 2026-10-23: ML duration predictor removed (engine-remake, uncommitted)
 - Changed: deleted `app/productivity/ml_*.py`, `predictor_comparison_cli.py`, `tests/productivity/test_ml_*.py`,
   `ml_fixtures.py`; removed `ProductivityService.predict_duration_comparison`, the controller method of the same

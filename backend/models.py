@@ -18,8 +18,8 @@ Design:
       optimistic-concurrency column, so every UPDATE also compares it), and
       a `deleted_at` tombstone. Rows are never physically deleted by the API.
     - Structured content is relational (migration 0006): a task's tags,
-      preferred dates, dependencies and recurrence weekdays are ordered or
-      keyed child rows, recurrence is scalar columns (the desktop SQLite
+      preferred dates and recurrence weekdays are ordered or keyed child
+      rows, recurrence is scalar columns (the desktop SQLite
       schema's own layout), and a preference layer is scalar columns plus
       category/tag-relation child rows that keep the absent/value/explicit-
       clear states of app.planning.preferences.PreferenceOverrides.
@@ -188,7 +188,6 @@ class _ProjectContent:
     completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     #: The defaults of the project's new tasks (app.planning.models.ProjectTaskDefaults); NULL = not configured.
     default_duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    default_priority: Mapped[int | None] = mapped_column(Integer, nullable=True)
     default_points: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
@@ -197,7 +196,6 @@ def _project_checks(table: str) -> tuple:
         CheckConstraint("length(name) > 0", name=f"ck_{table}_name"),
         CheckConstraint(
             "(default_duration_minutes IS NULL OR default_duration_minutes BETWEEN 1 AND 1440)"
-            " AND (default_priority IS NULL OR default_priority BETWEEN 1 AND 10)"
             " AND (default_points IS NULL OR default_points BETWEEN 0 AND 1000)",
             name=f"ck_{table}_task_defaults"),
     )
@@ -236,7 +234,6 @@ class _TaskContent:
     name: Mapped[str] = mapped_column(String(500), nullable=False)
     category: Mapped[str] = mapped_column(String(100), nullable=False)
     estimated_duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
-    priority: Mapped[int] = mapped_column(Integer, nullable=False)
     #: The user's productivity value (app.planning.models.Task.points); not a scheduling input.
     points: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     #: The task's reusable type (one of the user's task_types; NULL: not assigned yet). Not a scheduling input.
@@ -277,7 +274,6 @@ def _task_checks(table: str) -> tuple:
         CheckConstraint("length(name) > 0", name=f"ck_{table}_name"),
         CheckConstraint("length(category) > 0", name=f"ck_{table}_category"),
         CheckConstraint("estimated_duration_minutes > 0", name=f"ck_{table}_duration"),
-        CheckConstraint("priority BETWEEN 1 AND 10", name=f"ck_{table}_priority"),
         CheckConstraint("points BETWEEN 0 AND 1000", name=f"ck_{table}_points"),
         CheckConstraint(_in("kind", TASK_KINDS), name=f"ck_{table}_kind"),
         CheckConstraint(f"preferred_time IS NULL OR {_in('preferred_time', PREFERRED_TIMES)}",
@@ -493,7 +489,6 @@ class _ExecutionContent:
     planned_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
     planned_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
     planned_duration: Mapped[int] = mapped_column(Integer, nullable=False)
-    priority: Mapped[int] = mapped_column(Integer, nullable=False)
     #: The task's points when the execution was created (a snapshot); NULL when unknown (older executions).
     points: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -521,7 +516,6 @@ def _execution_checks(table: str) -> tuple:
             f"cancel_reason IS NULL OR (status = 'cancelled' AND {_in('cancel_reason', CANCEL_REASONS)})",
             name=f"ck_{table}_cancel_reason",
         ),
-        CheckConstraint("priority BETWEEN 1 AND 10", name=f"ck_{table}_priority"),
         CheckConstraint("points IS NULL OR points >= 0", name=f"ck_{table}_points"),
         CheckConstraint("focus_rating IS NULL OR focus_rating BETWEEN 1 AND 5", name=f"ck_{table}_focus"),
         CheckConstraint("energy_rating IS NULL OR energy_rating BETWEEN 1 AND 5", name=f"ck_{table}_energy"),
@@ -569,10 +563,6 @@ class Task(_Record, _TaskContent, Base):
         order_by="TaskTag.position", cascade="all, delete-orphan", lazy="selectin")
     preferred_date_rows: Mapped[list[TaskPreferredDate]] = relationship(
         order_by="TaskPreferredDate.position", cascade="all, delete-orphan", lazy="selectin")
-    dependency_rows: Mapped[list[TaskDependency]] = relationship(
-        primaryjoin="and_(Task.user_id == TaskDependency.user_id, Task.id == TaskDependency.task_id)",
-        foreign_keys="[TaskDependency.user_id, TaskDependency.task_id]",
-        order_by="TaskDependency.position", cascade="all, delete-orphan", lazy="selectin")
     recurrence_weekday_rows: Mapped[list[TaskRecurrenceWeekday]] = relationship(
         order_by="TaskRecurrenceWeekday.weekday", cascade="all, delete-orphan", lazy="selectin")
 
@@ -619,27 +609,6 @@ class TaskPreferredDate(Base):
 
     __table_args__ = (
         _child_of("task_preferred_dates", "tasks", ("task_id",), ("id",)), _position_check("task_preferred_dates"),
-    )
-
-
-class TaskDependency(Base):
-    """Task.dependency_ids, in order. Both ends must be tasks of the same user (composite foreign keys)."""
-
-    __tablename__ = "task_dependencies"
-
-    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
-    task_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
-    position: Mapped[int] = mapped_column(Integer, primary_key=True)
-    depends_on_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
-
-    __table_args__ = (
-        ForeignKeyConstraint(["user_id", "task_id"], ["tasks.user_id", "tasks.id"], name="fk_task_dependencies_task"),
-        ForeignKeyConstraint(
-            ["user_id", "depends_on_id"], ["tasks.user_id", "tasks.id"], name="fk_task_dependencies_depends_on"
-        ),
-        CheckConstraint("task_id <> depends_on_id", name="ck_task_dependencies_not_self"),
-        CheckConstraint("position >= 0", name="ck_task_dependencies_position"),
-        Index("ix_task_dependencies_depends_on", "user_id", "depends_on_id"),
     )
 
 
@@ -1096,8 +1065,6 @@ class TaskRevision(_RevisionKey, _TaskContent, RecordRevision):
         order_by="TaskRevisionTag.position", cascade="all, delete-orphan", lazy="selectin")
     preferred_date_rows: Mapped[list[TaskRevisionPreferredDate]] = relationship(
         order_by="TaskRevisionPreferredDate.position", cascade="all, delete-orphan", lazy="selectin")
-    dependency_rows: Mapped[list[TaskRevisionDependency]] = relationship(
-        order_by="TaskRevisionDependency.position", cascade="all, delete-orphan", lazy="selectin")
     recurrence_weekday_rows: Mapped[list[TaskRevisionRecurrenceWeekday]] = relationship(
         order_by="TaskRevisionRecurrenceWeekday.weekday", cascade="all, delete-orphan", lazy="selectin")
 
@@ -1130,22 +1097,6 @@ class TaskRevisionPreferredDate(Base):
     __table_args__ = (
         _child_of("task_revision_preferred_dates", "task_revisions", ("revision_id",), ("id",)),
         _position_check("task_revision_preferred_dates"),
-    )
-
-
-class TaskRevisionDependency(Base):
-    """A dependency id as it was (history: not a foreign key)."""
-
-    __tablename__ = "task_revision_dependencies"
-
-    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
-    revision_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
-    position: Mapped[int] = mapped_column(Integer, primary_key=True)
-    depends_on_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
-
-    __table_args__ = (
-        _child_of("task_revision_dependencies", "task_revisions", ("revision_id",), ("id",)),
-        _position_check("task_revision_dependencies"),
     )
 
 

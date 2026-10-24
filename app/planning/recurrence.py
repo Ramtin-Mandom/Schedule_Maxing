@@ -2,8 +2,8 @@
 app/planning/recurrence.py
 
 The calendar of a recurring series (docs/recurrence.md): which local dates a
-configured RecurrenceSpec produces, each occurrence's deterministic identity,
-and the cadence rules recurring-to-recurring dependencies need. Pure and
+configured RecurrenceSpec produces and each occurrence's deterministic
+identity. Pure and
 storage-free -- app/planning/series.py materializes, edits and deletes the
 concrete occurrence tasks; nothing here reads or writes records.
 
@@ -270,48 +270,6 @@ class SeriesRule:
     def first_slot_on_or_after(self, day: date_, *, horizon_days: int = 3700) -> date_ | None:
         """The first slot on/after `day` within `horizon_days`, or None."""
         return next(self.slots(day, day + timedelta(days=horizon_days)), None)
-
-
-# -----------------------------------------------------------------------------
-# Recurring-to-recurring dependencies
-# -----------------------------------------------------------------------------
-
-
-def cadence_problem(dependent: SeriesRule, prerequisite: SeriesRule) -> str | None:
-    """
-    Why `dependent`'s occurrences cannot each depend on `prerequisite`'s
-    occurrence of the *same original slot*, or None when they can. Supported:
-    the same time zone, and either a prerequisite that repeats every day, or
-    the same frequency and interval in phase -- daily: the dependent's interval
-    a multiple of the prerequisite's, anchors a whole number of prerequisite
-    intervals apart; weekly: the dependent's weekdays among the prerequisite's,
-    same interval, anchor weeks in step; monthly: the same day of month and
-    interval, anchor months in step. Bounds (start, end, count) are checked per
-    slot when occurrences are materialized.
-    """
-    if dependent.timezone != prerequisite.timezone:
-        return (f"the prerequisite series repeats in {prerequisite.timezone}, this one in {dependent.timezone}; "
-                "recurring dependencies need the same time zone.")
-    if prerequisite.frequency == RecurrenceFrequency.DAILY and prerequisite.interval == 1:
-        return None
-    if dependent.frequency != prerequisite.frequency:
-        return ("the two series repeat on different cadences; a recurring dependency needs the same frequency, or a "
-                "prerequisite that repeats every day.")
-    if dependent.frequency == RecurrenceFrequency.DAILY:
-        aligned = (dependent.interval % prerequisite.interval == 0
-                   and (dependent.start - prerequisite.start).days % prerequisite.interval == 0)
-    elif dependent.frequency == RecurrenceFrequency.WEEKLY:
-        weeks = (_monday(dependent.start) - _monday(prerequisite.start)).days // 7
-        aligned = (dependent.interval == prerequisite.interval and weeks % prerequisite.interval == 0
-                   and set(dependent.weekdays) <= set(prerequisite.weekdays))
-    else:
-        months = _month_number(dependent.start) - _month_number(prerequisite.start)
-        aligned = (dependent.interval == prerequisite.interval and dependent.day == prerequisite.day
-                   and months % prerequisite.interval == 0)
-    if not aligned:
-        return ("the two series do not repeat on the same dates; each occurrence must find the prerequisite's "
-                "occurrence of the same date.")
-    return None
 
 
 # -----------------------------------------------------------------------------

@@ -116,7 +116,7 @@ def _synthetic_day_schedule(
         tasks.append(
             Task(
                 name=f"Task{index:03d}", category=rng.choice(CATEGORIES), tags=[rng.choice(TAGS)],
-                estimated_duration_minutes=duration, priority=rng.randint(1, 10),
+                estimated_duration_minutes=duration, points=rng.randint(1, 10),
                 preferred_time_window=LocalTimeWindow(start_minute=pref_start, end_minute=pref_end),
             )
         )

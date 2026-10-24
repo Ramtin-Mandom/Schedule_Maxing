@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import csv
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -45,7 +45,7 @@ def seeded(services, connection) -> dict[str, dict]:
     for name, service in services.items():
         owner = OWNERS[name]
         project = service.create_project(Project(name=f"{name} project", user_id=owner))
-        task = service.create_task(Task(name=f"{name} task", category="study", estimated_duration_minutes=60, priority=5,
+        task = service.create_task(Task(name=f"{name} task", category="study", estimated_duration_minutes=60,
                                         user_id=owner, project_id=project.id, required_date=DAY))
         block = service.create_fixed_block(FixedBlock(label=f"{name} block", planned_date=DAY, timezone="UTC",
                                                       planned_start=at(12), planned_end=at(13), user_id=owner))
@@ -111,14 +111,11 @@ def test_writes_cannot_reach_or_create_another_scopes_records(services, seeded, 
     with pytest.raises(EntityNotFoundError):
         a.update_fixed_block(theirs["block"], expected_version=theirs["block"].version)
     with pytest.raises(ScopeError):
-        a.create_task(Task(name="for B", category="x", estimated_duration_minutes=5, priority=1, user_id=B))
+        a.create_task(Task(name="for B", category="x", estimated_duration_minutes=5, user_id=B))
     with pytest.raises(ScopeError):
-        a.create_task(Task(name="ownerless", category="x", estimated_duration_minutes=5, priority=1))
+        a.create_task(Task(name="ownerless", category="x", estimated_duration_minutes=5))
     with pytest.raises(InvalidReferenceError):  # references resolve inside the scope only
-        a.create_task(Task(name="dep", category="x", estimated_duration_minutes=5, priority=1, user_id=A,
-                           dependency_ids=[theirs["task"].id]))
-    with pytest.raises(InvalidReferenceError):
-        a.create_task(Task(name="proj", category="x", estimated_duration_minutes=5, priority=1, user_id=A,
+        a.create_task(Task(name="proj", category="x", estimated_duration_minutes=5, user_id=A,
                            project_id=theirs["project"].id))
     with pytest.raises(InvalidReferenceError):  # a placement for B's task
         a.replace_placements(DAY, DAY, [ScheduledTask(task_id=theirs["task"].id, planned_date=DAY, timezone="UTC",
@@ -178,14 +175,14 @@ def test_csv_export_and_import_are_scoped(services, seeded, tmp_path) -> None:
         owners = {row["user_id"] for row in csv.DictReader(file)}
     assert owners == {str(A)}
 
-    b_batch = RecordBatch(tasks=[Task(name="B import", category="x", estimated_duration_minutes=5, priority=1, user_id=B)])
+    b_batch = RecordBatch(tasks=[Task(name="B import", category="x", estimated_duration_minutes=5, user_id=B)])
     with pytest.raises(ScopeError):
         services["A"].apply_record_batch(b_batch)
     services["B"].apply_record_batch(b_batch)
     assert {t.name for t in services["B"].list_tasks()} == {"B task", "B import"}
 
     # A legacy CSV carries no owner: its records belong to the importing scope.
-    legacy = Task(name="legacy row", category="x", estimated_duration_minutes=5, priority=1)
+    legacy = Task(name="legacy row", category="x", estimated_duration_minutes=5)
     applied = services["A"].apply_import([legacy], [])
     assert applied.tasks[0].user_id == A
     assert services["local"].get_task(legacy.id) is None
@@ -198,11 +195,11 @@ def test_the_ownerless_scope_never_creates_records_for_an_active_account(service
     )
     before = [tuple(r) for r in connection.execute("SELECT * FROM tasks")]
     with pytest.raises(ScopeError, match="account is active"):
-        services["local"].create_task(Task(name="offline", category="x", estimated_duration_minutes=5, priority=1))
+        services["local"].create_task(Task(name="offline", category="x", estimated_duration_minutes=5))
     assert [tuple(r) for r in connection.execute("SELECT * FROM tasks")] == before
     # An explicit account scope creates its own records normally.
     assert services["A"].create_task(
-        Task(name="mine", category="x", estimated_duration_minutes=5, priority=1, user_id=A)).user_id == A
+        Task(name="mine", category="x", estimated_duration_minutes=5, user_id=A)).user_id == A
 
 
 def test_scoped_requires_an_owner_scope(planning_service: PlanningService) -> None:
@@ -211,15 +208,6 @@ def test_scoped_requires_an_owner_scope(planning_service: PlanningService) -> No
     with pytest.raises(ValueError):
         OwnerScope.account(None)
     assert planning_service.owner_scope is None and planning_service.scoped(SCOPES["A"]).owner_scope == SCOPES["A"]
-
-
-def test_scope_filters_placement_history_and_external_dependencies(services, seeded) -> None:
-    a = services["A"]
-    later = a.create_task(Task(name="later", category="x", estimated_duration_minutes=5, priority=1, user_id=A,
-                               dependency_ids=[seeded["A"]["task"].id], required_date=DAY + timedelta(days=1)))
-    external = a.external_dependencies([later], DAY + timedelta(days=1), DAY + timedelta(days=1), "UTC")
-    assert set(external) == {seeded["A"]["task"].id}
-    assert external[seeded["A"]["task"].id].state.value == "scheduled"
 
 
 def test_generation_and_freshness_stay_in_the_scope(services, seeded) -> None:

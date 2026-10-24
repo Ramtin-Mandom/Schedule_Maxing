@@ -100,15 +100,15 @@ def test_independent_operations_succeed_or_fail_individually(client, alice) -> N
 
 
 def test_rejections_are_recorded_even_though_their_mutation_rolled_back(client, alice) -> None:
-    task = create(client, alice, "tasks", task_payload())
-    create(client, alice, "tasks", task_payload(name="Dependent", dependency_ids=[task["id"]]))
-    delete = op("task", "delete", task["id"], base_version=1)
+    project = create(client, alice, "projects", {"name": "Thesis"})
+    create(client, alice, "tasks", task_payload(name="Member", project_id=project["id"]))
+    delete = op("project", "delete", project["id"], base_version=1)
 
     [refused] = push(client, alice, delete)
     [again] = push(client, alice, delete)
 
     assert refused == again and refused["status"] == "conflict" and refused["error"]["code"] == "in_use"
-    assert client.get(f"/tasks/{task['id']}", headers=alice).json() == task
+    assert client.get(f"/projects/{project['id']}", headers=alice).json() == project
 
 
 def test_push_is_scoped_to_the_token_user(client, alice, bob) -> None:

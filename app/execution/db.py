@@ -129,6 +129,10 @@ _V17_STATEMENTS.
 Version 18 (app/budget, Budgeting > Future): income ideas and wishlist
 items. See _V18_STATEMENTS.
 
+Version 19: tasks no longer have a priority or dependencies -- drops
+task_dependencies, tasks.priority and executions.priority. See
+_V19_STATEMENTS.
+
 Execution <-> planning links (the legacy compatibility strategy):
     executions.task_id / scheduled_task_id are *historical identity*: they
     record which task/placement an execution was created for, alongside the
@@ -1351,6 +1355,18 @@ _V18_STATEMENTS: tuple[str, ...] = (
     *_capture_triggers(_V18_BUDGET_TABLES, work_sessions=False),
 )
 
+# Version 19: tasks have no priority and no dependencies (points replaced priority; dependencies were removed).
+# Drops the task_dependencies table (and its index) and the priority columns of tasks and executions. Each
+# column's CHECK is its own and nothing else (index, trigger, view) names it, so ALTER TABLE DROP COLUMN
+# (SQLite 3.35+) removes it in place. Dropping fires no capture trigger: nothing is marked for synchronization.
+# A project's task_defaults JSON may still hold a "priority" key; it is ignored when read.
+_V19_STATEMENTS: tuple[str, ...] = (
+    "DROP INDEX IF EXISTS idx_task_dependencies_depends_on",
+    "DROP TABLE IF EXISTS task_dependencies",
+    "ALTER TABLE tasks DROP COLUMN priority",
+    "ALTER TABLE executions DROP COLUMN priority",
+)
+
 
 def backfill_fixed_block_completions(connection: sqlite3.Connection) -> int:
     """
@@ -1361,8 +1377,13 @@ def backfill_fixed_block_completions(connection: sqlite3.Connection) -> int:
     completed or not, from this backfill or from the user -- is left exactly as
     it is, and running this again changes nothing. Returns the rows added.
     The planned times are the block's own; the completion instant is its end.
+    Run by the v16 migration, when executions still had a priority (stored
+    as 5), and on any later schema without one.
     """
     from app.planning.models import fixed_block_execution_id
+
+    legacy_priority = any(column[1] == "priority" for column in connection.execute("PRAGMA table_info(executions)"))
+    priority_column, priority_value = (", priority", ", 5") if legacy_priority else ("", "")
 
     blocks = connection.execute(
         "SELECT id, user_id, label, category, planned_date, timezone, planned_start, planned_end, "
@@ -1374,10 +1395,10 @@ def backfill_fixed_block_completions(connection: sqlite3.Connection) -> int:
         start, end = datetime.fromisoformat(block[6]), datetime.fromisoformat(block[7])
         stamp = block[10] or block[9]
         added += connection.execute(
-            "INSERT OR IGNORE INTO executions (id, task_name, category, tag, planned_duration, priority, points, "
-            "status, created_at, updated_at, user_id, canonical_planned_date, canonical_timezone, "
+            f"INSERT OR IGNORE INTO executions (id, task_name, category, tag, planned_duration{priority_column}, "
+            "points, status, created_at, updated_at, user_id, canonical_planned_date, canonical_timezone, "
             "canonical_planned_start, canonical_planned_end, actual_final_end_at) "
-            "VALUES (?, ?, ?, '', ?, 5, 0, 'completed', ?, ?, ?, ?, ?, ?, ?, ?)",
+            f"VALUES (?, ?, ?, '', ?{priority_value}, 0, 'completed', ?, ?, ?, ?, ?, ?, ?, ?)",
             (execution_id, block[2], block[3], round((end - start).total_seconds() / 60), stamp, stamp, block[1],
              block[4], block[5], block[6], block[7], block[7]),
         ).rowcount
@@ -1553,6 +1574,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     (16, _migrate_v15_to_v16),
     (17, _V17_STATEMENTS),
     (18, _V18_STATEMENTS),
+    (19, _V19_STATEMENTS),
 )
 
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1][0]

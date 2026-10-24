@@ -21,8 +21,8 @@ decision was made.
 | ADR-001 | Python desktop app built on CustomTkinter | Inferred |
 | ADR-002 | Python 3.10 is the single supported runtime | Accepted |
 | ADR-003 | Hard constraints decide validity; reward only ranks valid placements | Accepted |
-| ADR-004 | Greedy Optimizer v1 is kept as a frozen baseline | Accepted |
-| ADR-005 | Canonical planning models run in parallel with the legacy models | Accepted |
+| ADR-004 | Greedy Optimizer v1 is kept as a frozen baseline | Superseded by ADR-047 |
+| ADR-005 | Canonical planning models run in parallel with the legacy models | Superseded by ADR-047 |
 | ADR-006 | Scheduling modes are objectives over one greedy engine | Accepted |
 | ADR-007 | Deterministic, bounded heuristics instead of a global optimizer | Accepted |
 | ADR-008 | All local data lives in one SQLite database, with no in-memory fallback | Accepted |
@@ -52,7 +52,7 @@ decision was made.
 | ADR-032 | CI runs once per pull request; deploys and releases reuse that result | Accepted |
 | ADR-033 | Automatic test tiers; the fast `dev` suite while working; no parallel tests | Accepted |
 | ADR-034 | One planning time zone; DST-transition and overnight windows are refused | Accepted |
-| ADR-035 | Points replace priority, and task kinds are Flexible, Fixed and To Do | Accepted |
+| ADR-035 | Points replace priority, and task kinds are Flexible, Fixed and To Do | Accepted; amended by ADR-048, ADR-049 |
 | ADR-036 | Analytics are recomputed from records; executions snapshot task fields | Accepted |
 | ADR-037 | The ML duration predictor is evidence-gated and kept out of the UI | Superseded by ADR-046 |
 | ADR-038 | The local web profile listens on loopback only, behind a session guard | Accepted |
@@ -64,6 +64,9 @@ decision was made.
 | ADR-044 | The desktop runs the day engine in a separate process | Accepted |
 | ADR-045 | Light caching: an opt-in mode that keeps only Day and the shown page built | Accepted |
 | ADR-046 | No machine learning: the ML duration predictor and its dependencies are removed | Accepted |
+| ADR-047 | Greedy Optimizer v1 and the legacy models are removed | Accepted |
+| ADR-048 | Tasks have no dependencies and no priority, everywhere; the wire keeps placeholders | Accepted |
+| ADR-049 | Week/month allocation is points first | Accepted |
 
 ---
 
@@ -97,12 +100,12 @@ decision was made.
 - **Rationale:** This is the README's stated core idea, and both agent instruction files restate it as a rule.
 - **Alternatives:** Soft-constraint penalties (rejected by the rule itself).
 - **Consequences:** Infeasible work is reported as unscheduled with a reason, never placed illegally. Preferred time (Early/Mid/Late) is a strong preference, not a constraint.
-- **Relevant files:** `app/constraints.py`, `app/planning/fixed_block_rules.py`, `app/pert.py`, `app/reward.py`, `app/optimizer.py`.
+- **Relevant files:** `app/planning/fixed_block_rules.py`, `app/planning/time.py`, `app/reward.py`, `app/optimizer.py` (the legacy `constraints.py` and `pert.py` were removed, ADR-047/048).
 - **Evidence:** README "Project Overview"; `AGENTS.md` section 3; `CLAUDE.md` "Architecture".
 
 ### ADR-004 — Greedy Optimizer v1 is kept as a frozen baseline
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-047](#adr-047--greedy-optimizer-v1-and-the-legacy-models-are-removed)
 - **Context:** The original Milestone 0 engine was superseded by the canonical day engine.
 - **Decision:** Keep `optimize_day_schedule` unchanged, apart from narrowly scoped documented fixes, as a protected baseline. New behavior goes into the canonical engine.
 - **Rationale:** The module docstring calls it "the frozen baseline scheduling algorithm"; the agent instructions require preserving optimizer baselines.
@@ -113,7 +116,7 @@ decision was made.
 
 ### ADR-005 — Canonical planning models run in parallel with the legacy models
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-047](#adr-047--greedy-optimizer-v1-and-the-legacy-models-are-removed)
 - **Context:** The legacy models use abstract day indexes and name-based dependencies.
 - **Decision:** A new canonical model in `app/planning/models.py` (calendar dates, UUID identity, aware datetimes) sits beside `app/models.py`, connected by explicit adapters in `compat.py`.
 - **Rationale:** The docstring says it is "a *new*, parallel domain model, not a replacement" and that the legacy layer stays as the compatibility layer during migration.
@@ -462,7 +465,7 @@ decision was made.
 
 ### ADR-035 — Points replace priority, and task kinds are Flexible, Fixed and To Do
 
-- **Status:** Accepted
+- **Status:** Accepted; amended by [ADR-048](#adr-048--tasks-have-no-dependencies-and-no-priority-everywhere-the-wire-keeps-placeholders) (priority and dependencies removed from storage) and [ADR-049](#adr-049--weekmonth-allocation-is-points-first) (points now order the week/month allocation; still never the day placement)
 - **Context:** In 1.1.0 the product moved toward tracking productivity.
 - **Decision:** Every kind carries points (0–1000) that count on completion and never affect placement; the scheduler reads no task priority. The task form has one Flexible/Fixed/To Do switch and no advanced settings; existing deadlines, dependencies and repeat rules are still honored.
 - **Rationale:** The README "New in 1.1.0" and the author note: the emphasis moved toward recording tasks and scoring performance.
@@ -510,7 +513,7 @@ decision was made.
 - **Status:** Accepted
 - **Context:** Users track a balance and recurring income and expenses next to their plans; money must be exact, and budget data must never influence scheduling.
 - **Decision:**
-  - `app/budget/` is its own domain; the scheduling stack (constraints, PERT, reward, engines, `app/planning/`) never imports it. A budget record may only reference a project.
+  - `app/budget/` is its own domain; the scheduling stack (constraints, reward, engines, `app/planning/`) never imports it. A budget record may only reference a project.
   - Amounts are integer minor units (2 decimals); floats are refused.
   - Recurring entries are expanded per query; only the entry and per-occurrence edits (keyed by the scheduled date, one live edit each) are stored. A monthly item falls on the month's last day when the month is shorter.
   - Records are sync-ready (ADR-013) in local schema v17 (and v18 for Future items) and server revisions 0019-0020, written on the server through the Mutator (ADR-016). They synchronize only with a server that lists the `budget` feature, and `GET /changes` returns them only with `include_budget=true`; a client that first sees the feature replays the change feed once.
@@ -605,3 +608,36 @@ decision was made.
 - **Consequences:** A lighter desktop install and bundle; a model file left in the data folder by an earlier version is no longer read. Bringing ML back would mean restoring the modules and dependencies from git history.
 - **Relevant files:** `app/productivity/reporting.py`, `app/ui/productivity_controller.py`, `requirements-desktop.txt`, `requirements.lock`, `app/selftest.py`, `packaging/windows/check_bundle.py`, `packaging/windows/ScheduleMaxing.spec`.
 - **Evidence:** The owner's request in the 2026-10-23 session; `ci_check_notes.md` Pending entry "ML duration predictor removed".
+
+### ADR-047 — Greedy Optimizer v1 and the legacy models are removed
+
+- **Status:** Accepted (2026-10-23; supersedes [ADR-004](#adr-004--greedy-optimizer-v1-is-kept-as-a-frozen-baseline) and [ADR-005](#adr-005--canonical-planning-models-run-in-parallel-with-the-legacy-models))
+- **Context:** No desktop, CLI or server path called `optimize_day_schedule` any more; only tests and old benchmarks did.
+- **Decision:** Delete Greedy Optimizer v1 and its pipeline (`app/models.py`, `app/constraints.py`, `app/data_processor.py`, the v1 tests and `benchmarks/optimizer_baseline.py`). The canonical day engine is the only engine; `app/planning/compat.py` keeps only the legacy CSV day-index/minute helpers.
+- **Rationale:** The owner's request to remake the engine without the legacy layer.
+- **Alternatives:** Keeping v1 frozen (ADR-004).
+- **Consequences:** The protected baselines are the Normal/ADHD ones (`benchmarks/scheduling_mode_baseline.py --check`). The legacy CSV import format still loads through `csv_import.py`.
+- **Relevant files:** `app/optimizer.py`, `app/planning/compat.py`.
+- **Evidence:** Commit `f47a080`.
+
+### ADR-048 — Tasks have no dependencies and no priority, everywhere; the wire keeps placeholders
+
+- **Status:** Accepted (2026-10-23; amends [ADR-035](#adr-035--points-replace-priority-and-task-kinds-are-flexible-fixed-and-to-do))
+- **Context:** Since 1.1.0 the form had no priority or dependency fields, but both were still stored, synced and honored by the engine and allocation.
+- **Decision:** Remove task dependencies and priority from the models, local SQLite (schema v19: `task_dependencies` dropped, `priority` dropped from `tasks` and `executions`; needs SQLite 3.35+), the server (Alembic `0021`, project `default_priority` too), CSV (canonical format 3; format 2 and legacy `priority`/`dependencies` columns still import, ignored), the API and the UI; `app/pert.py` and `app/planning/external_dependencies.py` are deleted. The reward is a typed `ScoringTask` scorer with the same formulas (the old priority term at priority 1: `weight_importance` x the category multiplier). For compatibility with 1.3.0 clients, which fail on a pulled record without them, the server and the client still put `priority` (always 5) and `dependency_ids` (always []) on the wire and ignore them on input (`LEGACY_TASK_WIRE_FIELDS`, `LEGACY_EXECUTION_WIRE_FIELDS` in `backend/resources.py`, `backend/executions.py`, `app/sync/mapping.py`).
+- **Rationale:** The owner chose to remove them "everywhere" rather than only hide them.
+- **Alternatives:** Keeping the columns as unused legacy fields (ADR-035's consequence).
+- **Consequences:** A dependency between saved tasks is lost on upgrade. `FINGERPRINT_VERSION` 2: every saved day shows as out of date once (accepted by the owner). The server revision must be deployed together with this client. The placeholders can go once no 1.3.0 client remains (ROADMAP).
+- **Relevant files:** `app/planning/models.py`, `app/execution/db.py` (`_V19_STATEMENTS`), `backend/migrations/versions/0021_drop_priority_and_dependencies.py`, `backend/resources.py`, `app/sync/mapping.py`, `app/planning/csv_export.py`, `app/reward.py`, `app/planning/provenance.py`.
+- **Evidence:** The owner's request in the 2026-10-23 session; `tests/backend/test_migrations.py`, `tests/execution/test_migration_v19.py`, `tests/sync/test_protocol.py`.
+
+### ADR-049 — Week/month allocation is points first
+
+- **Status:** Accepted (2026-10-23; amends [ADR-035](#adr-035--points-replace-priority-and-task-kinds-are-flexible-fixed-and-to-do))
+- **Context:** With priority and dependencies gone, allocation ordered tasks by deadline and duration only, so when a week was over-committed the dropped work had nothing to do with what the user valued.
+- **Decision:** `app/planning/allocation.py _allocation_order` places tasks by (points descending, deadline, duration descending, id). Points are therefore a scheduling input: `provenance` hashes them, and changing a task's points makes its saved day stale. The day engine still never reads points; a placement's score stays its quality, not the task's value.
+- **Rationale:** The owner's choice.
+- **Alternatives:** Deadline first (the previous order).
+- **Consequences:** Week/month results changed (`benchmarks/results/prompt1_scheduling_mode_baseline.json` was regenerated); day-engine results are identical.
+- **Relevant files:** `app/planning/allocation.py`, `app/planning/provenance.py`.
+- **Evidence:** `tests/planning/test_allocation.py`; `python -m benchmarks.scheduling_mode_baseline --check`.

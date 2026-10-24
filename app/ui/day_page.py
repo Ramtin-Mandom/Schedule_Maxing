@@ -669,9 +669,6 @@ class DaySchedulePage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         if not plan.ok:
             self.notice.show("error", plan.error or "The reset could not be prepared.")
             return
-        if plan.value.blocked:
-            self.notice.show("error", plan.value.message)
-            return
         if not self._confirm("Reset Day?", plan.value.message, "Reset Day", danger=True):
             self.notice.show("info", "Reset cancelled; nothing was deleted.")
             return

@@ -141,19 +141,8 @@ otherwise.
 
 ## Dependencies
 
-- An ordinary dependency names the concrete task (an occurrence included).
-- A **series depending on a series** resolves, per slot, to the prerequisite lineage's occurrence of the *same
-  original slot* (never every occurrence, never "the latest"). Supported: the same time zone and either a
-  daily-every-day prerequisite or the same frequency and interval in phase (weekly: the dependent's weekdays
-  among the prerequisite's; monthly: the same day). Mismatches are refused when the dependency is saved.
-  Expansion materializes the needed prerequisite occurrences (within the same budget, bounded lineage walks).
-  A prerequisite without that slot (it starts later, ended, repeats on other dates) leaves the dependent's slot
-  unmaterialized with a `dependency_unresolved` problem.
-- A one-off task or an occurrence cannot depend on a series definition: it names one concrete occurrence.
-  Edges stored before these rules are kept; external-dependency resolution reports such a series dependency
-  as `series` (blocking, with an explanation).
-- Series cycles are refused. Skipping a prerequisite occurrence is allowed although a dependent occurrence
-  keeps its same-slot edge to it; the dependent then reports the prerequisite as missing.
+Tasks have no dependencies since local schema v19 / server revision 0021 (ADR-048), so series and occurrences
+have none either; dependency edges stored by an earlier version were dropped on upgrade.
 
 ## Storage and migrations
 

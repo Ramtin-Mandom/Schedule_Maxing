@@ -35,7 +35,6 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
-from app.pert import compute_required_closure, has_cycle_by_id
 from app.planning.models import FixedBlock, Task, TaskRegistry
 from app.planning.preferences import DayPreferences
 from app.planning.time import (
@@ -62,8 +61,6 @@ class AllocationReasonCode(str, Enum):
     CAPACITY_EXCEEDED = "capacity_exceeded"
     REQUIRED_DATE_CONFLICT = "required_date_conflict"
     DEADLINE_INFEASIBLE = "deadline_infeasible"
-    DEPENDENCY_UNRESOLVED = "dependency_unresolved"
-    BLOCKED_BY_UNALLOCATED_DEPENDENCY = "blocked_by_unallocated_dependency"
     NO_FEASIBLE_DATE = "no_feasible_date"
 
 
@@ -82,8 +79,7 @@ class UnallocatedEntry(BaseModel):
 
 
 class AllocationDiagnostic(BaseModel):
-    """A non-fatal note about allocation input, e.g. a legacy dependency-name
-    resolution issue surfaced by an earlier import step and carried through."""
+    """A non-fatal note about allocation input, carried through to the caller."""
 
     task_id: uuid.UUID | None = None
     message: str = Field(min_length=1)
@@ -128,48 +124,20 @@ def _validate_fixed_blocks_no_overlap(fixed_blocks: list[FixedBlock], on_date: d
             raise ValueError(f"Overlapping fixed blocks on {on_date}: {earlier.label!r} and {later.label!r}.")
 
 
-def _priority_ordered_topological_sort(
-    task_ids: set[uuid.UUID],
-    registry: dict[uuid.UUID, Task],
-) -> list[uuid.UUID]:
+def _allocation_order(task_ids: set[uuid.UUID], registry: dict[uuid.UUID, Task]) -> list[uuid.UUID]:
     """
-    Kahn's-algorithm topological sort restricted to `task_ids` (an edge is
-    only considered when *both* endpoints are in `task_ids`, so this can be
-    called independently for the essential and optional tiers), breaking
-    ties among simultaneously-ready tasks by priority descending, then id
-    -- "do the most important currently-unblocked thing next", while still
-    never placing a task before a dependency also in `task_ids`.
+    The order a tier's tasks claim dates in (earlier tasks get the better
+    dates while capacity lasts): higher points first -- the user's own value
+    of a task -- then the earliest deadline (none last), then the longer task
+    (harder to fit later), then id, so the result is deterministic.
     """
-    in_degree = {task_id: 0 for task_id in task_ids}
-    dependents: dict[uuid.UUID, list[uuid.UUID]] = {task_id: [] for task_id in task_ids}
+    far = datetime.max.replace(tzinfo=timezone.utc)
 
-    for task_id in task_ids:
-        for dependency_id in registry[task_id].dependency_ids:
-            if dependency_id in task_ids:
-                in_degree[task_id] += 1
-                dependents[dependency_id].append(task_id)
+    def key(task_id: uuid.UUID) -> tuple:
+        task = registry[task_id]
+        return (-task.points, task.deadline or far, -task.estimated_duration_minutes, str(task_id))
 
-    def tie_break(task_id: uuid.UUID) -> tuple:
-        return str(task_id)
-
-    ready = sorted((task_id for task_id, degree in in_degree.items() if degree == 0), key=tie_break)
-    order: list[uuid.UUID] = []
-
-    while ready:
-        current = ready.pop(0)
-        order.append(current)
-
-        newly_ready = []
-        for dependent_id in dependents[current]:
-            in_degree[dependent_id] -= 1
-            if in_degree[dependent_id] == 0:
-                newly_ready.append(dependent_id)
-
-        if newly_ready:
-            ready.extend(newly_ready)
-            ready.sort(key=tie_break)
-
-    return order
+    return sorted(task_ids, key=key)
 
 
 def _rank_candidate_dates(
@@ -188,9 +156,9 @@ def _rank_candidate_dates(
            load rather than always packing the earliest day solid);
         4. earliest date wins any remaining tie -- the final, deterministic
            tie-break.
-    Required-task urgency is handled by the caller (essential tasks are
-    processed before optional ones, and within a tier in dependency-safe
-    topological order) rather than as a per-date ranking factor here.
+    Required-task urgency is handled by the caller (required tasks are
+    processed before optional ones) rather than as a per-date ranking
+    factor here.
     """
 
     def sort_key(candidate: date_) -> tuple:
@@ -255,28 +223,17 @@ def allocate_tasks(
     task_ids: list[uuid.UUID],
     preferences_by_date: dict[date_, DayPreferences],
     fixed_blocks_by_date: dict[date_, list[FixedBlock]] | None = None,
-    external_dependency_dates: dict[uuid.UUID, date_] | None = None,
 ) -> AllocationResult:
     """
     Allocate `task_ids` (drawn from `tasks`) across the inclusive date range
     [start_date, end_date]. Never produces minute-level placements and
     never calls the Day Scheduler.
 
-    Order: validate fixed blocks and the local dependency graph (once, up
-    front), reserve fixed-block occupancy, then schedule the "essential"
-    tier (required tasks plus the full transitive closure of their
-    dependency_ids, in dependency-safe topological order) before the
-    optional tier (remaining tasks, ordered by priority descending then id
-    for a deterministic tie-break). Every date, for every task, must
-    respect: enough remaining free capacity; required_date/deadline (a
-    deadline judged in each date's own planning timezone, see
-    _deadline_allows);
-    dependencies assigned to a date no later than this task's own
-    (same-date is allowed); a dependency assigned to a *later* date, left
-    unallocated, or referencing unresolved external context blocks this
-    task rather than being silently ignored (external_dependency_dates
-    supplies a known prerequisite's satisfied-by date when it lies outside
-    `task_ids`/`tasks` entirely).
+    Order: validate fixed blocks (once, up front), reserve fixed-block
+    occupancy, then allocate the required tier before the optional tier,
+    each in _allocation_order (points first). Every date, for every task, must respect:
+    enough remaining free capacity; required_date/deadline (a deadline
+    judged in each date's own planning timezone, see _deadline_allows).
 
     Required-allocation failure is reported in `unallocated` with
     `required=True` -- distinguishable from an optional task's entry -- and
@@ -289,7 +246,6 @@ def allocate_tasks(
     """
     all_dates = [start_date + timedelta(days=offset) for offset in range((end_date - start_date).days + 1)]
     fixed_blocks_by_date = fixed_blocks_by_date or {}
-    external_dependency_dates = external_dependency_dates or {}
 
     for day in all_dates:
         _validate_fixed_blocks_no_overlap(fixed_blocks_by_date.get(day, []), day)
@@ -299,9 +255,6 @@ def allocate_tasks(
         missing = [str(task_id) for task_id, task in registry.items() if task is None]
         raise ValueError(f"task_ids references tasks missing from the registry: {missing}")
 
-    if has_cycle_by_id(registry):
-        raise ValueError("Dependency cycle detected among allocation candidates.")
-
     capacity_remaining: dict[date_, int] = {
         day: (
             _day_window_total_minutes(preferences_by_date[day].day_window)
@@ -310,58 +263,15 @@ def allocate_tasks(
         for day in all_dates
     }
 
-    essential_ids = compute_required_closure(task_ids, registry)
-    optional_ids = {task_id for task_id in task_ids if task_id not in essential_ids}
-
-    # An essential task can never depend on a purely-optional one:
-    # compute_required_closure already pulls every transitive dependency of
-    # a required task into the essential set, so no essential->optional
-    # dependency edge can exist by construction -- essential_order and
-    # optional_order can therefore each be computed as an independent,
-    # internally dependency-safe priority-guided order.
-    essential_order = _priority_ordered_topological_sort(essential_ids, registry)
-    optional_order = _priority_ordered_topological_sort(optional_ids, registry)
+    required_order = _allocation_order({task_id for task_id in task_ids if registry[task_id].required}, registry)
+    optional_order = _allocation_order({task_id for task_id in task_ids if not registry[task_id].required}, registry)
 
     assignments: dict[uuid.UUID, date_] = {}
     unallocated: list[UnallocatedEntry] = []
 
-    def dependency_lower_bound(task: Task) -> tuple[date_ | None, uuid.UUID | None]:
-        """Earliest date this task may be assigned given its dependencies,
-        or (None, blocking_task_id) if a dependency blocks this task
-        entirely (unallocated / later-date / unresolved)."""
-        lower_bound: date_ | None = None
-        for dependency_id in task.dependency_ids:
-            if dependency_id in assignments:
-                dependency_date = assignments[dependency_id]
-            elif dependency_id in external_dependency_dates:
-                dependency_date = external_dependency_dates[dependency_id]
-            elif dependency_id in registry:
-                return None, dependency_id  # a local essential/optional dependency not yet allocated
-            else:
-                return None, dependency_id  # unresolved external id -- never silently ignored
-            if lower_bound is None or dependency_date > lower_bound:
-                lower_bound = dependency_date
-        return lower_bound, None
-
     def try_allocate(task_id: uuid.UUID, *, required: bool) -> None:
         task = registry[task_id]
-        lower_bound, blocking_id = dependency_lower_bound(task)
-
-        if blocking_id is not None:
-            unallocated.append(
-                UnallocatedEntry(
-                    task_id=task_id,
-                    reason_code=AllocationReasonCode.BLOCKED_BY_UNALLOCATED_DEPENDENCY
-                    if blocking_id in registry
-                    else AllocationReasonCode.DEPENDENCY_UNRESOLVED,
-                    explanation=f"depends on {blocking_id}, which is not allocated (or is unresolved external context).",
-                    required=required,
-                )
-            )
-            return
-
-        candidate_dates = [d for d in all_dates if lower_bound is None or d >= lower_bound]
-        feasible, capacity_only = _feasible_dates_for_task(task, candidate_dates, capacity_remaining, preferences_by_date)
+        feasible, capacity_only = _feasible_dates_for_task(task, all_dates, capacity_remaining, preferences_by_date)
 
         if not feasible:
             if task.required_date is not None and task.required_date not in all_dates:
@@ -373,13 +283,13 @@ def allocate_tasks(
                     )
                 )
             elif task.deadline is not None and not any(
-                _deadline_allows(task, day, preferences_by_date[day]) for day in candidate_dates
+                _deadline_allows(task, day, preferences_by_date[day]) for day in all_dates
             ):
                 unallocated.append(
                     UnallocatedEntry(
                         task_id=task_id, reason_code=AllocationReasonCode.DEADLINE_INFEASIBLE,
                         explanation=(
-                            f"no date at/after its dependency lower bound leaves {task.estimated_duration_minutes} "
+                            f"no date in range leaves {task.estimated_duration_minutes} "
                             f"minutes before its deadline ({task.deadline.isoformat()}) in the planning timezone."
                         ),
                         required=required, proven_infeasible=True,
@@ -407,7 +317,7 @@ def allocate_tasks(
         assignments[task_id] = chosen
         capacity_remaining[chosen] -= task.estimated_duration_minutes
 
-    for task_id in essential_order:
+    for task_id in required_order:
         try_allocate(task_id, required=True)
 
     for task_id in optional_order:

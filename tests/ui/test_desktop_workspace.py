@@ -63,7 +63,7 @@ def owners(connection, table: str = "tasks") -> set:
 def seed_owned(services, user_id: uuid.UUID, name: str) -> Task:
     """A record of another owner, written device-wide (as sync pulls or an association would leave it)."""
     return services.planning_service.create_task(Task(name=name, category="study", estimated_duration_minutes=30,
-                                                      priority=5, user_id=user_id, preferred_dates=[MON]))
+                                                      user_id=user_id, preferred_dates=[MON]))
 
 
 def activate(connection, user_id: uuid.UUID) -> None:
@@ -209,8 +209,7 @@ def test_close_never_closes_sqlite_under_a_running_transaction(tmp_path: Path) -
 
     def long_transaction() -> None:
         with services.planning_service.transaction():
-            services.planning_service.create_task(Task(name="Late", category="study", estimated_duration_minutes=30,
-                                                       priority=5))
+            services.planning_service.create_task(Task(name="Late", category="study", estimated_duration_minutes=30))
             inside.set()
             release.wait(timeout=10)
         committed.append(True)

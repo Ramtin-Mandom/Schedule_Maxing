@@ -9,14 +9,13 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime, timezone
-from pathlib import Path
 
 import pytest
 
 from app.execution.service import ExecutionService
 from app.planning.application import PlanningService
 from app.planning.csv_import import CsvImportError, parse_legacy_csv, parse_legacy_csv_file
-from app.planning.errors import DuplicateEntityError, EntityInUseError, InvalidEntityError
+from app.planning.errors import DuplicateEntityError, InvalidEntityError
 from app.planning.models import ScheduledTask
 
 ANCHOR = date(2026, 1, 5)
@@ -52,9 +51,7 @@ def test_rows_become_canonical_tasks_and_blocks_on_real_dates() -> None:
     research = next(task for task in parsed.tasks if task.name == "Research Topic")
     assert research.preferred_dates == [date(2026, 1, 5)]
     assert (research.preferred_time_window.start_minute, research.preferred_time_window.end_minute) == (540, 720)
-    assert research.tags == ["writing"] and research.estimated_duration_minutes == 90 and research.priority == 8
-    write = next(task for task in parsed.tasks if task.name == "Write Draft")
-    assert write.dependency_ids == [research.id]
+    assert research.tags == ["writing"] and research.estimated_duration_minutes == 90
     sleep = parsed.fixed_blocks[0]
     assert sleep.planned_start == datetime(2026, 1, 5, tzinfo=timezone.utc)
 
@@ -90,8 +87,8 @@ def test_every_import_mints_new_ids() -> None:
 
 
 def test_invalid_late_row_is_reported_with_its_line_and_rejects_the_whole_file() -> None:
-    body = "1,A,study,,false,540,600,30,5,\n" * 5 + "3,Broken,study,,false,540,600,30,11,\n"
-    assert issues(body) == ["line 7: priority must be between 1 and 10, got 11"]
+    body = "1,A,study,,false,540,600,30,5,\n" * 5 + "3,Broken,study,,false,540,600,0,5,\n"
+    assert issues(body) == ["line 7: duration must be greater than 0, got 0"]
 
 
 @pytest.mark.parametrize(
@@ -127,77 +124,17 @@ def test_overlapping_fixed_blocks_in_the_file_are_errors() -> None:
 
 
 # -----------------------------------------------------------------------------
-# Relationships: never weakened, never guessed
-# -----------------------------------------------------------------------------
-
-
-def test_missing_dependency_is_an_error_not_silently_dropped() -> None:
-    [issue] = issues("1,Review,study,,false,540,600,30,5,Nonexistent Task\n")
-    assert "'Nonexistent Task'" in issue and "does not match" in issue
-
-
-def test_ambiguous_duplicate_names_are_errors() -> None:
-    body = (
-        "1,Study,study,,false,540,660,60,8,\n"
-        "1,Study,study,,false,780,900,60,6,\n"
-        "1,Follow Up,study,,false,960,1020,30,7,Study\n"
-    )
-    [issue] = issues(body)
-    assert issue.startswith("line 4") and "more than one" in issue
-
-
-def test_same_day_name_wins_and_cross_day_references_resolve_when_unique() -> None:
-    body = (
-        "1,Study,study,,false,540,660,60,8,\n"
-        "2,Study,study,,false,540,660,60,8,\n"
-        "2,Quiz,study,,false,780,840,30,5,Study\n"  # same-day Study (day 2), not ambiguous
-        "1,Outline,study,,false,700,760,30,5,\n"
-        "3,Essay,study,,false,540,660,60,5,Outline\n"  # cross-day, unique
-    )
-    parsed = parse(body)
-    by_name_day = {(t.name, t.preferred_dates[0].day): t for t in parsed.tasks}
-    assert by_name_day[("Quiz", 6)].dependency_ids == [by_name_day[("Study", 6)].id]
-    assert by_name_day[("Essay", 7)].dependency_ids == [by_name_day[("Outline", 5)].id]
-
-
-def test_cross_day_reference_to_a_name_used_on_several_other_days_is_ambiguous() -> None:
-    body = "1,Study,study,,false,540,660,60,8,\n2,Study,study,,false,540,660,60,8,\n3,Exam,study,,false,540,600,30,5,Study\n"
-    assert "more than one" in issues(body)[0]
-
-
-def test_hyphenated_names_and_hyphen_lists_keep_the_compat_rules() -> None:
-    parsed = parse_legacy_csv_file("samples/inputs/dependency_name_contains_hyphen.csv", anchor_date=ANCHOR, timezone="UTC")
-    tasks = {task.name: task for task in parsed.tasks}
-    assert tasks["Study Session"].dependency_ids == [tasks["Pre-Calc Review"].id]
-
-    listed = parse("1,A,s,,false,0,60,30,5,\n1,B,s,,false,0,60,30,5,\n1,C,s,,false,60,120,30,5,A-B\n")
-    by_name = {task.name: task for task in listed.tasks}
-    assert by_name["C"].dependency_ids == [by_name["A"].id, by_name["B"].id]
-
-
-def test_self_references_and_cycles_are_errors() -> None:
-    assert "depends on itself" in issues("1,Loop,s,,false,0,60,30,5,Loop\n")[0]
-    assert "cycle" in issues(
-        "1,A,s,,false,0,60,30,5,B\n1,B,s,,false,0,60,30,5,A\n"
-    )[0]
-    sample = Path("samples/inputs/dependency_cycle_invalid.csv").read_text(encoding="utf-8").split("\n", 1)[1]
-    assert issues(sample)
-
-
-# -----------------------------------------------------------------------------
 # Writing: append / replace, all-or-nothing
 # -----------------------------------------------------------------------------
 
 
-def test_append_persists_tasks_dependencies_and_blocks(planning_service: PlanningService) -> None:
+def test_append_persists_tasks_and_blocks(planning_service: PlanningService) -> None:
     parsed = parse_legacy_csv_file("samples/inputs/valid_multi_day_two_days.csv", anchor_date=ANCHOR, timezone="UTC")
 
     result = apply(planning_service, parsed)
 
     assert {t.id for t in planning_service.list_tasks()} == {t.id for t in parsed.tasks}
     assert len(planning_service.list_fixed_blocks()) == 8
-    stored = {t.name: t for t in planning_service.list_tasks()}
-    assert stored["Submit Assignment"].dependency_ids == [stored["Edit Draft"].id]
     assert result.cleared is None and len(result.tasks) == 4
 
 
@@ -259,19 +196,6 @@ def test_replace_keeps_execution_history_and_reports_linked_placements(
     assert result.cleared.placements_with_history == 1
     assert execution_service.list_executions() == []  # a replaced (deleted) task's executions go with it
     assert [t.name for t in planning_service.list_tasks()] == ["Fresh"]
-
-
-def test_replace_is_refused_when_an_outside_task_depends_on_a_replaced_one(planning_service: PlanningService) -> None:
-    [inside] = apply(planning_service, parse("1,Inside,study,,false,540,600,30,5,\n")).tasks
-    outside = planning_service.save_task(inside.model_copy(update={
-        "id": uuid.uuid4(), "name": "Outside", "preferred_dates": [date(2026, 2, 1)],
-        "dependency_ids": [inside.id],
-    }))
-
-    with pytest.raises(EntityInUseError):
-        apply(planning_service, parse("1,Replacement,study,,false,540,600,30,5,\n"), replace=True)
-
-    assert {t.name for t in planning_service.list_tasks()} == {"Inside", outside.name}
 
 
 def test_injected_write_failure_rolls_back_everything_including_replace_deletions(

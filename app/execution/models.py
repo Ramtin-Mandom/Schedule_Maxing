@@ -40,7 +40,7 @@ Legacy vs. canonical rows (Schedule Maxing v2 migration):
     are present and falls back to legacy behavior when the canonical ones
     are absent (see its module docstring).
 
-Why historical name/category/tag/priority/planned_duration snapshots exist
+Why historical name/category/tag/planned_duration snapshots exist
 *in addition to* task_id: task_id is a stable reference to the *current*
 Task row, which may be renamed, re-categorized, re-estimated, or deleted
 after this execution was created. The snapshot fields keep describing what
@@ -160,8 +160,7 @@ class TaskExecution(BaseModel):
     planned_start: int | None = None
     planned_end: int | None = None
     planned_duration: int
-    priority: int = Field(ge=1, le=10)
-    #: The task's points when this execution was created (a snapshot, like priority), so later edits of the
+    #: The task's points when this execution was created (a snapshot), so later edits of the
     #: task never rewrite what an answered attempt was worth. None for executions created before points existed.
     points: int | None = Field(default=None, ge=0)
 

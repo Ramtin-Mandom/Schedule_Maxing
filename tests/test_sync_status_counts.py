@@ -17,7 +17,7 @@ def test_pending_and_conflict_counts_match_the_records_they_replace(tmp_path, mo
         store.set_active(mine.account_key)
         services.switch_workspace()
         planning = services.planning_controller
-        tasks = [planning.add_or_update_task(Task(name=f"Synthetic {index}", category="study", priority=5,
+        tasks = [planning.add_or_update_task(Task(name=f"Synthetic {index}", category="study",
                                                   estimated_duration_minutes=15,
                                                   preferred_dates=[date(2026, 9, 21)])).value for index in range(3)]
 

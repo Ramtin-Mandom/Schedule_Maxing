@@ -33,13 +33,13 @@ def read_rows(path: Path) -> list[dict[str, str]]:
 def populate(service: PlanningService) -> tuple[Task, Task, FixedBlock, ScheduledTask]:
     awkward = Task(
         name='Essay, part "one"\nand two', category="study", tags=["a,b", 'quo"te'],
-        estimated_duration_minutes=45, priority=7, preferred_dates=[DAY],
+        estimated_duration_minutes=45, preferred_dates=[DAY],
         preferred_time_window=LocalTimeWindow(start_minute=613, end_minute=1440),
         deadline=datetime(2026, 3, 3, 17, 0, tzinfo=NY),
         created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),  # explicit: rows are ordered by created_at
     )
-    dependent = Task(name="Review", category="study", estimated_duration_minutes=30, priority=5,
-                     preferred_dates=[DAY + timedelta(days=5)], dependency_ids=[awkward.id],
+    dependent = Task(name="Review", category="study", estimated_duration_minutes=30,
+                     preferred_dates=[DAY + timedelta(days=5)],
                      created_at=datetime(2026, 1, 2, tzinfo=timezone.utc))
     service.save_tasks([awkward, dependent])
     block = service.save_fixed_block(FixedBlock(
@@ -69,7 +69,6 @@ def test_export_contains_every_entity_with_exact_values(planning_service: Planni
     assert json.loads(task_row["tags"]) == ["a,b", 'quo"te']
     assert task_row["preferred_window"] == "10:13-24:00"
     assert task_row["deadline"] == "2026-03-03T17:00:00-05:00"  # original offset kept
-    assert json.loads(dependent_row["dependency_ids"]) == [str(awkward.id)]
     assert task_row["version"] == "1" and task_row["created_at"] == awkward.created_at.isoformat()
 
     assert block_row["name"] == "Lecture, room 2"

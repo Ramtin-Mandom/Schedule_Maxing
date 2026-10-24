@@ -36,7 +36,7 @@ def insert(engine, *rows) -> None:
 def execution_row(owner: uuid.UUID, **values) -> models.Execution:
     return models.Execution(
         user_id=owner, id=uuid.uuid4(), created_at=NOW, updated_at=NOW, version=1, historical_reference=False,
-        task_name="x", category="c", tag="", planned_duration=5, priority=5, status="scheduled", **values)
+        task_name="x", category="c", tag="", planned_duration=5, status="scheduled", **values)
 
 
 # -----------------------------------------------------------------------------
@@ -100,15 +100,13 @@ def test_soft_deleting_tasks_and_placements_keeps_linked_history(client, engine,
 
 
 def test_task_lists_keep_their_exact_order_and_repeats(client, alice) -> None:
-    dependency, other = create(client, alice, "tasks", task_payload()), create(client, alice, "tasks", task_payload())
     task = create(client, alice, "tasks", task_payload(
         tags=["b", "a", "b", ""], preferred_dates=["2026-03-05", "2026-03-01", "2026-03-05"],
-        dependency_ids=[other["id"], dependency["id"]], deadline="2026-03-05T17:00:00+05:30",
+        deadline="2026-03-05T17:00:00+05:30",
         recurrence={"frequency": "weekly", "interval": 3, "weekdays": [4, 0, 4], "count": 2},
     ))
     assert task["tags"] == ["b", "a", "b", ""]
     assert task["preferred_dates"] == ["2026-03-05", "2026-03-01", "2026-03-05"]
-    assert task["dependency_ids"] == [other["id"], dependency["id"]]
     assert task["deadline"] == "2026-03-05T17:00:00+05:30"
     assert task["recurrence"] == {"frequency": "weekly", "interval": 3, "weekdays": [0, 4], "day_of_month": None,
                                   "end_date": None, "count": 2, "start_date": None,
@@ -116,9 +114,8 @@ def test_task_lists_keep_their_exact_order_and_repeats(client, alice) -> None:
     assert client.get(f"/tasks/{task['id']}", headers=alice).json() == task
 
     changed = client.put(f"/tasks/{task['id']}", headers=alice, json=editable(
-        task, tags=["a"], preferred_dates=[], dependency_ids=[dependency["id"]], recurrence=None)).json()
-    assert (changed["tags"], changed["preferred_dates"], changed["dependency_ids"], changed["recurrence"]) == (
-        ["a"], [], [dependency["id"]], None)
+        task, tags=["a"], preferred_dates=[], recurrence=None)).json()
+    assert (changed["tags"], changed["preferred_dates"], changed["recurrence"]) == (["a"], [], None)
     assert client.get(f"/tasks/{task['id']}", headers=alice).json() == changed
 
 
@@ -276,7 +273,7 @@ def counted(engine):
 
 
 def test_a_thousand_tasks_round_trip_with_bounded_relationship_queries(client, engine, alice) -> None:
-    anchor = create(client, alice, "tasks", task_payload(name="Anchor"))
+    create(client, alice, "tasks", task_payload(name="Anchor"))  # the 1001st task
     expected = {}
     for batch in range(5):
         operations = []
@@ -284,7 +281,7 @@ def test_a_thousand_tasks_round_trip_with_bounded_relationship_queries(client, e
             task_id = str(uuid.uuid4())
             payload = task_payload(
                 name=f"Task {index}", tags=[f"t{index % 7}", "shared", f"t{index % 7}"][: 1 + index % 3],
-                preferred_dates=["2026-03-02", "2026-03-01"][: index % 3], dependency_ids=[anchor["id"]] * (index % 2),
+                preferred_dates=["2026-03-02", "2026-03-01"][: index % 3],
                 recurrence={"frequency": "weekly", "interval": 1, "weekdays": [index % 7]} if index % 4 == 0 else None,
             )
             operations.append({"op_id": str(uuid.uuid4()), "entity_type": "task", "entity_id": task_id,
@@ -298,7 +295,7 @@ def test_a_thousand_tasks_round_trip_with_bounded_relationship_queries(client, e
             body = client.get(path, params={"limit": limit, **params}, headers=alice).json()
         return body, len(statements)
 
-    # The tags/dates/dependencies/weekdays load per page, not per task: a page of 10 and of 400 cost the same.
+    # The tags/dates/weekdays load per page, not per task: a page of 10 and of 400 cost the same.
     # (SQLAlchemy loads children in IN-lists of up to 500 keys; a page reads limit + 1 rows, so a page of 500 adds
     # at most one more query per child kind.)
     _, small_queries = page("/tasks", 10)
@@ -311,8 +308,8 @@ def test_a_thousand_tasks_round_trip_with_bounded_relationship_queries(client, e
     assert len(stored) == 1001 and third["next_cursor"] is None
     for task_id, payload in expected.items():
         record = stored[task_id]
-        assert (record["name"], record["tags"], record["preferred_dates"], record["dependency_ids"]) == (
-            payload["name"], payload["tags"], payload["preferred_dates"], payload["dependency_ids"])
+        assert (record["name"], record["tags"], record["preferred_dates"]) == (
+            payload["name"], payload["tags"], payload["preferred_dates"])
         assert (record["recurrence"] or {}).get("weekdays") == (payload["recurrence"] or {}).get("weekdays")
 
     _, feed_small = page("/changes", 10)

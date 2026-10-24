@@ -34,6 +34,7 @@ from app.planning.errors import DuplicateEntityError, InvalidEntityError
 from app.planning.models import ScheduledTask, Task
 from app.planning.repository import PlanningRepository
 from tests.execution.test_migration_v2 import _build_v1_database
+from tests.execution.conftest import without_dropped_columns
 
 ORPHAN_TASK_ID = "11111111-1111-4111-8111-111111111111"
 ORPHAN_PLACEMENT_ID = "22222222-2222-4222-8222-222222222222"
@@ -73,7 +74,7 @@ def _build_v2_database_with_canonical_rows(db_path: Path) -> None:
 
 
 def _snapshot(conn: sqlite3.Connection, table: str) -> list[dict]:
-    return [dict(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY 1")]
+    return without_dropped_columns([dict(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY 1")])
 
 
 def _raw_rows(db_path: Path, table: str) -> list[dict]:
@@ -98,7 +99,7 @@ def _persist(connection, *, task: Task | None = None, placement: ScheduledTask |
 
 
 def _task(**overrides) -> Task:
-    defaults = dict(name="Study", category="study", estimated_duration_minutes=60, priority=5)
+    defaults = dict(name="Study", category="study", estimated_duration_minutes=60)
     defaults.update(overrides)
     return Task(**defaults)
 
@@ -285,8 +286,8 @@ def test_scheduled_task_id_without_task_id_is_rejected(tmp_path: Path) -> None:
     try:
         with pytest.raises(sqlite3.IntegrityError, match="requires task_id"):
             conn.execute(
-                "INSERT INTO executions (id, task_name, category, tag, planned_duration, priority, status, "
-                "created_at, updated_at, scheduled_task_id) VALUES ('x', 'X', 'c', '', 5, 5, 'scheduled', "
+                "INSERT INTO executions (id, task_name, category, tag, planned_duration, status, "
+                "created_at, updated_at, scheduled_task_id) VALUES ('x', 'X', 'c', '', 5, 'scheduled', "
                 "'2024-01-01T00:00:00+00:00', '2024-01-01T00:00:00+00:00', ?)",
                 (str(uuid.uuid4()),),
             )

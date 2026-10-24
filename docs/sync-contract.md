@@ -22,7 +22,7 @@ Every synchronizable record has the same metadata:
 | Table                  | Model                                   | Notes |
 | ---------------------- | --------------------------------------- | ----- |
 | `projects`             | `app.planning.models.Project`           | |
-| `tasks` (+ child rows) | `Task`                                  | Tags, preferred dates, dependencies, and recurrence weekdays are part of the task record and versioned with it. |
+| `tasks` (+ child rows) | `Task`                                  | Tags, preferred dates, and recurrence weekdays are part of the task record and versioned with it (dependencies were dropped in v19). |
 | `fixed_blocks`         | `FixedBlock`                            | Gained `category` (default `"fixed"`), `user_id`, and audit fields in v4. Blocks from before v4 got the migration instant as `created_at`/`updated_at` and version 1. The earlier times are unknown, so no earlier time is guessed. |
 | `scheduled_tasks`      | `ScheduledTask` (a placement)           | Always carries its task's owner. |
 | `executions` (+ `work_sessions`) | `app.execution.models.TaskExecution` | An aggregate: sessions belong to their execution (section 3). |
@@ -212,10 +212,11 @@ were generated from:
 - a **digest of the saved placements**.
 
 The inputs fingerprint (`app/planning/provenance.py`, `FINGERPRINT_VERSION`
-1) is a SHA-256 of canonical JSON. It covers the range's tasks (content
-only), their dependencies, the fixed blocks of every date in the range, the
+2) is a SHA-256 of canonical JSON. It covers the range's tasks (content,
+points included), the fixed blocks of every date in the range, and the
 resolved per-date preferences (YAML -> user -> date, including the engine
-mode), and the resolved state of every dependency outside the range.
+mode). Version 2 (tasks lost priority and dependencies) makes every day
+saved under version 1 stale once.
 
 After a restart, a date is:
 

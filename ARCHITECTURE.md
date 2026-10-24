@@ -35,7 +35,7 @@ UI (`docs/web-api.md` is the API contract it would be built against; `app/web` c
 |---|---|---|
 | Language | Python 3.10 (CI, release build and `.venv`) | `.github/workflows/*.yml`, `packaging/windows/build_windows.ps1` |
 | Desktop UI | CustomTkinter on Tk, plus `ttk.Treeview` | `requirements-desktop.txt` |
-| Domain models | Pydantic v2 | `app/models.py`, `app/planning/models.py`, `app/execution/models.py` |
+| Domain models | Pydantic v2 | `app/planning/models.py`, `app/execution/models.py` |
 | Local storage | `sqlite3` (stdlib), hand-written ordered migrations | `app/execution/db.py` |
 | Credentials on device | `keyring` (OS credential store) | `app/sync/credentials.py` |
 | Client HTTP | Standard library only: `http.client` with one keep-alive connection (sync), `urllib` (updater) | `app/sync/transport.py`, `app/update/transport.py` |
@@ -65,8 +65,8 @@ flowchart TB
         WF["Scheduling workflow<br/>app/planning/workflow.py"]
         PS["PlanningService<br/>app/planning/application.py"]
         ALLOC["Allocation<br/>app/planning/allocation.py"]
-        ENG["Day engine + Greedy v1<br/>app/optimizer.py"]
-        RULES["Constraints / PERT / reward / modes<br/>app/constraints.py, app/pert.py,<br/>app/reward.py, app/mode_objectives.py"]
+        ENG["Day engine (hard constraints)<br/>app/optimizer.py"]
+        RULES["Reward / modes<br/>app/reward.py, app/mode_objectives.py"]
         EXE["ExecutionService<br/>app/execution/service.py"]
         PROD["ProductivityService<br/>app/productivity/"]
         SYNC["SyncService / SyncEngine<br/>app/sync/"]
@@ -110,11 +110,10 @@ so the same rules run on both sides.
 
 | Layer | Responsibility | Modules |
 |---|---|---|
-| Models | Legacy (day-index, name-based) and canonical (calendar dates, UUIDs, owners, versions) planning models; execution models | `app/models.py`, `app/planning/models.py`, `app/execution/models.py` |
-| Hard constraints | Whether a placement is allowed (window, fixed blocks, overlaps, durations, fixed-block write rules, DST/overnight refusal) | `app/constraints.py`, `app/planning/fixed_block_rules.py`, `app/planning/time.py` |
-| Dependencies | Name-based (legacy) and id-based (canonical) precedence, cycles, required closure; prerequisites outside the scheduled range | `app/pert.py`, `app/planning/external_dependencies.py` |
-| Reward | How good a valid placement is; settings from `config/task_preference.yaml` and preference layers | `app/reward.py`, `app/planning/preferences.py` |
-| Engine | Greedy Optimizer v1 (frozen legacy baseline) and the canonical minute-precise day engine; mode objectives | `app/optimizer.py`, `app/mode_objectives.py`, `app/planning/catch_up.py` |
+| Models | Canonical planning models (calendar dates, UUIDs, owners, versions; tasks have points, no priority or dependencies); execution models | `app/planning/models.py`, `app/execution/models.py` |
+| Hard constraints | Whether a placement is allowed (window, fixed blocks, overlaps, durations, fixed-block write rules, DST/overnight refusal) | `app/optimizer.py` (checked before any scoring), `app/planning/fixed_block_rules.py`, `app/planning/time.py` |
+| Reward | How good a valid placement is (typed `ScoringTask`: category weight, preferred window, neighbour relation, fragmentation, ADHD short-gap bonus); settings from `config/task_preference.yaml` and preference layers | `app/reward.py`, `app/planning/preferences.py` |
+| Engine | The canonical minute-precise day engine; mode objectives | `app/optimizer.py`, `app/mode_objectives.py`, `app/planning/catch_up.py` |
 | Application | Persisted planning (CRUD, ranges, rescheduling, resets, CSV), the scheduling workflow, recurrence, freshness | `app/planning/application.py`, `workflow.py`, `service.py`, `allocation.py`, `series.py`, `provenance.py`, `csv_*.py` |
 | Execution | Lifecycle rules (shared with the server), execution persistence, fixed-block and direct completions | `app/execution/` |
 | Analytics | Statistics, tracker (awards, points), schedule cohort, day summaries, median predictor | `app/productivity/` |
@@ -182,12 +181,12 @@ so the same rules run on both sides.
 
 One file, `executions.db`, under the per-user data folder (`%LOCALAPPDATA%\ScheduleMaxing` on Windows;
 `SCHEDULE_MAXING_DATA_DIR` overrides). `app/execution/db.py` owns the connection, the transaction/lock
-helpers and 18 ordered schema migrations (`MIGRATIONS`, `LATEST_SCHEMA_VERSION`). Before migrating, the
+helpers and 19 ordered schema migrations (`MIGRATIONS`, `LATEST_SCHEMA_VERSION`). Before migrating, the
 file is copied by `app/execution/backup.py`; a newer schema than the code knows is refused
 (`NewerSchemaError`). A pre-Milestone-2 `data/` folder in a source checkout is adopted once.
 
 Tables: planning (`projects`, `task_types`, `tasks` + `task_tags`/`task_preferred_dates`/
-`task_dependencies`/`task_recurrence_weekdays`, `fixed_blocks`, `scheduled_tasks` (placements),
+`task_recurrence_weekdays`, `fixed_blocks`, `scheduled_tasks` (placements),
 `preference_overrides`, `schedule_generations`), execution (`executions`, `work_sessions`), sync
 (`sync_accounts`, `sync_dirty`, `sync_shadows`, `sync_outbox`, `sync_conflicts`, `sync_control`,
 `execution_wire_ids`), budget (`budget_balances`, `budget_entries`, `budget_overrides`; v17;
@@ -232,7 +231,7 @@ sequenceDiagram
     DC->>PC: day_freshness, then generate(FULL or INCREMENTAL)
     PC->>WF: read_inputs (fingerprint incl. Catch-Up evidence)
     WF->>PS: expand recurrence, load scoped tasks/blocks/preferences/history
-    WF->>AL: allocate tasks to dates (deadlines, dependencies, capacity)
+    WF->>AL: allocate tasks to dates (points first, then deadlines; capacity)
     WF->>SV: per date
     SV->>EN: one day, resolved preferences, kept work as busy time
     EN-->>SV: DayScheduleOutput (placed, unscheduled + reasons, scores)
@@ -240,9 +239,8 @@ sequenceDiagram
     PS-->>DC: saved placements + GenerationRecord (provenance)
 ```
 
-- **Two engines.** `optimize_day_schedule` is Greedy Optimizer v1 on legacy models (30-minute scan;
-  frozen baseline). `generate_day_schedule` is the canonical engine: exact event-candidate greedy search at
-  minute resolution over UUID-identified canonical models.
+- **One engine.** `generate_day_schedule` is the canonical engine: exact event-candidate greedy search at
+  minute resolution over UUID-identified canonical models (Greedy Optimizer v1 was removed, ADR-047).
 - **Five modes are objectives, not optimizers** (`docs/scheduling-modes.md`): Normal (`precise_greedy`),
   ADHD (`adhd_friendly`, quarter-hour starts for long tasks), Early Finish and Night Owl (baseline greedy then
   bounded repacking, `_refine_time_objective`), Catch-Up (greedy with per-task history bonuses from
@@ -250,6 +248,8 @@ sequenceDiagram
 - **Hard constraints vs reward.** Constraints decide validity; reward (`calculate_task_score`) ranks valid
   candidates. Hard constraints are never converted to penalties.
 - **Allocation** (`app/planning/allocation.py`) only chooses dates for a week/month; it never sets minutes.
+  It places tasks points first (points desc, deadline, duration desc, id; ADR-049), so points are a
+  fingerprint input; the day engine never reads them.
 - **Freshness/provenance** (`app/planning/provenance.py`): each saved day stores an inputs fingerprint and
   placements digest, so a schedule is reported stale after any input change and a stale save is refused.
 - **Unsupported windows**: overnight windows and days containing a DST transition raise explicit errors

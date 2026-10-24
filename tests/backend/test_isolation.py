@@ -76,7 +76,6 @@ def test_references_to_another_users_records_are_rejected(client, alice, bob, al
 
     attempts = [
         ("tasks", task_payload(project_id=project["id"])),
-        ("tasks", task_payload(dependency_ids=[task["id"]])),
         ("placements", placement_payload(task["id"])),
         ("executions", execution_payload(task["id"], placement["id"])),
         ("executions", execution_payload(bobs_task["id"], placement["id"])),
@@ -84,7 +83,7 @@ def test_references_to_another_users_records_are_rejected(client, alice, bob, al
     for path, payload in attempts:
         response = client.post(f"/{path}", json=payload, headers=bob)
         assert response.status_code == 422 and response.json()["error"]["code"] == "invalid_reference", (path, payload)
-    moved = client.put(f"/tasks/{bobs_task['id']}", json=editable(bobs_task, dependency_ids=[task["id"]]), headers=bob)
+    moved = client.put(f"/tasks/{bobs_task['id']}", json=editable(bobs_task, project_id=project["id"]), headers=bob)
     assert moved.status_code == 422
 
 

@@ -316,7 +316,7 @@ def test_csv_upload_and_export_go_through_the_saved_data_boundary(tmp_path: Path
     bad = tmp_path / "bad.csv"
     bad.write_text(
         "date,name,category,tag,fixed,start_time,end_time,duration,priority,dependencies\n"
-        "1,Okay,study,t,false,540,720,60,5,\n1,Broken,study,t,false,540,720,60,5,Missing\n",
+        "1,Okay,study,t,false,540,720,60,5,\n1,Broken,study,t,false,540,720,0,5,\n",
         encoding="utf-8",
     )
     chosen = {"file": str(good), "mode": "append"}
@@ -339,7 +339,7 @@ def test_csv_upload_and_export_go_through_the_saved_data_boundary(tmp_path: Path
         chosen["file"] = str(bad)
         day.import_button.invoke()
         pump(app)
-        assert "Missing" in day.notice.text and "nothing was saved" in day.notice.text
+        assert "duration" in day.notice.text and "nothing was saved" in day.notice.text
         week.reload()
         pump(app)
         assert sorted(tree_names(week)) == ["Lecture", "Read", "Summarise"]  # unchanged, re-read
