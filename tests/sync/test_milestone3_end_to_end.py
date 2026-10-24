@@ -37,7 +37,7 @@ def test_two_devices_complete_workflow(server, make_device, tmp_path, monkeypatc
 
     # 1. Offline work before any account: every record type.
     project = laptop.planning.create_project(Project(name="Thesis"))
-    prerequisite = laptop.add_task("Read papers", project_id=project.id, required_date=MON)
+    reading = laptop.add_task("Read papers", project_id=project.id, required_date=MON)
     writing = laptop.add_task("Write", required_date=MON + timedelta(days=1))
     floating = laptop.add_task("Floating")
     daily = laptop.add_task("Daily review", recurrence={"frequency": "daily"})
@@ -45,8 +45,8 @@ def test_two_devices_complete_workflow(server, make_device, tmp_path, monkeypatc
     laptop.controller.set_engine_mode(OptimizerMode.ADHD_FRIENDLY)
     laptop.controller.set_date_overrides(MON, PreferenceOverrides(category_multipliers={"study": 1.5}))
     week = laptop.controller.schedule_range(MON, SUN, scope=RangeScope.ELIGIBLE).value
-    [placement] = [p for p in laptop.planning.placements_for_date(MON) if p.task_id == prerequisite.id]
-    execution = laptop.executions.get_or_create_canonical_execution(prerequisite, placement)
+    [placement] = [p for p in laptop.planning.placements_for_date(MON) if p.task_id == reading.id]
+    execution = laptop.executions.get_or_create_canonical_execution(reading, placement)
     started = laptop.executions.start(execution.id)
     laptop.executions.pause(execution.id, expected_version=started.version)
 
@@ -64,7 +64,7 @@ def test_two_devices_complete_workflow(server, make_device, tmp_path, monkeypatc
     # 3. The second device pulls everything; its schedule is current by its own recomputation.
     phone.sign_in("alice@example.com")
     phone.sync_now()
-    assert phone.planning.get_task(writing.id) is not None and prerequisite.id
+    assert phone.planning.get_task(writing.id) is not None and reading.id
     assert phone.executions.get_execution(execution.id).status.value == "paused"
     assert phone.controller.resolve_preferences(MON).value.optimizer_mode == OptimizerMode.ADHD_FRIENDLY
     assert phone.planning.fixed_blocks_for_date(MON)[0].category == "sleep"
@@ -129,9 +129,10 @@ def test_two_devices_complete_workflow(server, make_device, tmp_path, monkeypatc
     laptop.sync_now()
     finished = completed.actual_final_end_at.date()
     later = finished + timedelta(days=7 - finished.weekday())
-    dependent = laptop.add_task("Follow-up", required_date=later)
+    assert laptop.executions.get_execution(execution.id).status.value == "completed"
+    follow_up = laptop.add_task("Follow-up", required_date=later)
     run = laptop.controller.schedule_range(later, later + timedelta(days=6), scope=RangeScope.ELIGIBLE).value
-    assert run.allocation.assignments.get(dependent.id) == later
+    assert run.allocation.assignments.get(follow_up.id) == later
 
     # 9. Rollback: a failed local compound change leaves nothing to push.
     before = laptop.dirty()
@@ -155,7 +156,7 @@ def test_two_devices_complete_workflow(server, make_device, tmp_path, monkeypatc
 
     # 10. A later edit on the laptop makes the phone's synced schedule stale after the next pull.
     phone.sync_now()
-    edit(laptop, prerequisite.id, estimated_duration_minutes=50)
+    edit(laptop, reading.id, estimated_duration_minutes=50)
     laptop.sync_now()
     phone.sync_now()
     assert phone.controller.day_state(MON).value.status == DayResultStatus.STALE

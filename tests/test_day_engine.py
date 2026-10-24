@@ -273,7 +273,7 @@ def test_short_gap_bonus_inactive_in_precise_mode():
 def test_required_task_is_scheduled_ahead_of_optional_competing_for_the_same_slot():
     prefs = zero_neighbor_effects_prefs()
     required = make_task("Required", duration=1440, required=True)  # fills entire day
-    optional = make_task("Optional", duration=60)  # higher priority but not required
+    optional = make_task("Optional", duration=60)  # competes for the same day but is not required
     schedule = make_day_schedule([required, optional])
 
     result = generate_day_schedule(schedule, prefs)

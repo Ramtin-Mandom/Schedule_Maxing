@@ -4,7 +4,7 @@ drafts <-> canonical Task/FixedBlock (required fields, 10:13 and a 13-minute dur
 refusals without rounding, overnight refusal), and the page presenter's saves: fixed-block
 window/overlap refusals that write nothing and name the other block, edits that keep
 recurrence and every hidden field, duplicate names, stale versions, owner isolation,
-project/dependency references by id, delete descriptions and refusals."""
+project references by id, delete descriptions and refusals."""
 
 from __future__ import annotations
 

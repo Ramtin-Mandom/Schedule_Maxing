@@ -156,14 +156,14 @@ def test_snapshot_isolation(planning_service: PlanningService) -> None:
 # -----------------------------------------------------------------------------
 
 
-def test_deleting_a_dependent_removes_only_its_own_edges(planning_service: PlanningService) -> None:
-    dependency = make_task("Dependency")
-    dependent = make_task("Dependent")
-    planning_service.save_tasks([dependency, dependent])
+def test_deleting_a_task_leaves_the_other_tasks(planning_service: PlanningService) -> None:
+    kept = make_task("Kept")
+    deleted = make_task("Deleted")
+    planning_service.save_tasks([kept, deleted])
 
-    assert planning_service.delete_task(dependent.id, expected_version=1) is True
-    assert planning_service.get_task(dependency.id) is not None
-    assert planning_service.delete_task(dependent.id, expected_version=1) is False  # already gone
+    assert planning_service.delete_task(deleted.id, expected_version=1) is True
+    assert planning_service.get_task(kept.id) is not None
+    assert planning_service.delete_task(deleted.id, expected_version=1) is False  # already gone
 
 
 def test_project_with_tasks_cannot_be_deleted(planning_service: PlanningService) -> None:

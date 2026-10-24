@@ -1,5 +1,5 @@
 """Tests for app/planning/service.py: the selected-day service (exactly one
-Day Scheduler call), cross-day dependency context, and result staleness.
+Day Scheduler call), coarse-vs-detailed feasibility, and result staleness.
 """
 
 from __future__ import annotations
@@ -93,11 +93,6 @@ def test_generate_selected_day_does_not_touch_other_dates(monkeypatch):
     placed_ids = {p.task_id for p in result.placements}
     assert task_a.id in placed_ids
     assert task_b.id not in placed_ids
-
-
-# -----------------------------------------------------------------------------
-# Cross-day dependency contract
-# -----------------------------------------------------------------------------
 
 
 # -----------------------------------------------------------------------------

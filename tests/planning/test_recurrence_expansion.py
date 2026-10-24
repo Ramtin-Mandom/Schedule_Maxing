@@ -2,9 +2,8 @@
 with derived identity and a reserved slot per (series, slot); series definitions are never scheduled;
 repeated, overlapping, restarted and retried expansion are no-ops; budgets bound the work and leave nothing
 half-written; legacy templates need configuration while their saved placements map to occurrences (ambiguous
-collisions are reported, not discarded); recurring dependencies resolve the same slot (prerequisites are
-materialized, mismatches and cycles refused, unresolved slots reported); DST days are reported; uniqueness
-holds under concurrency; owners are isolated."""
+collisions are reported, not discarded); DST days are reported; uniqueness holds under concurrency; owners are
+isolated."""
 
 from __future__ import annotations
 

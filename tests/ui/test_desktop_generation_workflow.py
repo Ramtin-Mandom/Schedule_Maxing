@@ -46,7 +46,7 @@ def ok(result):
     return result.value
 
 
-def add(controller, name: str, *, duration: int = 60, priority: int = 5, **extra) -> Task:
+def add(controller, name: str, *, duration: int = 60, **extra) -> Task:
     return ok(controller.add_or_update_task(Task(name=name, category="study", estimated_duration_minutes=duration,
                                                  **extra)))
 
