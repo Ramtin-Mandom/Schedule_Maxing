@@ -7,8 +7,8 @@ feature's state changes, and do not rewrite the file only to move the date. Arch
 
 | | |
 |---|---|
-| Generated | 2026-10-23 |
-| Commit | `f47a080` (Greedy Optimizer v1 removed, ADR-047) and the commit after it: task dependencies and priority removed everywhere, points-first allocation, typed reward (ADR-048, ADR-049); on top of `dfd53d6` ("Release 1.3.0", tag `v1.3.0`) and the ML-predictor removal (ADR-046) |
+| Generated | 2026-10-24 |
+| Commit | `c2b19c0` (regenerated benchmarks) on `92c6993` (task dependencies and priority removed everywhere, points-first allocation, typed reward; ADR-048, ADR-049) and `f47a080` (Greedy Optimizer v1 removed, ADR-047); on top of `dfd53d6` ("Release 1.3.0", tag `v1.3.0`) and `a7cdf17` (ML predictor removed, ADR-046). Not pushed |
 | Branch | `engine-remake`, at `main` (pull request #23 merged the round-3 performance work, light caching, the engine-process close wait and CI test fixes; all five CI jobs passed) |
 | App version | 1.3.0 (`app/version.py`); backend API version 1.0.0 (`backend/app.py`) |
 | Local schema | SQLite v19 (`app/execution/db.py`); server Alembic head `0021_drop_priority_and_dependencies` (deploy it together with this client) |
@@ -111,7 +111,7 @@ FastAPI/PostgreSQL account server.
 
 ## D. Testing and quality
 
-Test layout: 214 `test_*.py` modules under `tests/`, with tiers assigned automatically (`tests/test_tiers.py`).
+Test layout: 211 `test_*.py` modules under `tests/`, with tiers assigned automatically (`tests/test_tiers.py`).
 
 | Command | Purpose |
 |---|---|
@@ -122,6 +122,17 @@ Test layout: 214 `test_*.py` modules under `tests/`, with tiers assigned automat
 | `python -m compileall .` | Compile check |
 | `ruff check .` | Lint |
 | `python -m benchmarks.scheduling_mode_baseline --check` | Engine baseline drift (not run by CI) |
+
+Results of the engine-cleanup session (2026-10-23/24, Windows 10, `.venv` with Python 3.10.11, the tree committed
+as `92c6993`):
+
+| Check | Result |
+|---|---|
+| `pytest` (full suite, every tier) | **2 failed, 2389 passed, 2 skipped** (1009 s). The failures were `tests/ui/test_day_window_pages.py::test_week_and_month_bars_follow_the_selected_day` (the known `TclError` while Tk loads its library, section C) and `tests/test_transport_keepalive.py::test_a_connection_the_server_closed_is_replaced_before_the_next_request`; both **passed** when rerun alone |
+| `pytest -m dev` (before the last test and doc edits) | **Passed:** 1992 passed, 2 skipped, 397 deselected |
+| `ruff check .`; `python -m compileall` over `app backend benchmarks config packaging tests` | **Passed** |
+| `python -m benchmarks.scheduling_mode_baseline --check benchmarks/results/prompt1_scheduling_mode_baseline.json` | **Identical** (results regenerated from a `git archive` export of `92c6993`; day-engine results equal the previous baseline, week results changed) |
+| `tests/backend/test_migrations.py` on PostgreSQL (revision 0021) | **Unverified:** no PostgreSQL here; the CI `postgres` job is the first real run |
 
 Results of the ML-removal session (2026-10-23, Windows 10, `.venv` with Python 3.10.11, `dfd53d6` plus the
 uncommitted removal):
@@ -180,8 +191,10 @@ checklist is in `docs/windows-distribution.md`).
 
 ## F. Immediate technical priorities
 
-1. Commit the ML removal (ADR-046) through a pull request and check CI against its `ci_check_notes.md` entry; a
-   Windows build should confirm the smaller bundle and the self-test without pandas/scikit-learn.
+1. Open a pull request for `engine-remake` (ML removal, Greedy v1 removal, dependencies/priority removal) and check
+   CI against its three `ci_check_notes.md` Pending entries, the `postgres` job (revision 0021) above all; deploy
+   server revision 0021 together with the client. A Windows build should confirm the smaller bundle and the
+   self-test without pandas/scikit-learn.
 2. Run and confirm the first real backend deployment, then the smoke check (M4).
 3. Correct the documentation that contradicts the code (M2), and decide what happens to the unreachable UI
    modules (R3).

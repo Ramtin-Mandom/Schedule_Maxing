@@ -100,7 +100,7 @@ decision was made.
 - **Rationale:** This is the README's stated core idea, and both agent instruction files restate it as a rule.
 - **Alternatives:** Soft-constraint penalties (rejected by the rule itself).
 - **Consequences:** Infeasible work is reported as unscheduled with a reason, never placed illegally. Preferred time (Early/Mid/Late) is a strong preference, not a constraint.
-- **Relevant files:** `app/planning/fixed_block_rules.py`, `app/planning/time.py`, `app/reward.py`, `app/optimizer.py` (the legacy `constraints.py` and `pert.py` were removed, ADR-047/048).
+- **Relevant files:** `app/planning/fixed_block_rules.py`, `app/planning/time.py`, `app/reward.py`, `app/optimizer.py` (the legacy constraints.py and pert.py were removed, ADR-047/048).
 - **Evidence:** README "Project Overview"; `AGENTS.md` section 3; `CLAUDE.md` "Architecture".
 
 ### ADR-004 — Greedy Optimizer v1 is kept as a frozen baseline
@@ -111,18 +111,18 @@ decision was made.
 - **Rationale:** The module docstring calls it "the frozen baseline scheduling algorithm"; the agent instructions require preserving optimizer baselines.
 - **Alternatives:** Not documented.
 - **Consequences:** Two engines in one module. The legacy CSV loader keeps known quirks (the hyphen split) that tests pin as current behavior.
-- **Relevant files:** `app/optimizer.py`, `app/models.py`, `app/data_processor.py`, `benchmarks/optimizer_baseline.py`.
+- **Relevant files:** `app/optimizer.py`; removed by ADR-047: app/models.py, app/data_processor.py, benchmarks/optimizer_baseline.py.
 - **Evidence:** `app/optimizer.py` docstring; README "Current Limitations"; `CLAUDE.md`.
 
 ### ADR-005 — Canonical planning models run in parallel with the legacy models
 
 - **Status:** Superseded by [ADR-047](#adr-047--greedy-optimizer-v1-and-the-legacy-models-are-removed)
 - **Context:** The legacy models use abstract day indexes and name-based dependencies.
-- **Decision:** A new canonical model in `app/planning/models.py` (calendar dates, UUID identity, aware datetimes) sits beside `app/models.py`, connected by explicit adapters in `compat.py`.
+- **Decision:** A new canonical model in `app/planning/models.py` (calendar dates, UUID identity, aware datetimes) sits beside app/models.py (removed by ADR-047), connected by explicit adapters in `compat.py`.
 - **Rationale:** The docstring says it is "a *new*, parallel domain model, not a replacement" and that the legacy layer stays as the compatibility layer during migration.
 - **Alternatives:** Not documented.
 - **Consequences:** The desktop, CLI and server use the canonical models; legacy models remain for Greedy v1, legacy CSV and exports.
-- **Relevant files:** `app/planning/models.py`, `app/models.py`, `app/planning/compat.py`.
+- **Relevant files:** `app/planning/models.py`, `app/planning/compat.py` (app/models.py removed by ADR-047).
 - **Evidence:** Module docstrings of `app/planning/models.py` and `app/planning/compat.py`.
 
 ### ADR-006 — Scheduling modes are objectives over one greedy engine
@@ -613,7 +613,7 @@ decision was made.
 
 - **Status:** Accepted (2026-10-23; supersedes [ADR-004](#adr-004--greedy-optimizer-v1-is-kept-as-a-frozen-baseline) and [ADR-005](#adr-005--canonical-planning-models-run-in-parallel-with-the-legacy-models))
 - **Context:** No desktop, CLI or server path called `optimize_day_schedule` any more; only tests and old benchmarks did.
-- **Decision:** Delete Greedy Optimizer v1 and its pipeline (`app/models.py`, `app/constraints.py`, `app/data_processor.py`, the v1 tests and `benchmarks/optimizer_baseline.py`). The canonical day engine is the only engine; `app/planning/compat.py` keeps only the legacy CSV day-index/minute helpers.
+- **Decision:** Delete Greedy Optimizer v1 and its pipeline (app/models.py, app/constraints.py, app/data_processor.py, the v1 tests and benchmarks/optimizer_baseline.py). The canonical day engine is the only engine; `app/planning/compat.py` keeps only the legacy CSV day-index/minute helpers.
 - **Rationale:** The owner's request to remake the engine without the legacy layer.
 - **Alternatives:** Keeping v1 frozen (ADR-004).
 - **Consequences:** The protected baselines are the Normal/ADHD ones (`benchmarks/scheduling_mode_baseline.py --check`). The legacy CSV import format still loads through `csv_import.py`.
@@ -624,7 +624,7 @@ decision was made.
 
 - **Status:** Accepted (2026-10-23; amends [ADR-035](#adr-035--points-replace-priority-and-task-kinds-are-flexible-fixed-and-to-do))
 - **Context:** Since 1.1.0 the form had no priority or dependency fields, but both were still stored, synced and honored by the engine and allocation.
-- **Decision:** Remove task dependencies and priority from the models, local SQLite (schema v19: `task_dependencies` dropped, `priority` dropped from `tasks` and `executions`; needs SQLite 3.35+), the server (Alembic `0021`, project `default_priority` too), CSV (canonical format 3; format 2 and legacy `priority`/`dependencies` columns still import, ignored), the API and the UI; `app/pert.py` and `app/planning/external_dependencies.py` are deleted. The reward is a typed `ScoringTask` scorer with the same formulas (the old priority term at priority 1: `weight_importance` x the category multiplier). For compatibility with 1.3.0 clients, which fail on a pulled record without them, the server and the client still put `priority` (always 5) and `dependency_ids` (always []) on the wire and ignore them on input (`LEGACY_TASK_WIRE_FIELDS`, `LEGACY_EXECUTION_WIRE_FIELDS` in `backend/resources.py`, `backend/executions.py`, `app/sync/mapping.py`).
+- **Decision:** Remove task dependencies and priority from the models, local SQLite (schema v19: `task_dependencies` dropped, `priority` dropped from `tasks` and `executions`; needs SQLite 3.35+), the server (Alembic `0021`, project `default_priority` too), CSV (canonical format 3; format 2 and legacy `priority`/`dependencies` columns still import, ignored), the API and the UI; app/pert.py and app/planning/external_dependencies.py are deleted. The reward is a typed `ScoringTask` scorer with the same formulas (the old priority term at priority 1: `weight_importance` x the category multiplier). For compatibility with 1.3.0 clients, which fail on a pulled record without them, the server and the client still put `priority` (always 5) and `dependency_ids` (always []) on the wire and ignore them on input (`LEGACY_TASK_WIRE_FIELDS`, `LEGACY_EXECUTION_WIRE_FIELDS` in `backend/resources.py`, `backend/executions.py`, `app/sync/mapping.py`).
 - **Rationale:** The owner chose to remove them "everywhere" rather than only hide them.
 - **Alternatives:** Keeping the columns as unused legacy fields (ADR-035's consequence).
 - **Consequences:** A dependency between saved tasks is lost on upgrade. `FINGERPRINT_VERSION` 2: every saved day shows as out of date once (accepted by the owner). The server revision must be deployed together with this client. The placeholders can go once no 1.3.0 client remains (ROADMAP).

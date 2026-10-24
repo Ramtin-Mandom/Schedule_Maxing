@@ -253,12 +253,11 @@ These come from this analysis. None of them has been approved.
     and `ExecutionController.record_feedback` supports it.
   - `app/ui/cohort_view.py`: schedule follow-through. `ProductivityController.schedule_cohort_for_last` exists.
   - `app/ui/duration_suggestion.py`: the median duration suggestion. The README lists this as a feature.
-  - The `RewardConfigPage` class in `app/app.py`.
+  - [x] The `RewardConfigPage` class in `app/app.py` (removed in `f47a080`).
 
   None of these is imported or instantiated by the running app.
 - **Proposal:** The owner decides whether to bring the feedback dialog, the follow-through panel and the
-  duration suggestion back into the 1.1+ UI, or to delete them and correct the README. Remove
-  `RewardConfigPage`, which `README.md` says is no longer exposed.
+  duration suggestion back into the 1.1+ UI, or to delete them and correct the README.
 - **Testing:** `tests/ui/test_task_editor_widgets.py` covers `duration_suggestion`. Add page tests if the
   modules are wired in.
 - **Complexity:** Small for removal; Medium for each module wired in.

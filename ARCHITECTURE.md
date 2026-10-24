@@ -5,7 +5,7 @@ System-level view of Schedule Maxing. For file-level navigation and change impac
 reasons behind the structure see [DECISIONS.md](DECISIONS.md). Detailed contracts live in `docs/` and are
 linked where relevant rather than repeated.
 
-Verified against commit `dfd53d6` (app version 1.3.0) plus the uncommitted ML removal on 2026-10-23.
+Verified against commit `c2b19c0` (app version 1.3.0, branch `engine-remake`) on 2026-10-24.
 
 ## 1. What the system is
 
@@ -231,7 +231,7 @@ sequenceDiagram
     DC->>PC: day_freshness, then generate(FULL or INCREMENTAL)
     PC->>WF: read_inputs (fingerprint incl. Catch-Up evidence)
     WF->>PS: expand recurrence, load scoped tasks/blocks/preferences/history
-    WF->>AL: allocate tasks to dates (points first, then deadlines; capacity)
+    WF->>AL: allocate tasks to dates (points first, then deadlines, within capacity)
     WF->>SV: per date
     SV->>EN: one day, resolved preferences, kept work as busy time
     EN-->>SV: DayScheduleOutput (placed, unscheduled + reasons, scores)
