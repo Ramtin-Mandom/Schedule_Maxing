@@ -24,6 +24,7 @@ from app.planning.models import Task, fixed_block_execution_id
 from app.planning.repository import PlanningRepository
 from tests.execution.test_migration_v2 import _build_v1_database
 from tests.execution.test_migration_v3 import ORPHAN_TASK_ID, _build_v2_database_with_canonical_rows
+from tests.execution.conftest import without_dropped_columns
 
 V3_TASK_ID = "33333333-3333-4333-8333-333333333333"
 V3_BLOCK_ID = "44444444-4444-4444-8444-444444444444"
@@ -44,7 +45,8 @@ def without_block_completions(conn: sqlite3.Connection, table: str, rows: list[d
 
 def _rows(conn: sqlite3.Connection, table: str) -> list[dict]:
     conn.row_factory = sqlite3.Row
-    return without_block_completions(conn, table, [dict(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY 1")])
+    return without_dropped_columns(without_block_completions(
+        conn, table, [dict(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY 1")]))
 
 
 def _build_v3_database_with_planning_rows(db_path: Path) -> None:
@@ -135,7 +137,7 @@ def test_non_uuid_execution_ids_get_one_durable_wire_id(tmp_path: Path) -> None:
         assert repository.wire_id("canonical-orphan") != wire
         created = ExecutionService(repository).create_execution(
             task_name="New", category="c", tag="t", planned_date=1, planned_start=0, planned_end=30,
-            planned_duration=30, priority=5,
+            planned_duration=30,
         )
         assert repository.wire_id(created.id) == uuid.UUID(created.id)  # a UUID id is its own wire id
         mapped = {row[0] for row in conn.execute("SELECT execution_id FROM execution_wire_ids")}
@@ -190,7 +192,7 @@ def test_failed_v4_rolls_back_to_a_usable_v3(tmp_path: Path, monkeypatch) -> Non
 def test_new_executions_cannot_link_to_a_tombstoned_task(tmp_path: Path) -> None:
     conn = get_connection(tmp_path / "db.sqlite3")
     try:
-        task = Task(name="Gone", category="study", estimated_duration_minutes=30, priority=5)
+        task = Task(name="Gone", category="study", estimated_duration_minutes=30)
         planning = PlanningRepository(conn)
         planning.insert_task(task)
         planning.soft_delete_task(task.id, deleted_at=datetime.now(timezone.utc), expected_version=1)

@@ -1,18 +1,12 @@
 """
 benchmarks/day_engine_baseline.py
 
-Provisional benchmark for Task 4's canonical day engine
-(app.optimizer.generate_day_schedule), in both precise_greedy and
-adhd_friendly modes, on the same fixtures benchmarks/optimizer_baseline.py
-uses for Greedy Optimizer v1 (see benchmarks/BASELINE.md) -- so the two are
-directly comparable.
-
-Fixtures are converted from their legacy CSV form into canonical models via
-app.planning.compat.import_legacy_csv_rows (a fixed, documented anchor date;
-see ANCHOR_DATE below), exactly the adapter path a canonical importer would
-use. Any dependency-resolution diagnostics from that conversion are ignored
-here (this is a performance benchmark, not an import-correctness check --
-see tests/planning/test_compat.py for that).
+Benchmark for the canonical day engine (app.optimizer.generate_day_schedule)
+in both precise_greedy and adhd_friendly modes, on the synthetic CSV
+fixtures (benchmarks/generate_fixtures.py). Each fixture's first day is
+imported with the app's own CSV importer
+(app.planning.csv_import.parse_legacy_csv_file, a fixed anchor date; see
+ANCHOR_DATE below).
 
 Usage:
     python -m benchmarks.day_engine_baseline
@@ -31,9 +25,9 @@ from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
 
-from app.data_processor import read_csv_rows
 from app.optimizer import MandatoryTaskSchedulingError, generate_day_schedule
-from app.planning.compat import import_legacy_csv_rows
+from app.planning.csv_import import parse_legacy_csv_file
+from app.planning.models import DaySchedule, TaskRegistry
 from app.planning.preferences import OptimizerMode, PreferenceOverrides, resolve_day_preferences
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -121,6 +115,17 @@ def _run_mode(day_schedule, prefs, warmups: int, repeats: int) -> ModeResult:
     )
 
 
+
+def _load_first_day(path: Path) -> DaySchedule:
+    """The fixture's first day as a canonical DaySchedule, imported like the app's own CSV import."""
+    parsed = parse_legacy_csv_file(path, anchor_date=ANCHOR_DATE, timezone=TIMEZONE)
+    day = parsed.start_date
+    tasks = [task for task in parsed.tasks if day in task.preferred_dates]
+    return DaySchedule(
+        date=day, timezone=TIMEZONE, fixed_blocks=[block for block in parsed.fixed_blocks if block.planned_date == day],
+        task_ids=[task.id for task in tasks], tasks=TaskRegistry(tasks={task.id: task for task in tasks}),
+    )
+
 def run_benchmark(warmups: int = DEFAULT_WARMUPS, repeats: int = DEFAULT_REPEATS) -> dict:
     results: list[FixtureResult] = []
 
@@ -128,10 +133,7 @@ def run_benchmark(warmups: int = DEFAULT_WARMUPS, repeats: int = DEFAULT_REPEATS
         if not path.exists():
             raise FileNotFoundError(f"benchmark fixture not found: {path}")
 
-        rows = read_csv_rows(str(path))
-        imported = import_legacy_csv_rows(rows, anchor_date=ANCHOR_DATE, tz_name=TIMEZONE)
-        day_index = min(imported.keys())  # single-day fixtures: just the first day
-        day_schedule = imported[day_index].day_schedule
+        day_schedule = _load_first_day(path)  # single-day fixtures: just the first day
 
         modes = []
         for mode in (OptimizerMode.PRECISE_GREEDY, OptimizerMode.ADHD_FRIENDLY):

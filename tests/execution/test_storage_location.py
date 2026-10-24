@@ -177,8 +177,8 @@ def test_default_get_connection_adopts_legacy_database_once(tmp_path: Path, monk
     try:
         assert ExecutionRepository(connection).get_execution("legacy-1").task_name == "Old Task"
         connection.execute(
-            "INSERT INTO executions (id, task_name, category, tag, planned_duration, priority, status, "
-            "created_at, updated_at) VALUES ('new-1', 'New', 'study', '', 30, 5, 'scheduled', "
+            "INSERT INTO executions (id, task_name, category, tag, planned_duration, status, "
+            "created_at, updated_at) VALUES ('new-1', 'New', 'study', '', 30, 'scheduled', "
             "'2024-01-01T00:00:00+00:00', '2024-01-01T00:00:00+00:00')"
         )
     finally:

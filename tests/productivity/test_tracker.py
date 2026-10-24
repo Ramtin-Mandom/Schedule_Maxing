@@ -215,7 +215,7 @@ class Stack:
         self.productivity = ProductivityService(repository, clock=self.clock, history=self.planning, timezone_name=VAN)
 
     def plan(self, name: str, day: date, local_hour: int = 9, points: int = 3):
-        task = self.planning.create_task(Task(name=name, category="study", estimated_duration_minutes=60, priority=5,
+        task = self.planning.create_task(Task(name=name, category="study", estimated_duration_minutes=60,
                                               points=points))
         start = datetime(day.year, day.month, day.day, local_hour, tzinfo=UTC) + timedelta(hours=8)
         planned_at = min(self.clock.now, start)  # the plan existed before its work

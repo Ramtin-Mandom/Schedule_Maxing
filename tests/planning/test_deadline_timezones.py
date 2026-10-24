@@ -20,7 +20,7 @@ SEP_22, SEP_23, SEP_24 = date(2026, 9, 22), date(2026, 9, 23), date(2026, 9, 24)
 
 
 def make_task(name: str, deadline: datetime, duration: int = 30, **extra) -> Task:
-    return Task(name=name, category="study", estimated_duration_minutes=duration, priority=5, deadline=deadline, **extra)
+    return Task(name=name, category="study", estimated_duration_minutes=duration, deadline=deadline, **extra)
 
 
 def allocate(tasks: list[Task], dates: list[date], tz: str, window: DayWindowSpec | None = None):

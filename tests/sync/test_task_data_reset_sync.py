@@ -54,7 +54,7 @@ def test_reset_clears_server_and_device_and_nothing_is_sent_again(pair) -> None:
     b.sync_now()
     add(a, "Offline, never sent")  # queued on A only
     stored = b.planning.list_tasks()[0]
-    b.planning.update_task(stored.model_copy(update={"priority": 9}), expected_version=stored.version)  # B, offline
+    b.planning.update_task(stored.model_copy(update={"points": 90}), expected_version=stored.version)  # B, offline
 
     removed = a.sync.reset_task_data()
     assert removed["task"] == 2 and removed["fixed_block"] == 1

@@ -90,7 +90,7 @@ def test_the_sample_is_seeded_once_and_a_rerun_changes_nothing(engine, caplog) -
     assert code == 0, first
     assert "Ramtin <ramtin.test@example.com> (created, password verified)" in first
     assert "3 tasks, 4 fixed blocks, 3 placements, 1 execution (scheduled)" in first
-    assert "none in the main sample (not applicable)" in first and "generation generated" in first
+    assert "generation generated" in first
     ids, changes = seeded_ids(engine), count(engine, models.ChangeLogEntry)
 
     code, second = run(engine, ARGS)
@@ -116,7 +116,7 @@ def test_times_follow_the_anchor_date_and_time_zone(engine) -> None:
     assert blocks["Dinner"].planned_end == datetime(2026, 9, 29, 2, 0, tzinfo=timezone.utc)
     study = tasks["Study Session"]
     assert [tag.tag for tag in study.tag_rows] == ["focus"] and study.category == "study"
-    assert (study.estimated_duration_minutes, study.priority) == (90, 7)
+    assert study.estimated_duration_minutes == 90
     assert (study.preferred_window_start_minute, study.preferred_window_end_minute) == (540, 720)
     assert [row.preferred_date.isoformat() for row in study.preferred_date_rows] == ["2026-09-28"]
     assert all(placement.planned_date.isoformat() == "2026-09-28" for placement in placements)
@@ -142,12 +142,12 @@ def test_user_edits_are_never_overwritten(backend, engine) -> None:
     account = backend.sign_in(email=EMAIL, password=SECRET)
     planning = account.planning_service()
     study = next(task for task in planning.list_tasks() if task.name == "Study Session")
-    planning.update_task(study.model_copy(update={"priority": 2}), expected_version=study.version)
+    planning.update_task(study.model_copy(update={"estimated_duration_minutes": 20}), expected_version=study.version)
     changes = count(engine, models.ChangeLogEntry)
 
     code, out = run(engine, ARGS)
     assert code == 1 and "was edited" in out and "nothing was overwritten" in out
-    assert planning.get_task(study.id).priority == 2 and count(engine, models.ChangeLogEntry) == changes
+    assert planning.get_task(study.id).estimated_duration_minutes == 20 and count(engine, models.ChangeLogEntry) == changes
 
 
 def test_a_date_with_other_records_is_refused(backend, engine) -> None:
@@ -156,7 +156,7 @@ def test_a_date_with_other_records_is_refused(backend, engine) -> None:
     backend.register(email=EMAIL, password=SECRET, display_name=NAME)
     account = backend.sign_in(email=EMAIL, password=SECRET)
     account.planning_service().create_task(Task(user_id=account.user_id, name="Mine", category="c",
-                                                estimated_duration_minutes=30, priority=5))  # undated: eligible
+                                                estimated_duration_minutes=30))  # undated: eligible
     code, out = run(engine, ARGS)
     assert code == 1 and "already holds 1 other" in out and "choose another --anchor-date" in out
     assert count(engine, models.Task) == 1 and count(engine, models.FixedBlock) == 0
@@ -205,18 +205,6 @@ def test_two_accounts_get_their_own_seed(engine) -> None:
     with session_factory(engine)() as session:
         owners = {row.user_id for row in session.scalars(select(models.Task))}
         assert len(owners) == 2 and count(engine, models.Task) == 6  # distinct ids per account
-
-
-def test_the_dependency_fixture_round_trips_on_its_own_date(engine) -> None:
-    code, out = run(engine, [*ARGS, "--dependency-date", "2026-09-29"])
-    assert code == 0, out
-    assert "dependency_chain_linear.csv on 2026-09-29: 3 dependencies" in out
-    with session_factory(engine)() as session:
-        tasks = {row.name: row.id for row in session.scalars(select(models.Task))}
-        order = {row.task_id: row.planned_start for row in session.scalars(select(models.Placement).where(
-            models.Placement.planned_date == datetime(2026, 9, 29).date()))}
-        assert order[tasks["Task A"]] < order[tasks["Task B"]] < order[tasks["Task C"]] < order[tasks["Task D"]]
-    assert run(engine, [*ARGS, "--dependency-date", "2026-09-29"])[0] == 0  # idempotent too
 
 
 def test_pytest_never_takes_its_database_from_database_url() -> None:

@@ -37,7 +37,7 @@ class DuplicateEntityError(PlanningError):
 
 class InvalidReferenceError(PlanningError):
     """Raised when an entity references ids that are not persisted (e.g. a
-    dependency or project that does not exist)."""
+    project or task that does not exist)."""
 
     def __init__(self, message: str, missing_ids: Iterable[uuid.UUID] = ()) -> None:
         self.missing_ids = sorted(missing_ids, key=str)
@@ -46,7 +46,7 @@ class InvalidReferenceError(PlanningError):
 
 class EntityInUseError(PlanningError):
     """Raised when deleting an entity other planning data still depends on
-    (a task other tasks depend on, or a project that still has tasks)."""
+    (a project that still has tasks)."""
 
     def __init__(self, message: str, dependent_ids: Iterable[uuid.UUID] = ()) -> None:
         self.dependent_ids = sorted(dependent_ids, key=str)
@@ -75,7 +75,7 @@ class StaleInputsError(PlanningError):
         self.current = current
         super().__init__(
             message
-            or "The tasks, fixed blocks, preferences or dependencies of this range changed since they were read. "
+            or "The tasks, fixed blocks or preferences of this range changed since they were read. "
             "Nothing was saved; preview the range again."
         )
 

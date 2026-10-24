@@ -61,7 +61,7 @@ NAMESPACE = uuid.UUID("5c3e1f9a-7b2d-4c1e-9f0a-000000000005")
 
 def task(name: str, duration: int, **fields) -> Task:
     return Task(id=uuid.uuid5(NAMESPACE, name), name=name, category=fields.pop("category", "study"),
-                estimated_duration_minutes=duration, priority=fields.pop("priority", 5), **fields)
+                estimated_duration_minutes=duration, **fields)
 
 
 def block(label: str, start: int, end: int) -> FixedBlock:
@@ -79,9 +79,9 @@ def scenarios() -> dict:
                 task("Write", 45, preferred_time_window=window(780, 840)),
                 task("Email", 20), task("Review", 30, preferred_time_window=window(1020, 1050))]
     constrained_a = task("Draft", 90, required=True)
-    constrained = [constrained_a, task("Edit", 60, dependency_ids=[constrained_a.id]),
+    constrained = [constrained_a, task("Edit", 60),
                    task("Submit", 15, deadline=START + timedelta(minutes=900)), task("Gym", 45, category="health")]
-    workload = [task(f"Occurrence {index}", 25 + (index % 4) * 10, priority=1 + index % 9,
+    workload = [task(f"Occurrence {index}", 25 + (index % 4) * 10, points=1 + index % 9,
                      category=("study", "work", "health")[index % 3]) for index in range(20)]
     infeasible = [task("Huge A", 400, required=True), task("Huge B", 400, required=True)]
     odd = [task("Tick", 1), task("Odd 13", 13, preferred_time_window=window(613, 640)), task("Odd 47", 47),
@@ -89,7 +89,7 @@ def scenarios() -> dict:
     return {
         "non_round_minutes_and_unschedulable_optional": (odd, [block("Break", 607, 619)], (600, 1000)),
         "ordinary": (ordinary, [block("Lunch", 720, 750)], (480, 1320)),
-        "constrained_breaks_deadlines_dependencies": (
+        "constrained_breaks_deadlines": (
             constrained, [block("Lunch", 720, 780), block("Class", 600, 660)], (480, 1200)),
         "preferences": (ordinary[:2] + [task("Call", 30, preferred_time_window=window(600, 630))], [], (480, 1320)),
         "large_recurring_workload": (workload, [block("Lunch", 720, 780)], (420, 1380)),

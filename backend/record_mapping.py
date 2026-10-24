@@ -3,7 +3,7 @@ backend/record_mapping.py
 
 The one field <-> column mapping of the record content that is stored
 relationally (backend/models.py): a task's tags, preferred dates,
-dependencies, recurrence and recurrence identity (docs/recurrence.md), and a
+recurrence and recurrence identity (docs/recurrence.md), and a
 preference layer's overrides. The same
 functions write and read a live row (tasks, preferences) and a revision row
 (task_revisions, preference_revisions) -- they share their content columns
@@ -11,7 +11,7 @@ and child-relationship names -- so a record and its historical snapshots
 can never be mapped differently.
 
 Exactness:
-    - tags, preferred dates and dependency ids are ordered child rows: a
+    - tags and preferred dates are ordered child rows: a
       repeated value is stored as given, never de-duplicated;
     - recurrence weekdays are a set (RecurrenceSpec keeps them sorted and
       unique); no rows = weekdays None;
@@ -79,9 +79,7 @@ def write_task(row, task) -> None:
     recurrence = task.recurrence
     row.project_id = task.project_id
     row.name, row.category = task.name, task.category
-    row.estimated_duration_minutes, row.priority, row.required = (
-        task.estimated_duration_minutes, task.priority, task.required,
-    )
+    row.estimated_duration_minutes, row.required = task.estimated_duration_minutes, task.required
     row.points = task.points
     kind, preferred = task.kind, task.preferred_time
     row.kind = kind if isinstance(kind, str) else kind.value
@@ -104,21 +102,18 @@ def write_task(row, task) -> None:
     row.occurrence_state = state.value if state is not None and not isinstance(state, str) else state
     row.series_version, row.series_predecessor_id = task.series_version, task.series_predecessor_id
 
-    tag, preferred, dependency, weekday = (
-        _child(row, name) for name in ("tag_rows", "preferred_date_rows", "dependency_rows", "recurrence_weekday_rows")
+    tag, preferred, weekday = (
+        _child(row, name) for name in ("tag_rows", "preferred_date_rows", "recurrence_weekday_rows")
     )
     row.tag_rows = [tag(position=position, tag=value) for position, value in enumerate(task.tags)]
     row.preferred_date_rows = [
         preferred(position=position, preferred_date=day) for position, day in enumerate(task.preferred_dates)
     ]
-    row.dependency_rows = [
-        dependency(position=position, depends_on_id=task_id) for position, task_id in enumerate(task.dependency_ids)
-    ]
     row.recurrence_weekday_rows = [weekday(weekday=day) for day in ((recurrence.weekdays or []) if recurrence else [])]
 
 
 def task_content(row) -> dict:
-    """A tasks/task_revisions row's content as TaskFields values (dependency ids included)."""
+    """A tasks/task_revisions row's content as TaskFields values."""
     window = None
     if row.preferred_window_start_minute is not None:
         window = {"start_minute": row.preferred_window_start_minute, "end_minute": row.preferred_window_end_minute}
@@ -134,14 +129,13 @@ def task_content(row) -> dict:
     return {
         "project_id": row.project_id, "name": row.name, "category": row.category,
         "tags": [item.tag for item in row.tag_rows],
-        "estimated_duration_minutes": row.estimated_duration_minutes, "priority": row.priority,
+        "estimated_duration_minutes": row.estimated_duration_minutes,
         "points": row.points,
         "kind": row.kind, "preferred_time": row.preferred_time,
         "task_type_id": row.task_type_id,
         "required": row.required, "required_date": row.required_date,
         "preferred_dates": [item.preferred_date for item in row.preferred_date_rows],
         "preferred_time_window": window,
-        "dependency_ids": [item.depends_on_id for item in row.dependency_rows],
         "deadline": datetime.fromisoformat(row.deadline) if row.deadline else None,
         "recurrence": recurrence,
         "series_id": row.series_id, "occurrence_slot": row.occurrence_slot,

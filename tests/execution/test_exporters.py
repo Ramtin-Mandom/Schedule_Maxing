@@ -22,7 +22,6 @@ def _make_execution(**overrides: object) -> TaskExecution:
         planned_start=540,
         planned_end=660,
         planned_duration=120,
-        priority=8,
         status=ExecutionStatus.COMPLETED,
         created_at=TIMESTAMP,
         updated_at=TIMESTAMP,

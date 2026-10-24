@@ -29,13 +29,14 @@ import uuid
 from datetime import datetime
 
 from backend import models
-from backend.executions import ExecutionFields, ExecutionOut
+from backend.executions import LEGACY_EXECUTION_WIRE_FIELDS, ExecutionFields, ExecutionOut
 from backend.resources import CRUD_RESOURCES
 
 _SPECS = {spec.entity_type: spec for spec in CRUD_RESOURCES}
 _OUT = {**{entity_type: spec.out_schema for entity_type, spec in _SPECS.items()}, "execution": ExecutionOut}
 _TYPE_BY_KEYS = {frozenset(schema.model_fields): entity_type for entity_type, schema in _OUT.items()}
-_EXECUTION_COLUMNS = tuple(name for name in ExecutionFields.model_fields if name not in ("sessions", "status"))
+_EXECUTION_COLUMNS = tuple(name for name in ExecutionFields.model_fields
+                           if name not in ("sessions", "status", *LEGACY_EXECUTION_WIRE_FIELDS))
 
 REVISION_MODELS: dict[str, type[models.RecordRevision]] = {
     "project": models.ProjectRevision,

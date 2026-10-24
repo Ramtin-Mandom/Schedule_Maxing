@@ -44,11 +44,8 @@ Optimistic concurrency (replaces Milestone 2's last-write-wins):
 Deletion is soft (tombstones, schema v4): a deleted record keeps its row
 with `deleted_at` set, and disappears from every normal read. Tombstoned ids
 can never be reused by a create.
-    - Task: refused (EntityInUseError) while another *live* task depends on
-      it -- deleting a dependency must never silently unblock its
-      dependents. Deleting both in one delete_tasks call is fine. The task's
-      active placements (any date) are tombstoned with it; its child rows
-      stay with the tombstone.
+    - Task: its active placements (any date) are tombstoned with it; its
+      child rows stay with the tombstone.
     - Project: refused (EntityInUseError) while any live task references it.
     - Placement: replace_placements(start, end, placements) makes the live
       placements dated within [start, end] exactly `placements` (create/
@@ -105,11 +102,7 @@ This is a coarse filter; allocation's per-date check and the day engine's
 intraday deadline constraint stay authoritative.
 Recurrence is model-only (no expansion): a recurring template is treated
 exactly like any other task. Placements and preferred_dates never affect
-eligibility (preferred_dates only rank dates). A dependency outside the
-eligible set is not pulled into the range; external_dependencies() resolves
-its persisted state (completed / scheduled / skipped / cancelled / pending /
-missing, see app/planning/external_dependencies.py) so allocation and the
-day engine can treat it correctly. Ordering is (created_at, id),
+eligibility (preferred_dates only rank dates). Ordering is (created_at, id),
 deterministic across reopen.
 
 RangeScope.PLANNED (used by the desktop pages, whose tasks are entered
@@ -133,8 +126,7 @@ clear_range(start, end, include_planning_data=...) is the "reset" scope:
 it always deletes the placements (and schedule provenance) dated in the
 range; with include_planning_data it also deletes the fixed blocks dated in
 the range and the tasks whose planned date is in the range (undated tasks
-are never touched). All in one transaction, subject to the deletion policy
-above (e.g. refused if a task outside the range depends on one inside it).
+are never touched). All in one transaction.
 Execution history is never deleted by it. A reset is a range operation on
 whatever is stored inside one transaction; it writes no caller-supplied
 record content, so it takes no per-record precondition.
@@ -154,7 +146,6 @@ from enum import Enum
 from pathlib import Path
 
 from app.execution.db import get_connection
-from app.pert import has_cycle_by_id
 from app.planning import fixed_block_rules
 from app.planning.errors import (
     DuplicateEntityError,
@@ -167,11 +158,6 @@ from app.planning.errors import (
     VersionConflictError,
 )
 from app.planning.history import CompletionHistory, HistoryBounds, ScheduleHistory
-from app.planning.external_dependencies import (
-    ExternalDependency,
-    external_dependency_ids,
-    resolve_external_dependencies,
-)
 from app.execution.models import CancelReason
 from app.planning.models import (
     PLACEMENT_SNAPSHOT_FIELDS,
@@ -385,8 +371,6 @@ class ResetPreview:
     tasks_with_history_ids: list[uuid.UUID]
     #: Recurring templates planned in the range: kept; only their placements in the range are removed.
     protected_recurring_task_ids: list[uuid.UUID]
-    #: Task to be deleted -> live tasks outside the reset that depend on it. Non-empty: the reset is refused.
-    blocking_dependents: dict[uuid.UUID, list[uuid.UUID]]
     #: Identifies exactly these records at these versions; reset_range requires it as the confirmation.
     token: str
 
@@ -400,10 +384,6 @@ class ResetPreview:
             "tasks": len(self.task_ids),
             "date_preferences": len(self.date_preference_ids),
         }
-
-    @property
-    def blocked(self) -> bool:
-        return bool(self.blocking_dependents)
 
     @property
     def has_cascade(self) -> bool:
@@ -827,33 +807,7 @@ class PlanningService:
         # Caller holds a repository transaction. The tasks' live placements go with them (cascade_reason).
         # A deleted occurrence's tombstone records occurrence_state and keeps its slot reserved.
         ids = set(expected_versions)
-        dependents_of = self._repository.dependents_of(ids)
-        involved = self._repository.get_tasks(
-            ids | {dependent for group in dependents_of.values() for dependent in group}, include_deleted=True
-        )
-
-        def slot_edge(dependency_id: uuid.UUID, dependent_id: uuid.UUID) -> bool:
-            # An occurrence's same-slot edge never blocks skipping/deleting its prerequisite occurrence: the
-            # dependent stays and reports its prerequisite as missing (docs/recurrence.md).
-            dependency, dependent = involved.get(dependency_id), involved.get(dependent_id)
-            return dependency is not None and dependent is not None and dependency.is_occurrence and dependent.is_occurrence
-
-        blocking = {
-            dependency_id: remaining
-            for dependency_id, dependents in dependents_of.items()
-            if (remaining := {d for d in dependents - ids if not slot_edge(dependency_id, d)})
-        }
-        if blocking:
-            dependents = set().union(*blocking.values())
-            raise EntityInUseError(
-                "Cannot delete task(s) "
-                + ", ".join(sorted(str(task_id) for task_id in blocking))
-                + " while other tasks depend on them: "
-                + ", ".join(sorted(str(task_id) for task_id in dependents))
-                + ". Remove those dependencies first, or delete the dependents too.",
-                dependents,
-            )
-
+        involved = self._repository.get_tasks(ids, include_deleted=True)
         states = self._repository.record_states("tasks", ids)
         live = []
         for task_id in sorted(ids, key=str):
@@ -1692,35 +1646,6 @@ class PlanningService:
             series=TaskRegistry(tasks={task.id: task for task in series}),
         )
 
-    def external_dependencies(
-        self, tasks: Iterable[Task], start_date: date_, end_date: date_, timezone_name: str
-    ) -> dict[uuid.UUID, ExternalDependency]:
-        """
-        The persisted state of every dependency of `tasks` that is not itself
-        among `tasks` (see app/planning/external_dependencies.py): read from
-        the stored tasks, their active placements outside the range, and
-        their execution history, in one consistent snapshot.
-        """
-        _require_range(start_date, end_date)
-        dependency_ids = external_dependency_ids(tasks)
-        if not dependency_ids:
-            return {}
-        with self._repository.transaction():
-            stored = self._repository.get_tasks(dependency_ids)
-            persisted = set(stored)
-            placements = self._repository.active_placements_for_tasks(persisted)
-            executions = self._repository.execution_facts_for_tasks(persisted)
-        return resolve_external_dependencies(
-            dependency_ids,
-            range_start=start_date,
-            range_end=end_date,
-            timezone_name=timezone_name,
-            persisted_task_ids=persisted,
-            placements_by_task=placements,
-            executions_by_task=executions,
-            series_ids={task_id for task_id, task in stored.items() if task.is_series},
-        )
-
     # ------------------------------------------------------------------
     # Reset
     # ------------------------------------------------------------------
@@ -1784,9 +1709,7 @@ class PlanningService:
         (executions keep their historical links and snapshots). A recurring
         template planned in the range is protected: only its placements in
         the range are removed, never the template, since deleting it would
-        remove every other date too. A task to be deleted that a live task
-        outside the reset still depends on makes the reset refuse
-        (blocking_dependents); reset_range then rolls everything back.
+        remove every other date too.
 
         `token` identifies exactly the previewed records and their versions.
         reset_range requires it, so the reset applies only what was
@@ -1802,10 +1725,8 @@ class PlanningService:
         `confirmation` is the token of a preview of exactly the records (and
         versions) that are stored now -- otherwise VersionConflictError and
         nothing changes. Every deletion is a versioned tombstone that change
-        capture records for synchronization. If any step is refused (e.g. a
-        live task outside the reset depends on a task inside it,
-        EntityInUseError), the whole reset rolls back, preference layers
-        included.
+        capture records for synchronization. If any step is refused, the
+        whole reset rolls back, preference layers included.
         """
         _require_range(start_date, end_date)
         with self._repository.transaction():
@@ -1876,11 +1797,6 @@ class PlanningService:
             for placement in group
             if not start_date <= placement.planned_date <= end_date
         ]
-        blocking = {
-            dependency: sorted(dependents - task_ids, key=str)
-            for dependency, dependents in self._repository.dependents_of(task_ids).items()
-            if dependents - task_ids
-        }
         with_history = self._repository.placement_ids_with_history(
             placement.id for placement in [*placements, *cascade]
         )
@@ -1916,7 +1832,6 @@ class PlanningService:
             placements_with_history_ids=sorted(with_history, key=str),
             tasks_with_history_ids=sorted(tasks_with_history, key=str),
             protected_recurring_task_ids=protected,
-            blocking_dependents=blocking,
             token=token,
         )
 
@@ -2009,10 +1924,10 @@ class PlanningService:
 
         The batch must have a single owner (user_id) that matches every
         stored record it touches or references. After applying, the complete
-        result is validated -- relationships (project, dependency and
-        placement task references must point at live records; a deleted
-        task/project must have no live dependents/tasks), dependency cycles,
-        overlapping fixed blocks -- and any problem rolls back everything.
+        result is validated -- relationships (project and placement task
+        references must point at live records; a deleted project must have no
+        live tasks), overlapping fixed blocks -- and any problem rolls back
+        everything.
         """
         records = {
             "project": list(batch.projects),
@@ -2154,23 +2069,11 @@ class PlanningService:
                 missing_projects,
             )
 
-        task_refs = {dependency for task in live_tasks for dependency in task.dependency_ids}
-        task_refs |= {placement.task_id for placement in live_placements}
+        task_refs = {placement.task_id for placement in live_placements}
         missing_tasks = task_refs - final_live("task", task_refs)
         if missing_tasks:
-            # An occurrence's same-slot edge may name a skipped prerequisite occurrence (docs/recurrence.md).
-            batch_tasks_all = {item.id: item for _, item, _ in plans["task"]}
-            targets = {**self._repository.get_tasks(missing_tasks - set(batch_tasks_all), include_deleted=True),
-                       **{key: value for key, value in batch_tasks_all.items() if key in missing_tasks}}
-            placement_refs = {placement.task_id for placement in live_placements}
-            missing_tasks = {
-                missing for missing in missing_tasks
-                if missing in placement_refs or missing not in targets or not targets[missing].is_occurrence
-                or not all(task.is_occurrence for task in live_tasks if missing in task.dependency_ids)
-            }
-        if missing_tasks:
             raise InvalidReferenceError(
-                "dependency/placement task references point at tasks that do not exist (in the batch or stored): "
+                "placement task references point at tasks that do not exist (in the batch or stored): "
                 + ", ".join(sorted(map(str, missing_tasks))),
                 missing_tasks,
             )
@@ -2258,35 +2161,9 @@ class PlanningService:
             raise VersionConflictError(label, item.id, expected_version=stored.version, current_version=None)
 
     def _validate_batch_result(self, plans: dict, touched_dates: set[date_]) -> None:
-        deleted_tasks = [item.id for action, item, _ in plans["task"] if action == "delete" or (
-            action == "insert" and item.deleted_at is not None)]
-        dependents_of = self._repository.dependents_of(deleted_tasks)
-        involved = self._repository.get_tasks(
-            set(deleted_tasks) | {dependent for group in dependents_of.values() for dependent in group},
-            include_deleted=True,
-        )
-        blockers = {
-            dependency: remaining
-            for dependency, dependents in dependents_of.items()
-            if (remaining := {
-                dependent for dependent in dependents
-                if not (involved.get(dependency) is not None and involved[dependency].is_occurrence
-                        and involved.get(dependent) is not None and involved[dependent].is_occurrence)
-            })
-        }
-        if blockers:
-            dependents = set().union(*blockers.values())
-            raise EntityInUseError(
-                "the batch deletes task(s) that live tasks still depend on: "
-                + ", ".join(sorted(map(str, dependents))),
-                dependents,
-            )
         for action, project, _ in plans["project"]:
             if project.deleted_at is not None and self._repository.task_ids_for_project(project.id):
                 raise EntityInUseError(f"the batch deletes project {project.id}, which still has live tasks.")
-
-        if plans["task"] and has_cycle_by_id({task.id: task for task in self._repository.list_tasks()}):
-            raise InvalidEntityError("the batch would create a dependency cycle among the stored tasks.")
 
         # Fixed-block invariants for every live block the batch creates or whose interval it changes
         # (tombstones and unchanged records are history, stored as they are).
@@ -2338,24 +2215,6 @@ class PlanningService:
             raise InvalidEntityError("duplicate task ids in one save.")
         if any(task.deleted_at is not None for task in tasks):
             raise InvalidEntityError("use delete_task to delete a task; a save cannot set deleted_at.")
-        batch_ids = set(ids)
-
-        dependency_ids = {dependency for task in tasks for dependency in task.dependency_ids} - batch_ids
-        missing_dependencies = dependency_ids - self._repository.existing_task_ids(dependency_ids)
-        if missing_dependencies:
-            # An occurrence may keep its same-slot edge to a prerequisite occurrence that was skipped or
-            # deleted (a tombstone): the dependency then blocks it, explicitly (docs/recurrence.md).
-            tombstoned = self._repository.get_tasks(missing_dependencies, include_deleted=True)
-            missing_dependencies -= {
-                dependency for dependency, target in tombstoned.items()
-                if target.is_occurrence and all(task.is_occurrence for task in tasks if dependency in task.dependency_ids)
-            }
-        if missing_dependencies:
-            raise InvalidReferenceError(
-                "dependency_ids reference tasks that are not persisted: "
-                + ", ".join(sorted(map(str, missing_dependencies))),
-                missing_dependencies,
-            )
 
         project_ids = {task.project_id for task in tasks if task.project_id is not None}
         missing_projects = project_ids - self._repository.existing_project_ids(project_ids)
@@ -2408,12 +2267,7 @@ class PlanningService:
             - an occurrence's identity (series_id, occurrence_slot) and a
               segment's lineage (series_predecessor_id) never change; a series
               with occurrences stays a series;
-            - a new occurrence names a live series definition of the same owner;
-            - a *new* dependency on a series definition is a series-to-series
-              dependency with a compatible cadence (same-slot resolution); a
-              one-off task or an occurrence must name one concrete occurrence
-              instead. Edges stored before these rules are left as they are;
-            - series definitions never depend on each other in a cycle.
+            - a new occurrence names a live series definition of the same owner.
         """
         batch = {task.id: task for task in tasks}
         for task in tasks:
@@ -2431,10 +2285,7 @@ class PlanningService:
                 )
 
         new_occurrences = [task for task in tasks if task.is_occurrence and task.id not in stored_by_id]
-        referenced = {task.series_id for task in new_occurrences} | {
-            dependency for task in tasks for dependency in task.dependency_ids
-            if task.id not in stored_by_id or dependency not in stored_by_id[task.id].dependency_ids
-        }
+        referenced = {task.series_id for task in new_occurrences}
         known = self._repository.get_tasks(set(referenced) - set(batch), include_deleted=True)
         known.update(batch)
 
@@ -2447,34 +2298,6 @@ class PlanningService:
             if series.user_id != task.user_id:
                 raise InvalidEntityError(f"occurrence {task.id} must belong to its series' owner.")
 
-        from app.planning.recurrence import SeriesRule, cadence_problem
-
-        for task in tasks:
-            stored = stored_by_id.get(task.id)
-            for dependency in task.dependency_ids:
-                if stored is not None and dependency in stored.dependency_ids:
-                    continue
-                target = known.get(dependency)
-                if target is None or not target.is_series:
-                    continue
-                if not task.is_series:
-                    raise InvalidReferenceError(
-                        f"{task.name!r} cannot depend on the recurring series {target.name!r} itself: choose one "
-                        "concrete occurrence of it (a series only depends on a series occurrence by occurrence).",
-                        {dependency},
-                    )
-                if task.recurrence.configured and target.recurrence.configured:
-                    problem = cadence_problem(SeriesRule.of(task.recurrence), SeriesRule.of(target.recurrence))
-                    if problem is not None:
-                        raise InvalidReferenceError(
-                            f"{task.name!r} cannot depend on the series {target.name!r}: {problem}", {dependency}
-                        )
-
-        if any(task.is_series for task in tasks):
-            series = {task.id: task for task in self._repository.list_series()}
-            series.update({task.id: task for task in tasks if task.is_series})
-            if has_cycle_by_id(series):
-                raise InvalidEntityError("recurring series cannot depend on each other in a cycle.")
 
 
 #: Task fields that are an occurrence's bookkeeping rather than its content (see _same_occurrence_content).

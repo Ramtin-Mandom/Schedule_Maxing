@@ -1,11 +1,10 @@
 """Tests for app/planning/allocation.py: week/month calendar coverage,
-capacity/required/deadline/preference-driven ranking, cross-date
-dependencies, and the "never calls the Day Scheduler" guarantee.
+capacity/required/deadline/preference-driven ranking, the points-first
+order, and the "never calls the Day Scheduler" guarantee.
 """
 
 from __future__ import annotations
 
-import uuid
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -23,12 +22,12 @@ TZ = "UTC"
 
 
 def make_task(
-    name="Task", *, duration=60, priority=5, category="study", required=False, dependency_ids=None,
-    deadline=None, required_date=None, preferred_dates=None, task_id=None,
+    name="Task", *, duration=60, category="study", required=False,
+    deadline=None, required_date=None, preferred_dates=None, task_id=None, points=1,
 ):
     kwargs = dict(
-        name=name, category=category, estimated_duration_minutes=duration, priority=priority,
-        required=required, dependency_ids=dependency_ids or [], deadline=deadline,
+        name=name, category=category, estimated_duration_minutes=duration,
+        required=required, deadline=deadline, points=points,
         required_date=required_date, preferred_dates=preferred_dates or [],
     )
     if task_id is not None:
@@ -165,7 +164,7 @@ def test_capacity_exceeded_is_reported_not_raised():
         start_date=day, end_date=day, tasks=registry_of(big_a, big_b), task_ids=[big_a.id, big_b.id],
         preferences_by_date={day: resolve_day_preferences(date=day, timezone=TZ)},
     )
-    # Exactly one of the two (whichever the deterministic priority/id
+    # Exactly one of the two (whichever the deterministic points/id
     # tie-break picks first) fits the single day; the other cannot.
     assert len(result.assignments) == 1
     assert len(result.unallocated) == 1
@@ -176,7 +175,7 @@ def test_capacity_exceeded_is_reported_not_raised():
 
 
 # -----------------------------------------------------------------------------
-# Required dates, priorities, preferences, deadlines
+# Required dates, preferences, deadlines
 # -----------------------------------------------------------------------------
 
 
@@ -252,81 +251,46 @@ def test_earliest_date_is_the_final_tiebreak():
 
 
 # -----------------------------------------------------------------------------
-# Cross-date dependencies
+# Points-first order
 # -----------------------------------------------------------------------------
 
 
-def test_dependent_assigned_no_earlier_than_prerequisite():
-    dates = week_dates(date(2024, 6, 3))
-    prereq = make_task("Prereq", duration=1440)  # fills a whole day, forcing separation
-    dependent = make_task("Dependent", duration=60, dependency_ids=[prereq.id])
-    result = allocate_tasks(
-        start_date=dates[0], end_date=dates[-1], tasks=registry_of(prereq, dependent), task_ids=[dependent.id, prereq.id],
-        preferences_by_date=prefs_for(dates),
-    )
-    assert result.assignments[dependent.id] >= result.assignments[prereq.id]
-
-
-def test_same_date_dependency_allowed():
-    dates = week_dates(date(2024, 6, 3))
-    prereq = make_task("Prereq", duration=30)
-    dependent = make_task("Dependent", duration=30, dependency_ids=[prereq.id])
-    result = allocate_tasks(
-        start_date=dates[0], end_date=dates[0], tasks=registry_of(prereq, dependent), task_ids=[dependent.id, prereq.id],
-        preferences_by_date={dates[0]: resolve_day_preferences(date=dates[0], timezone=TZ)},
-    )
-    assert result.assignments[dependent.id] == result.assignments[prereq.id] == dates[0]
-
-
-def test_dependency_cycle_raises():
-    id_a, id_b = uuid.uuid4(), uuid.uuid4()
-    task_a = make_task("A", dependency_ids=[id_b], task_id=id_a)
-    task_b = make_task("B", dependency_ids=[id_a], task_id=id_b)
+def test_higher_points_claim_scarce_capacity_first():
     day = date(2024, 6, 3)
-    with pytest.raises(ValueError):
-        allocate_tasks(
-            start_date=day, end_date=day, tasks=registry_of(task_a, task_b), task_ids=[task_a.id, task_b.id],
-            preferences_by_date={day: resolve_day_preferences(date=day, timezone=TZ)},
-        )
-
-
-def test_external_dependency_context_unblocks_a_task():
-    dates = week_dates(date(2024, 6, 3))
-    external_id = uuid.uuid4()
-    task = make_task("Dependent", duration=60, dependency_ids=[external_id])
+    low = make_task("Low", duration=1440, points=2)
+    high = make_task("High", duration=1440, points=9)
     result = allocate_tasks(
-        start_date=dates[0], end_date=dates[-1], tasks=registry_of(task), task_ids=[task.id],
-        preferences_by_date=prefs_for(dates),
-        external_dependency_dates={external_id: dates[2]},
+        start_date=day, end_date=day, tasks=registry_of(low, high), task_ids=[low.id, high.id],
+        preferences_by_date={day: resolve_day_preferences(date=day, timezone=TZ)},
     )
-    assert result.assignments[task.id] >= dates[2]
+    assert high.id in result.assignments
+    assert [entry.task_id for entry in result.unallocated] == [low.id]
 
 
-def test_unresolved_dependency_blocks_task_not_ignored():
+def test_points_outrank_an_earlier_deadline():
     dates = week_dates(date(2024, 6, 3))
-    unknown_id = uuid.uuid4()
-    task = make_task("Blocked", duration=60, dependency_ids=[unknown_id])
+    urgent = make_task("Urgent", duration=1440, points=1,
+                       deadline=datetime(2024, 6, 9, 23, 0, tzinfo=timezone.utc))
+    valued = make_task("Valued", duration=1440, points=5)
     result = allocate_tasks(
-        start_date=dates[0], end_date=dates[-1], tasks=registry_of(task), task_ids=[task.id],
+        start_date=dates[0], end_date=dates[-1], tasks=registry_of(urgent, valued), task_ids=[urgent.id, valued.id],
         preferences_by_date=prefs_for(dates),
     )
-    assert task.id not in result.assignments
-    entry = result.unallocated[0]
-    assert entry.reason_code == AllocationReasonCode.DEPENDENCY_UNRESOLVED
+    # Both fit the week; the higher-points task claims the best (earliest) date.
+    assert result.assignments[valued.id] == dates[0]
+    assert result.assignments[urgent.id] == dates[1]
 
 
-def test_dependent_of_unallocated_local_task_is_blocked():
+def test_equal_points_fall_back_to_the_earliest_deadline():
     dates = week_dates(date(2024, 6, 3))
-    too_big = make_task("TooBig", duration=100_000, required=True)  # never fits
-    dependent = make_task("Dependent", duration=30, dependency_ids=[too_big.id])
+    later = make_task("Later", duration=1440, deadline=datetime(2024, 6, 9, 23, 0, tzinfo=timezone.utc))
+    sooner = make_task("Sooner", duration=1440, deadline=datetime(2024, 6, 8, 23, 0, tzinfo=timezone.utc))
     result = allocate_tasks(
-        start_date=dates[0], end_date=dates[-1], tasks=registry_of(too_big, dependent),
-        task_ids=[dependent.id, too_big.id], preferences_by_date=prefs_for(dates),
+        start_date=dates[0], end_date=dates[-1], tasks=registry_of(later, sooner), task_ids=[later.id, sooner.id],
+        preferences_by_date=prefs_for(dates),
     )
-    entries_by_id = {e.task_id: e for e in result.unallocated}
-    assert too_big.id in entries_by_id
-    assert dependent.id in entries_by_id
-    assert entries_by_id[dependent.id].reason_code == AllocationReasonCode.BLOCKED_BY_UNALLOCATED_DEPENDENCY
+    assert result.assignments[sooner.id] == dates[0]
+    assert result.assignments[later.id] == dates[1]
 
 
 # -----------------------------------------------------------------------------
@@ -349,8 +313,8 @@ def test_required_and_optional_unallocated_are_distinguishable():
 
 def test_required_tasks_are_processed_before_optional_for_the_same_capacity():
     day = date(2024, 6, 3)
-    optional_high_priority = make_task("OptionalHighPriority", duration=1440, priority=10, required=False)
-    required_low_priority = make_task("RequiredLowPriority", duration=1440, priority=1, required=True)
+    optional_high_priority = make_task("OptionalHighPoints", duration=1440, required=False, points=100)
+    required_low_priority = make_task("RequiredLowPoints", duration=1440, required=True, points=0)
     result = allocate_tasks(
         start_date=day, end_date=day, tasks=registry_of(optional_high_priority, required_low_priority),
         task_ids=[optional_high_priority.id, required_low_priority.id],

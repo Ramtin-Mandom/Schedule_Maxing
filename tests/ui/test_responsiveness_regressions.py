@@ -127,7 +127,7 @@ def test_available_chips_reuse_widgets_but_refresh_versions_and_remove_deleted_t
     app = open_app(tmp_path / "chips.db", tmp_path)
     try:
         planning, day = app.services.planning_controller, app.pages["day"]
-        task = planning.add_or_update_task(Task(name="Synthetic", category="study", priority=5,
+        task = planning.add_or_update_task(Task(name="Synthetic", category="study",
                                                estimated_duration_minutes=15, preferred_dates=[WEDNESDAY])).value
         day.reload()
         pump(app)
@@ -135,7 +135,7 @@ def test_available_chips_reuse_widgets_but_refresh_versions_and_remove_deleted_t
         day.reload()
         pump(app)
         assert day.chips[0] is chip
-        changed = planning.add_or_update_task(task.model_copy(update={"priority": 6}), expected_version=task.version)
+        changed = planning.add_or_update_task(task.model_copy(update={"points": 60}), expected_version=task.version)
         assert changed.ok
         day.reload()
         pump(app)

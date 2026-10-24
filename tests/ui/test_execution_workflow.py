@@ -54,8 +54,7 @@ class Stack:
             self.executions, clock=self.clock)
 
     def planned(self, name: str = "Study", hour: int = 9, minutes: int = 60):
-        task = self.planning_service.create_task(Task(name=name, category="study", estimated_duration_minutes=minutes,
-                                                      priority=5))
+        task = self.planning_service.create_task(Task(name=name, category="study", estimated_duration_minutes=minutes))
         placement = ScheduledTask(task_id=task.id, planned_date=MON, timezone=TZ, planned_start=at(hour),
                                   planned_end=at(hour) + timedelta(minutes=minutes), created_at=self.clock.now,
                                   updated_at=self.clock.now)

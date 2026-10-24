@@ -7,7 +7,6 @@ date-range loading and eligibility, and snapshot isolation.
 
 from __future__ import annotations
 
-import uuid
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -30,7 +29,7 @@ MON, TUE, WED = date(2024, 6, 3), date(2024, 6, 4), date(2024, 6, 5)
 
 
 def make_task(name: str = "Task", **overrides) -> Task:
-    defaults = dict(name=name, category="study", estimated_duration_minutes=60, priority=5)
+    defaults = dict(name=name, category="study", estimated_duration_minutes=60)
     defaults.update(overrides)
     return Task(**defaults)
 
@@ -104,19 +103,12 @@ def test_version_carried_by_the_model_is_never_trusted(planning_service: Plannin
     assert jumped.version == 7  # ...and a crafted version cannot jump ahead either
 
 
-def test_save_tasks_is_atomic_and_order_independent(planning_service: PlanningService) -> None:
-    dependency = make_task("Dependency")
-    dependent = make_task("Dependent", dependency_ids=[dependency.id])
+def test_save_tasks_keeps_the_given_order(planning_service: PlanningService) -> None:
+    first, second = make_task("First"), make_task("Second")
 
-    saved = planning_service.save_tasks([dependent, dependency])  # dependent first
-    assert [task.id for task in saved] == [dependent.id, dependency.id]
-
-    missing = uuid.uuid4()
-    batch = [make_task("A"), make_task("B", dependency_ids=[missing]), make_task("C")]
-    with pytest.raises(InvalidReferenceError) as info:
-        planning_service.save_tasks(batch)
-    assert info.value.missing_ids == [missing]
-    assert {task.name for task in planning_service.list_tasks()} == {"Dependency", "Dependent"}
+    saved = planning_service.save_tasks([second, first])
+    assert [task.id for task in saved] == [second.id, first.id]
+    assert {task.name for task in planning_service.list_tasks()} == {"First", "Second"}
 
 
 def test_multi_row_save_rolls_back_after_an_injected_failure(planning_service, planning_repository, monkeypatch) -> None:
@@ -152,11 +144,11 @@ def test_snapshot_isolation(planning_service: PlanningService) -> None:
     task.name = "mutated input"
     saved.tags.append("mutated output")
     fetched = planning_service.get_task(task.id)
-    fetched.priority = 10
+    fetched.points = 10
 
     assert planning_service.get_task(task.id) == saved.model_copy(update={"tags": ["x"]})
     assert planning_service.get_task(task.id).name == "Original"
-    assert planning_service.get_task(task.id).priority == 5
+    assert planning_service.get_task(task.id).points == saved.points
 
 
 # -----------------------------------------------------------------------------
@@ -164,28 +156,14 @@ def test_snapshot_isolation(planning_service: PlanningService) -> None:
 # -----------------------------------------------------------------------------
 
 
-def test_deleting_a_dependency_of_a_surviving_task_is_refused(planning_service: PlanningService) -> None:
-    dependency = make_task("Dependency")
-    dependent = make_task("Dependent", dependency_ids=[dependency.id])
-    planning_service.save_tasks([dependency, dependent])
+def test_deleting_a_task_leaves_the_other_tasks(planning_service: PlanningService) -> None:
+    kept = make_task("Kept")
+    deleted = make_task("Deleted")
+    planning_service.save_tasks([kept, deleted])
 
-    with pytest.raises(EntityInUseError) as info:
-        planning_service.delete_task(dependency.id, expected_version=1)
-    assert info.value.dependent_ids == [dependent.id]
-    assert planning_service.get_task(dependency.id) is not None
-
-    assert planning_service.delete_tasks({dependency.id: 1, dependent.id: 1}) == 2
-    assert planning_service.list_tasks() == []
-
-
-def test_deleting_a_dependent_removes_only_its_own_edges(planning_service: PlanningService) -> None:
-    dependency = make_task("Dependency")
-    dependent = make_task("Dependent", dependency_ids=[dependency.id])
-    planning_service.save_tasks([dependency, dependent])
-
-    assert planning_service.delete_task(dependent.id, expected_version=1) is True
-    assert planning_service.get_task(dependency.id) is not None
-    assert planning_service.delete_task(dependent.id, expected_version=1) is False  # already gone
+    assert planning_service.delete_task(deleted.id, expected_version=1) is True
+    assert planning_service.get_task(kept.id) is not None
+    assert planning_service.delete_task(deleted.id, expected_version=1) is False  # already gone
 
 
 def test_project_with_tasks_cannot_be_deleted(planning_service: PlanningService) -> None:

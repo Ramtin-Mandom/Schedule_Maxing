@@ -20,7 +20,7 @@ See [Projects](docs/desktop-projects-allocation.md) for project assignment and d
 The optional web/server adapters remain independently launched components; desktop
 workflows call shared Python services directly ([boundaries](docs/desktop-web-boundaries.md)).
 
-A Python schedule optimization project that builds daily, weekly, and monthly schedules from user-defined tasks. The app supports fixed tasks, flexible tasks, preferred time windows, task dependencies, reward-based scoring, CSV input/output, and a CustomTkinter desktop interface.
+A Python schedule optimization project that builds daily, weekly, and monthly schedules from user-defined tasks. The app supports fixed tasks, flexible tasks, To Dos, points, preferred time windows, reward-based scoring, CSV input/output, and a CustomTkinter desktop interface.
 
 The main idea of this project is to combine **hard scheduling constraints** with a **reward function**. Hard constraints decide whether a task placement is allowed, while the reward function decides how good a valid placement is. The optimizer then searches for strong task placements and returns a final schedule with scheduled and unscheduled tasks.
 
@@ -34,9 +34,7 @@ This project is designed around a simple scheduling problem:
 
 The desktop and CLI use the canonical minute-precise day engine with five scheduling modes: Normal, ADHD friendly, Early Finish, Night Owl and Catch-Up. See [scheduling modes](docs/scheduling-modes.md) for their shared constraints and objectives.
 
-The original **Greedy Optimizer v1** (Milestone 0) remains available as a protected legacy baseline. It places fixed tasks first, then repeatedly chooses the best currently valid placement for one flexible task at a time. For each flexible task, the optimizer scans possible start times in 30-minute increments, scores each valid placement, and keeps the highest-scoring option.
-
-The project also includes a dependency system inspired by PERT-style precedence constraints. If one task depends on another task, the optimizer tries to place the dependent task only after the prerequisite task has finished. In the legacy pipeline, missing dependency names are ignored so that the app remains usable even if the input contains a dependency that is not present in the current task list; the persistence-backed CSV importer used by the desktop app and CLI is stricter and rejects such a file instead (see [Saved data](#saved-data-sqlite-import-export-reset-and-backups-milestone-2)).
+The original Greedy Optimizer v1 (Milestone 0) and its legacy models have been removed; the canonical engine is the only one. Tasks have no priority and no dependencies: a task's points are what it is worth, and they decide which tasks get a date first when a week or month is over-committed.
 
 Since Milestone 2, the desktop app and the CLI keep all planning data (tasks, fixed blocks, generated schedules) and execution history in one local SQLite database. Nothing lives only in memory, and nothing is loaded from a CSV unless you explicitly import one.
 
@@ -49,9 +47,8 @@ Since Milestone 2, the desktop app and the CLI keep all planning data (tasks, fi
 - Add To Dos: checklist items that are never scheduled and are ticked off for their points.
 - See each day's Completed / Possible points on the Day page.
 - Optimize a day, week, or month schedule.
-- Use a reward function to prioritize important tasks and preferred time windows.
-- Support task dependencies using PERT-style graph logic.
-- Ignore missing dependencies instead of crashing the program (legacy pipeline).
+- Use a reward function to favour preferred time windows, related tags and compact days.
+- Give higher-points tasks the dates first when a week or month cannot fit everything.
 - Save every task, fixed block, generated schedule, and execution locally in SQLite; reopening the app restores them.
 - Import legacy CSV schedules transactionally (append, or replace the dates the file covers).
 - Export stored planning data to CSV with exact intervals and ids, plus the legacy half-hour CSV and an exact JSON export.
@@ -88,17 +85,13 @@ See the [documentation index](docs/README.md) for desktop guides, domain contrac
 │       └── release.yml       # Windows installer verification and releases
 ├── app/
 │   ├── app.py
-│   ├── constraints.py
-│   ├── data_processor.py
 │   ├── execution/            # SQLite infrastructure (db.py: location, migrations, transactions) + execution tracking
 │   ├── main.py                # canonical CLI (Task 6): import -> allocate -> generate one selected day
-│   ├── models.py               # legacy (Milestone 0) input/output models
-│   ├── optimizer.py            # Greedy Optimizer v1 (legacy) + generate_day_schedule (canonical, Task 4)
-│   ├── pert.py                  # name-based (legacy) + ID-based (canonical) dependency helpers
+│   ├── optimizer.py            # the canonical day engine: generate_day_schedule (all five modes)
 │   ├── planning/                # canonical models/time/compat/preferences/allocation/service (Tasks 1, 3, 5)
 │   │                            #   + repository.py/application.py: persisted planning data (Milestone 2)
 │   ├── productivity/         # analytics built on execution history (stats, predictions, insights, reporting)
-│   ├── reward.py
+│   ├── reward.py              # placement scoring (ScoringTask) and RewardSettings
 │   ├── sync/                 # offline-first sync client (Milestone 3): transport, engine, SyncService
 │   └── ui/                   # desktop-UI controllers/widgets, incl. the Tk-free PlanningController (Task 6)
 ├── backend/                  # FastAPI + PostgreSQL server (Milestone 3); migrations/ holds Alembic versions
@@ -111,9 +104,8 @@ See the [documentation index](docs/README.md) for desktop guides, domain contrac
 ├── data/                     # pre-Milestone-2 runtime data location (gitignored; only read once, see below)
 ├── docs/                     # sync-contract.md, backend.md, sync-protocol.md, render-deployment.md
 ├── samples/
-│   ├── inputs/                          # ~20 descriptive scenario CSVs (see "samples/inputs/" below)
+│   ├── inputs/                          # scenario CSVs (see "samples/inputs/" below)
 │   │   ├── valid_single_day_basic.csv
-│   │   ├── dependency_chain_linear.csv
 │   │   ├── fixed_blocks_overlap_invalid.csv
 │   │   └── ...
 │   └── outputs/
@@ -126,15 +118,13 @@ See the [documentation index](docs/README.md) for desktop guides, domain contrac
 │   ├── planning/               # canonical models/time/compat/preferences/allocation/service tests
 │   ├── productivity/
 │   ├── ui/                     # incl. test_planning_controller.py (Tk-free)
-│   ├── conftest.py            # shared Task/FixedBlock/DaySchedule/ScheduledTask builders
-│   ├── test_constraints.py
-│   ├── test_data_processor.py
+│   ├── conftest.py
 │   ├── test_day_engine.py      # canonical day engine (precise_greedy/adhd_friendly, mandatory scheduling)
 │   ├── test_end_to_end.py      # cross-cutting integration tests spanning Tasks 1-6
 │   ├── test_main_cli.py        # canonical CLI integration tests
 │   ├── test_main_time_formatting.py
-│   ├── test_optimizer.py       # Greedy Optimizer v1 (legacy, unchanged)
-│   ├── test_pert.py
+│   ├── test_optimizer_candidates.py / test_optimizer_differential.py  # engine search internals
+│   ├── test_scheduling_modes.py
 │   └── test_reward.py
 ├── .editorconfig
 ├── .env.example              # backend configuration placeholders only (real .env files are gitignored)
@@ -151,89 +141,11 @@ See the [documentation index](docs/README.md) for desktop guides, domain contrac
 └── requirements-backend.txt  # server-only dependencies (what the backend deployment installs)
 ```
 
-> `tests/` contains an automated suite (`python -m pytest`) covering the optimizer's core modules (constraints, PERT/dependencies, reward scoring, the optimizer itself, CSV loading, and CLI time formatting), the canonical planning layer (models, time, compat, preferences, allocation, the day engine, the CLI), execution tracking, productivity analytics, and the UI-facing controllers.
+> `tests/` contains an automated suite (`python -m pytest`) covering the day engine and its modes, reward scoring, the canonical planning layer (models, time, compat, preferences, allocation, the CLI), execution tracking, productivity analytics, sync, the backend and the UI-facing controllers.
 
 ---
 
 ## File Descriptions
-
-### `app/models.py`
-
-Defines legacy optimizer data structures. The desktop and CLI use canonical models in `app/planning/models.py`. These models represent time windows, tasks, fixed blocks, day schedules, scheduled tasks, unscheduled tasks, and final schedule outputs.
-
-Important models include:
-
-- `TimeWindow`: Stores `start_time` and `end_time` in minutes from midnight.
-- `Task`: Represents a flexible task with priority, duration, preferred time, category, tag, and dependencies.
-- `FixedBlock`: Represents a task that already has a fixed time.
-- `DaySchedule`: Stores one day of fixed blocks and flexible tasks.
-- `ScheduledTask`: Represents a task after it has been placed into the schedule.
-- `UnscheduledTask`: Represents a task that could not be scheduled.
-- `DayScheduleOutput`: Stores the final result for one day.
-
----
-
-### `app/data_processor.py`
-
-Loads schedule data from CSV files and converts rows into project models.
-
-It reads fixed and flexible tasks differently:
-
-- Fixed rows become `FixedBlock` objects.
-- Non-fixed rows become `Task` objects.
-
-For flexible tasks, the CSV `start_time` and `end_time` are treated as the task's preferred time window, not its final scheduled placement.
-
----
-
-### `app/constraints.py`
-
-Contains the hard time-based constraint checks used by the scheduling system.
-
-This file checks things like:
-
-- Whether two time intervals overlap.
-- Whether a task is inside the allowed day window.
-- Whether a task placement matches its duration.
-- Whether a task overlaps fixed blocks.
-- Whether a task overlaps already scheduled tasks.
-- Whether fixed blocks are valid.
-- What free time slots remain after fixed blocks are removed.
-
-These functions answer the question:
-
-> Is this placement allowed?
-
-They do not score how good the placement is.
-
----
-
-### `app/pert.py`
-
-Handles dependency logic between tasks.
-
-This file builds a dependency graph where the direction is:
-
-```text
-dependency -> task
-```
-
-For example, if `Math Review` depends on `Math Exam`, the graph stores:
-
-```text
-Math Exam -> Math Review
-```
-
-The PERT module checks for circular dependencies, computes valid dependency order, and validates whether scheduled tasks respect prerequisite timing.
-
-Legacy name-based behavior (canonical imports reject missing or ambiguous references):
-
-- Existing dependencies are enforced.
-- Missing dependencies are ignored.
-- Dependency cycles are treated as invalid.
-- A dependent task must start after its prerequisite finishes.
-
----
 
 ### `app/reward.py`
 
@@ -243,39 +155,25 @@ The reward function answers:
 
 > Given that this placement is allowed, how good is it?
 
-The score can depend on:
+A placement of a `ScoringTask` (category, duration, first tag, preferred window) between its neighbours scores:
 
-- Task priority.
-- Preferred time window.
-- Category weights.
-- Exact task weights.
-- Related tags.
-- Spacing between neighboring tasks.
+- The task weight: `weight_importance` times the category's multiplier.
+- The preferred-time bonus: full inside the task's preferred window, decaying with distance from it.
+- Related tags: a bonus per nearby neighbour with the same or a related tag (half of it for the same category).
 - Fragmentation penalties for awkward small gaps.
+- In ADHD mode, a bounded bonus for a short task that fills a stranded gap.
 
-The reward system reads values from a YAML file. An explicit `config_path` passed to `load_reward_settings()`/`optimize_day_schedule()` is always used directly; otherwise, default discovery looks for `config/task_preference.yaml` (singular) in this project's own `config/` directory, anchored to `app/reward.py`'s own file location rather than the current working directory (so it works the same regardless of where the CLI/UI/tests are run from, and never walks ancestor or home directories). If that canonical filename is absent, a recognized legacy filename in the same directory is used instead (`task_preferences.yaml`, `task_prefrence.yaml`, `task_prefrence.yml`, `task_preference.yml`), for compatibility with a file created under an older supported name. Since neither the CLI (`app/main.py`) nor the desktop UI (`app/app.py`) needs to pass an explicit `config_path` for this default discovery to work, editing `config/task_preference.yaml` does affect `python -m app.main`/`python -m app.app` today. If no config file is found (or a found file is incomplete), safe built-in defaults fill in the rest.
+A task's points are never scored: they count when the task is completed, and order the week/month allocation (see [Week/month allocation](#weekmonth-allocation-vs-selected-day-generation)).
+
+The reward system reads values from a YAML file. An explicit `config_path` passed to `load_reward_settings()` is always used directly; otherwise `config/task_preference.yaml` in this project's own `config/` directory is used (in a packaged build, the bundled one), never a file found through the current working directory. If no config file is found (or a found file is incomplete), safe built-in defaults fill in the rest.
 
 ---
 
 ### `app/optimizer.py`
 
-Contains the main greedy scheduling algorithm, protected as **Greedy Optimizer v1**.
+The canonical day engine, `generate_day_schedule`: an exact event-candidate greedy search at minute resolution. It checks every hard constraint (day window, fixed blocks, overlaps, durations, deadlines, required work) before anything is scored, places tasks one at a time at the best-scoring valid start, then lets the chosen mode refine the result. See [The canonical day engine](#the-canonical-day-engine-precise_greedy-and-adhd_friendly) and [scheduling modes](docs/scheduling-modes.md).
 
-The optimizer works in this order:
-
-1. Validate fixed blocks (`app.constraints.validate_fixed_blocks`): each must have `start_time < end_time`, fit inside the day window, and not overlap any other fixed block. An invalid fixed block raises `ValueError` immediately, before any scheduling happens.
-2. Load reward settings.
-3. Read the schedule's day start and day end.
-4. Convert fixed blocks into already scheduled tasks.
-5. Collect all flexible tasks.
-6. Repeatedly consider every remaining flexible task.
-7. For each task, find the best valid time slot.
-8. Pick the task-placement pair with the highest reward score.
-9. Lock that task into the schedule.
-10. Repeat until all tasks are scheduled or no progress can be made.
-11. Return scheduled tasks, unscheduled tasks, and total score.
-
-This is a greedy algorithm, so it is designed to find good schedules quickly. It does not guarantee a mathematically optimal schedule because it does not try every possible full schedule and it does not move tasks after locking them in.
+This is a greedy algorithm, so it is designed to find good schedules quickly. It does not guarantee a mathematically optimal schedule.
 
 ---
 
@@ -312,7 +210,6 @@ The local task-execution domain, used by both the desktop UI and the CLI report 
 
 Turns execution history into statistics and predictions: `data_prep.py` (flattens executions into analysis-ready records), `stats.py`/`segments.py` (aggregate statistics and groupings, each carrying its own sample count and evidence label), `prediction.py` (the median duration estimator and its documented fallback hierarchy — the production predictor), `insights.py` (structured, template-generated observations), `trends.py` (recent-vs-baseline comparison), `reporting.py` (the `ProductivityService` boundary and report/dashboard bundles), `exporters.py`, and `report_cli.py` (`python -m app.productivity.report_cli`).
 
-The evidence-gated ML duration predictor (see [Evidence-gated ML duration predictor](#evidence-gated-ml-duration-predictor-experimental-disabled-by-default)) lives in its own small, focused modules: `ml_features.py` (leakage-safe feature construction), `ml_split.py` (chronological train/test splitting), `ml_model.py` (the sklearn `Pipeline` definition and fitting), `ml_metrics.py` (MAE/median-AE/tolerance-rate calculations), `ml_evaluation.py` (the three-way comparison and activation gate), `ml_persistence.py` (saving/loading the model artifact, never raising), `ml_prediction.py` (the runtime, fail-safe prediction path), and `predictor_comparison_cli.py` (`python -m app.productivity.predictor_comparison_cli`).
 
 ---
 
@@ -332,47 +229,42 @@ Desktop-UI-facing controllers and widgets that connect `app/app.py` to `app/plan
 
 Stores global project settings, such as:
 
-- Time slot size.
-- Default day start and end.
-- Hard constraint toggles.
-- Reward weight constants.
-- Simulated annealing constants kept for future expansion.
-- Neighbor generation settings kept for future expansion.
+- Time slot size (the half-hour legacy CSV export).
 - The local data directory (`DATA_DIR`: the per-user application-data directory, or `SCHEDULE_MAXING_DATA_DIR`).
+- The default planning time zone, the backend URL, the update repository, the engine process switch and the storage mode.
 
-Some settings may be older or reserved for future optimizer versions. The legacy optimizer uses 30-minute slots; the canonical engine uses minute-precise candidates and persisted user/date preferences.
+The canonical engine uses minute-precise candidates and persisted user/date preferences.
 
 ---
 
 ### `config/task_preference.yaml`
 
-Stores user-adjustable reward preferences. This is the canonical, auto-discovered filename (see `app/reward.py`'s discovery precedence above) — it is found by default without passing `config_path` explicitly.
+Stores user-adjustable reward preferences. This is the canonical, auto-discovered filename (see `app/reward.py` above) — it is found by default without passing `config_path` explicitly.
 
 This file can define:
 
 - Reward weights.
 - Maximum preferred-time distance.
 - Category weights (the checked-in template lists the five primary categories — `health`, `enjoyment`, `study`, `work`, `chores` — at a neutral `1.0` each; any other category name remains valid and falls back to `1.0`).
-- Exact task weights.
-- Exact task preferred windows.
 - Category preferred windows.
 - Related tags.
+- The ADHD short-gap bonus.
 
-This lets the optimizer's behavior be tuned without rewriting Python code: editing this file directly changes what `python -m app.main`/`python -m app.app` schedule, since default discovery finds it automatically. A file under one of the older supported names (`task_preferences.yaml` plural, `task_prefrence.yaml`/`.yml`, `task_preference.yml`) is still recognized as a legacy variant if this canonical filename is absent, but the canonical filename always wins when both exist.
+This lets the optimizer's behavior be tuned without rewriting Python code: editing this file directly changes what `python -m app.main`/`python -m app.app` schedule, since default discovery finds it automatically.
 
 ---
 
 ### `samples/inputs/`
 
-Contains ~20 descriptive, scenario-focused CSV input files for manually exercising specific behaviors of the scheduler. Each filename describes the *intended* scenario, not proof that every path currently rejects or handles it exactly as its name implies (some are deliberately invalid inputs used to inspect current error handling). Representative examples:
+Contains descriptive, scenario-focused CSV input files for manually exercising specific behaviors of the scheduler. Each filename describes the *intended* scenario, not proof that every path currently rejects or handles it exactly as its name implies (some are deliberately invalid inputs used to inspect current error handling). Representative examples:
 
 - `valid_single_day_basic.csv` / `valid_multi_day_two_days.csv` — ordinary valid schedules.
-- `dependency_chain_linear.csv` / `multiple_dependencies_single_task.csv` / `dependency_missing_reference.csv` / `dependency_cycle_invalid.csv` / `dependency_name_contains_hyphen.csv` — dependency ordering, missing references, cycles, and the hyphen-splitting limitation (see [Dependency Behavior](#dependency-behavior)).
 - `fixed_blocks_overlap_invalid.csv` / `day_fully_packed_fixed_blocks.csv` — fixed-block validation and a fully-booked day.
 - `task_duration_exceeds_available_window.csv` / `end_of_day_boundary_1440.csv` — day-window and end-of-day boundary cases.
-- `zero_duration_task_invalid.csv` / `priority_out_of_range_invalid.csv` — CSV rows rejected by `Task`'s Pydantic validation (duration must be `> 0`; priority must be `1`-`10`).
+- `zero_duration_task_invalid.csv` — a CSV row rejected by validation (duration must be `> 0`).
+- `dependency_chain_linear.csv` — kept as a benchmark fixture; its `dependencies` column is ignored.
 
-`app/main.py` currently loads `valid_single_day_basic.csv` by default.
+`python -m app.main --demo` imports `valid_single_day_basic.csv`.
 
 ---
 
@@ -388,14 +280,11 @@ Currently, `valid_single_day_basic.csv` is used as the exported result from `app
 
 Contains the automated test suite, run with `python -m pytest`. It covers:
 
-- `test_constraints.py`: overlap detection, day-window bounds, duration and fixed-block checks, free-slot computation.
-- `test_pert.py`: dependency graph construction, cycle detection, topological order, and dependency-ready scheduling helpers.
-- `test_reward.py`: YAML-backed reward configuration loading and each scoring component (priority, preferred-time, neighboring-tag, and fragmentation-penalty scoring).
-- `test_optimizer.py`: the greedy optimizer end to end (fixed-block preservation, non-overlap, exact durations, day-window boundaries, dependency ordering and cycles, and unscheduled-task reporting).
-- `test_data_processor.py`: CSV loading for fixed and flexible tasks, dependency parsing, and malformed/missing input handling.
+- `test_day_engine.py`, `test_scheduling_modes.py`, `test_optimizer_candidates.py`, `test_optimizer_differential.py`: the day engine end to end, its five modes, and its candidate search (checked against an exhaustive reference).
+- `test_reward.py`: YAML-backed reward configuration loading and each scoring component (task weight, preferred-time, neighboring-tag, and fragmentation-penalty scoring).
 - `test_main_time_formatting.py`: CLI time-display and CSV export helpers, including the `minutes_to_time(1440)` midnight/noon boundary.
 - `execution/`, `productivity/`, `ui/`: the execution-tracking domain, productivity analytics, and desktop-UI-facing controllers.
-- `execution/test_migration_v3.py`, `test_storage_location.py`, `test_transactions.py`: schema upgrades, rollback, legacy database adoption, and transaction/thread safety.
+- `execution/test_migration_v*.py`, `test_storage_location.py`, `test_transactions.py`: schema upgrades, rollback, legacy database adoption, and transaction/thread safety.
 - `planning/test_planning_repository.py`, `test_application_service.py`, `test_csv_import.py`, `test_csv_export.py`: persisted planning data, deletion/replacement policy, and the CSV boundaries.
 - `ui/test_schedule_page_controller.py`, `test_app_services.py`: the desktop callback boundary, startup/shutdown, and restart behavior, all headless. `ui/test_desktop_app.py` drives the real Tk widgets and is skipped when no display is available.
 - `test_main_cli.py` and `test_milestone2_end_to_end.py`: the CLI startup contract and the full import → schedule → execute → reopen → export lifecycle.
@@ -408,20 +297,22 @@ CI (`.github/workflows/ci.yml`) runs `python -m pytest`, `python -m compileall .
 
 ## CSV Input Format
 
-The scheduler expects CSV files with columns similar to:
+The legacy schedule CSV has columns similar to:
 
 ```text
-date,name,category,tag,fixed,start_time,end_time,duration,priority,dependencies
+date,name,category,tag,fixed,start_time,end_time,duration
 ```
 
 Example:
 
 ```csv
-date,name,category,tag,fixed,start_time,end_time,duration,priority,dependencies
-1,Sleep,sleep,fixed,True,0,480,480,1,
-1,Study Math,study,math,False,540,720,120,10,
-1,Math Review,study,review,False,780,960,60,8,Study Math
+date,name,category,tag,fixed,start_time,end_time,duration
+1,Sleep,sleep,fixed,True,0,480,480
+1,Study Math,study,math,False,540,720,120
+1,Math Review,study,review,False,780,960,60
 ```
+
+Files written by older versions may also have `priority` and `dependencies` columns; they still import, and both columns are ignored (tasks have no priority or dependencies any more).
 
 Time values are stored as minutes from midnight:
 
@@ -443,38 +334,15 @@ Allowed categories: study, work, exercise, errand, food, entertainment, other
 
 ## How the Optimizer Works
 
-This section describes legacy Greedy Optimizer v1. The desktop and CLI use the canonical day engine and [five scheduling modes](docs/scheduling-modes.md).
+The desktop and CLI use the canonical day engine and [five scheduling modes](docs/scheduling-modes.md).
 
-First, all fixed tasks are placed into the schedule. These tasks act as blocked time ranges. Then the optimizer looks at all flexible tasks that still need to be scheduled.
+First, the fixed blocks (and any work kept from earlier, such as completed placements) are reserved as busy time. Then the engine looks at all flexible tasks that still need to be scheduled.
 
-For each flexible task, the optimizer scans the day in 30-minute increments. For every possible start time, it checks whether the task fits without overlapping existing scheduled tasks. If the placement is valid, the optimizer scores it using the reward function.
+For each flexible task, it finds the best valid start in every free interval of the day. It does not scan every minute: the reward is constant or linear between a small set of "event" points (window edges, neighbour gaps, the preferred window), so only those points and the best start between them are scored. Every candidate is checked against the hard constraints before it is scored.
 
-After every remaining task has been checked, the optimizer chooses the task and placement with the highest score. That task is permanently added to the schedule. The process repeats until no flexible tasks remain or no valid placement can be found.
+The engine then commits the task and placement with the highest score and repeats until no flexible tasks remain or no valid placement can be found. Required tasks that cannot be placed raise an explicit error; optional ones are reported as unscheduled with a reason.
 
-This approach is fast and understandable, but it is not guaranteed to find the global optimum. Since it locks in one task at a time, an early good choice may block a later better overall combination.
-
----
-
-## Dependency Behavior
-
-Dependencies are used to force one task to happen after another.
-
-Example:
-
-```text
-Math Review depends on Study Math
-```
-
-This means `Study Math` must finish before `Math Review` can start.
-
-The legacy name-based dependency system follows these rules; the desktop/CLI importer rejects missing or ambiguous references:
-
-- If a dependency exists in the task list, it is enforced.
-- If a dependency name is missing, it is ignored.
-- If dependencies form a cycle, the schedule is invalid.
-- If a task is scheduled before its dependency finishes, the dependency constraint fails.
-
-This keeps the scheduler flexible while still supporting real prerequisite relationships.
+This approach is fast and understandable, but it is not guaranteed to find the global optimum. Since it locks in one task at a time, an early good choice may block a later better overall combination; Early Finish and Night Owl repack the result within bounds.
 
 ---
 
@@ -518,7 +386,7 @@ To run only the desktop app and CLI (no web server, database server, or browser 
 pip install -r requirements-desktop.txt
 ```
 
-The desktop runtime needs `pydantic`, `PyYAML`, `customtkinter`, `pandas`, `scikit-learn`, `joblib`, `keyring` (saved sign-in), and `tzdata` (time zones on Windows). See [docs/desktop-web-boundaries.md](docs/desktop-web-boundaries.md) for how the desktop and the optional web components are kept apart.
+The desktop runtime needs `pydantic`, `PyYAML`, `customtkinter`, `keyring` (saved sign-in), and `tzdata` (time zones on Windows). See [docs/desktop-web-boundaries.md](docs/desktop-web-boundaries.md) for how the desktop and the optional web components are kept apart.
 
 ---
 
@@ -619,9 +487,9 @@ Prints (or exports) the same productivity analysis the desktop Productivity page
 
 There are three exports; only the stored-planning CSV and the exact JSON are exact:
 
-- **Stored planning CSV (format version 2):** desktop **Export CSV...** or CLI `--export-planning-csv`. It has one row per project, task, fixed block, and placement. Each row carries:
+- **Stored planning CSV (format version 3; version 2 files still import):** desktop **Export CSV...** or CLI `--export-planning-csv`. It has one row per project, task, fixed block, and placement. Each row carries:
   - ids and the owner;
-  - relationships (project, dependencies, placement task);
+  - relationships (project, placement task);
   - exact UTC and local intervals;
   - the fixed-block category and the recurrence rule;
   - placement metadata;
@@ -667,9 +535,9 @@ Load CSV or UI input
         ↓
 Build Task, FixedBlock, and DaySchedule objects
         ↓
-Place fixed tasks first
+Allocate a week or month to dates (points first)
         ↓
-Use PERT dependency logic to control task order
+Place fixed tasks first
         ↓
 Try valid placements for flexible tasks
         ↓
@@ -700,18 +568,9 @@ Execution history and persisted planning data (tasks, projects, fixed blocks, ge
 
 Override the directory with the `SCHEDULE_MAXING_DATA_DIR` environment variable (unchanged), or pass an explicit path (`get_connection(db_path=...)`, `--db-path` on the CLIs). The database and its schema are created and migrated automatically the first time the app or a CLI opens it.
 
-**Existing repository-local database (before Milestone 2 the default was `<project root>/data/executions.db`).** On the first default open (no explicit path, no `SCHEDULE_MAXING_DATA_DIR`), if that file exists and the per-user database does not, it is **copied** to the per-user location with SQLite's backup API (read-only on the source; written to a temporary file and only then linked into place) and then migrated there; a warning is logged. The original file is never modified, moved, or deleted — it stays behind as a backup you can remove yourself. If both files exist, nothing is copied or merged: the per-user database is used and the old one is left untouched. To keep using the old file in place instead, set `SCHEDULE_MAXING_DATA_DIR=<project root>/data`. An ML duration model saved under the old `data/` (`ml_duration_model.joblib` plus its `.meta.json`) is adopted the same way the first time it is loaded from the default location:
-
-- it is copied, never moved;
-- it is copied only as a complete pair;
-- an existing file is never overwritten;
-- nothing is copied when `SCHEDULE_MAXING_DATA_DIR` is set.
-
-See `app/productivity/ml_artifact_migration.py`.
+**Existing repository-local database (before Milestone 2 the default was `<project root>/data/executions.db`).** On the first default open (no explicit path, no `SCHEDULE_MAXING_DATA_DIR`), if that file exists and the per-user database does not, it is **copied** to the per-user location with SQLite's backup API (read-only on the source; written to a temporary file and only then linked into place) and then migrated there; a warning is logged. The original file is never modified, moved, or deleted — it stays behind as a backup you can remove yourself. If both files exist, nothing is copied or merged: the per-user database is used and the old one is left untouched. To keep using the old file in place instead, set `SCHEDULE_MAXING_DATA_DIR=<project root>/data`.
 
 `.gitignore` excludes `data/` and every SQLite file and side file (`*.db`, `*.sqlite`, `*.sqlite3`, `*-journal`, `*-wal`, `*-shm`), so none is ever committed.
-
-If you run `python -m app.productivity.predictor_comparison_cli --save-model` and the ML activation gate passes, the trained model is saved in the same directory as `ml_duration_model.joblib` plus a `ml_duration_model.meta.json` sidecar.
 
 ### Recording execution (desktop UI)
 
@@ -733,32 +592,7 @@ Figures are recomputed from saved records; reopening a completion removes its co
 
 In the task-entry form, once you've filled in a category and start time, click **Suggest duration from history** to see a historical prediction alongside your own entered duration, with the evidence behind it (e.g. "Based on 12 completed study tasks in the morning" or "Not enough history yet — using your original estimate"). The suggestion is never applied automatically — click **Use suggestion** to fill it into the (still freely editable) duration field yourself.
 
-This suggestion always comes from the median predictor described above (`app/productivity/prediction.py`) — it is the safe default and the only predictor the UI currently reads from. See the next section for an optional, separately evaluated machine-learning predictor that can only replace it once it has proven itself on your own real history.
-
-### Evidence-gated ML duration predictor (experimental, disabled by default)
-
-Alongside the median predictor, this repo includes an optional scikit-learn regression model, evaluated honestly against both the median predictor and your own original estimate before it is ever allowed to make a real prediction. This is not a claim that ML is better — it is a mechanism for finding out, on your own history, whether it actually is.
-
-**What it's allowed to see.** Only information known before a task begins: planned duration, category, tag, priority, planned start time (and the time-of-day bucket derived from it), day of week, and historical median-duration aggregates computed only from tasks completed *before* the task being predicted (a strict, chronologically-ordered "no future data" rule — see `app/productivity/ml_features.py`). It never sees actual duration, focus/energy/interruption feedback, or completion outcome as an input.
-
-**How it's evaluated.** `app/productivity/ml_evaluation.py` sorts your completed, plausible-duration history chronologically and splits it into a training set and a held-out test set by time (the most recent `--test-fraction`, default 20%) — never a random split. All three approaches are then scored on the exact same held-out test rows:
-- your original estimate,
-- the median predictor (re-run per test row using only the history that existed strictly before that row, so it doesn't get to "see" the test set either),
-- the ML model (an sklearn `Pipeline` — median/most-frequent imputation, one-hot encoding with unknown categories handled safely, and `Ridge` regression — trained only on the training rows).
-
-Reported for each: mean absolute error, median absolute error, percentage of predictions within 15 and within 30 minutes, sample counts, and the exact chronological cutoff.
-
-**Activation rule.** ML can only become active when *both* are true: your history clears configurable, conservative minimum-sample thresholds (defaults: 40 total / 25 train / 10 test observations), and its held-out mean absolute error is strictly lower than the median predictor's held-out mean absolute error on that same test set. If either condition fails, ML stays disabled and every prediction keeps coming from the median predictor — nothing about the existing "Suggest duration from history" behavior changes. The concrete numbers behind every enable/reject decision are recorded, never asserted without evidence.
-
-**Reproducing it yourself:**
-
-```bash
-python -m app.productivity.predictor_comparison_cli
-```
-
-Add `--format json` for machine-readable output, `--db-path` to point at a different execution database, `--min-total-samples`/`--min-train-samples`/`--min-test-samples`/`--test-fraction` to adjust the gate, and `--save-model` to persist the trained model (as `ml_duration_model.joblib` + `ml_duration_model.meta.json` under the same local data directory as `executions.db`) so it can be used at runtime — only written when the activation gate actually passes. Run `python -m app.productivity.predictor_comparison_cli --help` for the full list.
-
-On a fresh install (no completed execution history yet), this correctly reports "insufficient history" and leaves ML disabled — that is the expected, honest result, not an error.
+This suggestion always comes from the median predictor described above (`app/productivity/prediction.py`), the only duration predictor in the project.
 
 ### Exporting and resetting your data
 
@@ -780,7 +614,7 @@ This README does not embed screenshots of the desktop UI. To add your own: run `
 
 ## Schedule Maxing v2: Canonical Planning Architecture
 
-Alongside the original (Milestone 0) name/day-index-based scheduling described above, this codebase now also has a parallel **canonical** planning layer (`app/planning/`) built around stable UUID identity, real calendar dates, and aware UTC instants. Both layers coexist: `app/models.py`'s `Task`/`FixedBlock`/`ScheduledTask` and Greedy Optimizer v1 (`app/optimizer.py`'s `optimize_day_schedule`) are unchanged and remain available as the protected legacy baseline (`app/data_processor.py`, benchmarks, and tests). Since Milestone 2, the desktop app and the CLI run on the canonical layer and its SQLite persistence.
+The original (Milestone 0) name/day-index-based scheduling was replaced by a **canonical** planning layer (`app/planning/`) built around stable UUID identity, real calendar dates, and aware UTC instants. Since Milestone 2, the desktop app and the CLI run on the canonical layer and its SQLite persistence; Greedy Optimizer v1 and its legacy models (`app/models.py`, `app/constraints.py`, `app/data_processor.py`) have since been removed (ADR-047).
 
 ### Canonical models and identity
 
@@ -792,19 +626,19 @@ Alongside the original (Milestone 0) name/day-index-based scheduling described a
 
 ### Legacy CSV import and identity
 
-`app/planning/compat.py` converts legacy CSV rows (the same shape `app/data_processor.py` reads) into canonical models via `import_legacy_csv_rows(rows, anchor_date=..., tz_name=...)`. The anchor date is always explicit — day 1 == `anchor_date`, day N == `anchor_date + (N-1)` days — and is never inferred from today's date. IDs are minted fresh on every import; **re-running an import on the same CSV does not preserve identity across runs** (only a canonical JSON document, once created, preserves identity across edits/reloads — see below). Dependency-name resolution prefers an exact full-name match (so a hyphenated task name like `Pre-Calc Review` is never mis-split), accepts explicit semicolon-separated references, falls back to the old hyphen-delimited convention only when it resolves unambiguously, and reports (rather than guesses at) an ambiguous duplicate-name reference or a genuinely missing one. The persistence importer used by the desktop app and CLI (`app/planning/csv_import.py`) applies the same rules across the whole file, and treats those reports as errors that reject the file (see [Saved data](#saved-data-sqlite-import-export-reset-and-backups-milestone-2)).
+`app/planning/compat.py` converts legacy CSV rows into canonical models via `import_legacy_csv_rows(rows, anchor_date=..., tz_name=...)`. The anchor date is always explicit — day 1 == `anchor_date`, day N == `anchor_date + (N-1)` days — and is never inferred from today's date. IDs are minted fresh on every import; **re-running an import on the same CSV does not preserve identity across runs** (only a canonical JSON document, once created, preserves identity across edits/reloads — see below). A legacy `dependencies` or `priority` column is read and ignored.
 
 ### YAML reward configuration
 
-`app/reward.py` now discovers `config/task_preference.yaml` (singular) automatically, anchored to this project's own directory rather than the current working directory (no ancestor/home-directory walking). Precedence: an explicit `config_path` always wins; otherwise the canonical singular filename; otherwise a recognized legacy filename in the same `config/` directory (`task_preferences.yaml` plural, `task_prefrence.yaml`/`.yml`, `task_preference.yml`), for anyone who already created a config file under an older name; otherwise built-in defaults. The checked-in template lists the five primary categories (`health`, `enjoyment`, `study`, `work`, `chores`) at a neutral `1.0` multiplier each; any other category name remains valid and falls back to `1.0`.
+`app/reward.py` now discovers `config/task_preference.yaml` (singular) automatically, anchored to this project's own directory rather than the current working directory (no ancestor/home-directory walking). Precedence: an explicit `config_path` always wins; otherwise the canonical filename; otherwise built-in defaults (the older misspelled and plural filenames are no longer read). The checked-in template lists the five primary categories (`health`, `enjoyment`, `study`, `work`, `chores`) at a neutral `1.0` multiplier each; any other category name remains valid and falls back to `1.0`.
 
 ### Per-day preferences
 
-`app/planning/preferences.py`'s `DayPreferences`/`resolve_day_preferences` layer, in increasing precedence: built-in defaults → the YAML template → an optional in-memory "user" override → a date-specific override. For the two per-category maps (`category_multipliers`, `category_preferred_windows`), a layer distinguishes an *absent* key (inherit unchanged) from an *explicit* value (override, including a deliberate `0.0`) from an *explicit `None`* (clear a lower layer's override). Every resolution returns independent data — editing one date's override can never mutate another date's, the YAML layer, or an already-resolved `DayPreferences`. `day_preferences_to_reward_settings` adapts a resolved `DayPreferences` into the legacy `RewardSettings` shape so the frozen scoring formula (`priority × importance_weight × category_multiplier × task_multiplier`) is reused unchanged; a category multiplier of `1.0` always leaves scoring unaffected.
+`app/planning/preferences.py`'s `DayPreferences`/`resolve_day_preferences` layer, in increasing precedence: built-in defaults → the YAML template → an optional in-memory "user" override → a date-specific override. For the two per-category maps (`category_multipliers`, `category_preferred_windows`), a layer distinguishes an *absent* key (inherit unchanged) from an *explicit* value (override, including a deliberate `0.0`) from an *explicit `None`* (clear a lower layer's override). Every resolution returns independent data — editing one date's override can never mutate another date's, the YAML layer, or an already-resolved `DayPreferences`. `day_preferences_to_reward_settings` adapts a resolved `DayPreferences` into `RewardSettings`, whose task-weight term is `weight_importance × category_multiplier`; a category multiplier of `1.0` always leaves scoring unaffected.
 
 ### The canonical day engine: precise_greedy and adhd_friendly
 
-`app/optimizer.py`'s `generate_day_schedule(day_schedule, preferences, ...)` is the canonical counterpart to Greedy Optimizer v1, evolved in the same module rather than as a separate stack. Five scheduling modes are selected via `DayPreferences.optimizer_mode` (default: `precise_greedy`). The two baseline candidate policies are:
+`app/optimizer.py`'s `generate_day_schedule(day_schedule, preferences, ...)` is the day engine (it replaced Greedy Optimizer v1, which was evolved in the same module and has since been removed). Five scheduling modes are selected via `DayPreferences.optimizer_mode` (default: `precise_greedy`). The two baseline candidate policies are:
 
 - **`precise_greedy`** — one-minute candidate resolution, no global snapping; a task starts the instant it becomes feasible (e.g. immediately at 10:13).
 - **`adhd_friendly`** — a task longer than 30 minutes starts only on a local wall-clock quarter-hour boundary; a task at or under 30 minutes may start on any valid minute, exactly like `precise_greedy`. Durations are never rounded or split in either mode.
@@ -813,19 +647,19 @@ Both modes share the same hard constraints and base scoring, plus a **bounded, A
 
 Early Finish and Night Owl add bounded repacking of the baseline work set; Catch-Up adds evidence-gated history bonuses. All five retain the same hard rules. See [mode objectives](docs/scheduling-modes.md).
 
-**Mandatory scheduling**: fixed blocks are placed first, then every `required` task plus the full transitive closure of its dependencies (an optional prerequisite of a required task is scheduled as essential for that run without mutating its own stored `required` flag), then optional tasks. A successful `DayScheduleOutput` always contains every required task exactly once; otherwise `generate_day_schedule` raises `MandatoryTaskSchedulingError` with one structured `MandatoryTaskFailure` per affected task (a reason code, an explanation, and `proven_infeasible` — `True` only when a coarse capacity/individual-fit bound *proves* no placement could succeed, `False` when this particular greedy run simply failed to find one). This is a greedy engine, not an exact solver, and never overstates a greedy failure as mathematical infeasibility.
+**Mandatory scheduling**: fixed blocks are placed first, then every `required` task, then optional tasks. A successful `DayScheduleOutput` always contains every required task exactly once; otherwise `generate_day_schedule` raises `MandatoryTaskSchedulingError` with one structured `MandatoryTaskFailure` per affected task (a reason code, an explanation, and `proven_infeasible` — `True` only when a coarse capacity/individual-fit bound *proves* no placement could succeed, `False` when this particular greedy run simply failed to find one). This is a greedy engine, not an exact solver, and never overstates a greedy failure as mathematical infeasibility.
 
 **Identity across regenerations**: pass a prior `DayScheduleOutput` as `previous_result` and an unchanged placement (same task, same interval) keeps its placement id; any other placement (new, or the same task moved to a different interval) gets a fresh id — an existing execution record pointing at the old placement is never silently redirected.
 
-Provisional performance: see `benchmarks/FINAL_COMPARISON.md` — under matched scoring configuration, the canonical engine reproduces Greedy Optimizer v1's score exactly on simple fixtures and slightly *exceeds* it on more contended ones (finer resolution finds marginally better placements). See the next section for how that resolution is now found without scoring every minute, and `benchmarks/EVENT_CANDIDATE_COMPARISON.md` for the current (post-event-search) timing.
+Performance: see the next section for how minute resolution is found without scoring every minute, and `benchmarks/EVENT_CANDIDATE_COMPARISON.md` for the current timing.
 
 ### Exact event-based candidate search (Task 6)
 
-`_best_candidate_for_canonical_task`/`_best_candidate_for_task` (Greedy Optimizer v1's own placement search) no longer score every feasible minute to find a task's best placement. One-minute precision does **not** require one-minute enumeration: each free interval is decomposed into a small set of analytically-derived candidate starts ("events") — every point where some reward component's closed form could change (a preferred-window boundary, its center and decay zero-crossings, a neighbor's related-tag or fragmentation gap threshold, a bounded ADHD short-gap-bonus zone) — plus a provably-monotonic binary search (`_earliest_best_in_continuous_range`) between consecutive events to find the *exact* earliest minute achieving the real, rounded `calculate_task_score`'s maximum, even across a long, nearly-flat rounded-score plateau. The ADHD short-gap bonus's own internal rounding is handled by exhaustively evaluating only its small, bounded "active zone" (at most `min_gap_between_tasks_minutes` wide) rather than being trusted to keep a region monotonic. See `app/optimizer.py`'s "Shared event-search machinery" section docstring for the full breakdown of which reward component drives which candidate point, and for why every omitted minute provably cannot improve on — or win an earlier-start tie against — an evaluated one.
+`_best_candidate_for_canonical_task` no longer scores every feasible minute to find a task's best placement. One-minute precision does **not** require one-minute enumeration: each free interval is decomposed into a small set of analytically-derived candidate starts ("events") — every point where some reward component's closed form could change (a preferred-window boundary, its center and decay zero-crossings, a neighbor's related-tag or fragmentation gap threshold, a bounded ADHD short-gap-bonus zone) — plus a provably-monotonic binary search (`_earliest_best_in_continuous_range`) between consecutive events to find the *exact* earliest minute achieving the real, rounded `calculate_task_score`'s maximum, even across a long, nearly-flat rounded-score plateau. The ADHD short-gap bonus's own internal rounding is handled by exhaustively evaluating only its small, bounded "active zone" (at most `min_gap_between_tasks_minutes` wide) rather than being trusted to keep a region monotonic. See `app/optimizer.py`'s "Shared event-search machinery" section docstring for the full breakdown of which reward component drives which candidate point, and for why every omitted minute provably cannot improve on — or win an earlier-start tie against — an evaluated one.
 
-`adhd_friendly` tasks over the 30-minute threshold, and every Greedy Optimizer v1 (legacy) candidate, are grid-constrained rather than 1-minute; since a grid already bounds the candidate count (≤96 quarter-hour points, ≤48 half-hour points, even for a full day), those candidates are evaluated directly rather than run through the monotonic-search machinery — grid-constrained "event search" is exhaustive-on-its-own-lattice by construction, not a further reduction. Legacy's 30-minute lattice and its exact snapping/scoring behavior are otherwise unchanged; it is not silently turned into a canonical consumer.
+`adhd_friendly` tasks over the 30-minute threshold are grid-constrained rather than 1-minute; since a grid already bounds the candidate count (≤96 quarter-hour points, even for a full day), those candidates are evaluated directly rather than run through the monotonic-search machinery — grid-constrained "event search" is exhaustive-on-its-own-lattice by construction, not a further reduction.
 
-An independent, deliberately-separate **exhaustive reference** for each search (`_best_candidate_for_canonical_task_exhaustive`, `_best_candidate_for_task_exhaustive`) is kept in `app/optimizer.py` for tests and benchmarks only — never called by `generate_day_schedule`/`optimize_day_schedule` (see `tests/test_optimizer_differential.py`'s spy test). `tests/test_optimizer_candidates.py` and `tests/test_optimizer_differential.py` compare the two exhaustively across seeded scenarios (durations, both modes, signed/zero weights, near-cancelling slopes, thresholds, dependency/mandatory cases) and assert exact score and earliest-start parity, plus a substantial (order-of-magnitude, on a large sparse interval) reduction in real `calculate_task_score` calls. `python -m benchmarks.event_candidate_comparison` (see `benchmarks/EVENT_CANDIDATE_COMPARISON.md`) benchmarks the two on real workloads and fails loudly on any semantic mismatch.
+An independent, deliberately-separate **exhaustive reference** (`_best_candidate_for_canonical_task_exhaustive`) is kept in `app/optimizer.py` for tests and benchmarks only — never called by `generate_day_schedule` (see `tests/test_optimizer_differential.py`'s spy test). `tests/test_optimizer_candidates.py` and `tests/test_optimizer_differential.py` compare the two exhaustively across seeded scenarios (durations, both modes, signed/zero weights, near-cancelling slopes, thresholds, mandatory cases) and assert exact score and earliest-start parity, plus a substantial (order-of-magnitude, on a large sparse interval) reduction in real `calculate_task_score` calls. `python -m benchmarks.event_candidate_comparison` (see `benchmarks/EVENT_CANDIDATE_COMPARISON.md`) benchmarks the two on real workloads and fails loudly on any semantic mismatch.
 
 Four narrowly-scoped regressions surfaced while building this and were fixed first, before the exhaustive reference was written (so it reflects intended, not buggy, behavior):
 - A day whose usable window did not start at local midnight compared a task's preferred window (local minutes-from-midnight) directly against day-window-relative offsets — silently shifting the effective preferred window by the day's own start offset. Fixed in `_best_candidate_for_canonical_task` via `_normalize_preferred_window`.
@@ -835,7 +669,7 @@ Four narrowly-scoped regressions surfaced while building this and were fixed fir
 
 ### Week/month allocation vs. selected-day generation
 
-`app/planning/allocation.py`'s `allocate_tasks` decides **which date** each task goes on across a real date range (`week_dates`/`month_dates` use actual calendar arithmetic, including leap Februarys and year boundaries) — it never computes a minute-level start/end time and never calls the day engine (verified in tests and benchmarks via an instrumented spy, not inferred from timing). It reserves fixed-block occupancy and schedules required tasks (plus their dependency closure) before optional ones, respects `required_date`/deadlines/cross-date dependency ordering, and ranks feasible dates deterministically (preferred dates, then the day's own category preference, then remaining capacity, then earliest date as the final tie-break). A required task that cannot be placed is reported in `unallocated` with `required=True` — allocation itself never raises, so a partial result (e.g. "11 of 12 required tasks fit this week") stays useful. Allocation succeeding does not prove a full intra-day schedule exists: `app/planning/service.py`'s `generate_selected_day` is the only thing that actually calls the day engine, exactly once, for exactly one explicitly selected date — never the rest of the week/month, and a coarse-feasible allocation can still legitimately fail at that detailed stage (and does so loudly, via the same `MandatoryTaskSchedulingError`). `DayResultStatus` (`allocated` / `generated` / `stale`) tracks this: a fresh allocation run marks every previously generated day stale rather than leaving it looking current.
+`app/planning/allocation.py`'s `allocate_tasks` decides **which date** each task goes on across a real date range (`week_dates`/`month_dates` use actual calendar arithmetic, including leap Februarys and year boundaries) — it never computes a minute-level start/end time and never calls the day engine (verified in tests and benchmarks via an instrumented spy, not inferred from timing). It reserves fixed-block occupancy and allocates required tasks before optional ones; within each tier, higher-points tasks claim dates first (then the earliest deadline, the longer task, and id). It respects `required_date`/deadlines and ranks feasible dates deterministically (preferred dates, then the day's own category preference, then remaining capacity, then earliest date as the final tie-break). A required task that cannot be placed is reported in `unallocated` with `required=True` — allocation itself never raises, so a partial result (e.g. "11 of 12 required tasks fit this week") stays useful. Allocation succeeding does not prove a full intra-day schedule exists: `app/planning/service.py`'s `generate_selected_day` is the only thing that actually calls the day engine, exactly once, for exactly one explicitly selected date — never the rest of the week/month, and a coarse-feasible allocation can still legitimately fail at that detailed stage (and does so loudly, via the same `MandatoryTaskSchedulingError`). `DayResultStatus` (`allocated` / `generated` / `stale`) tracks this: a fresh allocation run marks every previously generated day stale rather than leaving it looking current.
 
 ### CLI (Task 6, SQLite-backed since Milestone 2)
 
@@ -855,12 +689,12 @@ An ID-less legacy CSV gets new ids on every import (see below).
 
 ### Planning persistence (Milestone 2)
 
-Introduced in schema version 3 and extended by later migrations (`app/execution/db.py`, the same migration chain as execution history), the store keeps the canonical planning entities relationally: `projects`, `tasks` with queryable columns (required date, preferred window, deadline plus a normalized UTC twin, recurrence fields, ownership, `created_at`/`updated_at`/`version`) and child tables for tags, preferred dates, dependencies, and recurrence weekdays; `fixed_blocks`; and `scheduled_tasks` placements (only the arbitrary `optimization_metadata` is a small JSON column). Instants keep their original UTC offset for an exact round trip. Planning repositories own SQL access; `app/planning/application.py`'s `PlanningService` owns the rules (task CRUD, fixed blocks, range loading, scoped placement saving), and `PlanningController` now delegates every authoritative read/write to it — returned models are fresh snapshots, while allocation previews remain transient and saved schedule records persist freshness inputs across restarts. Generating a day saves that date's placements, reusing stored placement ids for unchanged placements so linked execution history survives regeneration and restarts.
+Introduced in schema version 3 and extended by later migrations (`app/execution/db.py`, the same migration chain as execution history), the store keeps the canonical planning entities relationally: `projects`, `tasks` with queryable columns (required date, preferred window, deadline plus a normalized UTC twin, recurrence fields, ownership, `created_at`/`updated_at`/`version`) and child tables for tags, preferred dates, and recurrence weekdays (schema v19 dropped the dependencies table and the priority column); `fixed_blocks`; and `scheduled_tasks` placements (only the arbitrary `optimization_metadata` is a small JSON column). Instants keep their original UTC offset for an exact round trip. Planning repositories own SQL access; `app/planning/application.py`'s `PlanningService` owns the rules (task CRUD, fixed blocks, range loading, scoped placement saving), and `PlanningController` now delegates every authoritative read/write to it — returned models are fresh snapshots, while allocation previews remain transient and saved schedule records persist freshness inputs across restarts. Generating a day saves that date's placements, reusing stored placement ids for unchanged placements so linked execution history survives regeneration and restarts.
 
 - **Migrations** are ordered, contiguous, and each runs in one transaction with its `user_version` bump; a failure rolls that migration back completely and leaves the previous version usable. `PRAGMA foreign_key_check` must pass before each migration commits and `PRAGMA quick_check` after all of them; a database newer than the code is refused. Foreign keys stay enabled on every normal connection.
 - **Transactions**: connections run in autocommit mode and `transaction()` owns every transaction. The outermost call begins/commits; nested calls (a repository method inside a service operation) are savepoints that can never commit early. Each `ExecutionService` mutation (e.g. start = status change + new session + first-start time) is one transaction. A per-connection re-entrant lock, shared by every repository on that connection, is held for a whole transaction, so background-thread work cannot interleave with it.
 - **Execution ↔ planning links**: `executions.task_id`/`scheduled_task_id` are historical identity, not cascading foreign keys. Rows from before v3 keep their ids even though their tasks/placements were never persisted: nothing is fabricated and no date is guessed. Newly created executions must reference a persisted task (and a persisted placement of that same task), enforced by triggers. Once written, those ids are immutable.
-- **Deletion/replacement**: deleting a task that another task still depends on, or a project that still has tasks, is refused. Deleting a task removes its placements too. Since Milestone 3, deletions are tombstones (see the next section). `replace_placements(start, end, ...)` only touches placements dated inside that range, and refuses to move one from outside it. Execution history is never deleted, changed, or used to block an edit. A removed history-linked placement is reported back, and its executions keep their ids and planned snapshot.
+- **Deletion/replacement**: deleting a project that still has tasks is refused. Deleting a task removes its placements too. Since Milestone 3, deletions are tombstones (see the next section). `replace_placements(start, end, ...)` only touches placements dated inside that range, and refuses to move one from outside it. Execution history is never deleted, changed, or used to block an edit. A removed history-linked placement is reported back, and its executions keep their ids and planned snapshot.
 - **Range eligibility** follows allocation's own hard date rules. A task with `required_date` is eligible only when that date is inside the range. Otherwise, a task with a deadline is eligible when the deadline is not before the first instant of the range's start date in the planning timezone (its *local* date, never its UTC date; Milestone 4 preflight). Every other task is eligible. The order is `(created_at, id)`.
 
 ### Sync-ready local records (Milestone 3)
@@ -878,9 +712,8 @@ Schema version 4 prepares the local store for a later synchronization milestone.
 - **Version numbers.** Each logical change adds exactly 1 to the version. For an execution, that includes its work sessions and feedback.
 - **Soft deletion.** Deleting a record keeps it as a tombstone, so history stays and the id is never reused.
 - **Saved preferences.** The user preference layer and per-date layers, including the scheduler mode, are stored in SQLite. They keep the YAML -> user -> date order, and they stay the same after a restart.
-- **Schedule records.** Every Make Schedule run saves a record of what each date was generated from, in the same transaction as the placements. That includes dates where nothing was placed. After a restart, an unchanged schedule is shown as current, and one whose tasks, fixed blocks, preferences, mode, or timezone changed is shown as out of date. Schedules saved before this version have no record and are shown as out of date.
+- **Schedule records.** Every Make Schedule run saves a record of what each date was generated from, in the same transaction as the placements. That includes dates where nothing was placed. After a restart, an unchanged schedule is shown as current, and one whose tasks (points included), fixed blocks, preferences, mode, or timezone changed is shown as out of date. Schedules saved before this version have no record and are shown as out of date.
 - **Make Schedule never touches other dates.** Since Milestone 6 a run writes only the dates it schedules. A task that already has a placement on another date is left there and listed ("already planned on ...; left there") instead of being moved silently; moving it is an explicit reschedule. See `app/planning/occurrence.py` and [docs/execution-rescheduling.md](docs/execution-rescheduling.md#scope-milestone-6).
-- **Dependencies outside the range.** Make Schedule now checks dependencies that fall outside the scheduled dates against saved data. A dependency counts as done if it was completed, or if it has a generated placement before the range. A skipped, cancelled, pending, or missing dependency blocks its dependent, and the reason names which of these it was. See `app/planning/external_dependencies.py`.
 
 ### Milestone 4 preflight: domain repairs for the web UI
 
@@ -945,7 +778,7 @@ The desktop task form no longer creates repeating tasks (1.1.0); existing, impor
 
 - **Validation first.** The whole file is validated before anything is written, and any problem rejects the whole file with line numbers.
 - **Anchor.** Day 1 is the page's start date (desktop) or `--anchor-date` (CLI).
-- **Dependencies.** They are resolved across the whole file: the same day's names first, then the rest of the file if the name is unique. A missing or ambiguous (duplicate-name) reference, a self-reference, a cycle, or overlapping fixed blocks is an error, never guessed or silently dropped. The standalone `app/planning/compat.py` adapter keeps its legacy drop-and-report behavior for its own callers.
+- **Fixed blocks.** Overlapping fixed blocks are an error, never guessed or silently dropped. A `priority` or `dependencies` column from an older file is ignored.
 - **Identity.** Legacy rows have no ids, so every import creates new entities; appending the same file twice stores it twice. A stored-planning CSV exported by this app does keep ids. It is recognized by its header and merged by id:
   - a row identical to the saved record is skipped;
   - a differing row is refused by default; the canonical import preview or CLI `--allow-updates` can apply updates if the imported version matches the saved version;
@@ -953,10 +786,10 @@ The desktop task form no longer creates repeating tasks (1.1.0); existing, impor
 
   Replace does not apply to such a file.
 - **Append** adds every row.
-- **Replace** first deletes the placements, fixed blocks, and tasks planned on every date from the file's first to its last day, then adds the file. Undated tasks and anything outside that span are kept. Execution history is kept too, including history linked to replaced placements. If a task outside the span depends on one inside it, the whole import is refused.
+- **Replace** first deletes the placements, fixed blocks, and tasks planned on every date from the file's first to its last day, then adds the file. Undated tasks and anything outside that span are kept. Execution history is kept too, including history linked to replaced placements.
 - **All or nothing.** Any failure, including during a replace's deletions, rolls back everything.
 
-**Reset** (desktop **Reset...**) has two explicit scopes for the page's dates: *only the saved schedule*, or *schedule, fixed blocks, and tasks planned on these dates*. Both require confirmation, and neither deletes execution history; Settings has a separate **Reset all task data** action that includes history. Deleting a task that another task depends on is refused with the dependent's name.
+**Reset** (desktop **Reset...**) has two explicit scopes for the page's dates: *only the saved schedule*, or *schedule, fixed blocks, and tasks planned on these dates*. Both require confirmation, and neither deletes execution history; Settings has a separate **Reset all task data** action that includes history.
 
 **Export** reads SQLite and never writes to it. See [Output Format](#output-format) for what each export contains and which ones are lossy. Raw execution exports are available through the execution export helpers; the current Productivity page does not expose export controls.
 
@@ -964,7 +797,7 @@ The desktop task form no longer creates repeating tasks (1.1.0); existing, impor
 
 **Visual check.** The desktop flow was smoke-tested on Windows with a display: create, edit, and delete; Make Schedule; mark a task completed on the Day board; close and reopen with the tasks, schedule, and completed status restored; Reset; CSV import and export. `tests/ui/test_desktop_app.py` automates the same flow wherever a display exists. Manual checklist for other platforms:
 1. `python -m app.app` opens on the Day page for today, with no sample data.
-2. Add a fixed block and two tasks with the same name, edit one, delete one, and pick a dependency from the table.
+2. Add a fixed block and two tasks with the same name, edit one, and delete one.
 3. Run Make Schedule; the status says the saved schedule is current.
 4. Mark a scheduled task completed (→ on the Day board), close the app, and reopen it. The tasks and schedule are there, the schedule is labelled current (nothing changed), and the task is still in Completed. Edit a task, and the schedule is labelled out of date.
 5. Upload a CSV with Append and then Replace, try an invalid CSV (nothing changes), use Export CSV..., and use Reset... with each scope.
@@ -974,13 +807,11 @@ The desktop task form no longer creates repeating tasks (1.1.0); existing, impor
 ## Current Limitations
 
 - The optimizer is greedy and does not guarantee the global best schedule.
-- The legacy engine locks placements during a run. Canonical Early Finish and Night Owl can repack newly scheduled work; manual and history-protected placements remain fixed.
-- Some settings related to simulated annealing are present but not fully used by the current optimizer.
-- Legacy optimizer error messages for unscheduled tasks are general (`"not enough valid space or unresolved dependency cycle"`) and could become more specific in the future. Actual dependency cycles are instead reported precisely and immediately, as a `ValueError`, before scheduling even starts.
-- **(Fixed)** Reward-config file discovery previously did not match the checked-in filename — the checked-in file was `config/task_preferences.yaml` (plural) but default discovery only looked for singular/misspelled variants, so it silently never found it. The checked-in template is now `config/task_preference.yaml` (singular), matching default discovery exactly; see `app/reward.py`'s module docstring for the full precedence (explicit `config_path` > canonical `config/task_preference.yaml` > a recognized legacy filename in `config/` > built-in defaults). `tests/test_reward.py` covers this precedence directly.
-- **The legacy CSV loader keeps its hyphen bug.** `app/data_processor.py` (the legacy Greedy Optimizer v1 input path) still splits a flexible task's `dependencies` field only on `"-"`, so a hyphenated dependency name such as `Pre-Calc Review` is mis-split. `tests/test_data_processor.py` characterizes this as current behavior. The desktop app and CLI no longer use that loader: their importer applies `app/planning/compat.py`'s rules (a whole-name match first, so hyphenated names are preserved).
+- The engine locks placements during a run. Early Finish and Night Owl can repack newly scheduled work; manual and history-protected placements remain fixed.
+- Tasks have no dependencies or priority (removed everywhere, ADR-048): a dependency between saved tasks is dropped on upgrade, and every saved schedule shows as out of date once.
+- **(Fixed)** Reward-config file discovery previously did not match the checked-in filename — the checked-in file was `config/task_preferences.yaml` (plural) but default discovery only looked for singular/misspelled variants, so it silently never found it. The checked-in template is now `config/task_preference.yaml` (singular), matching default discovery exactly; the precedence is explicit `config_path` > `config/task_preference.yaml` > built-in defaults (the older misspelled and plural names are no longer read). `tests/test_reward.py` covers this precedence directly.
 - `weight_category_bonus` is loaded from YAML (`weights.category_bonus`) into `RewardSettings` but is not read anywhere in `calculate_task_score` — only the separate `category_weights` per-category multiplier dict actually affects scoring. `tests/test_reward.py` characterizes this as current behavior.
-- Fixed-block validation (`app.constraints.validate_fixed_blocks`) is now enforced by the shared optimizer (`app/optimizer.py`'s `optimize_day_schedule`/`combine_fixed_and_optimized_scheduled_tasks`) in addition to the desktop UI's own pre-existing checks: overlapping, non-positive, or out-of-day-window fixed blocks are rejected with a `ValueError` before scheduling begins, for both the CLI and UI entry points.
+- Fixed blocks are validated when written (`app/planning/fixed_block_rules.py`) and again by the day engine: overlapping, non-positive, or out-of-day-window fixed blocks are rejected before scheduling begins, for both the CLI and UI entry points.
 - Legacy executions (created before Milestone 2, or through `ExecutionService.create_execution`) are still identified by their planned snapshot, and their weekday statistics use when the record was created. Desktop executions are now canonical: identified by task/placement id, with real planned dates.
 - The planning timezone defaults to the computer's own zone. On Windows it is mapped from the registry's zone name with CLDR's table; an unknown name falls back to a whole-hour `Etc/GMT` zone from the current offset (no daylight-saving rules), else `UTC`. Set `SCHEDULE_MAXING_TIMEZONE` to choose one explicitly.
 - A schedule counts as out of date when anything in its date range changes, even a change that would not move any of its placements.
@@ -989,7 +820,6 @@ The desktop task form no longer creates repeating tasks (1.1.0); existing, impor
 - The backend supports SMTP-based password recovery, rotating native refresh credentials, session revocation and database-backed rate limits. Account deletion and email verification are not provided. Tombstones and the change log are not compacted.
 - History deletion through the service layer synchronizes as deletion of the account's executions; Settings offers the broader Reset all task data operation.
 - Legacy schedule CSVs carry no ids, so they are always imported as new records. Only the stored-planning CSV keeps ids.
-- The ML duration predictor is evidence-gated and, on a typical personal-scale history, is expected to stay disabled (the stock test fixture's 19 completed tasks are well below its default 40/25/10 sample thresholds) — this is by design, not a defect. It is not wired into the desktop UI; use `python -m app.productivity.predictor_comparison_cli` to evaluate and, if it qualifies, persist it.
 - The event-based candidate search's rounding-aware tie-breaking (see "Exact event-based candidate search" above) relies on the real, rounded `calculate_task_score` staying monotonic across an analytically-derived region; this holds exactly for real-number arithmetic and is validated empirically (fuzz-tested and differentially tested against an independent exhaustive reference across tens of thousands of scenarios, with zero mismatches found) rather than machine-checked for every possible floating-point evaluation order at astronomically extreme weight magnitudes.
 
 ### Milestone 4 desktop presentation
@@ -997,7 +827,7 @@ The desktop task form no longer creates repeating tasks (1.1.0); existing, impor
 The desktop UI now uses the shared services directly, with the optional web API kept separate.
 
 - **Calendars:** a Monday-first Week and a true Month calendar open selected dates on Day and preserve navigation context.
-- **Task form:** minute-precise times/durations, multiple tags, project/dependency choices and fixed-block validation before saving.
+- **Task form:** minute-precise times/durations, multiple tags, project choices and fixed-block validation before saving.
 - **Day:** category-colored timeline, backlog, free gaps, current/stale status, explicit incremental generation and confirmed regeneration/reset.
 - **Engines:** all five scheduling modes are beside Make Schedule. Day Preferences override persisted defaults without changing other dates.
 - **Projects:** project CRUD and assignments, display filters.
@@ -1057,10 +887,9 @@ Backend deployment is off until an operator sets the repository variable `BACKEN
 `benchmarks/` holds reproducible, standard-library-only performance scripts and their recorded results/method docs — none of them run as part of `pytest`/CI:
 
 ```bash
-python -m benchmarks.optimizer_baseline            # Greedy Optimizer v1 (see BASELINE.md)
 python -m benchmarks.day_engine_baseline           # canonical engine, both modes (see DAY_ENGINE_BASELINE.md)
 python -m benchmarks.allocation_baseline           # week/month allocation (see ALLOCATION_BASELINE.md)
-python -m benchmarks.final_comparison              # legacy vs. canonical under matched config (see FINAL_COMPARISON.md)
+python -m benchmarks.scheduling_mode_baseline --check benchmarks/results/prompt1_scheduling_mode_baseline.json  # Normal/ADHD drift
 python -m benchmarks.event_candidate_comparison    # event search vs. its own exhaustive reference (see EVENT_CANDIDATE_COMPARISON.md)
 ```
 
@@ -1073,11 +902,8 @@ Possible next steps:
 - Add more detailed unscheduled-task reasons.
 - Add a true simulated annealing optimizer as an alternative to the greedy optimizer.
 - Add schedule comparison metrics.
-- Add better warnings for ignored missing dependencies.
 - Add drag-and-drop task editing in the UI.
 - Feed productivity-derived duration predictions back into the optimizer as an opt-in input (currently the suggestion is shown but never applied automatically).
-- Add a real calendar-date mapping for the abstract day-index schedule model in the *legacy* pipeline (largely superseded by the canonical layer's real `datetime.date`, but the legacy `app/models.py` path itself still uses abstract day indexes).
-- If real usage history grows enough to clear the ML activation gate, surface the comparison result (and, once it wins honestly, the ML suggestion itself) in the desktop UI's duration-suggestion widget alongside the median predictor.
 - Implement project archiving; project CRUD, assignment and recurring series ([docs/recurrence.md](docs/recurrence.md)) are already available.
 
 ---
@@ -1086,7 +912,7 @@ Possible next steps:
 
 The project has these parts:
 
-- **Scheduling:** the original Milestone 0 greedy engine (the frozen baseline), and a canonical, UUID-identity-based day engine with five scheduling modes and week/month task-to-date allocation.
+- **Scheduling:** a canonical, UUID-identity-based day engine with five scheduling modes and points-first week/month task-to-date allocation (the Milestone 0 engine was removed).
 - **Persistence (Milestone 2):** a local SQLite store for all planning data and execution history, behind a transactional service boundary.
 - **Desktop app (Milestone 4):** reads and writes that store directly, with Day/Week/Month calendars, project management and milestones, five scheduling modes, default/date preferences, account/sync/conflict controls, CSV import/export, scoped resets, and restart-safe execution tracking.
 - **CLI:** the same persistence-backed pipeline.
@@ -1097,7 +923,7 @@ The project has these parts:
   - the stored-planning CSV imports back with the same ids.
 - **Server backend (Milestone 3):** FastAPI + PostgreSQL, with accounts (Argon2, JWT), per-user versioned records, soft deletion, and a commit-ordered change feed. See [docs/backend.md](docs/backend.md). [docs/render-deployment.md](docs/render-deployment.md) describes manual deployment; service availability is not guaranteed by this checkout.
 - **Offline-first sync (Milestone 3):** retries are safe, conflicts are stored and resolved explicitly, and guest data is adopted during account creation, while existing-account sign-in offers explicit association. See [docs/sync-protocol.md](docs/sync-protocol.md).
-- **Also:** reward-based optimization, PERT-style dependency handling (name- and id-based), personal productivity analytics, and an evidence-gated experimental ML duration predictor.
+- **Also:** reward-based optimization and personal productivity analytics.
 
 Automated coverage includes native desktop workflows (`python -m pytest`, which needs no external server, Docker, or PostgreSQL; native widget tests require a display). Real PostgreSQL verification is optional and explicit: see [docs/backend.md](docs/backend.md#tests). Remaining roadmap items include project archiving. See [testing](docs/testing.md) for verification commands and [Windows distribution](docs/windows-distribution.md) for installer, release and updater checks. Milestone reports record historical checks.
 

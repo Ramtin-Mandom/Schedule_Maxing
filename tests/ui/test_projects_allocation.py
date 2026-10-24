@@ -15,7 +15,7 @@ DAY = date(2026, 9, 24)
 
 def task(planning, name, project=None, **kwargs):
     return ok(planning.add_or_update_task(Task(name=name, category="study", estimated_duration_minutes=13,
-                                               priority=5, project_id=project, **kwargs)))
+                                               project_id=project, **kwargs)))
 
 
 def test_project_crud_versions_reassign(services):
@@ -44,7 +44,7 @@ def test_project_filter_is_display_only_after_scheduling_a_date(services):
     projects = ProjectsController(planning, timezone="UTC")
     a, b = ok(projects.create("A")), ok(projects.create("B"))
     predecessor = task(planning, "First", a.id, required_date=DAY)
-    successor = task(planning, "Second", b.id, required_date=DAY, dependency_ids=[predecessor.id])
+    successor = task(planning, "Second", b.id, required_date=DAY)
     assert DayScheduleController(planning, anchor_date=DAY, timezone="UTC").make_schedule_for(DAY).ok
     placements = ok(planning.get_placements(DAY))
     assert {p.task_id for p in placements} == {predecessor.id, successor.id}

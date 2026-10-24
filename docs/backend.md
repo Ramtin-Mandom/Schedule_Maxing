@@ -13,8 +13,8 @@ The desktop app never imports the backend and keeps working offline without
 any backend setting. The backend in turn imports only the pure canonical
 models (`app/planning/models.py`, `preferences.py`, `provenance.py`,
 `fixed_block_rules.py`, `app/execution/models.py`,
-`lifecycle.py`) and the reward-settings loader the YAML template needs. It never imports Tk, the local
-SQLite layer, pandas, or scikit-learn. A test checks this.
+`lifecycle.py`) and the reward-settings loader the YAML template needs. It never imports Tk or the local
+SQLite layer. A test checks this.
 
 ## Package choices
 
@@ -143,8 +143,9 @@ provenance and freshness).
 
 Tasks carry `kind` (`flexible`, or `todo` for a checklist item that is never
 scheduled; default `flexible`) and `preferred_time` (`early`, `mid`, `late`
-or null: the preferred third of the date's day window). `priority` is a
-legacy field, default 5, that no scheduler reads. Fixed blocks carry `points`
+or null: the preferred third of the date's day window). Tasks have no
+`priority` or `dependency_ids` since revision `0021`; the wire still carries
+them as constants (5 and []) for 1.3.0 clients (`LEGACY_TASK_WIRE_FIELDS`). Fixed blocks carry `points`
 (0 to 1000, default 0) and are completed through one execution whose id is
 derived from the block's (`app.planning.models.fixed_block_execution_id`).
 Migration `0016_task_kinds` adds these columns and backfills a completed,
@@ -349,8 +350,8 @@ Uvicorn 0.53.0 (proxy headers), PyJWT 2.14.0, and the OWASP Forgot Password Chea
 direct desktop adapter. Structured content is stored relationally, never as
 a JSON or text document:
 
-- **Tasks.** Tags, preferred dates and dependency ids are ordered child rows
-  (`task_tags`, `task_preferred_dates`, `task_dependencies`), so a list is
+- **Tasks.** Tags and preferred dates are ordered child rows (`task_tags`,
+  `task_preferred_dates`; `task_dependencies` was dropped in `0021`), so a list is
   kept exactly, repeated values included. Recurrence is scalar columns
   (`recurrence_frequency`, `_interval`, `_day_of_month`, `_end_date`,
   `_count`) plus `task_recurrence_weekdays` (a set, as the canonical model
@@ -396,7 +397,7 @@ a JSON or text document:
   `placements (user_id, task_id, id)` -- and are required unless
   `historical_reference` is set. Tasks and placements are only ever
   tombstoned, so linked history stays attached to them. The execution's
-  name/category/tag/priority/planned snapshot is kept as the audit record
+  name/category/tag/planned snapshot is kept as the audit record
   analytics need.
 
 Revision rows and outcomes are written through the same `Mutator`

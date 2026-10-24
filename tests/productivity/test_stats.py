@@ -22,7 +22,6 @@ def _make_observation(**overrides: object) -> Observation:
         task_name="Study Math",
         category="study",
         tag="math",
-        priority=8,
         status=ExecutionStatus.COMPLETED,
         planned_date=1,
         planned_start=540,

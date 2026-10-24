@@ -5,12 +5,13 @@ CSV export of *stored* planning data, read from SQLite through
 PlanningService (never from widget state or an in-memory schedule). Export
 only reads: it never writes to the database.
 
-Contract ("stored planning CSV", format version 2 -- the canonical,
+Contract ("stored planning CSV", format version 3 -- the canonical,
 identity-preserving planning CSV; app/planning/csv_canonical.py imports
 it back). One header row, then one row per record, standard CSV quoting
 (csv module, RFC 4180 style; values may contain commas, quotes, and
-newlines). The first 24 columns are exactly version 1's, in the same
-order, so readers of version 1 keep working; version 2 appends seven.
+newlines). Version 3 is version 2 without the task `priority` and
+`dependency_ids` columns (tasks have neither); a version 2 file still
+imports, those two columns ignored.
 
     record_type     "project", "task", "fixed_block", or "placement"
     id              the record's UUID
@@ -28,19 +29,17 @@ order, so readers of version 1 keep working; version 2 appends seven.
     start_utc       fixed_block / placement: exact start, ISO 8601 in UTC (authoritative)
     end_utc         fixed_block / placement: exact end, ISO 8601 in UTC (authoritative)
     duration_minutes  task: estimate (authoritative); fixed_block / placement: exact length (derived)
-    priority        task: 1-10
     required        task: true/false
     required_date   task: YYYY-MM-DD or empty
     preferred_dates task: JSON array of YYYY-MM-DD
     preferred_window  task: "HH:MM-HH:MM" local, or empty
     deadline        task: ISO 8601 with its original offset, or empty
-    dependency_ids  task: JSON array of UUIDs
     score           placement: optimizer score (Python float repr, exact)
     version         every record: its local edit revision
     created_at      every record: ISO 8601 UTC
     updated_at      every record: ISO 8601 UTC
     --- appended in format version 2 ---
-    format_version  "2" on every row
+    format_version  "3" on every row (an imported file may say "2")
     user_id         every record: owner UUID, or empty for a local ownerless record
     project_id      task: its project's UUID, or empty
     description     project: description (empty = none)
@@ -97,7 +96,9 @@ from app.planning.application import PlanningService, task_planned_date
 from app.planning.models import FixedBlock, Project, ScheduledTask, Task
 from app.planning.time import local_minutes, minutes_to_hhmm
 
-FORMAT_VERSION = 2
+FORMAT_VERSION = 3
+#: The format versions an import accepts (version 2's priority and dependency_ids columns are ignored).
+IMPORTABLE_FORMAT_VERSIONS = ("2", "3")
 
 COLUMNS_V1 = (
     "record_type", "id", "task_id", "date", "timezone", "name", "category", "tags",
@@ -106,14 +107,18 @@ COLUMNS_V1 = (
     "dependency_ids", "score", "version", "created_at", "updated_at",
 )
 
-#: The columns every format version 2 file has (an import requires them).
+#: The columns every format version 2 file has.
 COLUMNS_V2 = COLUMNS_V1 + (
     "format_version", "user_id", "project_id", "description", "recurrence", "optimization_metadata", "deleted_at",
 )
+#: Version 2's columns that version 3 dropped.
+DROPPED_COLUMNS = ("priority", "dependency_ids")
+#: The columns every importable file (version 2 or 3) has; an import requires them.
+REQUIRED_COLUMNS = tuple(column for column in COLUMNS_V2 if column not in DROPPED_COLUMNS)
 
 #: Written by this version: version 2 plus the placement history columns appended in Milestone 5. They are
 #: optional on import (an earlier version 2 file has none: the history is then unknown, never guessed).
-COLUMNS = COLUMNS_V2 + ("task_category", "removal_reason", "superseded_by_id", "points",
+COLUMNS = REQUIRED_COLUMNS + ("task_category", "removal_reason", "superseded_by_id", "points",
                         "series_id", "occurrence_slot", "occurrence_state", "series_version", "series_predecessor_id",
                         "origin", "preserved",
                         # A task's kind (flexible / todo) and preferred third of the day; "points" also carries a
@@ -249,7 +254,6 @@ def _task_row(task: Task) -> dict[str, str]:
         "category": task.category,
         "tags": json.dumps(task.tags),
         "duration_minutes": str(task.estimated_duration_minutes),
-        "priority": str(task.priority),
         "points": str(task.points),
         "kind": task.kind.value,
         "preferred_time": task.preferred_time.value if task.preferred_time else "",
@@ -260,7 +264,6 @@ def _task_row(task: Task) -> dict[str, str]:
             f"{minutes_to_hhmm(window.start_minute)}-{minutes_to_hhmm(window.end_minute)}" if window else ""
         ),
         "deadline": task.deadline.isoformat() if task.deadline else "",
-        "dependency_ids": json.dumps([str(dependency) for dependency in task.dependency_ids]),
         "project_id": str(task.project_id) if task.project_id else "",
         "recurrence": json.dumps(task.recurrence.model_dump(mode="json"), sort_keys=True) if task.recurrence else "",
         "series_id": str(task.series_id) if task.series_id else "",

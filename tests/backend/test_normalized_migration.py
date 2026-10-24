@@ -466,12 +466,31 @@ PLACEMENT_FIELDS_SINCE_0013 = {"task_name": None, "task_tags": None, "task_point
 TASK_FIELDS_SINCE_0016 = {"kind": "flexible", "preferred_time": None}
 BLOCK_FIELDS_SINCE_0016 = {"points": 0}
 PROJECT_FIELDS_SINCE_0014 = {"start_date": None, "estimated_end_date": None, "completed_at": None, "milestones": [],
-                             "task_defaults": {"duration_minutes": None, "priority": None, "points": None}}
+                             "task_defaults": {"duration_minutes": None, "points": None}}  # priority: dropped by 0021
 
 
 def live_task_at_head(record: dict) -> dict:
     """A fixture task as its live row reads at head: 0013 derived its type from its own id (no series here)."""
     return {**record, "task_type_id": str(derived_task_type_id(uuid.UUID(record["id"])))}
+
+
+#: What 0021 left of a task's priority and dependencies and an execution's priority (the wire placeholders).
+LEGACY_TASK_WIRE = {"priority": 5, "dependency_ids": []}
+LEGACY_EXECUTION_WIRE = {"priority": 5}
+
+
+def without_priority_and_dependencies(value):
+    """`value` as it reads after 0021 dropped priority and dependencies (a downgrade restores 5 and none)."""
+    if isinstance(value, dict):
+        converted = {key: without_priority_and_dependencies(item) for key, item in value.items()}
+        if {"estimated_duration_minutes", "priority", "dependency_ids"} <= set(value):
+            converted.update(LEGACY_TASK_WIRE)
+        if {"task_name", "planned_duration", "status", "priority"} <= set(value):
+            converted.update(LEGACY_EXECUTION_WIRE)
+        return converted
+    if isinstance(value, list):
+        return [without_priority_and_dependencies(item) for item in value]
+    return value
 
 
 def as_of_head(value):
@@ -480,7 +499,8 @@ def as_of_head(value):
     placements gain the 0007 fields (null), tasks their 0008 points (the
     default) and 0009 recurrence fields (null), recurrence rules their 0009
     anchor (null: needs configuration) and executions their 0008 points
-    snapshot (null).
+    snapshot (null). Since 0021 a task's priority and dependencies and an
+    execution's priority are gone: the API sends the placeholders 5 and [].
     """
     if isinstance(value, dict):
         converted = {key: as_of_head(item) for key, item in value.items()}
@@ -489,7 +509,7 @@ def as_of_head(value):
                          **converted}
         if {"estimated_duration_minutes", "priority", "dependency_ids"} <= set(value):
             converted = {**TASK_FIELDS_SINCE_0008, **TASK_FIELDS_SINCE_0009, **TASK_FIELDS_SINCE_0013,
-                         **TASK_FIELDS_SINCE_0016, **converted}
+                         **TASK_FIELDS_SINCE_0016, **converted, **LEGACY_TASK_WIRE}
         if {"label", "planned_start", "planned_end"} <= set(value) and "task_id" not in value:  # a fixed block
             converted = {**BLOCK_FIELDS_SINCE_0016, **converted}
         if {"frequency", "interval"} <= set(value):
@@ -497,7 +517,8 @@ def as_of_head(value):
         if {"name", "description", "version"} <= set(value) and "category" not in value:  # a project record
             converted = {**PROJECT_FIELDS_SINCE_0014, **converted}
         if {"task_name", "planned_duration", "status"} <= set(value):
-            converted = {**EXECUTION_FIELDS_SINCE_0008, **EXECUTION_FIELDS_SINCE_0010, **converted}
+            converted = {**EXECUTION_FIELDS_SINCE_0008, **EXECUTION_FIELDS_SINCE_0010, **converted,
+                         **LEGACY_EXECUTION_WIRE}
         return converted
     if isinstance(value, list):
         return [as_of_head(item) for item in value]
@@ -605,7 +626,7 @@ def test_recorded_sync_outcomes_replay_identically_even_after_later_edits(predec
         edit = {**content(task1), "name": "Renamed later", "tags": ["new"], "base_version": task1["version"]}
         assert client.put(f"/tasks/{T1}", json=edit, headers=headers).status_code == 200
         task2 = client.get(f"/tasks/{T2}", headers=headers).json()
-        assert client.put(f"/tasks/{T2}", json={**content(task2), "priority": 9, "base_version": task2["version"]},
+        assert client.put(f"/tasks/{T2}", json={**content(task2), "points": 9, "base_version": task2["version"]},
                           headers=headers).status_code == 200
 
         assert replay() == first  # snapshots are immutable: the later edits change no recorded outcome
@@ -680,9 +701,9 @@ def test_an_empty_database_upgrades_and_a_disposable_one_downgrades_losslessly(p
     assert_same(preferences[PREF_USER], {k: v for k, v in USER_OVERRIDES.items() if k != "optimizer_mode"})
     assert_same(preferences[PREF_OLD], {k: v for k, v in OLD_OVERRIDES.items() if k != "optimizer_mode"})
     for payload, (_, _, record) in zip(payloads, CHANGES):
-        assert_same(payload, record)
+        assert_same(payload, without_priority_and_dependencies(record))
     for op, recorded in RESULTS:
-        assert_same(results[op["op_id"]], recorded)
+        assert_same(results[op["op_id"]], without_priority_and_dependencies(recorded))
 
     upgrade(predecessor)  # and forward again
     with predecessor.connect() as connection:

@@ -61,7 +61,6 @@ def make_snapshot_kwargs(**overrides: object) -> dict:
         planned_start=540,
         planned_end=600,
         planned_duration=60,
-        priority=8,
     )
     defaults.update(overrides)
     return defaults

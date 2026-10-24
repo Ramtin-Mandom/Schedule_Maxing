@@ -22,18 +22,15 @@ from app.optimizer import (
     _next_lattice_offset,
     _short_gap_active_zone,
 )
-from app.reward import RewardSettings
+from app.reward import RewardSettings, ScoringTask
 
 
 def placed(start, end):
-    return _Placed(start=start, end=end, name="X", category="other", tag="", task_id=uuid.uuid4(), score=0.0, fixed=False)
+    return _Placed(start=start, end=end, category="other", tag="", task_id=uuid.uuid4(), score=0.0, fixed=False)
 
 
-def scoring_task(*, duration=60, name="T", category="other", tag="", priority=5, preference_time=None):
-    return {
-        "name": name, "category": category, "tag": tag, "duration": duration,
-        "priority": priority, "fixed": False, "preference_time": preference_time,
-    }
+def scoring_task(*, duration=60, category="other", tag=""):
+    return ScoringTask(category=category, duration=duration, tag=tag)
 
 
 # -----------------------------------------------------------------------------
@@ -147,7 +144,7 @@ def test_event_breakpoints_preferred_window_boundaries_present():
     cuts, _ = _event_breakpoints(
         duration=60, clipped_start=0, clipped_latest=1000,
         previous_item=None, next_item=None,
-        preferred_window={"start_time": 100, "end_time": 200},
+        preferred_window=(100, 200),
         settings=_settings(max_time_distance_minutes=240), adhd_mode=False, day_start=None, day_end=None,
     )
     # preferred_start=100, preferred_end-duration=140, center=(100+200-60)/2=120

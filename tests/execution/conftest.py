@@ -53,7 +53,15 @@ def make_execution_kwargs(**overrides: object) -> dict:
         planned_start=540,
         planned_end=660,
         planned_duration=120,
-        priority=8,
     )
     defaults.update(overrides)
     return defaults
+
+
+#: Columns schema v19 dropped (tasks and executions have no priority): an upgrade to the latest schema
+#: compares every other column.
+DROPPED_COLUMNS = frozenset({"priority"})
+
+
+def without_dropped_columns(rows: list[dict]) -> list[dict]:
+    return [{column: value for column, value in row.items() if column not in DROPPED_COLUMNS} for row in rows]

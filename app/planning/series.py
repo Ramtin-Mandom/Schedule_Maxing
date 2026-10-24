@@ -23,11 +23,6 @@ budget (MAX_EXPANSION_OCCURRENCES):
       lineage still covers (a "this and every later occurrence" change kept
       completed or individually edited work) is not minted for the new
       segment, so an edit never duplicates a slot's work;
-    - a series' dependency on another series resolves, per slot, to the
-      prerequisite lineage's occurrence of the *same* slot (materialized
-      too when needed, within the same budget). A prerequisite without such
-      a slot, or with an incompatible cadence or time zone, is an
-      unresolved-dependency problem and that slot is not materialized;
     - a series without an explicit start date and time zone needs
       configuration and produces no slots. Its legacy placements (saved
       before expansion) are mapped: a date with exactly one live legacy
@@ -102,7 +97,6 @@ from app.planning.occurrence import HISTORY_PROTECTED_STATUSES
 from app.planning.recurrence import (
     RecurrenceBudgetError,
     SeriesRule,
-    cadence_problem,
     occurrence_task_id,
     offset_transition,
 )
@@ -110,7 +104,7 @@ from app.planning.time import AmbiguousLocalTimeError, local_instant
 
 #: The widest range one expansion may cover: the planning-range limit (app.planning.workflow.MAX_RANGE_DAYS).
 MAX_EXPANSION_DAYS = 62
-#: The most occurrences one expansion may materialize (prerequisites included).
+#: The most occurrences one expansion may materialize.
 MAX_EXPANSION_OCCURRENCES = 500
 #: The most existing occurrences one scoped change may refresh, supersede or preserve.
 MAX_CHANGE_OCCURRENCES = 5000
@@ -119,7 +113,7 @@ MAX_LINEAGE = 64
 
 #: The content fields an occurrence takes from its series definition.
 _CONTENT_FIELDS = (
-    "project_id", "name", "category", "tags", "estimated_duration_minutes", "priority", "points", "required",
+    "project_id", "name", "category", "tags", "estimated_duration_minutes", "points", "required",
     "preferred_time", "preferred_time_window",
 )
 #: The occurrence fields its series dictates (public: synchronization re-derives an occurrence from a series).
@@ -153,13 +147,13 @@ class LegacyCollision:
 class ExpansionResult:
     start_date: date_
     end_date: date_
-    #: Occurrences materialized by this call (prerequisites included); empty for a repeated expansion.
+    #: Occurrences materialized by this call; empty for a repeated expansion.
     created: list[Task]
     #: Slots that already had a record (live or tombstoned) or are covered by a preserved earlier segment.
     existing_count: int
     #: Series without an explicit start date and time zone (they produce no slots).
     needs_configuration: list[uuid.UUID] = field(default_factory=list)
-    #: Slots left unmaterialized, with the reason (e.g. dependency_unresolved).
+    #: Slots left unmaterialized, with the reason (e.g. legacy_collision).
     problems: list[SlotProblem] = field(default_factory=list)
     #: Materialized, but worth knowing (daylight-saving changes, unmapped legacy placements).
     warnings: list[SlotProblem] = field(default_factory=list)
@@ -208,12 +202,12 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def occurrence_for(series: Task, slot: date_, dependency_ids: list[uuid.UUID], now: datetime) -> Task:
+def occurrence_for(series: Task, slot: date_, now: datetime) -> Task:
     """The occurrence of `series` at `slot`, as the series definition describes it now."""
     return Task(
         id=occurrence_task_id(series.id, slot), user_id=series.user_id,
         **{name: getattr(series, name) for name in _CONTENT_FIELDS},
-        required_date=slot, dependency_ids=list(dependency_ids),
+        required_date=slot,
         series_id=series.id, occurrence_slot=slot, series_version=series.version,
         created_at=now, updated_at=now,
     )
@@ -341,7 +335,7 @@ class _Expander:
             "one is that day's occurrence is ambiguous. Remove the extra placement(s), then expand again.",
         ))
 
-    def slot(self, series: Task, slot: date_) -> uuid.UUID | None:
+    def slot(self, series: Task, slot: date_) -> uuid.UUID:
         """The occurrence doing `slot`'s work for this segment: existing, covered, or materialized now."""
         own = occurrence_task_id(series.id, slot)
         if self.exists(own):
@@ -351,56 +345,17 @@ class _Expander:
         if covered is not None:
             self.existing += 1
             return covered.id
-        return self._materialize(series, slot, depth=0)
+        return self._materialize(series, slot)
 
-    def _materialize(self, series: Task, slot: date_, *, depth: int) -> uuid.UUID | None:
-        dependencies: list[uuid.UUID] = []
-        for dependency_id in series.dependency_ids:
-            target = self.lineage.task(dependency_id)
-            if target is None or not target.is_series:
-                dependencies.append(dependency_id)
-                continue
-            prerequisite, problem = self._prerequisite(series, target, slot, depth)
-            if problem is not None:
-                self.problems.append(SlotProblem(series.id, slot, "dependency_unresolved", problem))
-                return None
-            dependencies.append(prerequisite)
+    def _materialize(self, series: Task, slot: date_) -> uuid.UUID:
         if len(self.created) >= self.budget:
             raise RecurrenceLimitError(
                 f"materializing these occurrences would create more than {self.budget}; expand a smaller range."
             )
-        occurrence = occurrence_for(series, slot, dependencies, self.now)
+        occurrence = occurrence_for(series, slot, self.now)
         self.created[occurrence.id] = occurrence
         self._warn_about_clocks(series, occurrence)
         return occurrence.id
-
-    def _prerequisite(self, dependent: Task, prerequisite: Task, slot: date_, depth: int) -> tuple[uuid.UUID | None, str | None]:
-        if depth >= MAX_LINEAGE:
-            return None, "the chain of recurring prerequisites is too deep."
-        if dependent.needs_configuration:
-            return None, (f"it depends on the recurring series {prerequisite.name!r}; configure this series' start "
-                          "date and time zone so each occurrence can find the prerequisite's occurrence of its date.")
-        for segment in self.lineage.segments(prerequisite):
-            if segment.deleted_at is not None or segment.needs_configuration or not segment.is_series:
-                continue
-            rule = SeriesRule.of(segment.recurrence)
-            if not rule.is_slot(slot):
-                continue
-            problem = cadence_problem(SeriesRule.of(dependent.recurrence), rule)
-            if problem is not None:
-                return None, f"its prerequisite {segment.name!r}: {problem}"
-            own = occurrence_task_id(segment.id, slot)
-            if self.exists(own):
-                return own, None
-            covered = self.lineage.covering_predecessor_occurrence(segment, slot)
-            if covered is not None:
-                return covered.id, None
-            created = self._materialize(segment, slot, depth=depth + 1)
-            if created is None:
-                return None, f"its prerequisite {segment.name!r} cannot be materialized on {slot}."
-            return created, None
-        return None, (f"its prerequisite series {prerequisite.name!r} has no occurrence on {slot} (it starts later, "
-                      "ended, was deleted, or repeats on other dates).")
 
     def _warn_about_clocks(self, series: Task, occurrence: Task) -> None:
         tz_name = series.recurrence.timezone if series.recurrence is not None else None
@@ -593,7 +548,6 @@ def _edit_in_place(service: PlanningService, stored: Task, definition: Task, exp
     statuses = service.execution_statuses_for_tasks(task.id for task in occurrences)
     preserved: list[PreservedOccurrence] = []
     refresh: list[Task] = []
-    expander = _Expander(service, budget=MAX_EXPANSION_OCCURRENCES, now=now)
     for occurrence in occurrences:
         if statuses.get(occurrence.id, set()) & HISTORY_PROTECTED_STATUSES:
             preserved.append(PreservedOccurrence(occurrence, "history"))
@@ -601,40 +555,14 @@ def _edit_in_place(service: PlanningService, stored: Task, definition: Task, exp
         if occurrence.occurrence_state == OccurrenceState.MODIFIED:
             preserved.append(PreservedOccurrence(occurrence, "modified"))
             continue
-        dependencies = _refreshed_dependencies(expander, saved, occurrence)
-        if dependencies is None:
-            continue  # reported in expander.problems; the occurrence keeps its previous content
         refreshed = occurrence.model_copy(update={
-            **{name: getattr(saved, name) for name in _CONTENT_FIELDS},
-            "dependency_ids": dependencies, "series_version": saved.version,
+            **{name: getattr(saved, name) for name in _CONTENT_FIELDS}, "series_version": saved.version,
         })
         if refreshed != occurrence:
             refresh.append(refreshed)
-    if expander.created:
-        service.materialize_occurrences(list(expander.created.values()))
     updated = service.refresh_occurrences(refresh, expected_versions={task.id: task.version for task in refresh}) \
         if refresh else []
-    return SeriesChange(EditScope.SERIES, series=saved, updated=updated, preserved=preserved,
-                        problems=expander.problems)
-
-
-def _refreshed_dependencies(expander: _Expander, series: Task, occurrence: Task) -> list[uuid.UUID] | None:
-    """The occurrence's dependencies under the series' current definition (None: a prerequisite is unresolved)."""
-    if series.needs_configuration:
-        return [dependency for dependency in series.dependency_ids
-                if (target := expander.lineage.task(dependency)) is None or not target.is_series]
-    dependencies: list[uuid.UUID] = []
-    for dependency_id in series.dependency_ids:
-        target = expander.lineage.task(dependency_id)
-        if target is None or not target.is_series:
-            dependencies.append(dependency_id)
-            continue
-        prerequisite, problem = expander._prerequisite(series, target, occurrence.occurrence_slot, 0)
-        if problem is not None:
-            expander.problems.append(SlotProblem(series.id, occurrence.occurrence_slot, "dependency_unresolved", problem))
-            return None
-        dependencies.append(prerequisite)
-    return dependencies
+    return SeriesChange(EditScope.SERIES, series=saved, updated=updated, preserved=preserved)
 
 
 def _split(service: PlanningService, stored: Task, definition: Task, expected_version: int, cutoff: date_,

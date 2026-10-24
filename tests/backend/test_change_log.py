@@ -19,7 +19,7 @@ def changes(client, headers, after: int = 0, limit: int | None = None) -> dict:
 
 def test_every_accepted_mutation_is_logged_with_its_record(client, alice) -> None:
     task = create(client, alice, "tasks", task_payload())
-    updated = client.put(f"/tasks/{task['id']}", json=editable(task, priority=8), headers=alice).json()
+    updated = client.put(f"/tasks/{task['id']}", json=editable(task, points=8), headers=alice).json()
     client.put(f"/tasks/{task['id']}", json=editable(updated), headers=alice)  # no-op: not logged
     placement = create(client, alice, "placements", placement_payload(task["id"]))
     execution = create(client, alice, "executions", execution_payload(task["id"], placement["id"]))
@@ -54,17 +54,17 @@ def test_compound_deletes_log_every_tombstone_in_one_transaction(client, alice) 
 
 
 def test_rejected_mutations_write_nothing_and_allocate_nothing(client, alice, engine) -> None:
-    task = create(client, alice, "tasks", task_payload())
-    create(client, alice, "tasks", task_payload(name="Dependent", dependency_ids=[task["id"]]))
+    project = create(client, alice, "projects", {"name": "Thesis"})
+    task = create(client, alice, "tasks", task_payload(project_id=project["id"]))
 
-    assert client.delete(f"/tasks/{task['id']}", params={"base_version": 1}, headers=alice).status_code == 409
-    stale = {**editable(task, priority=2), "base_version": 7}
+    assert client.delete(f"/projects/{project['id']}", params={"base_version": 1}, headers=alice).status_code == 409
+    stale = {**editable(task, points=2), "base_version": 7}
     assert client.put(f"/tasks/{task['id']}", json=stale, headers=alice).status_code == 409
     assert client.post("/tasks", json=task_payload(project_id=task["id"]), headers=alice).status_code == 422
 
     assert changes(client, alice)["cursor"] == 2
-    project = create(client, alice, "projects", {"name": "Next"})
-    assert changes(client, alice, after=2)["changes"][0]["seq"] == 3 and project
+    following = create(client, alice, "projects", {"name": "Next"})
+    assert changes(client, alice, after=2)["changes"][0]["seq"] == 3 and following
 
 
 def test_a_failure_inside_a_mutation_rolls_back_the_record_the_log_and_the_counter(

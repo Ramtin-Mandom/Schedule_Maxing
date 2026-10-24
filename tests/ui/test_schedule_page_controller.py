@@ -60,17 +60,17 @@ def stack(db_path, tmp_path):
         session.close()
 
 
-def flexible(name="Study", *, day="1", start="480", end="720", duration="60", priority="5", tag="math", category="study"):
+def flexible(name="Study", *, day="1", start="480", end="720", duration="60", tag="math", category="study"):
     return {
         "name": name, "day": day, "category": category, "tag": tag, "fixed": "False",
-        "start_time": start, "end_time": end, "duration": duration, "priority": priority,
+        "start_time": start, "end_time": end, "duration": duration,
     }
 
 
 def fixed(name="Lecture", *, day="1", start="600", end="660"):
     return {
         "name": name, "day": day, "category": "event", "tag": "uni", "fixed": "True",
-        "start_time": start, "end_time": end, "duration": "", "priority": "",
+        "start_time": start, "end_time": end, "duration": "",
     }
 
 
@@ -124,7 +124,6 @@ def test_adding_a_fixed_block_uses_the_page_date_and_timezone(db_path, tmp_path)
         (flexible(day="8"), "Day must be between 1 and 7"),
         (flexible(start="490"), "multiples of 30"),
         (flexible(duration="45"), "multiple of 30"),
-        (flexible(priority="11"), "Priority"),
         (flexible(tag=""), "Tag is required"),
         (flexible(category="nope"), "Category"),
         (flexible(start="720", end="480"), "Start time must be smaller"),
@@ -154,11 +153,11 @@ def test_editing_a_task_keeps_its_id_and_bumps_its_version(stack: Stack) -> None
     original = stack.service.get_task(ref.id)
 
     state = ok(stack.page.form_state_for(ref))
-    edited_values = dict(state.values, name="Final", day="4", priority="9")
-    snapshot = ok(stack.page.submit_task_form(edited_values, dependency_ids=state.dependency_ids, editing=ref))
+    edited_values = dict(state.values, name="Final", day="4")
+    snapshot = ok(stack.page.submit_task_form(edited_values, editing=ref))
 
     stored = stack.service.get_task(ref.id)
-    assert (stored.id, stored.name, stored.priority) == (original.id, "Final", 9)
+    assert (stored.id, stored.name) == (original.id, "Final")
     assert stored.preferred_dates == [date(2024, 6, 6)]
     assert stored.version == original.version + 1 and stored.created_at == original.created_at
     assert [row.ref for row in task_rows(snapshot)] == [ref]
@@ -178,17 +177,11 @@ def test_editing_a_fixed_block_can_move_it_and_kind_cannot_change(stack: Stack) 
     assert not result.ok and "cannot be turned into" in result.error
 
 
-def test_duplicate_names_and_dependencies_are_resolved_by_id(stack: Stack) -> None:
+def test_duplicate_names_are_distinct_rows_by_id(stack: Stack) -> None:
     ok(stack.page.submit_task_form(flexible("Study", day="1")))
     snapshot = ok(stack.page.submit_task_form(flexible("Study", day="2")))
     first, second = sorted(task_rows(snapshot, "Study"), key=lambda row: row.date)
     assert first.ref != second.ref
-
-    ok(stack.page.submit_task_form(flexible("Exam prep", day="3"), dependency_ids=[second.ref.id]))
-
-    [dependent] = [t for t in stack.service.list_tasks() if t.name == "Exam prep"]
-    assert dependent.dependency_ids == [second.ref.id]
-    assert ok(stack.page.describe_tasks([second.ref.id])) == ["Study (Tue Jun 4)"]
 
 
 def test_delete_targets_the_selected_id_even_after_rows_are_reordered(stack: Stack) -> None:
@@ -202,25 +195,6 @@ def test_delete_targets_the_selected_id_even_after_rows_are_reordered(stack: Sta
     [remaining] = stack.service.list_tasks()
     assert remaining.preferred_dates == [MON]
     assert [row.ref.id for row in snapshot.rows] == [remaining.id]
-
-
-def test_deleting_a_task_others_depend_on_fails_with_names_and_changes_nothing(stack: Stack) -> None:
-    base = task_rows(ok(stack.page.submit_task_form(flexible("Read", day="1"))))[0]
-    ok(stack.page.submit_task_form(flexible("Summarise", day="2"), dependency_ids=[base.ref.id]))
-
-    result = stack.page.delete(base.ref)
-
-    assert not result.ok
-    assert "Summarise (Tue Jun 4)" in result.error
-    assert len(stack.service.list_tasks()) == 2
-    assert len(result.value.rows) == 2
-
-
-def test_self_dependency_is_rejected_by_the_model(stack: Stack) -> None:
-    ref = task_rows(ok(stack.page.submit_task_form(flexible("Loop"))))[0].ref
-    state = ok(stack.page.form_state_for(ref))
-    result = stack.page.submit_task_form(state.values, dependency_ids=[ref.id], editing=ref)
-    assert not result.ok and "depend on itself" in result.error
 
 
 # -----------------------------------------------------------------------------
@@ -297,7 +271,7 @@ def test_failed_generation_saves_nothing(stack: Stack) -> None:
     before = stack.service.placements_for_date(date(2024, 6, 4))
     # A required task that fits the day's aggregate capacity but no single free interval.
     ok(stack.planning.add_or_update_task(Task(
-        name="Fragmented", category="study", estimated_duration_minutes=1000, priority=5,
+        name="Fragmented", category="study", estimated_duration_minutes=1000,
         required=True, required_date=MON,
     )))
     ok(stack.planning.save_fixed_block(FixedBlock(
@@ -406,23 +380,6 @@ def test_reset_planning_data_is_scoped_to_the_page_and_keeps_history(db_path, tm
         stack.close()
 
 
-def test_reset_is_refused_atomically_when_a_task_outside_depends_on_one_inside(db_path, tmp_path) -> None:
-    stack = Stack(db_path, tmp_path)
-    try:
-        inside = task_rows(ok(stack.page.submit_task_form(flexible("Inside"))))[0].ref
-        ok(stack.page.make_schedule())
-        next_week = SchedulePageController(stack.planning, number_of_days=7, anchor_date=date(2024, 6, 10), timezone="UTC")
-        ok(next_week.submit_task_form(flexible("Outside"), dependency_ids=[inside.id]))
-
-        result = stack.page.reset(ResetScope.PLANNING_DATA)
-
-        assert not result.ok and "depend" in result.error
-        assert len(stack.service.list_tasks()) == 2
-        assert len(stack.service.placements_for_date(MON)) == 1  # the placement deletion rolled back too
-    finally:
-        stack.close()
-
-
 def test_reset_description_is_explicit_about_scope_and_history(stack: Stack) -> None:
     text = stack.page.reset_description(ResetScope.SCHEDULE)
     assert "2024-06-03 to 2024-06-09" in text and "NOT deleted" in text
@@ -476,7 +433,7 @@ def test_import_uses_the_page_anchor_and_marks_saved_schedules_stale(stack: Stac
 
 def test_invalid_import_changes_nothing_and_returns_the_committed_view(stack: Stack, tmp_path: Path) -> None:
     ok(stack.page.submit_task_form(flexible("Existing", day="1")))
-    path = write_csv(tmp_path / "bad.csv", "1,Good,study,t,false,540,720,60,5,\n9,Bad,study,t,false,540,720,60,0,\n")
+    path = write_csv(tmp_path / "bad.csv", "1,Good,study,t,false,540,720,60,5,\n9,Bad,study,t,false,540,720,0,5,\n")
 
     result = stack.page.import_csv(path, ImportMode.REPLACE)
 

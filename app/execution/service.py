@@ -96,7 +96,6 @@ from app.execution.lifecycle import (  # noqa: F401 - re-exported for existing c
 )
 from app.execution.models import CancelReason, ExecutionStatus, TaskExecution, WorkSession
 from app.execution.repository import ExecutionRepository
-from app.models import ScheduledTask
 from app.planning.models import ScheduledTask as CanonicalScheduledTask
 from app.planning.models import Task as CanonicalTask
 from app.planning.scope import OwnerScope
@@ -155,7 +154,6 @@ class ExecutionService:
         planned_start: int,
         planned_end: int,
         planned_duration: int,
-        priority: int,
     ) -> TaskExecution:
         """Create a new execution in 'scheduled' status, snapshotting the given planned task fields."""
         now = self._now_iso()
@@ -168,39 +166,12 @@ class ExecutionService:
             planned_start=planned_start,
             planned_end=planned_end,
             planned_duration=planned_duration,
-            priority=priority,
             status=ExecutionStatus.SCHEDULED,
             created_at=now,
             updated_at=now,
             user_id=self._new_record_owner(None),
         )
         return self._repository.create_execution(execution)
-
-    @_atomic
-    def create_execution_from_scheduled_task(
-        self,
-        scheduled_task: ScheduledTask,
-        *,
-        planned_date: int,
-        priority: int,
-    ) -> TaskExecution:
-        """
-        Convenience constructor from an optimizer ScheduledTask.
-
-        ScheduledTask does not carry priority or an abstract day index, so
-        those are supplied separately by the caller; planned_duration is
-        derived from the scheduled time window.
-        """
-        return self.create_execution(
-            task_name=scheduled_task.name,
-            category=scheduled_task.category,
-            tag=scheduled_task.tag,
-            planned_date=planned_date,
-            planned_start=scheduled_task.time_window.start_time,
-            planned_end=scheduled_task.time_window.end_time,
-            planned_duration=scheduled_task.time_window.end_time - scheduled_task.time_window.start_time,
-            priority=priority,
-        )
 
     @_atomic
     def get_or_create_execution(
@@ -213,7 +184,6 @@ class ExecutionService:
         planned_start: int,
         planned_end: int,
         planned_duration: int,
-        priority: int,
     ) -> TaskExecution:
         """
         Return an existing execution with this exact planned snapshot
@@ -256,7 +226,6 @@ class ExecutionService:
             planned_start=planned_start,
             planned_end=planned_end,
             planned_duration=planned_duration,
-            priority=priority,
         )
 
     # ------------------------------------------------------------------
@@ -283,7 +252,7 @@ class ExecutionService:
         *is* available and "re-selecting the same placement reuses its
         execution" is the desired behavior.
 
-        task_name/category/tag/priority/planned_duration are still
+        task_name/category/tag/planned_duration are still
         populated here as a historical snapshot of the Task's *current*
         values at creation time -- see the module and
         app/execution/models.py docstrings for why that snapshot exists
@@ -700,7 +669,6 @@ def build_canonical_execution(
         planned_start=None,
         planned_end=None,
         planned_duration=planned_duration_minutes,
-        priority=task.priority,
         points=task.points,
         status=ExecutionStatus.SCHEDULED,
         created_at=now_iso,

@@ -50,21 +50,13 @@ def _check_dependencies() -> dict:
     from zoneinfo import ZoneInfo
 
     import customtkinter
-    import joblib
-    import pandas
     import pydantic
-    import sklearn
     import yaml
-    from sklearn.linear_model import Ridge
 
     theme = Path(customtkinter.__file__).parent / "assets" / "themes" / "blue.json"
     assert theme.is_file(), f"missing CustomTkinter theme: {theme}"
     assert ZoneInfo("America/Toronto").key == "America/Toronto"  # tzdata: Windows has no IANA database of its own
-    frame = pandas.DataFrame({"x": [0.0, 1.0, 2.0, 3.0], "y": [1.0, 3.0, 5.0, 7.0]})
-    model = Ridge(alpha=0.0).fit(frame[["x"]], frame["y"])
-    assert abs(float(model.predict(pandas.DataFrame({"x": [4.0]}))[0]) - 9.0) < 1e-6
-    return {"customtkinter": customtkinter.__version__, "pandas": pandas.__version__, "sklearn": sklearn.__version__,
-            "joblib": joblib.__version__, "pydantic": pydantic.VERSION, "yaml": yaml.__version__}
+    return {"customtkinter": customtkinter.__version__, "pydantic": pydantic.VERSION, "yaml": yaml.__version__}
 
 
 def _check_credential_store() -> dict:
@@ -99,7 +91,7 @@ def _check_storage_and_scheduling() -> dict:
         restart = existed and set(TASK_NAMES) <= names
         if not restart:
             form = {"day": "1", "category": "study", "tag": "selftest", "fixed": "False", "start_time": "480",
-                    "end_time": "1200", "duration": "60", "priority": "5"}
+                    "end_time": "1200", "duration": "60"}
             for name in TASK_NAMES:
                 created = page.submit_task_form({**form, "name": name})
                 assert created.ok, created.error

@@ -5,7 +5,7 @@ System-level view of Schedule Maxing. For file-level navigation and change impac
 reasons behind the structure see [DECISIONS.md](DECISIONS.md). Detailed contracts live in `docs/` and are
 linked where relevant rather than repeated.
 
-Verified against commit `f5d91aa` (app version 1.2.0) on 2026-10-22.
+Verified against commit `c2b19c0` (app version 1.3.0, branch `engine-remake`) on 2026-10-24.
 
 ## 1. What the system is
 
@@ -23,8 +23,7 @@ Three deployable parts, all Python 3.10, in one repository:
 | Backend API (FastAPI) | Render web service (manual or CI deployment) | `uvicorn --factory backend.app:create_app` (`backend/main.py` also exposes `app`) | PostgreSQL (SQLAlchemy 2 + Alembic) |
 | Optional local web profile | Loopback on the user's machine | `python -m app.web` | The same local SQLite as the desktop (never at the same time) |
 
-Also present: a CLI (`python -m app.main`), productivity CLIs (`app/productivity/report_cli.py`,
-`predictor_comparison_cli.py`), operator tools in `backend/` (`migrate`, `maintenance`, `inspect_db`,
+Also present: a CLI (`python -m app.main`), productivity CLIs (`app/productivity/report_cli.py`), operator tools in `backend/` (`migrate`, `maintenance`, `inspect_db`,
 `smoke_check`, `email_diagnostic`) and offline benchmarks (`benchmarks/`).
 
 Not in this repository: an Android client (mentioned in the README's author note only) and the browser web
@@ -36,9 +35,8 @@ UI (`docs/web-api.md` is the API contract it would be built against; `app/web` c
 |---|---|---|
 | Language | Python 3.10 (CI, release build and `.venv`) | `.github/workflows/*.yml`, `packaging/windows/build_windows.ps1` |
 | Desktop UI | CustomTkinter on Tk, plus `ttk.Treeview` | `requirements-desktop.txt` |
-| Domain models | Pydantic v2 | `app/models.py`, `app/planning/models.py`, `app/execution/models.py` |
+| Domain models | Pydantic v2 | `app/planning/models.py`, `app/execution/models.py` |
 | Local storage | `sqlite3` (stdlib), hand-written ordered migrations | `app/execution/db.py` |
-| Analytics / ML | pandas, scikit-learn, joblib (ML is evidence-gated and not wired into the UI) | `app/productivity/` |
 | Credentials on device | `keyring` (OS credential store) | `app/sync/credentials.py` |
 | Client HTTP | Standard library only: `http.client` with one keep-alive connection (sync), `urllib` (updater) | `app/sync/transport.py`, `app/update/transport.py` |
 | Server | FastAPI, Starlette, Uvicorn | `requirements-backend.txt` |
@@ -67,8 +65,8 @@ flowchart TB
         WF["Scheduling workflow<br/>app/planning/workflow.py"]
         PS["PlanningService<br/>app/planning/application.py"]
         ALLOC["Allocation<br/>app/planning/allocation.py"]
-        ENG["Day engine + Greedy v1<br/>app/optimizer.py"]
-        RULES["Constraints / PERT / reward / modes<br/>app/constraints.py, app/pert.py,<br/>app/reward.py, app/mode_objectives.py"]
+        ENG["Day engine (hard constraints)<br/>app/optimizer.py"]
+        RULES["Reward / modes<br/>app/reward.py, app/mode_objectives.py"]
         EXE["ExecutionService<br/>app/execution/service.py"]
         PROD["ProductivityService<br/>app/productivity/"]
         SYNC["SyncService / SyncEngine<br/>app/sync/"]
@@ -112,14 +110,13 @@ so the same rules run on both sides.
 
 | Layer | Responsibility | Modules |
 |---|---|---|
-| Models | Legacy (day-index, name-based) and canonical (calendar dates, UUIDs, owners, versions) planning models; execution models | `app/models.py`, `app/planning/models.py`, `app/execution/models.py` |
-| Hard constraints | Whether a placement is allowed (window, fixed blocks, overlaps, durations, fixed-block write rules, DST/overnight refusal) | `app/constraints.py`, `app/planning/fixed_block_rules.py`, `app/planning/time.py` |
-| Dependencies | Name-based (legacy) and id-based (canonical) precedence, cycles, required closure; prerequisites outside the scheduled range | `app/pert.py`, `app/planning/external_dependencies.py` |
-| Reward | How good a valid placement is; settings from `config/task_preference.yaml` and preference layers | `app/reward.py`, `app/planning/preferences.py` |
-| Engine | Greedy Optimizer v1 (frozen legacy baseline) and the canonical minute-precise day engine; mode objectives | `app/optimizer.py`, `app/mode_objectives.py`, `app/planning/catch_up.py` |
+| Models | Canonical planning models (calendar dates, UUIDs, owners, versions; tasks have points, no priority or dependencies); execution models | `app/planning/models.py`, `app/execution/models.py` |
+| Hard constraints | Whether a placement is allowed (window, fixed blocks, overlaps, durations, fixed-block write rules, DST/overnight refusal) | `app/optimizer.py` (checked before any scoring), `app/planning/fixed_block_rules.py`, `app/planning/time.py` |
+| Reward | How good a valid placement is (typed `ScoringTask`: category weight, preferred window, neighbour relation, fragmentation, ADHD short-gap bonus); settings from `config/task_preference.yaml` and preference layers | `app/reward.py`, `app/planning/preferences.py` |
+| Engine | The canonical minute-precise day engine; mode objectives | `app/optimizer.py`, `app/mode_objectives.py`, `app/planning/catch_up.py` |
 | Application | Persisted planning (CRUD, ranges, rescheduling, resets, CSV), the scheduling workflow, recurrence, freshness | `app/planning/application.py`, `workflow.py`, `service.py`, `allocation.py`, `series.py`, `provenance.py`, `csv_*.py` |
 | Execution | Lifecycle rules (shared with the server), execution persistence, fixed-block and direct completions | `app/execution/` |
-| Analytics | Statistics, tracker (awards, points), schedule cohort, day summaries, median predictor, gated ML | `app/productivity/` |
+| Analytics | Statistics, tracker (awards, points), schedule cohort, day summaries, median predictor | `app/productivity/` |
 | Budget | Balance, income/expense entries with recurrence, occurrence edits, range expansion and totals in integer minor units, history statistics and the 90-day forecast (`stats.py`), income ideas and the wishlist; never read by constraints, reward or engines (a project link is a reference only) | `app/budget/` (storage: `repository.py` local, `app/persistence/budget.py` direct) |
 | Sync client | Dirty tracking, outbox, shadows, conflicts, push/pull, credentials | `app/sync/` |
 | UI | Pages/views draw; controllers/models hold UI logic and call services | `app/ui/`, `app/app.py` |
@@ -148,13 +145,12 @@ so the same rules run on both sides.
   results handed back by a main-thread `after` poll, and results of a previous workspace or destroyed page
   dropped. Workers never touch Tk. `SyncService` runs its own daemon thread with interval and exponential
   backoff. `app/ui/tk_lifecycle.py` moves cyclic garbage collection onto the Tk thread while windows live.
-- **Start-up sequence.** `app.app` imports no machine-learning stack (scikit-learn, scipy, pandas and joblib
-  load only when a model is trained or loaded) and none of the non-Day page modules. The constructor opens
+- **Start-up sequence.** `app.app` imports none of the non-Day page modules. The constructor opens
   storage, builds the shell and the Day page only; every other page (Week, Month, Projects, Productivity,
   Budgeting, Settings, Account, How to Use, About) is a `DeferredPage` (`app/ui/pages.py`) built, with its
   module, the first time it is shown. The Day page reads its date in a worker; CustomTkinter shows the window
   when `mainloop()` starts. The OS credential store is found on first use or by a background prefetch 1.5 s
-  later (`LazyVault`), and the first background sync waits 3 s (ADR-041).
+  later (`LazyVault`; no prefetch when no backend is configured), and the first background sync waits 3 s (ADR-041).
 - **Activity and periodic work.** `app/ui/activity.py` (Tk-free) turns the root's focus/map events into
   focused / unfocused / minimized; `ACTIVITY_POLICIES` sets the status-bar poll (4 s / 15 s / paused), the GC
   timer's interval and `SyncService.set_activity` (sync interval 60 s / 300 s, no pending looks while
@@ -173,7 +169,8 @@ so the same rules run on both sides.
   but Day is destroyed instead (`DeferredPage.release`) and built again on its next show (ADR-045).
 - **Engine process.** A schedule generation runs in a worker thread, but its day-engine calls run in one
   separate spawned process (`app/planning/engine_process.py`, ADR-044), so their CPU never holds the GIL the
-  Tk thread needs; everything that touches the database stays in the thread.
+  Tk thread needs; everything that touches the database stays in the thread. `EngineProcess.shutdown` waits
+  for the process (and a call already running) to end, so closing the storage leaves nothing running.
 - **Error handling.** Startup failures show a "Database Unavailable" panel rather than a scheduler that
   cannot save. `app/desktop.py` installs log files and exception hooks (`app/logging_setup.py`, with secret
   scrubbing) because the packaged app has no console.
@@ -184,12 +181,12 @@ so the same rules run on both sides.
 
 One file, `executions.db`, under the per-user data folder (`%LOCALAPPDATA%\ScheduleMaxing` on Windows;
 `SCHEDULE_MAXING_DATA_DIR` overrides). `app/execution/db.py` owns the connection, the transaction/lock
-helpers and 18 ordered schema migrations (`MIGRATIONS`, `LATEST_SCHEMA_VERSION`). Before migrating, the
+helpers and 19 ordered schema migrations (`MIGRATIONS`, `LATEST_SCHEMA_VERSION`). Before migrating, the
 file is copied by `app/execution/backup.py`; a newer schema than the code knows is refused
 (`NewerSchemaError`). A pre-Milestone-2 `data/` folder in a source checkout is adopted once.
 
 Tables: planning (`projects`, `task_types`, `tasks` + `task_tags`/`task_preferred_dates`/
-`task_dependencies`/`task_recurrence_weekdays`, `fixed_blocks`, `scheduled_tasks` (placements),
+`task_recurrence_weekdays`, `fixed_blocks`, `scheduled_tasks` (placements),
 `preference_overrides`, `schedule_generations`), execution (`executions`, `work_sessions`), sync
 (`sync_accounts`, `sync_dirty`, `sync_shadows`, `sync_outbox`, `sync_conflicts`, `sync_control`,
 `execution_wire_ids`), budget (`budget_balances`, `budget_entries`, `budget_overrides`; v17;
@@ -234,7 +231,7 @@ sequenceDiagram
     DC->>PC: day_freshness, then generate(FULL or INCREMENTAL)
     PC->>WF: read_inputs (fingerprint incl. Catch-Up evidence)
     WF->>PS: expand recurrence, load scoped tasks/blocks/preferences/history
-    WF->>AL: allocate tasks to dates (deadlines, dependencies, capacity)
+    WF->>AL: allocate tasks to dates (points first, then deadlines, within capacity)
     WF->>SV: per date
     SV->>EN: one day, resolved preferences, kept work as busy time
     EN-->>SV: DayScheduleOutput (placed, unscheduled + reasons, scores)
@@ -242,9 +239,8 @@ sequenceDiagram
     PS-->>DC: saved placements + GenerationRecord (provenance)
 ```
 
-- **Two engines.** `optimize_day_schedule` is Greedy Optimizer v1 on legacy models (30-minute scan;
-  frozen baseline). `generate_day_schedule` is the canonical engine: exact event-candidate greedy search at
-  minute resolution over UUID-identified canonical models.
+- **One engine.** `generate_day_schedule` is the canonical engine: exact event-candidate greedy search at
+  minute resolution over UUID-identified canonical models (Greedy Optimizer v1 was removed, ADR-047).
 - **Five modes are objectives, not optimizers** (`docs/scheduling-modes.md`): Normal (`precise_greedy`),
   ADHD (`adhd_friendly`, quarter-hour starts for long tasks), Early Finish and Night Owl (baseline greedy then
   bounded repacking, `_refine_time_objective`), Catch-Up (greedy with per-task history bonuses from
@@ -252,6 +248,8 @@ sequenceDiagram
 - **Hard constraints vs reward.** Constraints decide validity; reward (`calculate_task_score`) ranks valid
   candidates. Hard constraints are never converted to penalties.
 - **Allocation** (`app/planning/allocation.py`) only chooses dates for a week/month; it never sets minutes.
+  It places tasks points first (points desc, deadline, duration desc, id; ADR-049), so points are a
+  fingerprint input; the day engine never reads them.
 - **Freshness/provenance** (`app/planning/provenance.py`): each saved day stores an inputs fingerprint and
   placements digest, so a schedule is reported stale after any input change and a stale save is refused.
 - **Unsupported windows**: overnight windows and days containing a DST transition raise explicit errors
@@ -277,8 +275,7 @@ flowchart LR
 - `ProductivityService` (`app/productivity/reporting.py`) is the analytics boundary; the tracker
   (`tracker.py`) feeds the Productivity page's General / Specific / Project sections. Analytics compute from
   authoritative records every time; there is no stored counter.
-- The ML duration predictor is evidence-gated and only reachable through
-  `python -m app.productivity.predictor_comparison_cli`.
+- There is no machine learning: duration prediction is the median-based predictor only (ADR-046).
 
 ## 8. Accounts, authentication and synchronization
 

@@ -95,7 +95,7 @@ def _tasks(zone: str, *, overloaded: bool = False):
             "id": _id(f"{zone}:task:{index}"), "name": f"Task {index:02d}", "category": CATEGORIES[index % 5],
             "tags": sorted(rng.sample(["deep", "light", "outdoor", "desk", "call"], k=rng.randint(0, 2))),
             "estimated_duration_minutes": rng.choice([20, 25, 30, 45, 50, 60, 75, 90, 120]),
-            "priority": rng.randint(1, 10), "created_at": CLOCK + timedelta(seconds=index),
+            "points": rng.randint(1, 10), "created_at": CLOCK + timedelta(seconds=index),
             "updated_at": CLOCK + timedelta(seconds=index),
         }
         if overloaded:
@@ -116,9 +116,9 @@ def _tasks(zone: str, *, overloaded: bool = False):
             start = rng.choice([8, 9, 13, 17]) * 60
             fields.update(preferred_time_window=LocalTimeWindow(start_minute=start, end_minute=start + 180),
                           preferred_dates=[day])
-        elif kind == 4 and tasks:
-            fields.update(dependency_ids=[tasks[rng.randrange(len(tasks))].id], preferred_dates=[day])
         else:
+            if kind == 4 and tasks:
+                rng.randrange(len(tasks))  # the draw of the removed dependency edge: keeps the later inputs stable
             fields.update(preferred_dates=[day])
         tasks.append(Task(**fields))
     return tasks
@@ -172,7 +172,7 @@ def _day_engine(zone: str, mode: str, *, overloaded: bool = False) -> dict:
 
     day = WEEK_START + timedelta(days=2)
     pool = _tasks(zone, overloaded=True)[:24] if overloaded else _tasks(zone)[:12]
-    tasks = [task.model_copy(update={"dependency_ids": [], "required_date": None, "deadline": None,
+    tasks = [task.model_copy(update={"required_date": None, "deadline": None,
                                       "preferred_dates": [], "required": False}) for task in pool]
     schedule = DaySchedule(
         date=day, timezone=zone, fixed_blocks=[block for block in _blocks(zone) if block.planned_date == day],

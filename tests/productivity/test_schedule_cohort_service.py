@@ -53,7 +53,7 @@ class Stack:
 
     def planned(self, name: str, local_hour: int, minutes: int = 60, day: date = MON, **fields):
         task = self.planning.create_task(Task(user_id=self.owner, name=name, category=fields.pop("category", "study"),
-                                              estimated_duration_minutes=minutes, priority=5, **fields))
+                                              estimated_duration_minutes=minutes, **fields))
         start = datetime(day.year, day.month, day.day, local_hour, tzinfo=timezone.utc) + timedelta(hours=8)
         placement = ScheduledTask(task_id=task.id, user_id=self.owner, planned_date=day, timezone=VAN,
                                   planned_start=start, planned_end=start + timedelta(minutes=minutes),
@@ -106,7 +106,7 @@ def test_a_reclassified_and_renamed_task_keeps_its_historical_category(stack: St
 
 def test_legacy_history_stays_out_of_calendar_reports_but_in_the_compatible_one(stack: Stack) -> None:
     legacy = stack.executions.create_execution(task_name="Old", category="study", tag="", planned_date=1,
-                                               planned_start=540, planned_end=600, planned_duration=60, priority=5)
+                                               planned_start=540, planned_end=600, planned_duration=60)
     stack.executions.skip(legacy.id)
     stack.clock.advance(days=1)
     assert stack.report().occurrence_count == 0  # no calendar anchor: never given a fabricated date
@@ -130,7 +130,7 @@ def test_moves_and_an_unchanged_regeneration_count_one_occurrence(tmp_path: Path
     stack = Stack(tmp_path, now=datetime.now(timezone.utc))
     controller = PlanningController(service=stack.planning, timezone=VAN, project_root=str(tmp_path))
     task = controller.add_or_update_task(Task(name="Plan", category="study", estimated_duration_minutes=60,
-                                              priority=5, required_date=MON)).value
+                                              required_date=MON)).value
     assert controller.schedule_range(MON, MON, scope=RangeScope.ELIGIBLE).ok
     [first] = stack.planning.placements_for_date(MON)
     for hour in (14, 16):  # two explicit moves (local 14:00, 16:00)
@@ -138,7 +138,7 @@ def test_moves_and_an_unchanged_regeneration_count_one_occurrence(tmp_path: Path
         start = datetime(2026, 3, 2, tzinfo=timezone.utc) + timedelta(hours=hour + 8)
         workflow.reschedule_placement(stack.planning, current.id, expected_version=current.version, planned_date=MON,
                                       timezone_name=VAN, planned_start=start, planned_end=start + timedelta(hours=1))
-    controller.add_or_update_task(stack.planning.get_task(task.id).model_copy(update={"priority": 6}),
+    controller.add_or_update_task(stack.planning.get_task(task.id).model_copy(update={"points": 60}),
                                   expected_version=stack.planning.get_task(task.id).version)
     stack.clock.advance(days=1)
 

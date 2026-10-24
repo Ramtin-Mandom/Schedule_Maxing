@@ -16,7 +16,7 @@ THRESHOLDS = ProductivityThresholds(low=2, moderate=4, high=6)
 
 def _completed(actual_minutes: float, planned_duration: int = 60) -> Observation:
     return Observation(
-        execution_id="e", task_name="task", category="study", tag="tag", priority=5,
+        execution_id="e", task_name="task", category="study", tag="tag",
         status=ExecutionStatus.COMPLETED, planned_date=1, planned_start=0, planned_end=planned_duration,
         planned_duration=planned_duration, created_at=TIMESTAMP, time_bucket=TimeBucket.MORNING,
         day_of_week="Monday", actual_active_duration_minutes=actual_minutes,
@@ -28,7 +28,7 @@ def _completed(actual_minutes: float, planned_duration: int = 60) -> Observation
 
 def _skipped() -> Observation:
     return Observation(
-        execution_id="e", task_name="task", category="study", tag="tag", priority=5,
+        execution_id="e", task_name="task", category="study", tag="tag",
         status=ExecutionStatus.SKIPPED, planned_date=1, planned_start=0, planned_end=60,
         planned_duration=60, created_at=TIMESTAMP, time_bucket=TimeBucket.MORNING,
         day_of_week="Monday", actual_active_duration_minutes=None, duration_variance_minutes=None,

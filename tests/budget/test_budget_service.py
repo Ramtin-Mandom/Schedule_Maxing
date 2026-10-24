@@ -315,8 +315,7 @@ def test_the_ownerless_workspace_never_creates_account_records(connection) -> No
 
 def test_scheduling_code_never_imports_the_budget_domain() -> None:
     root = Path(__file__).resolve().parents[2] / "app"
-    scheduling = [root / name for name in ("optimizer.py", "reward.py", "constraints.py", "pert.py",
-                                           "mode_objectives.py", "models.py")]
+    scheduling = [root / name for name in ("optimizer.py", "reward.py", "mode_objectives.py")]
     scheduling += sorted((root / "planning").glob("*.py"))
     offenders = [path.name for path in scheduling if "app.budget" in path.read_text(encoding="utf-8")]
     assert offenders == []

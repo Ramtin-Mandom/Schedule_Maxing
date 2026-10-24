@@ -3,9 +3,8 @@ models.py
 
 Pydantic models for the execution-tracking subsystem.
 
-This is a separate concern from app/models.py and app/planning/models.py:
-those describe the scheduling *plan* (legacy Task/FixedBlock/DaySchedule,
-and canonical Task/ScheduledTask/DaySchedule respectively); the models here
+This is a separate concern from app/planning/models.py: that describes
+the scheduling *plan* (Task/ScheduledTask/DaySchedule); the models here
 describe what actually happened when a planned task was worked on. A
 TaskExecution stores a point-in-time snapshot of the planned task alongside
 its own stable id and lifecycle status, so historical records stay accurate
@@ -19,7 +18,7 @@ Legacy vs. canonical rows (Schedule Maxing v2 migration):
     - Legacy rows (task_id is None): created via
       ExecutionService.create_execution/get_or_create_execution, exactly as
       before. planned_date/planned_start/planned_end are the app's abstract
-      1-based day index and minutes-from-midnight, matching app/models.py.
+      1-based day index and minutes-from-midnight (the legacy CSV format).
       There is no recoverable real calendar date for these rows (the
       abstract day index has no anchor), so canonical_planned_date and the
       other canonical_* fields are always None here -- never guessed.
@@ -41,7 +40,7 @@ Legacy vs. canonical rows (Schedule Maxing v2 migration):
     are present and falls back to legacy behavior when the canonical ones
     are absent (see its module docstring).
 
-Why historical name/category/tag/priority/planned_duration snapshots exist
+Why historical name/category/tag/planned_duration snapshots exist
 *in addition to* task_id: task_id is a stable reference to the *current*
 Task row, which may be renamed, re-categorized, re-estimated, or deleted
 after this execution was created. The snapshot fields keep describing what
@@ -54,7 +53,7 @@ All legacy timestamps (created_at, updated_at, and WorkSession's
 started_at/ended_at) remain timezone-aware ISO 8601 strings (see
 datetime.now(timezone.utc).isoformat()), stored as TEXT in SQLite, exactly
 as before -- changing that would ripple through every existing consumer
-(service.py, data_prep.py, ml_features.py, buckets.py, exporters.py) for no
+(service.py, data_prep.py, buckets.py, exporters.py) for no
 benefit this milestone needs. The *new* canonical timestamp/date fields
 below (canonical_planned_start/end, actual_first_start_at,
 actual_final_end_at, canonical_planned_date) instead use typed, timezone-
@@ -154,15 +153,14 @@ class TaskExecution(BaseModel):
     category: str
     tag: str
 
-    # Legacy abstract day-index snapshot (app/models.py's day 1, day 2, ...)
+    # Legacy abstract day-index snapshot (the legacy CSV format's day 1, day 2, ...)
     # and minutes-from-midnight. None for a canonical-only execution (no
     # legacy day-index exists for it) -- never populated by inference.
     planned_date: int | None = None
     planned_start: int | None = None
     planned_end: int | None = None
     planned_duration: int
-    priority: int = Field(ge=1, le=10)
-    #: The task's points when this execution was created (a snapshot, like priority), so later edits of the
+    #: The task's points when this execution was created (a snapshot), so later edits of the
     #: task never rewrite what an answered attempt was worth. None for executions created before points existed.
     points: int | None = Field(default=None, ge=0)
 

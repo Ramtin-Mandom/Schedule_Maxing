@@ -11,16 +11,15 @@ created_at, updated_at or deleted_at -- those are owned by the server.
 Relationship rules (docs/sync-contract.md sections 4-6), all checked inside
 the caller's user scope only:
     project      delete refused (409 in_use) while live tasks belong to it
-    task         project_id / dependency_ids must be live records of the user;
-                 delete refused while live tasks depend on it; deleting it
+    task         project_id must be a live record of the user; deleting it
                  tombstones its live placements (each logged). Recurrence
                  (docs/recurrence.md): an occurrence names one of the user's
                  series and its id is derived from (series, slot); its
-                 identity, and a segment's lineage, never change; a new
-                 dependency on a series is series-to-series with a compatible
-                 cadence (anything else names one concrete occurrence); an
-                 occurrence may keep its same-slot edge to a skipped
-                 prerequisite occurrence, and such edges never block a skip.
+                 identity, and a segment's lineage, never change. Tasks have
+                 no priority or dependencies: `priority` and `dependency_ids`
+                 are legacy wire placeholders (LEGACY_TASK_WIRE_FIELDS) --
+                 accepted from older clients and ignored, always 5 and [] in
+                 a response.
                  Fields an update omits (an older client that does not know
                  them) keep their stored values -- recurrence identity,
                  exception state, lineage and a series' anchor are never
@@ -80,7 +79,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Annotated, Any, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import inspect, select
 from sqlalchemy.orm import Session
 
@@ -113,7 +112,7 @@ from app.planning.models import (
     TaskKind,
 )
 from app.planning.models import PlacementOrigin, PlacementRemovalReason
-from app.planning.recurrence import SeriesRule, cadence_problem, occurrence_task_id
+from app.planning.recurrence import SeriesRule, occurrence_task_id
 from app.planning.models import ScheduledTask as CanonicalPlacement
 from app.planning.models import Task as CanonicalTask
 from app.planning.preferences import OptimizerMode, PreferenceOverrides
@@ -221,7 +220,10 @@ class TaskTypeOut(TaskTypeFields, RecordMeta):
 #: Request bounds of a task's lists (validation errors, before any database work).
 MAX_TAGS = 50
 MAX_PREFERRED_DATES = 366
-MAX_DEPENDENCIES = 200
+
+#: Fields tasks no longer have, kept on the wire for 1.3.0 clients (which require them in every task record):
+#: accepted and ignored on input, always the neutral value on output. Remove once no 1.3.0 client remains.
+LEGACY_TASK_WIRE_FIELDS = frozenset({"priority", "dependency_ids"})
 
 
 class TaskFields(Strict):
@@ -230,7 +232,8 @@ class TaskFields(Strict):
     category: str = Field(min_length=1, max_length=100)
     tags: list[Annotated[str, Field(max_length=100)]] = Field(default_factory=list, max_length=MAX_TAGS)
     estimated_duration_minutes: int = Field(gt=0)
-    priority: int = Field(ge=1, le=10)
+    #: Legacy wire placeholder (LEGACY_TASK_WIRE_FIELDS): whatever an older client sends, it is 5.
+    priority: int = 5
     #: The user's productivity value (not the optimizer's placement score); omitted by older clients: the default.
     points: int = Field(default=DEFAULT_TASK_POINTS, ge=0, le=MAX_TASK_POINTS)
     #: The task's reusable type (one of the caller's task types). Omitted or null (an older client): a create
@@ -244,7 +247,8 @@ class TaskFields(Strict):
     #: The preferred third of the day (early / mid / late); omitted or null: none.
     preferred_time: PreferredTime | None = None
     preferred_time_window: LocalTimeWindow | None = None
-    dependency_ids: list[uuid.UUID] = Field(default_factory=list, max_length=MAX_DEPENDENCIES)
+    #: Legacy wire placeholder (LEGACY_TASK_WIRE_FIELDS): whatever an older client sends, it is [].
+    dependency_ids: list[uuid.UUID] = Field(default_factory=list)
     deadline: AwareDatetime | None = None
     recurrence: RecurrenceSpec | None = None
     #: Recurrence identity, exception state, provenance and lineage (docs/recurrence.md). An older client
@@ -255,16 +259,24 @@ class TaskFields(Strict):
     series_version: int | None = Field(default=None, gt=0)
     series_predecessor_id: uuid.UUID | None = None
 
+    @field_validator("priority", mode="before")
+    @classmethod
+    def _no_priority(cls, _value) -> int:
+        return 5
+
+    @field_validator("dependency_ids", mode="before")
+    @classmethod
+    def _no_dependencies(cls, _value) -> list:
+        return []
+
     def canonical(self, task_id: uuid.UUID) -> CanonicalTask:
-        data = self.model_dump(include=set(TaskFields.model_fields))
+        data = self.model_dump(include=set(TaskFields.model_fields) - LEGACY_TASK_WIRE_FIELDS)
         if self.occurrence_state in OCCURRENCE_TOMBSTONE_STATES:
             data["deleted_at"] = datetime.now(timezone.utc)  # only ever stored as a tombstone
         return CanonicalTask(id=task_id, **data)
 
     @model_validator(mode="after")
     def _canonical_rules(self):
-        if len(set(self.dependency_ids)) != len(self.dependency_ids):
-            raise ValueError("dependency_ids must not repeat a task")
         task_id = getattr(self, "id", None)
         if task_id is None and self.series_id is not None and self.occurrence_slot is not None:
             task_id = occurrence_task_id(self.series_id, self.occurrence_slot)
@@ -476,8 +488,7 @@ def _project_content(_session, _user_id, row) -> dict:
             "estimated_end_date": row.estimated_end_date, "completed_at": row.completed_at,
             "milestones": [{"id": item.milestone_id, "number": item.number, "title": item.title,
                             "description": item.description, "score": item.score} for item in row.milestone_rows],
-            "task_defaults": {"duration_minutes": row.default_duration_minutes, "priority": row.default_priority,
-                              "points": row.default_points}}
+            "task_defaults": {"duration_minutes": row.default_duration_minutes, "points": row.default_points}}
 
 
 def _project_assign(_session, _user_id, row, payload) -> None:
@@ -489,8 +500,7 @@ def _project_assign(_session, _user_id, row, payload) -> None:
             setattr(row, name, getattr(payload, name))
     if "task_defaults" in sent:
         defaults = payload.task_defaults
-        row.default_duration_minutes, row.default_priority, row.default_points = (
-            defaults.duration_minutes, defaults.priority, defaults.points)
+        row.default_duration_minutes, row.default_points = defaults.duration_minutes, defaults.points
     if "milestones" in sent:
         child = inspect(type(row)).relationships["milestone_rows"].mapper.class_
         row.milestone_rows = [
@@ -609,31 +619,10 @@ def _task_validate(session, user_id, payload: TaskFields, existing) -> None:
         predecessor = session.get(models.Task, (user_id, payload.series_predecessor_id))
         if predecessor is None or predecessor.recurrence_frequency is None:
             raise invalid_reference("series_predecessor_id must name one of your recurring series.")
-    stored_edges = {item.depends_on_id for item in existing.dependency_rows} if existing is not None else set()
-    for dependency in payload.dependency_ids:
-        if existing is not None and dependency == existing.id:
-            raise ApiError(422, "validation_error", "A task cannot depend on itself.")
-        target = session.get(models.Task, (user_id, dependency))
-        if target is None or (target.deleted_at is not None and not (
-                target.series_id is not None and payload.series_id is not None)):
-            raise invalid_reference("dependency_ids must name your own existing tasks.")
-        if dependency in stored_edges or target.recurrence_frequency is None:
-            continue
-        if payload.recurrence is None:
-            raise invalid_reference(f"A one-off task or an occurrence cannot depend on the recurring series "
-                                    f"{target.name!r} itself; name one concrete occurrence of it.")
-        target_spec = RecurrenceSpec.model_validate(task_content(target)["recurrence"])
-        if payload.recurrence.configured and target_spec.configured:
-            problem = cadence_problem(SeriesRule.of(payload.recurrence), SeriesRule.of(target_spec))
-            if problem is not None:
-                raise invalid_reference(f"This series cannot depend on the series {target.name!r}: {problem}")
-    if payload.recurrence is not None and payload.dependency_ids:
-        task_id = existing.id if existing is not None else getattr(payload, "id", None)
-        _refuse_series_cycles(session, user_id, task_id, payload.dependency_ids)
 
 
 #: The occurrence fields its series dictates (app/planning/series.py: _CONTENT_FIELDS, occurrence_for).
-_SERIES_CONTENT = frozenset({"project_id", "name", "category", "tags", "estimated_duration_minutes", "priority",
+_SERIES_CONTENT = frozenset({"project_id", "name", "category", "tags", "estimated_duration_minutes",
                              "points", "required", "preferred_time", "preferred_time_window"})
 
 
@@ -665,45 +654,7 @@ def _check_series_precondition(session, user_id, series, payload: TaskFields) ->
                        current=TASKS.serialize(session, user_id, series))
 
 
-def _refuse_series_cycles(session, user_id, task_id, dependency_ids) -> None:
-    """Series definitions never depend on each other in a cycle (every slot would be a cycle)."""
-    if task_id is None:
-        return
-    edges: dict[uuid.UUID, set[uuid.UUID]] = {}
-    for depender, depends_on in session.execute(
-        select(models.TaskDependency.task_id, models.TaskDependency.depends_on_id)
-        .join(models.Task, (models.Task.user_id == models.TaskDependency.user_id)
-              & (models.Task.id == models.TaskDependency.task_id))
-        .where(models.TaskDependency.user_id == user_id, models.Task.recurrence_frequency.is_not(None),
-               models.Task.deleted_at.is_(None))
-    ):
-        edges.setdefault(depender, set()).add(depends_on)
-    edges[task_id] = set(dependency_ids)
-    seen: set[uuid.UUID] = set()
-    stack = list(edges.get(task_id, ()))
-    while stack:
-        current = stack.pop()
-        if current == task_id:
-            raise ApiError(422, "validation_error", "Recurring series cannot depend on each other in a cycle.")
-        if current not in seen:
-            seen.add(current)
-            stack.extend(edges.get(current, ()))
-
-
 def _task_before_delete(mutator, row, occurrence_state: str | None = None) -> None:
-    rows = mutator.session.execute(
-        select(models.TaskDependency.task_id, models.Task.series_id)
-        .join(models.Task, (models.Task.user_id == models.TaskDependency.user_id)
-              & (models.Task.id == models.TaskDependency.task_id))
-        .where(
-            models.TaskDependency.user_id == mutator.user_id, models.TaskDependency.depends_on_id == row.id,
-            models.Task.deleted_at.is_(None),
-        )
-    ).all()
-    # An occurrence's same-slot edge never blocks skipping/deleting its prerequisite occurrence.
-    blocking = [task_id for task_id, series_id in rows if not (row.series_id is not None and series_id is not None)]
-    if blocking:
-        raise ApiError(409, "in_use", "Other tasks depend on this task; remove those dependencies first.")
     if row.series_id is not None:
         if occurrence_state is not None and occurrence_state not in {state.value for state in OCCURRENCE_TOMBSTONE_STATES}:
             raise ApiError(422, "validation_error", "An occurrence is removed as skipped, deleted or superseded.")
