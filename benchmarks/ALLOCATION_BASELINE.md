@@ -23,12 +23,13 @@ Deterministic, seeded week/month allocation benchmark for
 
 | workload | dates | tasks | assigned | unallocated | Day Scheduler calls | allocate median (ms) |
 |---|---:|---:|---:|---:|---:|---:|
-| week_20_tasks | 7 | 20 | 20 | 0 | **0** | 0.21 |
-| week_60_tasks | 7 | 60 | 60 | 0 | **0** | 0.59 |
-| month_leap_feb_80_tasks | 29 | 80 | 80 | 0 | **0** | 1.72 |
-| month_leap_feb_200_tasks | 29 | 200 | 200 | 0 | **0** | 4.46 |
+| week_20_tasks | 7 | 20 | 20 | 0 | **0** | 0.14 |
+| week_60_tasks | 7 | 60 | 60 | 0 | **0** | 0.38 |
+| month_leap_feb_80_tasks | 29 | 80 | 80 | 0 | **0** | 1.38 |
+| month_leap_feb_200_tasks | 29 | 200 | 200 | 0 | **0** | 3.37 |
 
-(Full precision in `benchmarks/results/allocation_baseline.json`.)
+(Full precision in `benchmarks/results/allocation_baseline.json`; regenerated on 2026-10-23 from an unmodified
+`git archive` export of `92c6993`.)
 
 ## Reading the numbers
 
@@ -36,7 +37,7 @@ Deterministic, seeded week/month allocation benchmark for
   workload** — allocation never invokes minute-level scheduling, exactly
   as required.
 - Allocation is very fast relative to the day engine (Task 4): even 200
-  tasks across a 29-date month completes in ~4.5ms median, versus
+  tasks across a 29-date month completes in ~3.4ms median, versus
   hundreds of milliseconds for a single day's `precise_greedy` generation
   on a comparably-sized task set (see `DAY_ENGINE_BASELINE.md`) — expected,
   since allocation only reasons about aggregate per-date capacity in
