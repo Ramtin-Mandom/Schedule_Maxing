@@ -284,7 +284,9 @@ def test_dialogs_drawers_and_the_task_list_work_from_the_keyboard(tmp_path: Path
                                on_result=results.append).present()
         settle(app, 0.1)
         assert app.focus_get() == focus_target(danger.cancel_button)  # destructive: Cancel is the default
-        key(danger, "Return")
+        # Enter in the dialog away from its buttons. Not on the dialog window itself: forcing the focus there makes
+        # X (CI's xvfb) send it a FocusIn, which the dialog passes straight back to Cancel -- a race Enter then loses.
+        key(danger.body, "Return")
         pump(app)
         assert danger.winfo_exists() and results == [False, True]  # Enter does not confirm a destructive action
         danger.cancel()

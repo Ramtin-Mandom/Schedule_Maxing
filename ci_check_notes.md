@@ -36,6 +36,19 @@ work it out again from failure logs.
 
 ## Checked
 
+### 2026-10-27: First CI run of engine-remake (run 40083410138, abd5da7)
+- Changed: nothing new; the run checked the dependency/priority removal (entry below) on CI.
+- Outcome: `postgres`, `direct-desktop` (Alembic 0021 on PostgreSQL 17) and `security-scan` passed. Two test
+  failures, both uncommitted fixes:
+  - stale test (`desktop-only`): `tests/ui/test_projects_allocation.py::test_project_filter_is_display_only_after_scheduling_a_date`
+    still asserted "predecessor ends before successor" after d111c3c dropped the dependency that guaranteed it.
+    The two tasks tie, so allocation orders them by random id (failed 3 of 8 local runs). Now asserts the
+    still-promised contract: both placed, no overlap.
+  - CI environment (`test` and `desktop-only`): `tests/ui/test_desktop_shell.py::test_dialogs_drawers_and_the_task_list_work_from_the_keyboard`
+    pressed Enter after focus-forcing the danger `ConfirmDialog` window itself; under X that FocusIn sends the
+    focus back to Cancel (`ModalDialog.present`'s `<FocusIn>` handler), so Enter cancelled. Enter now goes to the
+    dialog's body; the assertion is unchanged. Needs the next CI run to confirm (Linux only).
+
 ### 2026-10-23: Task dependencies and priority removed everywhere; points-first allocation (92c6993)
 - Changed: local schema v18 -> v19 (`app/execution/db.py` `_V19_STATEMENTS`: `task_dependencies` dropped, `priority`
   dropped from `tasks` and `executions`; `ALTER TABLE ... DROP COLUMN` needs SQLite >= 3.35); server Alembic head
@@ -145,6 +158,10 @@ work it out again from failure logs.
   records the git revision it ran from; a new 40-hex revision is a new `Hex High Entropy String` for
   `security-scan`. Update that entry's `hashed_secret` (the SHA-1 of the revision string) and `line_number` by
   hand in `secret-scan-baseline.json`.
+- **Focus-forcing a Tk toplevel under X sends it a real FocusIn.** On Windows `toplevel.focus_force()` leaves the
+  focus on the toplevel quietly; under xvfb the X server answers with a FocusIn some time later, which runs the
+  toplevel's `<FocusIn>` bindings (a `ModalDialog` then moves the focus to its default button). A test that
+  presses a key "on the dialog" should send it to a frame inside it, not to the toplevel.
 - **Known Tcl flake:** `TclError: invalid command name "tcl_findLibrary"` in a real-window test. Rerun the test
   alone; if it passes, it was the flake.
 
@@ -153,8 +170,8 @@ work it out again from failure logs.
 - `Deploy backend` failed on `main` for `9e37656` and `dfd53d6`: "Render accepted the request without a deploy
   id; check the Render dashboard" (not a test failure). Waiting on the owner: check the Render service and
   the `production` environment secrets.
-- `engine-remake` has never run on CI (not pushed). First run checks Alembic `0021` on PostgreSQL 17
-  (`postgres`, `direct-desktop`), which could not be run locally (Docker daemon not running).
+- `engine-remake`: the two test fixes of 2026-10-27 are uncommitted; the dialog fix is confirmed only by the
+  next CI run (`test`, `desktop-only`).
 - Starlette warns "Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead". Waiting on
   the owner: adding `httpx2` means a new dependency in `requirements.txt` and `requirements.lock`.
 - `gh` is installed and logged in, but a shell opened before the install has the old PATH. If `gh` is not found,
