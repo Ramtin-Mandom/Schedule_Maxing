@@ -2,7 +2,8 @@
 
 A navigation and change-impact guide. Use section D first: find the change you need, open the
 "Start here" files, follow only the listed dependencies, run the listed tests. System design is in
-[ARCHITECTURE.md](ARCHITECTURE.md); feature status in [CURRENT_STATE.md](CURRENT_STATE.md).
+[ARCHITECTURE.md](ARCHITECTURE.md); run-time behaviour (call chains, engine internals, rules and constraints)
+in [WORKFLOW.md](WORKFLOW.md); feature status in [CURRENT_STATE.md](CURRENT_STATE.md).
 
 Paths verified against commit `c2b19c0` on 2026-10-24. Dependencies marked **(import)** were checked in
 the source; others are call-level or conceptual relationships.
