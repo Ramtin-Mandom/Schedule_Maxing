@@ -1,22 +1,14 @@
 """
 app/planning/models.py
 
-Canonical planning models for Schedule Maxing v2.
+Canonical planning models: the one representation of "a task", "a fixed
+block" and "a scheduled placement" that every consumer builds on.
 
-This is a *new*, parallel domain model, not a replacement for
-app/models.py. app/models.py remains the documented legacy input/output
-compatibility layer during migration: the existing CLI (app/main.py), the
-desktop UI (app/app.py), and Greedy Optimizer v1 (app/optimizer.py) keep
-using it unchanged. Canonical consumers introduced by later milestones must
-build on the models here rather than growing a second, competing
-representation of "a task" or "a scheduled placement".
-
-Key differences from the legacy models:
+Key properties:
     - Every entity has a stable UUID identity that survives serialization,
-      edits, and repeated optimization (app/models.py's Task/ScheduledTask
-      have no identity at all -- they are matched by name).
+      edits, and repeated optimization.
     - Calendar dates are real `datetime.date` values (see
-      app.planning.compat for the explicit legacy day-index <-> date
+      app.planning.compat for the legacy CSV day-index <-> date
       conversion), not abstract 1-based day integers.
     - A placement (ScheduledTask) stores a reference to its Task (task_id)
       plus aware UTC instants and a timezone identifier; it does not copy
@@ -235,8 +227,6 @@ class TaskKind(str, Enum):
 #: Task.points: the default of a new task, and the largest value accepted.
 DEFAULT_TASK_POINTS = 1
 MAX_TASK_POINTS = 1000
-#: Task.priority of a task saved without one. Priority is a legacy stored field: no scheduler reads it.
-DEFAULT_TASK_PRIORITY = 5
 #: Task.estimated_duration_minutes of a To Do. A To Do has no duration; storage requires a positive value, so
 #: this placeholder is stored and never shown, scheduled or counted as planned time.
 TODO_PLACEHOLDER_MINUTES = 1
@@ -267,12 +257,11 @@ class ProjectTaskDefaults(BaseModel):
     """
 
     duration_minutes: int | None = Field(default=None, ge=1, le=1440)
-    priority: int | None = Field(default=None, ge=1, le=10)
     points: int | None = Field(default=None, ge=0, le=MAX_TASK_POINTS)
 
     @property
     def configured(self) -> bool:
-        return any(value is not None for value in (self.duration_minutes, self.priority, self.points))
+        return any(value is not None for value in (self.duration_minutes, self.points))
 
 
 class Project(BaseModel):
@@ -414,8 +403,6 @@ class Task(BaseModel):
     kind: TaskKind = TaskKind.FLEXIBLE
 
     estimated_duration_minutes: int = Field(gt=0)
-    #: Legacy: kept for records, files and clients that carry it. Not a scheduling input any more.
-    priority: int = Field(default=DEFAULT_TASK_PRIORITY, ge=1, le=10)
     #: The user's own productivity value of the task (the task form's "Points"): what finishing it is worth to
     #: them, for analytics. Not a scheduling input and unrelated to a placement's optimizer `score`.
     points: int = Field(default=DEFAULT_TASK_POINTS, ge=0, le=MAX_TASK_POINTS)
@@ -432,8 +419,6 @@ class Task(BaseModel):
     #: Legacy: a custom preferred window saved or imported before Early / Mid / Late. The task form no longer
     #: sets one; it only scores a task that has no preferred_time (which always takes precedence).
     preferred_time_window: LocalTimeWindow | None = None
-
-    dependency_ids: list[uuid.UUID] = Field(default_factory=list)
 
     deadline: datetime | None = None
 
@@ -487,12 +472,6 @@ class Task(BaseModel):
     @classmethod
     def _timestamps_aware(cls, value: datetime | None) -> datetime | None:
         return _utc_timestamp(value)
-
-    @model_validator(mode="after")
-    def _validate_no_self_dependency(self) -> "Task":
-        if self.id in self.dependency_ids:
-            raise ValueError("a task cannot depend on itself")
-        return self
 
     @model_validator(mode="after")
     def _validate_todo(self) -> "Task":
@@ -583,8 +562,7 @@ class FixedBlock(BaseModel):
     user_id: uuid.UUID | None = None
     label: str = Field(min_length=1)
     #: What kind of commitment this is (e.g. "sleep", "food", "event"). The
-    #: default mirrors app.models.FixedBlock's legacy default, so blocks
-    #: created before categories existed stay valid.
+    #: default ("fixed") keeps blocks created before categories existed valid.
     category: str = Field(default="fixed", min_length=1)
     #: What completing it is worth (like Task.points). 0 for a block saved before fixed blocks had points.
     points: int = Field(default=0, ge=0, le=MAX_TASK_POINTS)
@@ -806,8 +784,6 @@ def project_scheduled_task_display(
 
 class UnscheduledReasonCode(str, Enum):
     NO_VALID_SLOT = "no_valid_slot"
-    DEPENDENCY_CYCLE = "dependency_cycle"
-    DEPENDENCY_UNRESOLVED = "dependency_unresolved"
     REQUIRED_DATE_CONFLICT = "required_date_conflict"
     WINDOW_UNSUPPORTED = "window_unsupported"
     OTHER = "other"

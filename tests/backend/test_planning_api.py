@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import csv
 import io
-import json
 import uuid
 
 import pytest
@@ -36,7 +35,7 @@ def changes(engine) -> int:
 def seed(client, headers) -> dict:
     sleep = create(client, headers, "fixed-blocks", block_payload())  # 00:00-07:00 on DAY
     essay = create(client, headers, "tasks", task_payload(name="Essay", required=True, required_date=DAY,
-                                                          estimated_duration_minutes=90, priority=8))
+                                                          estimated_duration_minutes=90))
     gym = create(client, headers, "tasks", task_payload(name="Gym", category="health", preferred_dates=[DAY]))
     return {"sleep": sleep, "essay": essay, "gym": gym}
 
@@ -93,7 +92,7 @@ def test_incremental_generation_adds_work_without_moving_committed_placements(cl
     generate(client, alice)
     committed = day_placements(client, alice)
 
-    urgent = create(client, alice, "tasks", task_payload(name="Urgent", priority=10, preferred_dates=[DAY],
+    urgent = create(client, alice, "tasks", task_payload(name="Urgent", preferred_dates=[DAY],
                                                          estimated_duration_minutes=45))
     result = generate(client, alice, mode="incremental")
 
@@ -144,7 +143,7 @@ def test_explicit_regeneration_never_moves_started_work(client, alice) -> None:
     started = client.post(f"/executions/{execution['id']}/actions/start",
                           json={"base_version": 1, "at": "2026-03-02T11:30:00Z"}, headers=alice)
     assert started.status_code == 200, started.text
-    create(client, alice, "tasks", task_payload(name="Bigger", priority=10, preferred_dates=[DAY]))
+    create(client, alice, "tasks", task_payload(name="Bigger", preferred_dates=[DAY]))
 
     generate(client, alice, mode="full")
     kept = next(p for p in day_placements(client, alice) if p["task_id"] == records["essay"]["id"])
@@ -167,7 +166,7 @@ def test_a_concurrent_input_change_rolls_the_generation_back(tmp_path, settings,
         def racing(*args, **kwargs):
             with session_factory(engine)() as other, mutation(other, user_id, clock) as mutator:
                 mutator.create(TASKS, TaskCreate(name="Sneaked in", category="x", estimated_duration_minutes=5,
-                                                 priority=1, preferred_dates=[DAY]))
+                                                 preferred_dates=[DAY]))
             return real(*args, **kwargs)
 
         monkeypatch.setattr(workflow, "generate_selected_day", racing)
@@ -208,7 +207,7 @@ def test_reset_preview_and_confirmed_reset(client, alice, engine) -> None:
     generate(client, alice)
     preview = client.post("/planning/reset/preview", json={"start_date": DAY, "end_date": DAY}, headers=alice).json()
     assert set(preview["task_ids"]) == {records["essay"]["id"], records["gym"]["id"]}
-    assert preview["fixed_block_ids"] == [records["sleep"]["id"]] and not preview["blocked"]
+    assert preview["fixed_block_ids"] == [records["sleep"]["id"]]
 
     stale = client.post("/planning/reset", json={"start_date": DAY, "end_date": DAY, "confirmation": "0" * 64},
                         headers=alice)
@@ -240,7 +239,7 @@ def test_csv_round_trip_keeps_identities_and_a_bad_file_changes_nothing(client, 
     rows = list(csv.DictReader(io.StringIO(text)))
     task_row = next(row for row in rows if row["record_type"] == "task")
     fine = {**task_row, "id": str(uuid.uuid4()), "name": "Fine"}
-    dangling = {**task_row, "id": str(uuid.uuid4()), "name": "Dangling", "dependency_ids": json.dumps([str(uuid.uuid4())])}
+    dangling = {**task_row, "id": str(uuid.uuid4()), "name": "Dangling", "project_id": str(uuid.uuid4())}
     out = io.StringIO()
     writer = csv.DictWriter(out, fieldnames=list(rows[0]))
     writer.writeheader()
@@ -331,12 +330,12 @@ with TestClient(app) as client:
     result = client.post("/planning/generate", headers=headers,
                          json={"start_date": "2026-03-02", "end_date": "2026-03-02", "timezone": "UTC"}).json()
     assert len(result["days"][0]["placements"]) == 1, result
-print(sorted({name.split(".")[0] for name in sys.modules} & {"tkinter", "customtkinter", "pandas", "sklearn"}))
+print(sorted({name.split(".")[0] for name in sys.modules} & {"tkinter", "customtkinter"}))
 """
 
 
 def test_generation_needs_no_desktop_packages(tmp_path) -> None:
-    """A fresh process generates through the hosted API without importing Tk, pandas or scikit-learn."""
+    """A fresh process generates through the hosted API without importing Tk."""
     import os
     import subprocess
     import sys

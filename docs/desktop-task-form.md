@@ -22,11 +22,12 @@ disabled. To change the type, remove the record and add the other one.
 | Fixed | `FixedBlock` | Label, category, points, start, end |
 | To Do | `Task`, `kind = todo` | Name, category, points, tags |
 
-There are **no advanced settings**: the form has no priority, preferred
-window, deadline, dependency, task-type or repeat controls. A record that
-already has one of those (saved by an earlier version, imported from CSV, or
-synchronized from another client) keeps it unchanged when it is edited here,
-and the scheduler still honours deadlines, dependencies and recurring series.
+There are **no advanced settings**: the form has no preferred window,
+deadline, task-type or repeat controls. A record that already has one of
+those (saved by an earlier version, imported from CSV, or synchronized from
+another client) keeps it unchanged when it is edited here, and the scheduler
+still honours deadlines and recurring series. Tasks have no priority or
+dependencies at all (removed everywhere, ADR-048).
 
 ## Flexible task
 
@@ -39,14 +40,13 @@ and the scheduler still honours deadlines, dependencies and recurring series.
 | Required | The task must be scheduled (`required`) |
 | Duration | Whole minutes, from 1 minute to 24 h: `13`, `13 min`, `1 h 13 min`, `1h13m`, `1:13` |
 | Preferred time | Early, Mid or Late: a third of the date's day window (not midnight to midnight). The scheduler places the task there whenever it fits, and looks elsewhere only when that third has no valid placement |
-| Points | 0 to 1000, default 1, typed or changed by 10 with − / +: what finishing the task is worth to the user, for productivity analytics. Not a scheduling input (the inputs fingerprint excludes it) and never the optimizer's placement `score`. Each execution snapshots the task's points when it is created |
+| Points | 0 to 1000, default 1, typed or changed by 10 with − / +: what finishing the task is worth to the user, for productivity analytics. Never the optimizer's placement `score`, but the first key of the week/month allocation order (higher points get a date first, ADR-049), so the inputs fingerprint includes it. Each execution snapshots the task's points when it is created |
 | Tags | Flexible tasks and To Dos. An ordered list. **Enter** adds the typed tag as a chip and never submits the task. A chip's ✕ removes it, and **Backspace** in the empty tag field removes the last one. The chips stay on one row and scroll sideways when they are wider than the form. Blank and repeated tags are ignored. There is no mandatory tag. The scoring adapter still reads only the first tag, and the engine is unchanged |
 | Use default values | Fills the name (if empty), duration and points from the chosen category's defaults, or the general ones when no category is chosen. Out of the box: 60 minutes, 20 points, named after the category. Changed in Settings, stored in `task_defaults.json` beside the database (this device only); "Reset All Task Data" removes added categories and changed values |
 
-**Priority is gone.** Tasks have no priority in the form, and no scheduler
-reads one: every task scores as the reward's neutral priority, and the
-stored `priority` field (default 5) is kept only for older records, files
-and clients. What a task is worth to you is its **points**.
+**Priority is gone.** Tasks have no priority anywhere (local schema v19,
+server revision 0021); the sync wire still carries a constant `priority` of 5
+for 1.3.0 clients. What a task is worth to you is its **points**.
 
 **Preferred time replaces the preferred window.** `Task.preferred_time` is
 `early`, `mid` or `late`; `preferred_third_bounds` divides the date's day

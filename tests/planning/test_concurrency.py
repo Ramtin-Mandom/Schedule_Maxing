@@ -149,13 +149,13 @@ def test_each_logical_task_mutation_advances_the_version_by_one(planning_service
     unchanged = planning_service.update_task(task, expected_version=1)
     assert unchanged.version == 1 and unchanged.updated_at == task.updated_at
 
-    edited = planning_service.update_task(task.model_copy(update={"priority": 9}), expected_version=1)
+    edited = planning_service.update_task(task.model_copy(update={"points": 90}), expected_version=1)
     assert (edited.version, edited.updated_at, edited.created_at) == (2, clock(), task.created_at)
 
     clock.advance(5)
     assert planning_service.delete_task(task.id, expected_version=2)
     [tombstone] = planning_service.list_tasks(include_deleted=True)
-    assert (tombstone.version, tombstone.deleted_at, tombstone.priority) == (3, clock(), 9)
+    assert (tombstone.version, tombstone.deleted_at, tombstone.points) == (3, clock(), 90)
 
 
 def test_a_conflict_in_a_batch_rolls_back_the_whole_batch(planning_service: PlanningService) -> None:

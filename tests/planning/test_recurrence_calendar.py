@@ -17,7 +17,6 @@ from app.planning.recurrence import (
     RecurrenceBudgetError,
     SeriesNotConfiguredError,
     SeriesRule,
-    cadence_problem,
     occurrence_task_id,
     offset_transition,
 )
@@ -156,18 +155,6 @@ def test_occurrence_ids_derive_from_series_and_original_slot_only() -> None:
     assert occurrence_task_id(series_id, date(2026, 5, 1)) == occurrence_task_id(series_id, date(2026, 5, 1))
     assert occurrence_task_id(series_id, date(2026, 5, 1)) != occurrence_task_id(series_id, date(2026, 5, 2))
     assert occurrence_task_id(series_id, date(2026, 5, 1)) != occurrence_task_id(uuid.uuid4(), date(2026, 5, 1))
-
-
-def test_recurring_dependencies_need_the_same_zone_and_slot_compatible_cadences() -> None:
-    weekly = rule("weekly", date(2026, 1, 5), weekdays=[0, 2], tz="Europe/Berlin")
-    assert cadence_problem(weekly, rule("daily", date(2025, 12, 1), tz="Europe/Berlin")) is None
-    assert cadence_problem(weekly, rule("weekly", date(2026, 1, 12), weekdays=[0, 2, 4], tz="Europe/Berlin")) is None
-    assert "time zone" in cadence_problem(weekly, rule("daily", date(2025, 12, 1), tz="UTC"))
-    assert cadence_problem(weekly, rule("monthly", date(2026, 1, 5), tz="Europe/Berlin")) is not None
-    assert cadence_problem(weekly, rule("weekly", date(2026, 1, 5), weekdays=[0], tz="Europe/Berlin")) is not None
-    biweekly = rule("weekly", date(2026, 1, 5), interval=2, weekdays=[0], tz="UTC")
-    assert cadence_problem(biweekly, rule("weekly", date(2026, 1, 12), interval=2, weekdays=[0], tz="UTC")) is not None
-    assert cadence_problem(rule("daily", date(2026, 1, 3), interval=4), rule("daily", date(2026, 1, 1), interval=2)) is None
 
 
 def test_slots_are_local_dates_and_dst_days_are_detectable() -> None:

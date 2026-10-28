@@ -73,10 +73,10 @@ def test_the_repeats_fields_report_every_problem_next_to_its_field() -> None:
 
 
 def test_an_occurrence_is_edited_like_a_task_and_never_repeats_itself() -> None:
-    series = Task(name="Gym", category="exercise", estimated_duration_minutes=45, priority=6,
+    series = Task(name="Gym", category="exercise", estimated_duration_minutes=45,
                   recurrence=RecurrenceSpec(frequency="weekly", start_date=MON, timezone="UTC"))
     occurrence = Task(id=occurrence_task_id(series.id, MON), name="Gym", category="exercise",
-                      estimated_duration_minutes=45, priority=6, required_date=MON, series_id=series.id,
+                      estimated_duration_minutes=45, required_date=MON, series_id=series.id,
                       occurrence_slot=MON, series_version=1)
     draft = draft_from_task(occurrence, "UTC", series=series)
     assert draft.recurrence_role == "occurrence" and draft.repeat == ""
@@ -131,7 +131,7 @@ def test_a_template_saved_before_series_repeated_shows_needs_setup_and_the_form_
     week: SchedulePageController,
 ) -> None:
     legacy = week.planning.add_or_update_task(Task(
-        name="Standup", category="work", estimated_duration_minutes=15, priority=5,
+        name="Standup", category="work", estimated_duration_minutes=15,
         recurrence=RecurrenceSpec(frequency="daily"))).value
     [row] = rows(week)["needs setup"]
     draft = week.draft_for(row.ref).value

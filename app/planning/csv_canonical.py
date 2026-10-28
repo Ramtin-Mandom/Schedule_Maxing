@@ -1,12 +1,12 @@
 """
 app/planning/csv_canonical.py
 
-Import of the canonical stored-planning CSV (format version 2, written by
+Import of the canonical stored-planning CSV (format version 3, or 2, written by
 app/planning/csv_export.py -- see that module for the column contract):
 an identity-preserving round trip. Where the legacy schedule CSV
 (app/planning/csv_import.py) has no ids and always creates new records,
 this format carries every record's id, owner, relationships (project,
-dependencies, placement task), local edit revision, audit timestamps,
+placement task), local edit revision, audit timestamps,
 tombstone, fixed-block category, recurrence rule, and placement metadata,
 so exporting and importing reproduces the same records.
 
@@ -22,7 +22,7 @@ Two stages, both all-or-nothing:
    its CSV line, in a CsvImportError; nothing is written.
 
 2. PlanningService.apply_record_batch validates the batch against what is
-   stored (ownership, relationships, collisions, cycles, overlaps) and
+   stored (ownership, relationships, collisions, overlaps) and
    applies it in one transaction. Its documented collision rules decide
    what an existing id means: identical content is a no-op; a divergent
    record needs allow_updates *and* its row's `version` equal to the stored
@@ -48,7 +48,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from app.planning.application import RecordBatch, task_planned_date
-from app.planning.csv_export import COLUMNS_V2, FORMAT_VERSION
+from app.planning.csv_export import IMPORTABLE_FORMAT_VERSIONS, REQUIRED_COLUMNS
 from app.planning.csv_import import CsvImportError, ImportIssue, bounded_reader, read_csv_text
 from app.planning.models import FixedBlock, LocalTimeWindow, Project, RecurrenceSpec, ScheduledTask, Task
 from app.planning.time import local_minutes, minutes_to_hhmm
@@ -80,7 +80,7 @@ def parse_canonical_csv(text: str) -> RecordBatch:
             1, "this is a format version 1 planning export, which has no ownership, project, recurrence, or "
             "deletion columns; importing it could silently clear those fields. Export again with this version."
         )])
-    missing = [column for column in COLUMNS_V2 if column not in header]
+    missing = [column for column in REQUIRED_COLUMNS if column not in header]
     if missing:
         raise CsvImportError([ImportIssue(1, f"missing column(s): {', '.join(missing)}")])
 
@@ -95,8 +95,9 @@ def parse_canonical_csv(text: str) -> RecordBatch:
             record_type = row["record_type"].strip()
             if record_type not in RECORD_TYPES:
                 raise _RowError(f"record_type must be one of {', '.join(RECORD_TYPES)}, got {record_type!r}")
-            if row["format_version"].strip() != str(FORMAT_VERSION):
-                raise _RowError(f"format_version must be {FORMAT_VERSION}, got {row['format_version']!r}")
+            if row["format_version"].strip() not in IMPORTABLE_FORMAT_VERSIONS:
+                raise _RowError(f"format_version must be one of {', '.join(IMPORTABLE_FORMAT_VERSIONS)}, "
+                                f"got {row['format_version']!r}")
             batch[record_type].append((line, _PARSERS[record_type](row)))
         except ValidationError as error:
             issues.append(ImportIssue(line, _validation_message(error)))
@@ -289,7 +290,6 @@ def _parse_task(row: dict[str, str]) -> Task:
         category=_text(row, "category"),
         tags=[str(tag) for tag in _json(row, "tags", list, empty=[])],
         estimated_duration_minutes=_int(row, "duration_minutes"),
-        priority=_int(row, "priority"),
         **({"points": _int(row, "points")} if _text(row, "points") else {}),
         **({"kind": _text(row, "kind")} if _text(row, "kind") else {}),
         **({"preferred_time": _text(row, "preferred_time")} if _text(row, "preferred_time") else {}),
@@ -297,7 +297,6 @@ def _parse_task(row: dict[str, str]) -> Task:
         required_date=_date(row, "required_date", required=False),
         preferred_dates=[date_.fromisoformat(str(day)) for day in _json(row, "preferred_dates", list, empty=[])],
         preferred_time_window=window,
-        dependency_ids=[uuid.UUID(str(value)) for value in _json(row, "dependency_ids", list, empty=[])],
         deadline=_instant(row, "deadline", required=False),
         recurrence=RecurrenceSpec.model_validate(recurrence) if recurrence is not None else None,
         # Recurrence identity (optional columns: an older file has none -- ordinary tasks and unconfigured series).

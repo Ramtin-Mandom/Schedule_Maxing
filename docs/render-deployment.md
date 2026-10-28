@@ -51,8 +51,7 @@ About these settings:
 
 - **Dependencies.** `requirements-backend.txt` contains only server
   dependencies: FastAPI, Uvicorn, SQLAlchemy, Alembic, psycopg 3,
-  argon2-cffi, PyJWT, and pydantic. It has no desktop UI, pandas, or
-  scikit-learn.
+  argon2-cffi, PyJWT, and pydantic. It has no desktop UI.
 - **`--factory`.** Configuration is read when the app is created, not at
   import. Missing or invalid settings stop startup with an error that names
   the setting but never its value.

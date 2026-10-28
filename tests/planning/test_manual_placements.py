@@ -111,7 +111,7 @@ def test_a_moved_placement_survives_every_generation_and_a_restart(stack: Stack,
     assert new.planned_end <= moved.planned_start or new.planned_start >= moved.planned_end  # placed around it
 
     stack.restart()
-    stack.controller.add_or_update_task(other.model_copy(update={"priority": 9}), expected_version=other.version)
+    stack.controller.add_or_update_task(other.model_copy(update={"points": 90}), expected_version=other.version)
     stack.generate()
     assert stack.only(task) == moved  # the intent is stored, not held in memory
 
@@ -265,7 +265,7 @@ def test_a_change_during_generation_refuses_the_save(stack: Stack, monkeypatch, 
     stack.generate()
     planned = stack.only(plain)
     execution = stack.executions.get_or_create_canonical_execution(plain, planned)
-    stack.controller.add_or_update_task(plain.model_copy(update={"priority": 8}), expected_version=plain.version)
+    stack.controller.add_or_update_task(plain.model_copy(update={"name": "Plain, edited"}), expected_version=plain.version)
     real = workflow.generate_selected_day
     raced = []
 

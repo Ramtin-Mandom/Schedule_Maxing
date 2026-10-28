@@ -79,7 +79,7 @@ def block(label: str, start: tuple[int, int], end: tuple[int, int], category: st
 
 def add_task(services, name: str, *, duration: int = 60, window: tuple[int, int] | None = None, day: date | None = DAY,
              **extra) -> Task:
-    fields = dict(name=name, category="study", estimated_duration_minutes=duration, priority=5, **extra)
+    fields = dict(name=name, category="study", estimated_duration_minutes=duration, **extra)
     if window is not None:
         fields["preferred_time_window"] = LocalTimeWindow(start_minute=window[0], end_minute=window[1])
     if day is not None and "required_date" not in extra:
@@ -403,7 +403,6 @@ def test_reset_day_previews_then_deletes_only_this_dates_planning(services) -> N
     ok(page.make_schedule())
 
     plan = ok(page.reset_plan())
-    assert not plan.blocked
     assert "1 task(s) planned for this date, 1 fixed block(s)" in plan.message
     assert "date preferences and engines set for this date" in plan.message and "undated tasks" in plan.message
     saved = state(services.connection)
@@ -493,8 +492,8 @@ def test_canonical_csv_round_trip_preview_updates_and_refusals(services, tmp_pat
     write_rows(duplicate, header, [*data, dict(task_row)])
     assert "already appears on line" in page.csv_plan(str(duplicate)).error
     bad = tmp_path / "bad.csv"
-    write_rows(bad, header, [{**line, "format_version": "3"} for line in data])
-    assert "format_version must be 2" in page.csv_plan(str(bad)).error
+    write_rows(bad, header, [{**line, "format_version": "9"} for line in data])
+    assert "format_version must be one of 2, 3" in page.csv_plan(str(bad)).error
     bad_date = tmp_path / "bad_date.csv"
     write_rows(bad_date, header, [{**line, "date": "2026-13-40"} if line["record_type"] == "fixed_block" else line
                                   for line in data])
@@ -676,7 +675,7 @@ def test_points_counter_and_complete_removal_on_delete_and_reset_day(db_path: Pa
             complete(page, name)
         assert state(page)[2].text == "20 / 20 pts" and len(executions()) == 5
         plan = ok(page.reset_plan())
-        assert "points" in plan.message and not plan.blocked
+        assert "points" in plan.message
         snapshot = ok(page.reset_day(plan))
         assert (snapshot.rows, snapshot.todos, snapshot.timeline) == ([], [], [])
         assert state(page)[2].text == "0 / 0 pts" and executions() == ["Gym", "Milk"]

@@ -43,7 +43,6 @@ def make_task(planning_repository: PlanningRepository):
             category="study",
             tags=["math"],
             estimated_duration_minutes=60,
-            priority=8,
             preferred_time_window=LocalTimeWindow(start_minute=540, end_minute=660),
         )
         defaults.update(overrides)
@@ -98,7 +97,7 @@ def test_legacy_observation_falls_back_to_created_at_weekday(
     # created_at-based approximation is used, unchanged from before.
     service.create_execution(
         task_name="Legacy Task", category="study", tag="math",
-        planned_date=1, planned_start=540, planned_end=600, planned_duration=60, priority=5,
+        planned_date=1, planned_start=540, planned_end=600, planned_duration=60,
     )
 
     [observation] = build_observations(repository)
@@ -166,7 +165,7 @@ def test_mixed_legacy_and_canonical_records_in_one_report(
 , make_task, make_placement) -> None:
     legacy_execution = service.create_execution(
         task_name="Legacy Study", category="study", tag="math",
-        planned_date=1, planned_start=540, planned_end=600, planned_duration=60, priority=5,
+        planned_date=1, planned_start=540, planned_end=600, planned_duration=60,
     )
     service.start(legacy_execution.id)
     clock.advance(timedelta(minutes=45))

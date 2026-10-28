@@ -154,8 +154,8 @@ unanswered operations or an open conflict waits.
   A plan created and then moved or regenerated before it ever reached the
   server is uploaded as history (a `create` with its removal reason and
   successor, stored as a tombstone), after its successor.
-- **Order.** Creates and updates go in this order: projects, tasks (each
-  after the tasks it depends on), fixed blocks, placements, preferences,
+- **Order.** Creates and updates go in this order: projects, tasks (a
+  recurring series before its occurrences), fixed blocks, placements, preferences,
   schedule records, executions. Deletes follow, in reverse order
   (dependents first).
 - **Stable ids.** Each operation is stored in `sync_outbox` with a stable
@@ -219,7 +219,7 @@ The answers are recorded in one SQLite transaction:
   the precondition of a *new* live occurrence is its series' current state: the
   series is live, the slot is still one of its dates, and an occurrence that
   follows its series (no exception state) carries the series' current content
-  (name, category, tags, estimate, priority, points, required, preferred time and window,
+  (name, category, tags, estimate, points, required, preferred time and window,
   project). Otherwise the create is a `series_changed` conflict whose `current`
   is the series. So an occurrence expanded offline from an older rule -- or
   under a series another device deleted -- can never get around the series
@@ -240,6 +240,19 @@ out of payloads, and a pulled placement record without them keeps the local
 values, so an older server can never erase manual intent. The server keeps
 both fields when an update omits them (an older client) and never lets an
 update grant intent.
+
+### Removed task fields (legacy wire placeholders)
+
+Tasks and executions have no `priority` and tasks no `dependency_ids` since
+local schema v19 and server revision `0021` (ADR-048). A 1.3.0 client fails on a
+pulled record without them, so both sides still put them on the wire: the
+server answers `priority: 5` and `dependency_ids: []` on every task (and
+`priority: 5` on every execution) and ignores whatever a client sends
+(`LEGACY_TASK_WIRE_FIELDS` in `backend/resources.py`,
+`LEGACY_EXECUTION_WIRE_FIELDS` in `backend/executions.py`); the client sends the
+same constants and ignores them on pull (`app/sync/mapping.py`). Deploy the
+server revision together with the client. The placeholders go once no 1.3.0
+client remains (ROADMAP M11).
 
 ## Pull
 

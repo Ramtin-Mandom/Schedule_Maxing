@@ -26,8 +26,11 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-from app.planning.models import DEFAULT_TASK_PRIORITY, fixed_block_execution_id
+from app.planning.models import fixed_block_execution_id
 from backend.database import UTCDateTime
+
+#: Frozen copy of app.planning.models' former DEFAULT_TASK_PRIORITY (tasks no longer have a priority).
+DEFAULT_TASK_PRIORITY = 5
 
 revision = '0016'
 down_revision = '0015'

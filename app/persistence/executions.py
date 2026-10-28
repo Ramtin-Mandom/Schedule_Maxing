@@ -53,7 +53,6 @@ from app.execution.errors import (
 from app.execution.lifecycle import TRANSITIONS, BulkOutcomeResult, OutcomeChangeError, TaskOutcome
 from app.execution.models import ExecutionStatus, TaskExecution, WorkSession
 from app.execution.service import build_canonical_execution, check_feedback
-from app.models import ScheduledTask
 from app.persistence import errors
 from app.planning.models import ScheduledTask as CanonicalScheduledTask
 from app.planning.models import Task as CanonicalTask
@@ -199,28 +198,18 @@ class DirectExecutionService:
         return self._create(candidate, reuse_placement=True)
 
     def create_execution(self, *, task_name: str, category: str, tag: str, planned_date: int, planned_start: int,
-                         planned_end: int, planned_duration: int, priority: int) -> TaskExecution:
+                         planned_end: int, planned_duration: int) -> TaskExecution:
         """A legacy (day-index snapshot) execution, as ExecutionService.create_execution."""
         now = self._account.clock().isoformat()
         candidate = TaskExecution(
             id=str(uuid.uuid4()), task_name=task_name, category=category, tag=tag, planned_date=planned_date,
-            planned_start=planned_start, planned_end=planned_end, planned_duration=planned_duration, priority=priority,
+            planned_start=planned_start, planned_end=planned_end, planned_duration=planned_duration,
             status=ExecutionStatus.SCHEDULED, created_at=now, updated_at=now, user_id=self._account.user_id,
         )
         return self._create(candidate, reuse_placement=False)
 
-    def create_execution_from_scheduled_task(self, scheduled_task: ScheduledTask, *, planned_date: int,
-                                             priority: int) -> TaskExecution:
-        window = scheduled_task.time_window
-        return self.create_execution(
-            task_name=scheduled_task.name, category=scheduled_task.category, tag=scheduled_task.tag,
-            planned_date=planned_date, planned_start=window.start_time, planned_end=window.end_time,
-            planned_duration=window.end_time - window.start_time, priority=priority,
-        )
-
     def get_or_create_execution(self, *, task_name: str, category: str, tag: str, planned_date: int,
-                                planned_start: int, planned_end: int, planned_duration: int,
-                                priority: int) -> TaskExecution:
+                                planned_start: int, planned_end: int, planned_duration: int) -> TaskExecution:
         """As ExecutionService.get_or_create_execution: reuse the execution with this exact legacy snapshot."""
         snapshot = (task_name, category, tag, planned_date, planned_start, planned_end, planned_duration)
         for execution in self.list_executions():
@@ -229,7 +218,7 @@ class DirectExecutionService:
                 return execution
         return self.create_execution(task_name=task_name, category=category, tag=tag, planned_date=planned_date,
                                      planned_start=planned_start, planned_end=planned_end,
-                                     planned_duration=planned_duration, priority=priority)
+                                     planned_duration=planned_duration)
 
     # ------------------------------------------------------------------
     # Lifecycle (the server's mutation path; the shared transition table)

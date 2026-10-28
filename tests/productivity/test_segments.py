@@ -24,7 +24,7 @@ TIMESTAMP = "2024-01-01T09:00:00+00:00"
 
 def _completed(category: str, time_bucket: TimeBucket, actual_minutes: float) -> Observation:
     return Observation(
-        execution_id="e", task_name="task", category=category, tag="tag", priority=5,
+        execution_id="e", task_name="task", category=category, tag="tag",
         status=ExecutionStatus.COMPLETED, planned_date=1, planned_start=0, planned_end=60,
         planned_duration=60, created_at=TIMESTAMP, time_bucket=time_bucket, day_of_week="Monday",
         actual_active_duration_minutes=actual_minutes, duration_variance_minutes=actual_minutes - 60,

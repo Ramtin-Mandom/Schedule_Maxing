@@ -22,7 +22,7 @@ day gets preferred_dates=[that date], exactly like the legacy CSV import
 (app.planning.compat), so desktop-entered and imported tasks mean the same
 thing. The page's tasks are RangeScope.PLANNED for its dates.
 
-Identity: rows, dependency choices, edit targets, and executable
+Identity: rows, edit targets, and executable
 placements are all keyed by UUID (RowRef / ExecutablePlacement), never by a
 row index, task name, or display label -- duplicate names work.
 
@@ -52,7 +52,7 @@ The desktop form (Milestone 4) saves through blank_draft/editor_options/
 draft_for/save_draft/delete_description with app/ui/task_form_model.py's
 minute-precise rules (docs/desktop-task-form.md). submit_task_form and
 form_state_for remain for existing headless callers and keep the legacy
-form's rules (30-minute grid, 1-10 priority, required tag); the schedulers'
+form's rules (30-minute grid, required tag; a `priority` value is ignored); the schedulers'
 own rules are untouched either way.
 """
 
@@ -208,7 +208,6 @@ class FormState:
 
     ref: RowRef
     values: dict[str, str]
-    dependency_ids: list[uuid.UUID]
 
 
 @dataclass(frozen=True)
@@ -383,9 +382,8 @@ class SchedulePageController:
                     "start_time": str(window.start_minute) if window else "0",
                     "end_time": str(window.end_minute) if window else str(MINUTES_PER_DAY),
                     "duration": str(task.estimated_duration_minutes),
-                    "priority": str(task.priority),
                 }
-                return ControllerResult.success(FormState(ref=ref, values=values, dependency_ids=list(task.dependency_ids)))
+                return ControllerResult.success(FormState(ref=ref, values=values))
 
             block = self._find_block(ref.id)
             values = {
@@ -397,9 +395,8 @@ class SchedulePageController:
                 "start_time": str(local_minutes(block.planned_start, block.planned_date, block.timezone)),
                 "end_time": str(local_minutes(block.planned_end, block.planned_date, block.timezone)),
                 "duration": "",
-                "priority": "",
             }
-            return ControllerResult.success(FormState(ref=ref, values=values, dependency_ids=[]))
+            return ControllerResult.success(FormState(ref=ref, values=values))
         except _Failure as failure:
             return ControllerResult.failure(failure.message, failure.cause)
 
@@ -416,27 +413,14 @@ class SchedulePageController:
         """An empty form for this page, dated on form_date, with no category chosen yet."""
         return TaskDraft(kind=kind, category="", date=self.form_date.isoformat())
 
-    def editor_options(self, editing: RowRef | None = None, *, category: str | None = None,
+    def editor_options(self, *, category: str | None = None,
                        project_id: uuid.UUID | None = None) -> ControllerResult[EditorOptions]:
         """
         The form's choices in this workspace: categories (a stored unknown
-        one kept), tasks that can be dependencies (never the edited task;
-        labels include the date, and a short id where names still collide)
-        and projects -- all kept by id.
+        one kept), projects and task types -- all kept by id (labels get a
+        short id where names collide).
         """
         try:
-            tasks = [task for task in self._unwrap(self._planning.list_tasks())
-                     if not task.is_todo
-                     and not (editing is not None and editing.kind == "task" and task.id == editing.id)]
-            labels = {task.id: self._task_display(task) for task in tasks}
-            counts: dict[str, int] = {}
-            for label in labels.values():
-                counts[label] = counts.get(label, 0) + 1
-            dependencies = sorted(
-                (Choice(task.id, labels[task.id] if counts[labels[task.id]] == 1 else f"{labels[task.id]} #{str(task.id)[:4]}")
-                 for task in tasks),
-                key=lambda choice: choice.label.lower(),
-            )
             live = self._unwrap(self._planning.list_projects())
             names: dict[str, int] = {}
             for project in live:
@@ -461,7 +445,7 @@ class SchedulePageController:
                         else f"{task_type.label} #{str(task_type.id)[:4]}") for task_type in types),
                 key=lambda choice: choice.label.lower())
             return ControllerResult.success(EditorOptions(
-                timezone=self.timezone, categories=categories_for(category), dependencies=dependencies,
+                timezone=self.timezone, categories=categories_for(category),
                 projects=projects, task_types=task_types,
             ))
         except _Failure as failure:
@@ -597,7 +581,7 @@ class SchedulePageController:
         if series is None:
             raise _Failure("This occurrence's series was deleted; only this occurrence can be changed.")
         content = {name: getattr(edited, name) for name in (
-            "project_id", "name", "category", "tags", "estimated_duration_minutes", "priority", "points", "required",
+            "project_id", "name", "category", "tags", "estimated_duration_minutes", "points", "required",
             "preferred_time", "preferred_time_window")}
         definition = series.model_copy(update=content)
         return self._planning.edit_series(definition, expected_version=series.version, scope=chosen,
@@ -642,18 +626,6 @@ class SchedulePageController:
                     f"{format_clock(end)} on {day_label(other.planned_date)}). Choose another time.")
         return result.error or "The fixed block could not be saved."
 
-    def describe_tasks(self, task_ids: list[uuid.UUID]) -> ControllerResult[list[str]]:
-        """Display labels ("name (date)") for dependency ids, in the given order."""
-        try:
-            registry = self._unwrap(self._planning.get_tasks(task_ids))
-            labels = []
-            for task_id in task_ids:
-                task = registry.get(task_id)
-                labels.append(self._task_display(task) if task is not None else f"(missing task {task_id})")
-            return ControllerResult.success(labels)
-        except _Failure as failure:
-            return ControllerResult.failure(failure.message, failure.cause)
-
     # ------------------------------------------------------------------
     # Mutations (commit, then re-read from SQLite)
     # ------------------------------------------------------------------
@@ -662,7 +634,6 @@ class SchedulePageController:
         self,
         values: dict[str, str],
         *,
-        dependency_ids: list[uuid.UUID] | None = None,
         editing: RowRef | None = None,
     ) -> ControllerResult[PageSnapshot]:
         """Create (editing=None) or update one task/fixed block from legacy form values."""
@@ -679,7 +650,7 @@ class SchedulePageController:
             else:
                 if editing is not None and editing.kind != "task":
                     raise InvalidFormError("A fixed block cannot be turned into a flexible task; delete it and add a new one.")
-                task = self._build_task(validated, target_date, list(dependency_ids or []), editing)
+                task = self._build_task(validated, target_date, editing)
                 self._unwrap(self._planning.add_or_update_task(task, expected_version=expected_version))
         except (InvalidFormError, _Failure) as error:
             return self._fail_with_reload(str(error))
@@ -696,7 +667,6 @@ class SchedulePageController:
             if task is not None and (task.is_occurrence or task.is_series):
                 self._unwrap(self._delete_in_series(task, expected_version, scope))
             elif ref.kind == "task":
-                self._explain_dependents(ref.id)
                 self._unwrap(self._planning.remove_task(ref.id, expected_version=expected_version))
             else:
                 self._unwrap(self._planning.delete_fixed_block(ref.id, expected_version=expected_version))
@@ -987,22 +957,19 @@ class SchedulePageController:
         if start_time % TIME_SLOT_MINUTES or end_time % TIME_SLOT_MINUTES:
             raise InvalidFormError(f"Start and end times must be multiples of {TIME_SLOT_MINUTES} minutes.")
 
-        duration, priority = 0, 1
+        duration = 0
         if not fixed:
             duration = _parse_int(values.get("duration", ""), "Duration")
-            priority = _parse_int(values.get("priority", ""), "Priority")
             if duration <= 0:
                 raise InvalidFormError("Duration must be greater than 0.")
             if duration % TIME_SLOT_MINUTES:
                 raise InvalidFormError(f"Duration must be a multiple of {TIME_SLOT_MINUTES} minutes.")
             if duration > MINUTES_PER_DAY:
                 raise InvalidFormError("Duration cannot be longer than 24 hours.")
-            if not 1 <= priority <= 10:
-                raise InvalidFormError("Priority must be between 1 and 10.")
 
         return {
             "name": name, "day": day, "category": category, "tag": tag, "fixed": fixed,
-            "start_time": start_time, "end_time": end_time, "duration": duration, "priority": priority,
+            "start_time": start_time, "end_time": end_time, "duration": duration,
         }
 
     def _build_block(self, validated: dict, target_date: date_, editing: RowRef | None) -> FixedBlock:
@@ -1029,17 +996,15 @@ class SchedulePageController:
         return FixedBlock(**fields)
 
     def _build_task(
-        self, validated: dict, target_date: date_, dependency_ids: list[uuid.UUID], editing: RowRef | None
+        self, validated: dict, target_date: date_, editing: RowRef | None
     ) -> Task:
         fields = {
             "name": validated["name"],
             "category": validated["category"],
             "estimated_duration_minutes": validated["duration"],
-            "priority": validated["priority"],
             "preferred_time_window": LocalTimeWindow(
                 start_minute=validated["start_time"], end_minute=validated["end_time"]
             ),
-            "dependency_ids": dependency_ids,
         }
         try:
             if editing is None:
@@ -1057,7 +1022,7 @@ class SchedulePageController:
                 else:
                     data["preferred_dates"] = [target_date]
             return Task.model_validate(data)
-        except ValueError as error:  # pydantic ValidationError, e.g. a self-dependency
+        except ValueError as error:  # pydantic ValidationError
             raise InvalidFormError(_first_validation_message(error)) from error
 
     # ------------------------------------------------------------------
@@ -1072,17 +1037,6 @@ class SchedulePageController:
         if ref.version is None:
             raise InvalidFormError("This row has no saved version to compare against; reload the page and try again.")
         return ref.version
-
-    def _explain_dependents(self, task_id: uuid.UUID) -> None:
-        """Turn "other tasks depend on this" into a readable, name-based message before deleting."""
-        tasks = self._unwrap(self._planning.list_tasks())
-        dependents = [task for task in tasks if task_id in task.dependency_ids]
-        if dependents:
-            names = ", ".join(self._task_display(task) for task in dependents)
-            raise _Failure(
-                f"Cannot delete this task: {names} depend(s) on it. Remove that dependency first, "
-                "or delete the dependent task(s)."
-            )
 
     def _task_names(self, task_ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
         if not task_ids:

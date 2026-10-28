@@ -4,8 +4,8 @@ app/mode_objectives.py
 Scheduling objectives of the five user-facing modes (docs/scheduling-modes.md),
 on top of the one canonical day engine (app/optimizer.py). Modes are
 objectives, not separate optimizers: every mode uses the same hard
-constraints (window, fixed blocks and kept work, durations, dependencies,
-deadlines, required work) and the same greedy event-candidate search.
+constraints (window, fixed blocks and kept work, durations, deadlines,
+required work) and the same greedy event-candidate search.
 
     Normal       B(S): the existing baseline reward, existing search and ties.
     ADHD         the existing search on the local quarter-hour lattice for
@@ -27,15 +27,14 @@ unoccupied minutes between F and L (fixed blocks and kept work are occupied,
 counted once); E=(Z-L)/H, T=(F-A)/H, C=1-G/H, U=mean((start_i-A)/H), each
 clamped to [0, 1]. An empty flexible schedule has every component 0.
 W=max(1, |weight_importance|) of the date's reward settings, frozen for the
-run; its unit is the baseline reward's own (one priority step's worth).
+run; its unit is the baseline reward's own (one task's base weight).
 
 Early Finish and Night Owl refine the baseline greedy result: the same
 selected work set (no task is dropped or shortened; unscheduled work stays
 reported) is repacked -- left (as early as possible) for Early, right (as
-late as possible) for Night -- in a bounded set of orders that respect
-in-day dependencies: every dependency-respecting order when there are at most
-MAX_EXHAUSTIVE_ORDER_TASKS tasks, else the baseline's chronological order and
-the input order. Every candidate keeps every hard constraint; the best
+late as possible) for Night -- in a bounded set of orders: every order when
+there are at most MAX_EXHAUSTIVE_ORDER_TASKS tasks, else the baseline's
+chronological order and the input order. Every candidate keeps every hard constraint; the best
 objective wins (ties: Early by earlier L, then smaller G; Night by later F,
 then smaller G; then candidate order, the baseline first), and the baseline
 itself always competes, so refinement never returns a worse objective. This
@@ -49,7 +48,7 @@ import uuid
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 
-#: Repacking enumerates every dependency-respecting order up to this many tasks (6! = 720 orders at most).
+#: Repacking enumerates every order up to this many tasks (6! = 720 orders at most).
 MAX_EXHAUSTIVE_ORDER_TASKS = 6
 
 EARLY_WEIGHTS = (0.50, 0.35, 0.15)
@@ -126,12 +125,10 @@ def mode_weight(weight_importance: float) -> float:
 class RepackTask:
     task_id: uuid.UUID
     duration: int
-    #: Earliest start from dependencies outside this day's flexible set (external ends), else 0.
+    #: Earliest start (the start of its preferred third when it was placed inside it), else 0.
     earliest: int
     #: Latest finish (deadline / window end).
     latest_finish: int
-    #: In-day predecessors among the flexible set.
-    predecessors: tuple[uuid.UUID, ...]
     #: Stable rank (lower first) (input order) for the ranked order and ties.
     rank: int
 
@@ -170,53 +167,28 @@ def _last_fit(task: RepackTask, earliest: int, latest_finish: int, busy: list[tu
 
 
 def _pack(order: list[RepackTask], fixed: list[tuple[int, int]], *, left: bool) -> dict[uuid.UUID, int] | None:
-    """Pack `order` (a dependency-respecting order; reversed for right packing) around `fixed`; None if any fails."""
-    by_id = {task.task_id: task for task in order}
-    successors: dict[uuid.UUID, list[uuid.UUID]] = {task.task_id: [] for task in order}
-    for task in order:
-        for predecessor in task.predecessors:
-            if predecessor in successors:
-                successors[predecessor].append(task.task_id)
+    """Pack `order` (reversed for right packing) around `fixed`; None if any task fails to fit."""
     busy = list(fixed)
     starts: dict[uuid.UUID, int] = {}
-    sequence = order if left else list(reversed(order))
-    for task in sequence:
+    for task in (order if left else list(reversed(order))):
         if left:
-            earliest = max([task.earliest, *(starts[p] + by_id[p].duration for p in task.predecessors if p in starts)])
-            start = _first_fit(task, earliest, task.latest_finish, busy)
+            start = _first_fit(task, task.earliest, task.latest_finish, busy)
         else:
-            latest_finish = min([task.latest_finish, *(starts[s] for s in successors[task.task_id] if s in starts)])
-            start = _last_fit(task, task.earliest, latest_finish, busy)
+            start = _last_fit(task, task.earliest, task.latest_finish, busy)
         if start is None:
             return None
         starts[task.task_id] = start
         busy.append((start, start + task.duration))
-    if not left:  # a predecessor packed later (earlier in time) must still end before its successors start
-        for task in order:
-            for predecessor in task.predecessors:
-                if predecessor in starts and starts[predecessor] + by_id[predecessor].duration > starts[task.task_id]:
-                    return None
     return starts
 
 
 def _orders(tasks: list[RepackTask], baseline: Mapping[uuid.UUID, int]) -> list[list[RepackTask]]:
-    ids = {task.task_id for task in tasks}
-
-    def respects(order: list[RepackTask]) -> bool:
-        seen: set[uuid.UUID] = set()
-        for task in order:
-            if any(p in ids and p not in seen for p in task.predecessors):
-                return False
-            seen.add(task.task_id)
-        return True
-
     chronological = sorted(tasks, key=lambda task: (baseline[task.task_id], task.rank))
-    if len(tasks) <= MAX_EXHAUSTIVE_ORDER_TASKS:
-        return [chronological, *(list(order) for order in itertools.permutations(sorted(tasks, key=lambda t: t.rank))
-                                 if respects(list(order)) and list(order) != chronological)]
     by_rank = sorted(tasks, key=lambda task: task.rank)
-    candidates = [order for order in (chronological, by_rank) if respects(order)]
-    return candidates or [chronological]
+    if len(tasks) <= MAX_EXHAUSTIVE_ORDER_TASKS:
+        return [chronological, *(list(order) for order in itertools.permutations(by_rank)
+                                 if list(order) != chronological)]
+    return [chronological, by_rank]
 
 
 def refine(

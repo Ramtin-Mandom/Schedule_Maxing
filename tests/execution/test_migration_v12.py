@@ -19,6 +19,7 @@ from app.execution.db import LATEST_SCHEMA_VERSION, MigrationError, get_connecti
 from app.planning.models import derived_task_type_id
 from app.planning.recurrence import occurrence_task_id
 from app.planning.repository import PlanningRepository
+from tests.execution.conftest import without_dropped_columns
 
 READING_A = "11111111-1111-4111-8111-111111111111"
 READING_B = "22222222-2222-4222-8222-222222222222"
@@ -35,7 +36,7 @@ SNAPSHOT_COLUMNS = ("task_name", "task_tags", "task_points", "task_estimate_minu
 
 def _rows(conn: sqlite3.Connection, table: str) -> list[dict]:
     conn.row_factory = sqlite3.Row
-    return [dict(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY 1, 2")]
+    return without_dropped_columns([dict(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY 1, 2")])
 
 
 def _build_v11_database(db_path: Path) -> None:

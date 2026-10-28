@@ -106,7 +106,7 @@ def main() -> None:
         for index in range(args.tasks):
             result = services.planning_controller.add_or_update_task(Task(
                 id=uuid.uuid5(uuid.NAMESPACE_URL, f"schedule-diagnostics:{index}"), name=f"Synthetic {index}",
-                category="study", estimated_duration_minutes=15, priority=1 + index % 10, preferred_dates=[day]))
+                category="study", estimated_duration_minutes=15, points=1 + index % 10, preferred_dates=[day]))
             assert result.ok, "Synthetic fixture creation failed"
         services.close()
 

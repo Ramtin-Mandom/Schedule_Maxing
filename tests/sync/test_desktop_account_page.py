@@ -188,7 +188,7 @@ def test_connect_register_sign_in_associate_sync_and_sign_out(tmp_path: Path, di
         # Guest work done after signing out, then signing in to the existing account: the page asks, in plain
         # words, whether to add it to the account or keep it separate -- and adds it only when chosen.
         note = app.services.planning_controller.add_or_update_task(
-            Task(name="Guest note", category="study", estimated_duration_minutes=20, priority=4)).value
+            Task(name="Guest note", category="study", estimated_duration_minutes=20)).value
         assert owners(app)["Guest note"] is None
         assert "asked whether to add it" in page.mode_note.cget("text")
         page.email_field.variable.set("alice@example.com")
@@ -218,7 +218,7 @@ def test_a_real_conflict_is_compared_and_decided_on_the_page(tmp_path: Path, dia
         assert account.sign_in("alice@example.com", PASSWORD).ok
         app.apply_workspace()
         essay = app.services.planning_controller.add_or_update_task(
-            Task(name="Essay", category="study", estimated_duration_minutes=30, priority=5)).value
+            Task(name="Essay", category="study", estimated_duration_minutes=30)).value
         assert account.sync_now().value.status == "ok"
 
         other = make_device("other", InProcessTransport(alice_server.client))
@@ -261,7 +261,7 @@ def conflicting_essay(app, alice_server, make_device, name: str = "Essay"):
         assert account.sign_in("alice@example.com", PASSWORD).ok
         app.apply_workspace()
     task = app.services.planning_controller.add_or_update_task(
-        Task(name=name, category="study", estimated_duration_minutes=30, priority=5)).value
+        Task(name=name, category="study", estimated_duration_minutes=30)).value
     assert account.sync_now().value.status == "ok"
     other = make_device(f"other-{name}", InProcessTransport(alice_server.client))
     other.sign_in("alice@example.com")

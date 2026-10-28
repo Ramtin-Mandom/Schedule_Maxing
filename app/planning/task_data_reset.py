@@ -13,7 +13,7 @@ history, and this device must not show or resend any of it):
 
     executions (their work sessions and wire-id mappings cascade),
     placements (scheduled_tasks), schedule generation records, fixed blocks,
-    tasks (tags, preferred dates, dependencies, recurrence weekdays cascade),
+    tasks (tags, preferred dates, recurrence weekdays cascade),
     projects.
 
 Kept: preference layers (scheduling settings: default and per-date day
@@ -69,12 +69,6 @@ def wipe_task_data(connection, scope: OwnerScope, *, account_key: str | None = N
     with store.applying_remote():
         ids = {table: [row[0] for row in connection.execute(f"SELECT id FROM {table} WHERE {condition}", params)]
                for _, table in TASK_DATA_TABLES}
-        task_ids = ids["tasks"]
-        # A dependency another workspace's task has on one of these tasks goes with it (never a dangling link).
-        for start in range(0, len(task_ids), 500):
-            chunk = task_ids[start:start + 500]
-            marks = ", ".join("?" for _ in chunk)
-            connection.execute(f"DELETE FROM task_dependencies WHERE depends_on_task_id IN ({marks})", chunk)
         for entity_type, table in TASK_DATA_TABLES:
             removed[entity_type] = connection.execute(f"DELETE FROM {table} WHERE {condition}", params).rowcount
             for start in range(0, len(ids[table]), 500):

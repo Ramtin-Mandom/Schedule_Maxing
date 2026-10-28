@@ -2,7 +2,7 @@
 using temporary fixtures only (never a real user database):
 
 - a genuine Milestone 3 database (schema v5) that was synchronized and associated --
-  account-owned records with recurrence, tags, dependencies, a project, fixed blocks,
+  account-owned records with recurrence, tags, a project, fixed blocks,
   a generated schedule with provenance, preference layers, a completed execution,
   server shadows and a pending outbox operation -- migrates to v6 without changing any
   id, timestamp, owner, local version, server version, cursor or queued operation, stays
@@ -38,7 +38,7 @@ from tests.execution.test_migration_v2 import _build_v1_database
 MON = date(2024, 6, 3)
 ALICE = uuid.UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 ACCOUNT_KEY = "https://backend.test|aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-PRESERVED_TABLES = ("projects", "tasks", "task_tags", "task_dependencies", "task_recurrence_weekdays", "fixed_blocks",
+PRESERVED_TABLES = ("projects", "tasks", "task_tags", "task_recurrence_weekdays", "fixed_blocks",
                     "scheduled_tasks", "schedule_generations", "preference_overrides", "executions", "work_sessions",
                     "sync_dirty", "sync_shadows", "sync_outbox")
 
@@ -82,7 +82,8 @@ V14_PROJECT_COLUMNS = ("start_date", "estimated_end_date", "completed_at", "mile
 @contextmanager
 def pre_v8_writers():
     """
-    The planning and execution repositories as they were before schema v8: no points or recurrence columns --
+    The planning and execution repositories as they were before schema v8: no points or recurrence columns, a
+    priority --
     and a planning service that, like that code, knows no task types or planning snapshots (schema v12).
     """
     from app.execution import repository as execution_repository
@@ -100,9 +101,10 @@ def pre_v8_writers():
             (execution_repository, "_EXECUTION_COLUMNS", "_execution_to_row", "_row_to_execution"),
         ):
             columns, to_row = getattr(module, columns_name), getattr(module, to_row_name)
-            patch.setattr(module, columns_name, tuple(c for c in columns if c not in absent))
-            patch.setattr(module, to_row_name, lambda record, columns=columns, to_row=to_row: tuple(
-                value for column, value in zip(columns, to_row(record)) if column not in absent))
+            # That code also wrote the priority every task and execution had then (schema v19 dropped it).
+            patch.setattr(module, columns_name, (*(c for c in columns if c not in absent), "priority"))
+            patch.setattr(module, to_row_name, lambda record, columns=columns, to_row=to_row: (*(
+                value for column, value in zip(columns, to_row(record)) if column not in absent), 5))
             if from_row_name is not None:
                 from_row = getattr(module, from_row_name)
                 patch.setattr(module, from_row_name, lambda row, from_row=from_row: from_row(
@@ -164,10 +166,10 @@ def build_milestone3_database(db_path: Path, project_root: Path) -> dict:
     planning = PlanningService(PlanningRepository(connection))
     project = planning.create_project(Project(user_id=ALICE, name="Thesis"))
     outline = planning.create_task(Task(user_id=ALICE, name="Outline", category="study", estimated_duration_minutes=45,
-                                        priority=7, tags=["writing", "deep"], preferred_dates=[MON], project_id=project.id))
-    planning.create_task(Task(user_id=ALICE, name="Draft", category="study", estimated_duration_minutes=60, priority=6,
-                              preferred_dates=[MON], dependency_ids=[outline.id], project_id=project.id))
-    planning.create_task(Task(user_id=ALICE, name="Gym", category="exercise", estimated_duration_minutes=30, priority=4,
+                                        tags=["writing", "deep"], preferred_dates=[MON], project_id=project.id))
+    planning.create_task(Task(user_id=ALICE, name="Draft", category="study", estimated_duration_minutes=60,
+                              preferred_dates=[MON], project_id=project.id))
+    planning.create_task(Task(user_id=ALICE, name="Gym", category="exercise", estimated_duration_minutes=30,
                               recurrence=RecurrenceSpec(frequency=RecurrenceFrequency.WEEKLY, weekdays=[0, 2, 4])))
     start = datetime(2024, 6, 3, 0, tzinfo=timezone.utc)
     planning.create_fixed_block(FixedBlock(user_id=ALICE, label="Sleep", category="sleep", planned_date=MON,
@@ -211,8 +213,10 @@ def test_a_synchronized_milestone3_database_opens_unchanged_in_its_owners_worksp
     owners = {row[0] for table in ("tasks", "fixed_blocks", "scheduled_tasks", "executions")
               for row in before_connection.execute(f"SELECT user_id FROM {table}")}
     assert owners == {str(ALICE)}  # every record is the account's, as association leaves it
-    before_columns = {table: column_names(before_connection, table) for table in PRESERVED_TABLES}
-    before = {table: rows(before_connection, table) for table in PRESERVED_TABLES}
+    # Every column that still exists (schema v19 dropped the tasks' and executions' priority).
+    before_columns = {table: [column for column in column_names(before_connection, table) if column != "priority"]
+                      for table in PRESERVED_TABLES}
+    before = {table: rows(before_connection, table, before_columns[table]) for table in PRESERVED_TABLES}
     before_connection.close()
 
     for _ in range(2):  # the migrating open, then a plain reopen
@@ -243,7 +247,6 @@ def test_a_synchronized_milestone3_database_opens_unchanged_in_its_owners_worksp
             tasks = {task.name: task for task in controller.list_tasks().value}
             assert set(tasks) == {"Outline", "Draft", "Gym"}
             assert tasks["Gym"].recurrence.weekdays == [0, 2, 4] and tasks["Outline"].tags == ["writing", "deep"]
-            assert tasks["Draft"].dependency_ids == [facts["outline_id"]]
             state = controller.day_state(MON).value
             assert state.status == DayResultStatus.GENERATED  # the migration did not make the schedule stale
             assert facts["placement_id"] in {p.id for p in state.result.placements}

@@ -106,7 +106,7 @@ def test_concurrent_rule_edits_conflict_instead_of_minting_another_occurrence(pa
     series_ops.edit_series(a.planning, stored_a.model_copy(update={"name": "Run"}), expected_version=stored_a.version,
                            scope=EditScope.FUTURE, cutoff=MON + timedelta(days=3))
     stored_b = b.planning.get_task(walk.id)
-    series_ops.edit_series(b.planning, stored_b.model_copy(update={"priority": 9}), expected_version=stored_b.version,
+    series_ops.edit_series(b.planning, stored_b.model_copy(update={"points": 90}), expected_version=stored_b.version,
                            scope=EditScope.SERIES)
     a.transport.pushed.clear()
     assert a.sync_now().status == "ok"

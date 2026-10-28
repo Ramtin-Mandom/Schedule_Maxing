@@ -73,11 +73,23 @@ TASK_TYPE_FIELDS = ("task_type_id",)
 PLACEMENT_HISTORY_FIELDS = tuple(name for name in PLACEMENT_SNAPSHOT_FIELDS if name != "task_category")
 
 _TASK_FIELDS = (
-    "project_id", "name", "category", "tags", "estimated_duration_minutes", "priority", "points", "required",
+    "project_id", "name", "category", "tags", "estimated_duration_minutes", "points", "required",
     "required_date",
-    "preferred_dates", "preferred_time_window", "dependency_ids", "deadline", "recurrence",
+    "preferred_dates", "preferred_time_window", "deadline", "recurrence",
     "series_id", "occurrence_slot", "occurrence_state", "series_version", "series_predecessor_id",
 )
+#: Wire placeholders for fields tasks and executions no longer have: desktop clients released before this change
+#: and a server before revision 0021 require them in every record, so a payload always carries them with neutral
+#: values and a received value is ignored. Remove once no such client or server remains (ROADMAP).
+LEGACY_TASK_WIRE_FIELDS = {"priority": 5, "dependency_ids": ()}
+LEGACY_EXECUTION_WIRE_FIELDS = {"priority": 5}
+
+
+def _with_legacy_task_wire(payload: dict) -> dict:
+    return {**payload, **{name: list(value) if isinstance(value, tuple) else value
+                          for name, value in LEGACY_TASK_WIRE_FIELDS.items()}}
+
+
 #: Task fields a record from a server older than recurrence expansion (docs/recurrence.md) does not have.
 _TASK_FIELDS_SINCE_RECURRENCE = ("series_id", "occurrence_slot", "occurrence_state", "series_version",
                                  "series_predecessor_id")
@@ -99,7 +111,7 @@ _GENERATION_FIELDS = (
     "total_score", "generated_at",
 )
 _EXECUTION_FIELDS = (
-    "task_name", "category", "tag", "planned_date", "planned_start", "planned_end", "planned_duration", "priority",
+    "task_name", "category", "tag", "planned_date", "planned_start", "planned_end", "planned_duration",
     "points", "actual_active_duration_minutes", "duration_variance_minutes", "start_delay_minutes", "focus_rating",
     "energy_rating", "interruption_count", "note", "canonical_planned_date", "canonical_timezone",
     "canonical_planned_start", "canonical_planned_end", "actual_first_start_at", "actual_final_end_at",
@@ -175,8 +187,9 @@ class LocalRecords:
             payload = model and {"label": model.label}
         elif entity_type == "task":
             model = self.planning.get_task(record_id, include_deleted=True)
-            payload = model and _dump(model, (*_TASK_FIELDS, *(TASK_TYPE_FIELDS if self.task_types else ()),
-                                              *(TASK_KIND_FIELDS if self.task_kinds else ())))
+            payload = model and _with_legacy_task_wire(_dump(model, (
+                *_TASK_FIELDS, *(TASK_TYPE_FIELDS if self.task_types else ()),
+                *(TASK_KIND_FIELDS if self.task_kinds else ()))))
         elif entity_type == "fixed_block":
             model = self.planning.get_fixed_blocks([record_id], include_deleted=True).get(record_id)
             payload = model and _dump(model, (*_BLOCK_FIELDS, *(BLOCK_KIND_FIELDS if self.task_kinds else ())))
@@ -210,6 +223,7 @@ class LocalRecords:
             return None
         sessions = [(s.started_at, s.ended_at) for s in self.executions.list_sessions(local_id)]
         payload = {name: value for name, value in execution.model_dump(mode="json").items() if name in _EXECUTION_FIELDS}
+        payload.update(LEGACY_EXECUTION_WIRE_FIELDS)
         if self.manual_placements and execution.cancel_reason is not None:
             payload["cancel_reason"] = execution.cancel_reason.value
         payload.update(

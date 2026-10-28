@@ -19,7 +19,7 @@ Legacy vs. canonical basis (Task 2 / Schedule Maxing v2):
           record's own legacy values when present, otherwise the local
           wall-clock minute-of-day derived from canonical_planned_start/end
           in canonical_timezone. Every existing consumer (stats.py,
-          ml_features.py, duration_suggestion.py) keeps reading a plain
+          duration_suggestion.py) keeps reading a plain
           minute-of-day without needing to know which kind of row produced
           it.
         - effective_planned_date (date | None): the real calendar date when
@@ -90,7 +90,6 @@ class Observation(BaseModel):
     task_name: str
     category: str
     tag: str
-    priority: int
     status: ExecutionStatus
 
     planned_date: int | None
@@ -177,7 +176,6 @@ def _to_observation(execution: TaskExecution, repository: ExecutionRepository) -
         task_name=execution.task_name,
         category=execution.category,
         tag=execution.tag,
-        priority=execution.priority,
         status=execution.status,
         planned_date=execution.planned_date,
         planned_start=effective_start,

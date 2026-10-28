@@ -29,7 +29,8 @@ updater, and the CI, release and deploy workflows.
 ### M1. Make the in-progress 1.2.0 debug branch releasable
 
 - **Priority:** High
-- **Status:** In progress. Pull request #21 merged the branch into `main` (including the build script's
+- **Status:** Complete (verified 2026-10-23): pull request #23 merged with all five CI jobs green, and
+  1.3.0 was released from `main` (`dfd53d6`, tag `v1.3.0`). Earlier: pull request #21 merged the branch into `main` (including the build script's
   Python 3.10 check); pull request #22 merged the remaining updater edits and the Ruff fix. `ruff check .`
   is clean on `664de0e` (verified 2026-10-20); the pull request's CI results were not checked here.
 - **Objective:** Commit a green change through a pull request so that CI, and then a release, can use it.
@@ -38,9 +39,9 @@ updater, and the CI, release and deploy workflows.
   `app/ui/ui_settings.py`, `packaging/windows/build_windows.ps1`, and their tests.
 - **Deliverables:**
   - [x] Fix Ruff F841 at `app/ui/update_view.py:130`: `release` is assigned but never used (`800996f`).
-  - [ ] Run `pytest -m dev` and `ruff check .`, then open a pull request (CI runs only on pull requests).
-    Pull request #22 is merged; confirm its five CI jobs passed.
-  - [ ] When releasing: bump `app/version.py` and tag `v<version>`.
+  - [x] Run `pytest -m dev` and `ruff check .`, then open a pull request (CI runs only on pull requests).
+    Pull request #23 passed `test`, `security-scan`, `desktop-only`, `direct-desktop` and `postgres`.
+  - [x] When releasing: bump `app/version.py` and tag `v<version>` (1.3.0, `v1.3.0`).
 - **Acceptance criteria:** All five CI jobs pass on the pull request; `ruff check .` is clean.
 - **Testing:** `pytest -m dev`, `ruff check .`, `tests/update/`, `tests/test_transport_security.py`,
   `tests/test_packaging_config.py`.
@@ -179,13 +180,11 @@ Items the repository names as future work or as "not yet" limitations, in priori
 - **Priority:** Low
 - **Status:** The README lists these as "Possible next steps"; they are not commitments.
 - **Items:**
-  - a simulated-annealing optimizer (its settings exist, unused, in `config/settings.py`);
+  - a simulated-annealing optimizer;
   - schedule comparison metrics;
   - more detailed reasons for unscheduled tasks;
-  - warnings for ignored missing dependencies (legacy pipeline);
   - drag-and-drop editing;
-  - opt-in use of predicted durations;
-  - showing ML predictions in the UI once the evidence gate passes.
+  - opt-in use of predicted durations.
 - **Complexity:** Varies.
 
 ### M10. Budgeting beyond the desktop
@@ -198,6 +197,22 @@ Items the repository names as future work or as "not yet" limitations, in priori
   - [ ] Budget routes in the local web profile, if wanted.
   - [ ] Optional: "this and following" series edits, moving an occurrence from the forms.
 - **Testing:** `tests/budget/*`, `tests/ui/test_budget_*.py`.
+
+### M11. Drop the legacy `priority` / `dependency_ids` wire placeholders
+
+- **Priority:** Low
+- **Status:** Waiting. Tasks and executions have no priority or dependencies since ADR-048, but 1.3.0 clients
+  fail on a pulled record without the fields, so the server and the client still send `priority` (5) and
+  `dependency_ids` ([]) and ignore them on input.
+- **Dependencies:** Server revision `0021` deployed together with the client that removed them; no 1.3.0
+  client left (the updater moves installed clients forward).
+- **Modules:** `backend/resources.py` (`LEGACY_TASK_WIRE_FIELDS`), `backend/executions.py`
+  (`LEGACY_EXECUTION_WIRE_FIELDS`), `app/sync/mapping.py` (`_with_legacy_task_wire`), `docs/sync-protocol.md`.
+- **Deliverables:**
+  - [ ] Remove the placeholder fields and their validators from the server schemas and the client mapping.
+- **Testing:** `tests/sync/test_protocol.py`, `tests/backend/test_resources.py`, `tests/backend/test_sync_push.py`.
+- **Risks:** An old client still syncing breaks on pull.
+- **Complexity:** Small.
 - **Complexity:** Small to Medium.
 
 ---
@@ -226,7 +241,7 @@ These come from this analysis. None of them has been approved.
 - **Status:** Python 3.10 is pinned everywhere (ADR-002). Its upstream security support is scheduled to end
   in October 2026 (PEP 619).
 - **Proposal:** Pick a newer version and change all workflows, `build_windows.ps1` and its test, and the
-  `.venv` in one change. Re-check PyInstaller, CustomTkinter and the scikit-learn wheels.
+  `.venv` in one change. Re-check PyInstaller and CustomTkinter.
 - **Risks:** Changes in bundling behavior; checks needed on a clean Windows machine.
 - **Complexity:** Medium.
 
@@ -238,12 +253,11 @@ These come from this analysis. None of them has been approved.
     and `ExecutionController.record_feedback` supports it.
   - `app/ui/cohort_view.py`: schedule follow-through. `ProductivityController.schedule_cohort_for_last` exists.
   - `app/ui/duration_suggestion.py`: the median duration suggestion. The README lists this as a feature.
-  - The `RewardConfigPage` class in `app/app.py`.
+  - [x] The `RewardConfigPage` class in `app/app.py` (removed in `f47a080`).
 
   None of these is imported or instantiated by the running app.
 - **Proposal:** The owner decides whether to bring the feedback dialog, the follow-through panel and the
-  duration suggestion back into the 1.1+ UI, or to delete them and correct the README. Remove
-  `RewardConfigPage`, which `README.md` says is no longer exposed.
+  duration suggestion back into the 1.1+ UI, or to delete them and correct the README.
 - **Testing:** `tests/ui/test_task_editor_widgets.py` covers `duration_suggestion`. Add page tests if the
   modules are wired in.
 - **Complexity:** Small for removal; Medium for each module wired in.
@@ -252,12 +266,10 @@ These come from this analysis. None of them has been approved.
 
 - **Priority:** Low
 - **Status:**
-  - `app/planning/application.py` (about 2,500 lines), `app/optimizer.py` (about 2,000; two engines in one
-    module), `app/execution/db.py` (about 1,600; it owns planning and sync tables although it sits in
+  - `app/planning/application.py` (about 2,500 lines), `app/optimizer.py` (about 1,300; the canonical engine only since ADR-047), `app/execution/db.py` (about 1,600; it owns planning and sync tables although it sits in
     `execution/`), `backend/models.py` (about 1,600).
   - `app/planning/application.py` imports `app.execution.db`, which couples the two packages.
 - **Proposal:**
-  - Move the legacy Greedy v1 into its own module, behind a re-export.
   - Move the storage infrastructure into a neutral package, with shims at the old import paths.
   - Make each move behavior-preserving, guarded by the existing baselines.
 - **Risks:** Wide import changes, and moves that look like rewrites in review. Do this only with approval and
@@ -267,8 +279,9 @@ These come from this analysis. None of them has been approved.
 ### R5. Tighten the desktop dependency bounds
 
 - **Priority:** Low
-- **Status:** `requirements-desktop.txt` has lower bounds only. `docs/desktop-web-boundaries.md` §8 records
-  that a fresh install resolved CustomTkinter 6.0.0 while the development environment has 5.2.2.
+- **Status:** Partially addressed: CustomTkinter is now capped below 6 (`b5668ff`); the other entries in
+  `requirements-desktop.txt` have lower bounds only. `docs/desktop-web-boundaries.md` §8 records that a fresh
+  install had resolved CustomTkinter 6.0.0 while the development environment has 5.2.2.
   `requirements.lock` exists for the security scan, but the build does not use it.
 - **Proposal:** Build the installer from the lock file, or add upper bounds, so released builds can be
   reproduced.

@@ -9,7 +9,7 @@ must be chosen on the command line.
     python -m app.persistence.verify_render --env-file .env --check-only
     python -m app.persistence.verify_render --env-file .env --write-sample \\
         --email Ramtin1383.5@gmail.com --display-name Ramtin \\
-        --anchor-date 2026-09-28 --timezone America/Vancouver [--dependency-date 2026-09-29]
+        --anchor-date 2026-09-28 --timezone America/Vancouver
 
 --check-only    connection, TLS mode and schema revision. No DDL, no account,
                 no writes. Exit 0 = current, 1 = schema not current, 2 = failure.
@@ -20,10 +20,10 @@ must be chosen on the command line.
                    otherwise signed in with the supplied password -- a wrong
                    password stops everything; a password is never reset.
                 2. samples/inputs/valid_single_day_basic.csv (3 flexible tasks, 4
-                   fixed blocks, day 1, no dependencies -- asserted) converted by
-                   the ordinary legacy importer onto --anchor-date in --timezone,
-                   then given stable seed identities (uuid5 of fixture version,
-                   user, date, timezone and CSV line), dependencies remapped.
+                   fixed blocks, day 1 -- asserted) converted by the ordinary
+                   legacy importer onto --anchor-date in --timezone, then given
+                   stable seed identities (uuid5 of fixture version, user, date,
+                   timezone and CSV line).
                    Seeding is one transaction under the user's lock: missing
                    records are created; identical ones are left alone; edited or
                    deleted ones are reported as a conflict and nothing is
@@ -67,13 +67,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 MAIN_SAMPLE = ROOT / "samples" / "inputs" / "valid_single_day_basic.csv"
-DEPENDENCY_SAMPLE = ROOT / "samples" / "inputs" / "dependency_chain_linear.csv"
 FIXTURE_VERSION = "render-sample-v1"
 SEED_NAMESPACE = uuid.UUID("7a0f1c5e-2b8d-4c3a-9e61-5f2d8b4a7c10")
 #: What the main sample must contain (checked against the file itself before anything is written).
-MAIN_EXPECTED = {"tasks": 3, "fixed_blocks": 4, "day_indexes": {1}, "dependencies": 0}
-TASK_CONTENT = ("project_id", "name", "category", "tags", "estimated_duration_minutes", "priority", "required",
-                "required_date", "preferred_dates", "preferred_time_window", "dependency_ids", "deadline", "recurrence")
+MAIN_EXPECTED = {"tasks": 3, "fixed_blocks": 4, "day_indexes": {1}}
+TASK_CONTENT = ("project_id", "name", "category", "tags", "estimated_duration_minutes", "required",
+                "required_date", "preferred_dates", "preferred_time_window", "deadline", "recurrence")
 BLOCK_CONTENT = ("label", "category", "planned_date", "timezone", "planned_start", "planned_end")
 STEPS = ("connection", "schema", "account", "seed", "preference", "generation", "execution", "read-back",
          "password-scope")
@@ -100,7 +99,6 @@ class Seed:
     tasks: list  # app.planning.models.Task, owner and stable ids set
     fixed_blocks: list  # app.planning.models.FixedBlock
     day_indexes: set[int]
-    dependency_count: int
 
 
 def seed_id(user_id: uuid.UUID, fixture: str, day: date, timezone_name: str, line: int) -> uuid.UUID:
@@ -108,7 +106,7 @@ def seed_id(user_id: uuid.UUID, fixture: str, day: date, timezone_name: str, lin
 
 
 def load_seed(path: Path, *, user_id: uuid.UUID, day: date, timezone_name: str) -> Seed:
-    """The CSV through the ordinary legacy importer, re-keyed with stable ids (dependencies remapped)."""
+    """The CSV through the ordinary legacy importer, re-keyed with stable ids."""
     from app.planning.csv_import import parse_legacy_csv, read_csv_text
 
     text = read_csv_text(path)
@@ -118,13 +116,10 @@ def load_seed(path: Path, *, user_id: uuid.UUID, day: date, timezone_name: str) 
     day_indexes = {int(row["date"]) for row in rows}
     task_ids = {task.id: seed_id(user_id, path.name, day, timezone_name, parsed.lines_by_task_id[task.id])
                 for task in parsed.tasks}
-    tasks = [task.model_copy(update={"id": task_ids[task.id], "user_id": user_id,
-                                     "dependency_ids": [task_ids[d] for d in task.dependency_ids]})
-             for task in parsed.tasks]
+    tasks = [task.model_copy(update={"id": task_ids[task.id], "user_id": user_id}) for task in parsed.tasks]
     blocks = [block.model_copy(update={"id": seed_id(user_id, path.name, day, timezone_name, line), "user_id": user_id})
               for block, line in zip(parsed.fixed_blocks, block_lines)]
-    return Seed(path.name, day, timezone_name, tasks, blocks, day_indexes,
-                sum(len(task.dependency_ids) for task in tasks))
+    return Seed(path.name, day, timezone_name, tasks, blocks, day_indexes)
 
 
 def _content(model, fields: tuple[str, ...]) -> dict:
@@ -358,12 +353,6 @@ def _read_back(account, seed: Seed, execution_id: str) -> dict[str, int]:
             if placement.planned_start < end and start < placement.planned_end:
                 raise VerificationError(f"The placement of {task.name!r} overlaps a fixed block or another task.")
         intervals.append((placement.planned_start, placement.planned_end))
-    for task in seed.tasks:  # dependencies are respected (the dependency fixture's chain)
-        own = next((p for p in placements if p.task_id == task.id), None)
-        for dependency in task.dependency_ids:
-            before = next((p for p in placements if p.task_id == dependency), None)
-            if own is not None and (before is None or before.planned_end > own.planned_start):
-                raise VerificationError(f"{task.name!r} is placed before a task it depends on.")
     freshness = workflow.day_freshness(planning, [seed.day], seed.timezone)[seed.day]
     if freshness.status != workflow.Freshness.CURRENT:
         raise VerificationError(f"The seed date's schedule is not current after reopening ({freshness.status.value}).")
@@ -465,21 +454,14 @@ def write_sample(args, settings, backend_factory, password_source) -> tuple[Repo
         step = "seed"
         seeds = [load_seed(MAIN_SAMPLE, user_id=account.user_id, day=args.anchor_date, timezone_name=args.timezone)]
         main = seeds[0]
-        found = {"tasks": len(main.tasks), "fixed_blocks": len(main.fixed_blocks), "day_indexes": main.day_indexes,
-                 "dependencies": main.dependency_count}
+        found = {"tasks": len(main.tasks), "fixed_blocks": len(main.fixed_blocks), "day_indexes": main.day_indexes}
         if found != MAIN_EXPECTED:
             raise VerificationError("The main sample file no longer has the expected content (3 flexible tasks, "
-                                    "4 fixed blocks, day 1, no dependencies); nothing was written.")
-        if args.dependency_date is not None:
-            seeds.append(load_seed(DEPENDENCY_SAMPLE, user_id=account.user_id, day=args.dependency_date,
-                                   timezone_name=args.timezone))
+                                    "4 fixed blocks, day 1); nothing was written.")
         before = _change_count(backend, account.user_id)
         created = sum(_apply_seed(planning, seed) for seed in seeds)
         report.done("seed", f"{created} record(s) created" if created else "already seeded")
         report.facts["seed"] = f"{main.fixture} ({FIXTURE_VERSION}) on {main.day.isoformat()} in {main.timezone}"
-        report.facts["dependencies"] = ("none in the main sample (not applicable)" + (
-            f"; {seeds[1].fixture} on {seeds[1].day.isoformat()}: {seeds[1].dependency_count} dependencies"
-            if len(seeds) > 1 else ""))
 
         step = "preference"
         report.done("preference", "; ".join(_apply_preference(planning, seed.day) for seed in seeds))
@@ -557,8 +539,6 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--display-name", help="the display name of a new account (required with --write-sample)")
     p.add_argument("--anchor-date", type=_date, help="the date day 1 of the sample becomes (required with --write-sample)")
     p.add_argument("--timezone", type=_zone, help="the IANA time zone of the sample (required with --write-sample)")
-    p.add_argument("--dependency-date", type=_date,
-                   help="optional: also seed samples/inputs/dependency_chain_linear.csv on this (different) date")
     return p
 
 
@@ -569,8 +549,6 @@ def main(argv: list[str] | None = None, *, backend_factory: Callable | None = No
         missing = [name for name in ("email", "display_name", "anchor_date", "timezone") if getattr(args, name) is None]
         if missing:
             parser().error("--write-sample needs " + ", ".join("--" + name.replace("_", "-") for name in missing))
-        if args.dependency_date is not None and args.dependency_date == args.anchor_date:
-            parser().error("--dependency-date must differ from --anchor-date")
 
     from app.persistence import load_direct_settings, open_direct_backend
     from app.persistence.errors import DirectPersistenceError

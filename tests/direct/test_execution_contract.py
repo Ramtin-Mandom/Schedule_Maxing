@@ -85,7 +85,7 @@ class ServiceDriver:
 
     def placement(self, hour: int = 9, day: date = MONDAY, **task_fields) -> tuple[uuid.UUID, uuid.UUID]:
         task = self.planning.create_task(Task(user_id=self.owner, name=task_fields.pop("name", "Study"), category="study",
-                                              estimated_duration_minutes=60, priority=5, **task_fields))
+                                              estimated_duration_minutes=60, **task_fields))
         placement = ScheduledTask(task_id=task.id, user_id=self.owner, planned_date=day, timezone="UTC",
                                   planned_start=at(hour, day=day), planned_end=at(hour + 1, day=day))
         existing = self.planning.placements_for_date(day)
@@ -457,15 +457,3 @@ def test_invalid_destinations_and_stale_versions_change_nothing(driver, clock) -
         driver.reschedule(placement_id, 16, version=version)
     assert again.value.code == "deleted"
     assert driver.stored_placement(placement_id).superseded_by_id == moved["replacement"].id
-
-
-def test_dependencies_and_dependents_are_hard_rules_for_a_move(driver) -> None:
-    first_task, first = driver.placement(hour=9, name="First")
-    _, second = driver.placement(hour=11, name="Second", dependency_ids=[str(first_task)])
-    with pytest.raises(Refused) as dependent:  # the dependent would start before its dependency ends
-        driver.reschedule(first, 13)
-    assert dependent.value.code == "reschedule_rejected" and dependent.value.reason == "dependent_starts_first"
-    with pytest.raises(Refused) as dependency:
-        driver.reschedule(second, 8)
-    assert dependency.value.reason == "dependency_not_satisfied"
-    assert driver.reschedule(second, 15)["replacement"].planned_start == at(15)

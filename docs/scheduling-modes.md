@@ -5,8 +5,8 @@ layer) exactly like the earlier engine choice. A mode is an objective over one
 shared search, not a separate optimizer: every mode runs the canonical greedy
 event-candidate engine (`app/optimizer.py`) under the same hard constraints --
 the day window, fixed blocks (breaks included), kept work (history and manual
-placements, reserved as busy time), durations, dependencies, deadlines and
-required work. Generation mode (FULL/INCREMENTAL) is independent.
+placements, reserved as busy time), durations, deadlines and required
+work. Tasks have no dependencies or priority (ADR-048). Generation mode (FULL/INCREMENTAL) is independent.
 
 | Mode | Stored value | Search | Objective |
 | --- | --- | --- | --- |
@@ -47,8 +47,8 @@ the quarter-hour lattice).
   E = (Z − L)/H, T = (F − A)/H, C = 1 − G/H, U = mean((startᵢ − A)/H), each
   clamped to [0, 1]. An empty schedule scores 0 on every component.
 - **W** = max(1, |weight_importance|) of the date's reward settings (default
-  5), fixed for the run -- the unit of one priority step of the baseline
-  reward.
+  5), fixed for the run -- the unit of the baseline reward's task weight
+  (`weight_importance` x the category multiplier).
 - **Ties.** Normal/ADHD/Catch-Up: the engine's existing order (input order on
   equal scores). Early: higher objective, then earlier L, then smaller G, then
   candidate order (the baseline first). Night: higher objective, then later F,
@@ -56,14 +56,12 @@ the quarter-hour lattice).
 
 ## Early Finish and Night Owl
 
-The baseline greedy result fixes the work set: which tasks are placed (with
-the required-prerequisite closure) and their durations. Repacking then moves
-only those tasks -- left as early as possible (Early) or right as late as
-possible (Night) -- around fixed blocks and kept work, respecting
-dependencies (including prerequisites satisfied on earlier dates), deadlines
-and the window. Candidate orders: every dependency-respecting order for up to
-6 tasks (at most 720), otherwise the baseline's chronological order and the
-priority order. The baseline placement always competes, so the result is
+The baseline greedy result fixes the work set: which tasks are placed and
+their durations. Repacking then moves only those tasks -- left as early as
+possible (Early) or right as late as possible (Night) -- around fixed blocks
+and kept work, respecting deadlines and the window. Candidate orders: every
+order for up to 6 tasks (at most 720), otherwise the baseline's chronological
+order and the input order. The baseline placement always competes, so the result is
 never worse on the objective; when nothing improves it, the baseline is kept.
 Unscheduled work stays reported, never hidden to improve finish time. This is
 a bounded heuristic with no global-optimum guarantee; a small-fixture test
@@ -116,6 +114,6 @@ advertising `scheduling_modes`; otherwise it waits (counted as held).
 stored insertion score, mode component, objective, scheduled/unscheduled counts
 and minutes with reasons, first start, last finish, idle gap minutes,
 fixed/break minutes and constraint violations, for constrained days,
-infeasible required work, preferences, dependencies, sparse history and a
+infeasible required work, preferences, sparse history and a
 20-task workload. Objectives of different modes are different quantities, not
 one quality scale.

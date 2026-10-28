@@ -13,7 +13,7 @@ import sys
 
 import httpx
 
-TASK = {"name": "Smoke check task", "category": "study", "estimated_duration_minutes": 30, "priority": 5}
+TASK = {"name": "Smoke check task", "category": "study", "estimated_duration_minutes": 30}
 
 
 def run(base_url: str) -> int:

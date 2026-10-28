@@ -283,10 +283,6 @@ class ResetPlan:
     preview: ResetPreview
     message: str
 
-    @property
-    def blocked(self) -> bool:
-        return self.preview.blocked
-
 
 @dataclass(frozen=True)
 class CsvPlan:
@@ -763,7 +759,7 @@ class DayScheduleController(SchedulePageController):
         return ControllerResult.success(ResetPlan(preview.value, self._reset_message(preview.value)))
 
     def _reset_message(self, preview: ResetPreview) -> str:
-        return describe_reset(preview, day_label(self._anchor), self._names)
+        return describe_reset(preview, day_label(self._anchor))
 
     def reset_day(self, plan: ResetPlan) -> ControllerResult[DaySnapshot]:
         """Apply exactly the previewed reset (refused, with nothing deleted, if anything changed since)."""
@@ -816,16 +812,8 @@ class DayScheduleController(SchedulePageController):
         return ControllerResult.success(ImportRun(snapshot=loaded.value, summary=_batch_summary(result.value)))
 
 
-def describe_reset(preview: ResetPreview, label: str, names_of: Callable[[list[uuid.UUID]], dict[uuid.UUID, str]],
-                   *, what: str = "this date") -> str:
+def describe_reset(preview: ResetPreview, label: str, *, what: str = "this date") -> str:
     """A reset preview in words (Day, Week and Month use the same wording); `label` names the range."""
-    if preview.blocked:
-        names = names_of([*preview.blocking_dependents,
-                          *(d for dependents in preview.blocking_dependents.values() for d in dependents)])
-        lines = [f"{names.get(task, 'A task')} is needed by " + ", ".join(names.get(d, "a task") for d in dependents)
-                 for task, dependents in preview.blocking_dependents.items()]
-        return (f"{label} cannot be reset: tasks outside it depend on tasks planned in it.\n- "
-                + "\n- ".join(lines) + "\nRemove those dependencies first. Nothing was deleted.")
     counts = preview.counts
     parts = [f"{counts['tasks']} task(s) planned for {what}",
              f"{counts['fixed_blocks']} fixed block(s)",
