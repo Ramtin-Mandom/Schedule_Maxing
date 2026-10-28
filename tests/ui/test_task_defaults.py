@@ -10,22 +10,22 @@ from app.ui.task_form_model import CATEGORIES
 
 def test_built_in_defaults_are_named_after_their_category() -> None:
     defaults = TaskDefaults()
-    assert defaults.for_category(None) == TaskDefault("Task", 60, 5, 20) == defaults.for_category("")
-    assert defaults.for_category("study") == TaskDefault("Study", 60, 5, 20)
+    assert defaults.for_category(None) == TaskDefault("Task", 60, 20) == defaults.for_category("")
+    assert defaults.for_category("study") == TaskDefault("Study", 60, 20)
     assert defaults.all_categories() == CATEGORIES
 
 
 def test_changes_and_added_categories_are_stored_and_reset(tmp_path) -> None:
     store = TaskDefaultsStore(tmp_path / "task_defaults.json")
-    value = store.value.with_category("  Side   project ").with_default("study", parse_default("Revise", "1:30", "7", "40"))
-    value = value.with_default(None, TaskDefault("Something", 15, 3, 0))
+    value = store.value.with_category("  Side   project ").with_default("study", parse_default("Revise", "1:30", "40"))
+    value = value.with_default(None, TaskDefault("Something", 15, 0))
     assert store.save(value)
 
     reopened = TaskDefaultsStore(store.path).value
     assert reopened == value and reopened.all_categories() == [*CATEGORIES, "Side project"]
-    assert reopened.for_category("study") == TaskDefault("Revise", 90, 7, 40)
+    assert reopened.for_category("study") == TaskDefault("Revise", 90, 40)
     assert reopened.for_category("Side project").name == "Side project"
-    assert reopened.for_category("") == TaskDefault("Something", 15, 3, 0)
+    assert reopened.for_category("") == TaskDefault("Something", 15, 0)
 
     assert store.reset() and TaskDefaultsStore(store.path).value == TaskDefaults()
 
@@ -38,7 +38,7 @@ def test_invalid_input_is_refused() -> None:
     with pytest.raises(ValueError):
         defaults.without_category("study")  # only an added category can be removed
     assert defaults.with_default("Garden", TaskDefault("Weed")).without_category("Garden") == TaskDefaults()
-    for values in (("", "60", "5", "20"), ("A", "soon", "5", "20"), ("A", "60", "11", "20"), ("A", "60", "5", "1001")):
+    for values in (("", "60", "20"), ("A", "soon", "20"), ("A", "60", "1001")):
         with pytest.raises(ValueError):
             parse_default(*values)
 

@@ -90,7 +90,7 @@ def test_a_local_exception_survives_a_series_edit_as_its_own_content(pair) -> No
     server, a, b = pair
     walk = synced_series(server, a, b)
     [created] = series_ops.expand_occurrences(b.planning, MON + 2 * DAY, MON + 2 * DAY).created
-    series_ops.edit_occurrence(b.planning, created.model_copy(update={"priority": 9}), expected_version=created.version)
+    series_ops.edit_occurrence(b.planning, created.model_copy(update={"points": 90}), expected_version=created.version)
     stored = a.planning.get_task(walk.id)
     series_ops.edit_series(a.planning, stored.model_copy(update={"name": "Stroll"}), expected_version=stored.version,
                            scope=EditScope.SERIES)
@@ -99,7 +99,7 @@ def test_a_local_exception_survives_a_series_edit_as_its_own_content(pair) -> No
     assert b.sync_now().status == "ok" and b.sync.list_conflicts() == []
 
     exception = server_occurrences(server, walk.id)[(MON + 2 * DAY).isoformat()]
-    assert (exception["priority"], exception["occurrence_state"]) == (9, "modified")  # the user's own edit
+    assert (exception["points"], exception["occurrence_state"]) == (90, "modified")  # the user's own edit
 
 
 def test_a_late_device_never_resurrects_a_deleted_series(pair) -> None:
@@ -107,7 +107,7 @@ def test_a_late_device_never_resurrects_a_deleted_series(pair) -> None:
     walk = synced_series(server, a, b)
     created = series_ops.expand_occurrences(b.planning, MON + 2 * DAY, MON + 3 * DAY).created  # offline
     exception = created[0]
-    series_ops.edit_occurrence(b.planning, exception.model_copy(update={"priority": 9}),
+    series_ops.edit_occurrence(b.planning, exception.model_copy(update={"points": 90}),
                                expected_version=exception.version)
     stored = a.planning.get_task(walk.id)
     series_ops.delete_series(a.planning, walk.id, expected_version=stored.version, scope=EditScope.SERIES)
@@ -318,10 +318,10 @@ def test_an_expired_session_keeps_the_queue_and_the_conflicts(pair) -> None:
     shared = a.add_task("Shared")
     a.sync_now()
     b.sync_now()
-    a.planning.update_task(shared.model_copy(update={"priority": 2}), expected_version=shared.version)
+    a.planning.update_task(shared.model_copy(update={"points": 20}), expected_version=shared.version)
     a.sync_now()
     stored = b.planning.get_task(shared.id)
-    b.planning.update_task(stored.model_copy(update={"priority": 3}), expected_version=stored.version)
+    b.planning.update_task(stored.model_copy(update={"points": 30}), expected_version=stored.version)
     b.sync_now()
     assert len(b.sync.list_conflicts()) == 1
     b.add_task("Queued")

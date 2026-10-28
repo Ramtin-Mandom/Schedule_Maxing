@@ -22,7 +22,7 @@ Keep responsibilities separated:
 - dependencies/PERT
 - reward/scoring
 - optimizer/engine strategies
-- analytics/ML
+- analytics
 - UI
 - persistence/sync/API
 The UI should call domain/application logic rather than reimplement it. Hard constraints must remain hard constraints.
@@ -62,15 +62,17 @@ After the whole batch is complete, give one concise summary containing:
 - important remaining limitations
 Avoid verbose per-task summaries unless requested.
 Project Knowledge Base (documentation navigation)
-Five root documents describe the repository. Load only the document -- and only the section -- the current task needs; never read all five by default.
+Six root documents describe the repository. Load only the document -- and only the section -- the current task needs; never read all six by default.
 - CODEBASE_MAP.md: where a feature lives, what a change affects, which tests to run. Start with its "If You Need to Change X, Look Here" table.
-- ARCHITECTURE.md: system design, boundaries and major data flows.
+- ARCHITECTURE.md: system design, boundaries, module dependencies, file reference and feature-to-file map.
+- WORKFLOW.md: run-time behaviour -- the Make Schedule call chain, engine internals, rules/constraints, decision order and error handling.
 - CURRENT_STATE.md: what currently works, is partial or broken (a dated snapshot).
 - ROADMAP.md: planned and unfinished work, when planning development.
 - DECISIONS.md: established architectural decisions; read the relevant record before changing one.
 Keep them accurate in the same change that makes them wrong:
 - module responsibilities, important paths or dependencies changed -> update CODEBASE_MAP.md
 - architectural boundaries or major data flows changed -> update ARCHITECTURE.md
+- execution flow, engine behaviour or an enforced rule/constraint changed -> update WORKFLOW.md
 - a feature's state or a known limitation changed -> update CURRENT_STATE.md
 - a milestone or deliverable status changed -> update ROADMAP.md
 - a consequential decision made or superseded -> add or amend a record in DECISIONS.md

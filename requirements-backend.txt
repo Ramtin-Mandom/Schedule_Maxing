@@ -1,5 +1,4 @@
-# Server (backend/) runtime dependencies only: no desktop UI, pandas, or
-# scikit-learn. Install on the server with:
+# Server (backend/) runtime dependencies only: no desktop UI. Install on the server with:
 #     python -m pip install -r requirements-backend.txt
 # The backend reuses the canonical pydantic models in app/planning and
 # app/execution, which need nothing beyond these packages.

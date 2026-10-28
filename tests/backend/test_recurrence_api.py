@@ -1,8 +1,7 @@
 """Recurring series on the server (docs/recurrence.md): occurrences are owner-scoped tasks whose id derives from
 (series, slot) and whose identity never changes; an older client's update cannot erase recurrence fields it
 does not know; a repeated identical occurrence create converges while a different one conflicts; suppressed
-slots arrive as tombstones and stay reserved; dependency rules (no one-off -> series edges, compatible
-cadences, no cycles, skipped prerequisites) hold; the database enforces one record per (user, series, slot);
+slots arrive as tombstones and stay reserved; the database enforces one record per (user, series, slot);
 hosted generation expands first and logs every occurrence; a cross-date reschedule returns the re-dated
 occurrence; and the server advertises the feature."""
 
@@ -55,13 +54,13 @@ def test_series_and_occurrences_round_trip_and_identity_is_derived_and_immutable
 def test_an_older_clients_update_keeps_every_field_it_does_not_know(client, alice) -> None:
     walk = create(client, alice, "tasks", series_payload())
     occurrence = create(client, alice, "tasks", occurrence_payload(walk, MON))
-    legacy_body = {key: value for key, value in editable(occurrence, priority=9).items()
+    legacy_body = {key: value for key, value in editable(occurrence, points=9).items()
                    if key not in ("series_id", "occurrence_slot", "occurrence_state", "series_version",
                                   "series_predecessor_id")}
     updated = client.put(f"/tasks/{occurrence['id']}", json=legacy_body, headers=alice).json()
     assert (updated["series_id"], updated["occurrence_slot"], updated["series_version"]) == (
         walk["id"], MON.isoformat(), 1)
-    assert updated["priority"] == 9 and updated["occurrence_state"] == "modified"  # its own edit: a manual override
+    assert updated["points"] == 9 and updated["occurrence_state"] == "modified"  # its own edit: a manual override
 
     old_rule = {key: value for key, value in walk["recurrence"].items() if key not in ("start_date", "timezone")}
     renamed = client.put(f"/tasks/{walk['id']}", headers=alice, json={
@@ -81,7 +80,7 @@ def test_an_identical_occurrence_create_converges_and_a_different_one_conflicts(
                                                                                 if k != "id"}))
     assert first["status"] == again["status"] == "applied"
     assert again["record"] == first["record"] and feed(client, alice) == log  # another device's same slot: no-op
-    different = {**{k: v for k, v in payload.items() if k != "id"}, "priority": 1}
+    different = {**{k: v for k, v in payload.items() if k != "id"}, "points": 7}
     [conflict] = push(client, alice, op("task", "create", occurrence_id, payload=different))
     assert conflict["status"] == "conflict" and conflict["error"]["code"] == "already_exists"
     with session_factory(engine)() as session:
@@ -108,26 +107,6 @@ def test_a_suppressed_slot_arrives_as_a_tombstone_and_stays_reserved(client, ali
     assert removed["record"]["occurrence_state"] == "skipped" and removed["record"]["deleted_at"] is not None
 
 
-def test_dependency_rules_for_series_and_occurrences(client, alice) -> None:
-    walk = create(client, alice, "tasks", series_payload())
-    monthly = create(client, alice, "tasks", series_payload(name="Monthly", rule={"frequency": "monthly"}))
-    one_off = client.post("/tasks", json=task_payload(dependency_ids=[walk["id"]]), headers=alice)
-    assert one_off.status_code == 422 and "concrete occurrence" in one_off.json()["error"]["message"]
-    mismatched = client.post("/tasks", json=series_payload(name="Run", dependency_ids=[monthly["id"]]), headers=alice)
-    assert mismatched.status_code == 422
-    run = create(client, alice, "tasks", series_payload(name="Run", dependency_ids=[walk["id"]]))
-    cycle = client.put(f"/tasks/{walk['id']}", json=editable(walk, dependency_ids=[run["id"]]), headers=alice)
-    assert cycle.status_code == 422 and "cycle" in cycle.json()["error"]["message"]
-
-    prerequisite = create(client, alice, "tasks", occurrence_payload(walk, MON))
-    dependent = create(client, alice, "tasks", occurrence_payload(run, MON, dependency_ids=[prerequisite["id"]]))
-    skipped = client.delete(f"/tasks/{prerequisite['id']}", params={"base_version": prerequisite["version"]},
-                            headers=alice)
-    assert skipped.status_code == 200 and skipped.json()["occurrence_state"] == "deleted"  # a slot edge never blocks
-    unchanged = client.put(f"/tasks/{dependent['id']}", json=editable(dependent, priority=4), headers=alice)
-    assert unchanged.status_code == 200  # its edge to the skipped prerequisite stays valid
-
-
 def test_occurrences_are_owner_scoped(client, alice, bob) -> None:
     walk = create(client, alice, "tasks", series_payload())
     stolen = client.post("/tasks", json=occurrence_payload(walk, MON), headers=bob)
@@ -141,7 +120,7 @@ def test_the_database_keeps_one_record_per_user_series_and_slot(client, alice, e
         stored = session.scalars(select(models.Task).where(models.Task.series_id == uuid.UUID(walk["id"]))).one()
         session.add(models.Task(
             user_id=stored.user_id, id=uuid.uuid4(), created_at=stored.created_at, updated_at=stored.updated_at,
-            version=1, name="Twin", category="x", estimated_duration_minutes=5, priority=5, points=1, required=False,
+            version=1, name="Twin", category="x", estimated_duration_minutes=5, points=1, required=False,
             series_id=stored.series_id, occurrence_slot=stored.occurrence_slot))
         with pytest.raises(IntegrityError):
             session.flush()

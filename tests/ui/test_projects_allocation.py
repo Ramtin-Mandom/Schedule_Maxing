@@ -15,7 +15,7 @@ DAY = date(2026, 9, 24)
 
 def task(planning, name, project=None, **kwargs):
     return ok(planning.add_or_update_task(Task(name=name, category="study", estimated_duration_minutes=13,
-                                               priority=5, project_id=project, **kwargs)))
+                                               project_id=project, **kwargs)))
 
 
 def test_project_crud_versions_reassign(services):
@@ -43,13 +43,16 @@ def test_project_filter_is_display_only_after_scheduling_a_date(services):
     planning = services.planning_controller
     projects = ProjectsController(planning, timezone="UTC")
     a, b = ok(projects.create("A")), ok(projects.create("B"))
-    predecessor = task(planning, "First", a.id, required_date=DAY)
-    successor = task(planning, "Second", b.id, required_date=DAY, dependency_ids=[predecessor.id])
+    first = task(planning, "First", a.id, required_date=DAY)
+    second = task(planning, "Second", b.id, required_date=DAY)
     assert DayScheduleController(planning, anchor_date=DAY, timezone="UTC").make_schedule_for(DAY).ok
     placements = ok(planning.get_placements(DAY))
-    assert {p.task_id for p in placements} == {predecessor.id, successor.id}
-    by_task = {p.task_id: p for p in placements}
-    assert by_task[predecessor.id].planned_end <= by_task[successor.id].planned_start
+    assert {p.task_id for p in placements} == {first.id, second.id}
+    # Mixed projects share the day without overlapping. Which one comes first is not promised: the two tie on
+    # points, deadline and duration, so allocation orders them by their random ids (ADR-049; tasks have no
+    # dependencies since ADR-048).
+    earlier, later = sorted(placements, key=lambda p: p.planned_start)
+    assert earlier.planned_end <= later.planned_start
     calendar = ok(CalendarController(planning, mode="week", selected=DAY, timezone="UTC").load())
     assert [item.name for item in calendar.filtered(b.id).day(DAY).items] == ["Second (B)"]  # with its project
     assert len(calendar.day(DAY).items) == 2

@@ -45,9 +45,8 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import app.optimizer as optimizer_module
-from app.data_processor import read_csv_rows
 from app.optimizer import MandatoryTaskSchedulingError, generate_day_schedule
-from app.planning.compat import import_legacy_csv_rows
+from app.planning.csv_import import parse_legacy_csv_file
 from app.planning.models import DaySchedule, FixedBlock, LocalTimeWindow, Task, TaskRegistry
 from app.planning.preferences import (
     DayWindowSpec,
@@ -117,7 +116,7 @@ def _synthetic_day_schedule(
         tasks.append(
             Task(
                 name=f"Task{index:03d}", category=rng.choice(CATEGORIES), tags=[rng.choice(TAGS)],
-                estimated_duration_minutes=duration, priority=rng.randint(1, 10),
+                estimated_duration_minutes=duration, points=rng.randint(1, 10),
                 preferred_time_window=LocalTimeWindow(start_minute=pref_start, end_minute=pref_end),
             )
         )
@@ -321,16 +320,24 @@ def _compare_one(
     )
 
 
+
+def _load_first_day(path: Path) -> DaySchedule:
+    """The fixture's first day as a canonical DaySchedule, imported like the app's own CSV import."""
+    parsed = parse_legacy_csv_file(path, anchor_date=ANCHOR_DATE, timezone=TIMEZONE)
+    day = parsed.start_date
+    tasks = [task for task in parsed.tasks if day in task.preferred_dates]
+    return DaySchedule(
+        date=day, timezone=TIMEZONE, fixed_blocks=[block for block in parsed.fixed_blocks if block.planned_date == day],
+        task_ids=[task.id for task in tasks], tasks=TaskRegistry(tasks={task.id: task for task in tasks}),
+    )
+
 def run_benchmark(warmups: int = DEFAULT_WARMUPS, repeats: int = DEFAULT_REPEATS) -> dict:
     results: list[ComparisonResult] = []
 
     for name, path in CSV_FIXTURES:
         if not path.exists():
             raise FileNotFoundError(f"benchmark fixture not found: {path}")
-        rows = read_csv_rows(str(path))
-        imported = import_legacy_csv_rows(rows, anchor_date=ANCHOR_DATE, tz_name=TIMEZONE)
-        day_index = min(imported.keys())
-        day_schedule = imported[day_index].day_schedule
+        day_schedule = _load_first_day(path)
 
         for mode in (OptimizerMode.PRECISE_GREEDY, OptimizerMode.ADHD_FRIENDLY):
             prefs = resolve_day_preferences(

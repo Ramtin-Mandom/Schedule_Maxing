@@ -17,7 +17,7 @@ and identified by their fingerprint, never kept in a process.
 
 Reading inputs (read_inputs): one consistent snapshot of a range's tasks
 (per RangeScope, deadlines judged in the planning timezone), fixed blocks,
-effective preferences and external dependencies, plus their fingerprint.
+and effective preferences, plus their fingerprint.
 preview_allocation allocates such a snapshot without saving anything;
 preference_views shows each date's effective and inherited preferences with
 the stored layers they come from.
@@ -57,7 +57,7 @@ and its occurrences are not placed again. Then, in one of two modes:
         it still fits the current inputs, and only newly eligible work is
         scheduled into the time around it. If a kept placement no longer fits
         (its task was deleted, moved, re-timed, or its date's window, fixed
-        blocks, engine mode, deadline or dependencies changed),
+        blocks, engine mode or deadline changed),
         RegenerationRequiredError says which and why, and nothing is saved:
         replacing kept work always takes an explicit FULL regeneration.
 
@@ -67,7 +67,7 @@ writes nothing (no id, version, timestamp, provenance or change-capture
 change). Otherwise the engine runs outside any write transaction; then, in
 one transaction, the inputs are read again and their fingerprint compared
 with the one generation used (StaleInputsError if anything changed --
-tasks, blocks, preferences, external dependencies), the saved placements'
+tasks, blocks, preferences), the saved placements'
 versions are compared (VersionConflictError), the reservation state --
 saved placements and their versions, manual intent, execution states, and
 the occurrences kept outside the generated dates -- is recomputed
@@ -130,12 +130,6 @@ from app.planning.errors import (
     ScopeError,
     StaleInputsError,
 )
-from app.planning.external_dependencies import (
-    ExternalDependency,
-    allocation_dates,
-    explain_unallocated,
-    satisfaction_instants,
-)
 from app.planning.models import (
     PLACEMENT_SNAPSHOT_FIELDS,
     DayScheduleOutput,
@@ -197,7 +191,6 @@ class SchedulingInputs:
     timezone_name: str
     planning_range: PlanningRange
     preferences_by_date: dict[date_, DayPreferences]
-    external: dict[uuid.UUID, ExternalDependency]
     fingerprint: str
     #: The Catch-Up history evidence (app/planning/catch_up.py) when any date uses Catch-Up; its digest is part of
     #: the fingerprint, so changed outcomes make a saved Catch-Up schedule stale and refuse a stale save.
@@ -342,34 +335,31 @@ def read_inputs(
     with service.transaction():
         planning_range = service.load_range(start_date, end_date, scope=scope, timezone_name=timezone_name)
         preferences_by_date = service.resolve_preferences(dates, timezone_name, template=template)
-        external = service.external_dependencies(planning_range.tasks.tasks.values(), start_date, end_date, timezone_name)
         if any(day.optimizer_mode == OptimizerMode.CATCH_UP for day in preferences_by_date.values()):
             evidence = catch_up_evidence(service, (clock or _utcnow)())
     fingerprint = inputs_fingerprint(
         start_date=start_date, end_date=end_date, scope=scope.value, timezone_name=timezone_name,
         tasks=[*planning_range.tasks.tasks.values(), *planning_range.series.tasks.values()],
         fixed_blocks=[block for day in dates for block in planning_range.fixed_blocks_by_date[day]],
-        preferences_by_date=preferences_by_date, external_dependencies=external,
+        preferences_by_date=preferences_by_date,
     )
     if evidence is not None:
         fingerprint = hashlib.sha256(f"{fingerprint}|catch_up:{evidence.digest}".encode("utf-8")).hexdigest()
     return SchedulingInputs(
         start_date=start_date, end_date=end_date, scope=scope, timezone_name=timezone_name,
-        planning_range=planning_range, preferences_by_date=preferences_by_date, external=external,
+        planning_range=planning_range, preferences_by_date=preferences_by_date,
         fingerprint=fingerprint, catch_up=evidence,
     )
 
 
 def allocate(inputs: SchedulingInputs) -> AllocationResult:
-    """Allocation of the inputs' range (never generates placements), with external-dependency explanations."""
+    """Allocation of the inputs' range (never generates placements)."""
     planning_range = inputs.planning_range
-    result = allocate_tasks(
+    return allocate_tasks(
         start_date=inputs.start_date, end_date=inputs.end_date, tasks=planning_range.tasks,
         task_ids=planning_range.task_ids, preferences_by_date=inputs.preferences_by_date,
         fixed_blocks_by_date=planning_range.fixed_blocks_by_date,
-        external_dependency_dates=allocation_dates(inputs.external),
     )
-    return explain_unallocated(result, planning_range.tasks.tasks, inputs.external)
 
 
 def preview_allocation(
@@ -617,9 +607,9 @@ def plan_reservations(
         kept_placements = [placement for placement in stored if placement.id in kept]
         kept_tasks = service.get_tasks_including_deleted(placement.task_id for placement in kept_placements)
         problems = _kept_problems(
-            service, kept_placements, kept_tasks, inputs, day,
+            kept_placements, kept_tasks, inputs, day,
             full_check_ids={pid for pid, kind in kept.items() if kind != KEPT_HISTORY},
-            kinds=kept, upcoming=set(tasks.tasks),
+            kinds=kept,
         )
         blocking = [problem for problem in problems if problem.blocking]
         notices = [problem for problem in problems if not problem.blocking]
@@ -680,10 +670,6 @@ def generate_from(
         outputs[day] = _with_category_snapshots(output, stored, service)
         expected.update({placement.id: placement.version for placement in stored})
         kept[day] = sorted(reservations.days[day].kept, key=str)
-    order = _kept_order_problems(service, outputs, reservations, inputs)
-    if order:
-        raise RegenerationRequiredError(order)
-
     notices = {day: reservations.days[day].notices for day in dates if reservations.days[day].notices}
     if preserve_on_empty and expected and not any(output.placements for output in outputs.values()):
         # Nothing new to show and saved work would be wiped: keep the previous schedule untouched.
@@ -700,7 +686,7 @@ def generate_from(
     )
     with service.transaction():
         # The write transaction re-reads every input: a change since generation started -- to any task, series,
-        # block, preference or external dependency, to a placement's manual intent, to an execution's state, or to
+        # block or preference, to a placement's manual intent, to an execution's state, or to
         # a placement kept outside the generated dates -- refuses the save. Nothing is written in part.
         again = read_inputs(
             service, inputs.start_date, inputs.end_date, scope=inputs.scope, timezone_name=inputs.timezone_name,
@@ -812,20 +798,6 @@ def _generate_date(
     kept = [placement for placement in stored if placement.id in reservation.kept]
     kept_tasks = service.get_tasks_including_deleted(placement.task_id for placement in kept)
 
-    satisfaction = dict(satisfaction_instants(inputs.external))
-    for placement in [*kept, *reservations.kept_keys.values()]:
-        satisfaction[placement.task_id] = (placement.planned_date, placement.planned_end)
-    for task_id, placement in reservations.elsewhere.items():
-        satisfaction[task_id] = (placement.planned_date, placement.planned_end)
-    for task_id in excluded:
-        task = tasks.get(task_id)
-        if task is None:
-            continue
-        for key in (task_occurrence_key(task, day), task_occurrence_key(task, None)):
-            if key in reservations.kept_keys:
-                held = reservations.kept_keys[key]
-                satisfaction[task_id] = (held.planned_date, held.planned_end)
-
     busy = _busy_blocks(kept, blocks, preferences, day)
     sub_allocation = allocation.model_copy(update={
         "assignments": {task_id: assigned for task_id, assigned in allocation.assignments.items() if task_id not in excluded}
@@ -842,7 +814,7 @@ def _generate_date(
     # The pure engine call: in the desktop's engine process when one is installed (app/planning/engine_process.py).
     generated, _ = run_engine(
         generate_selected_day, sub_allocation, day, tasks, {day: preferences}, {day: [*blocks, *busy]},
-        previous_result=previous, external_dependency_satisfaction=satisfaction, task_bonuses=bonuses,
+        previous_result=previous, task_bonuses=bonuses,
     )
     if explanations:
         # A bounded explanation on each new Catch-Up placement (never the history itself; well under 4 KiB).
@@ -891,49 +863,6 @@ def _busy_blocks(
             taken.append((start, end))
         taken.sort()
     return busy
-
-
-def _kept_order_problems(
-    service: PlanningService,
-    outputs: Mapping[date_, DayScheduleOutput],
-    reservations: Reservations,
-    inputs: SchedulingInputs,
-) -> list[PlacementProblem]:
-    """
-    A kept (manual or incremental) placement whose dependency is planned by
-    this run must still come after it: the day engine treats kept work as
-    busy time and cannot order around it, so the result is checked here and
-    a violation blocks the whole generation (nothing is written).
-    """
-    range_ids = set(inputs.planning_range.tasks.tasks)
-    dates = set(reservations.dates)
-    problems: list[PlacementProblem] = []
-    stored_dependencies: dict[uuid.UUID, list[ScheduledTask]] | None = None
-    for day in reservations.dates:
-        reservation = reservations.days[day]
-        same_day = {placement.task_id: placement for placement in outputs[day].placements}
-        for placement in reservation.stored:
-            kept_as = reservation.kept.get(placement.id)
-            task = reservation.kept_tasks.get(placement.task_id)
-            if kept_as in (None, KEPT_HISTORY) or task is None or task.deleted_at is not None:
-                continue
-            for dependency in task.dependency_ids:
-                if dependency not in range_ids:
-                    continue  # judged up front (_kept_problems)
-                if stored_dependencies is None:
-                    wanted = {d for t in inputs.planning_range.tasks.tasks.values() for d in t.dependency_ids}
-                    stored_dependencies = service.active_placements_for_tasks(wanted)
-                others = [p for other_day, output in outputs.items() if other_day != day
-                          for p in output.placements if p.task_id == dependency]
-                others += [p for p in stored_dependencies.get(dependency, []) if p.planned_date not in dates]
-                if not _dependency_done_by(dependency, placement, day, same_day, {dependency: others}, inputs.external):
-                    problems.append(PlacementProblem(
-                        placement.id, placement.task_id, day, "dependency_not_satisfied",
-                        f"its dependency {dependency} would not finish before it.", kept_as=kept_as,
-                        blocking=True, remedies=_remedies("dependency_not_satisfied", kept_as),
-                    ))
-                    break
-    return problems
 
 
 def _catch_up_bonuses(
@@ -986,7 +915,7 @@ def _minutes(start: datetime, end: datetime) -> float:
 #: What resolves a kept-placement problem (PlacementProblem.remedies).
 _CONSTRAINT_REASONS = frozenset({
     "outside_day_window", "overlaps_fixed_block", "required_date_changed", "duration_changed", "deadline_missed",
-    "engine_mode_changed", "dependency_not_satisfied", "unsupported_day_window",
+    "engine_mode_changed", "unsupported_day_window",
 })
 
 
@@ -1008,7 +937,6 @@ def _remedies(reason: str, kept_as: str) -> tuple[str, ...]:
 
 
 def _kept_problems(
-    service: PlanningService,
     kept: list[ScheduledTask],
     kept_tasks: Mapping[uuid.UUID, Task],
     inputs: SchedulingInputs,
@@ -1016,16 +944,14 @@ def _kept_problems(
     *,
     full_check_ids: set[uuid.UUID],
     kinds: Mapping[uuid.UUID, str] | None = None,
-    upcoming: set[uuid.UUID] = frozenset(),
 ) -> list[PlacementProblem]:
     """
     Why kept placements no longer fit the current inputs. Every kept placement
     is checked for reservability (inside the date's window, clear of fixed
     blocks and of each other); those in `full_check_ids` must also still be a
     valid placement of their task (required date, duration, deadline, engine
-    mode, dependencies). `kinds` says why each is kept: a history placement's
-    problems never block (it stays as recorded); others block. A dependency
-    among `upcoming` (scheduled by this run) is left to the day engine.
+    mode). `kinds` says why each is kept: a history placement's problems
+    never block (it stays as recorded); others block.
     """
     kinds = kinds or {}
     preferences = inputs.preferences_by_date[day]
@@ -1047,9 +973,6 @@ def _kept_problems(
         return problems
 
     in_range = inputs.planning_range.tasks
-    dependency_ids = {dep for task in kept_tasks.values() for dep in task.dependency_ids}
-    dependency_placements = service.active_placements_for_tasks(dependency_ids) if full_check_ids else {}
-    kept_by_task = {placement.task_id: placement for placement in kept}
 
     for placement in sorted(kept, key=lambda item: (item.planned_start, str(item.id))):
         task = kept_tasks.get(placement.task_id)
@@ -1087,37 +1010,12 @@ def _kept_problems(
         ):
             problem(placement, "engine_mode_changed",
                     "the adhd_friendly engine starts tasks over 30 minutes on quarter hours only.")
-        for dependency in task.dependency_ids:
-            if dependency in upcoming and dependency not in kept_by_task:
-                continue  # scheduled (or kept elsewhere) by this run: the engine orders it before what depends on it
-            if not _dependency_done_by(dependency, placement, day, kept_by_task, dependency_placements, inputs.external):
-                problem(placement, "dependency_not_satisfied", f"its dependency {dependency} no longer finishes before it.")
-                break
     return problems
 
 
 def _local_minute(instant: datetime, tz_name: str) -> int:
     local = instant.astimezone(ZoneInfo(tz_name))
     return local.hour * 60 + local.minute
-
-
-def _dependency_done_by(
-    dependency: uuid.UUID,
-    placement: ScheduledTask,
-    day: date_,
-    kept_by_task: Mapping[uuid.UUID, ScheduledTask],
-    dependency_placements: Mapping[uuid.UUID, list[ScheduledTask]],
-    external: Mapping[uuid.UUID, ExternalDependency],
-) -> bool:
-    same_day = kept_by_task.get(dependency)
-    if same_day is not None:
-        return same_day.planned_end <= placement.planned_start
-    if any(other.planned_date < day for other in dependency_placements.get(dependency, [])):
-        return True
-    resolved = external.get(dependency)
-    if resolved is not None and resolved.satisfied:
-        return resolved.satisfied_date < day or resolved.satisfied_at <= placement.planned_start
-    return False
 
 
 # -----------------------------------------------------------------------------
@@ -1211,9 +1109,7 @@ def reschedule_problems(
     occurrence; honour the task's required date and deadline; and, like a
     placement kept by incremental generation (_kept_problems), lie inside the
     date's day window, clear of fixed blocks and of the date's other
-    placements, last exactly the task's estimate, fit the engine mode and
-    start after its dependencies finish. Tasks that depend on it must still
-    start after it ends.
+    placements, last exactly the task's estimate and fit the engine mode.
     """
     day = candidate.planned_date
     problems: list[PlacementProblem] = []
@@ -1245,7 +1141,7 @@ def reschedule_problems(
     others = [placement for placement in service.placements_for_date(day) if placement.id != previous.id]
     kept_tasks = service.get_tasks_including_deleted({task.id, *(placement.task_id for placement in others)})
     problems.extend(
-        found for found in _kept_problems(service, [candidate, *others], kept_tasks, inputs, day,
+        found for found in _kept_problems([candidate, *others], kept_tasks, inputs, day,
                                           full_check_ids={candidate.id}, kinds={candidate.id: "destination"})
         if found.placement_id == candidate.id
     )
@@ -1258,13 +1154,4 @@ def reschedule_problems(
                  if placement.planned_date == task.occurrence_slot and placement.id != previous.id]
         if same:
             problem("occurrence_taken", f"this occurrence already has another placement (on {same[0].planned_date}).")
-
-    dependents = [other.id for other in service.list_tasks() if task.id in other.dependency_ids]
-    grouped = service.active_placements_for_tasks(dependents)
-    for dependent_id in sorted(grouped, key=str):
-        if any(placement.planned_date < day
-               or (placement.planned_date == day and placement.planned_start < candidate.planned_end)
-               for placement in grouped[dependent_id]):
-            problem("dependent_starts_first",
-                    f"the task {dependent_id} depends on it and is planned to start before it would end.")
     return problems

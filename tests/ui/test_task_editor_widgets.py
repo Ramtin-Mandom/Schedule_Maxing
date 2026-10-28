@@ -98,8 +98,7 @@ def test_defaults_points_steps_and_added_categories(tmp_path: Path, dialogs) -> 
         form.submit_button.invoke()
         pump(app)
         task = stored(app)["Volunteering"]
-        assert (task.category, task.estimated_duration_minutes, task.priority, task.points) == (
-            "Volunteering", 60, 5, 20)
+        assert (task.category, task.estimated_duration_minutes, task.points) == ("Volunteering", 60, 20)
 
         # A task saved without a category is "other".
         day._reset_editor()
@@ -123,7 +122,7 @@ def test_editing_keeps_a_pinned_date(tmp_path: Path, dialogs) -> None:
     app = open_app(tmp_path / "pinned.db", tmp_path)
     try:
         saved = app.services.planning_controller.add_or_update_task(Task(
-            name="Pinned", category="study", estimated_duration_minutes=30, priority=5, required_date=WEDNESDAY)).value
+            name="Pinned", category="study", estimated_duration_minutes=30, required_date=WEDNESDAY)).value
         day = app.pages["day"]
         day.edit_ref(RowRef("task", saved.id, saved.version))
         pump(app)
@@ -256,7 +255,7 @@ def test_edit_keeps_hidden_fields_remove_asks_and_everything_survives_a_reopen(t
     try:
         service = app.services.planning_service
         gym = service.create_task(Task(
-            name="Gym", category="Volunteering", estimated_duration_minutes=45, priority=4, tags=["a", "b"],
+            name="Gym", category="Volunteering", estimated_duration_minutes=45, tags=["a", "b"],
             preferred_dates=[WEDNESDAY, WEDNESDAY + timedelta(days=7)],
             recurrence=RecurrenceSpec(frequency=RecurrenceFrequency.WEEKLY, weekdays=[2])))
         day = app.pages["day"]

@@ -20,7 +20,6 @@ EXPECTED_TABLES = {
     "tasks",
     "task_tags",
     "task_preferred_dates",
-    "task_dependencies",
     "task_recurrence_weekdays",
     "fixed_blocks",
     "scheduled_tasks",
@@ -123,8 +122,8 @@ def test_data_persists_across_independent_connections(db_path: Path) -> None:
     conn_a.execute(
         "INSERT INTO executions ("
         "id, task_name, category, tag, planned_date, planned_start, planned_end, "
-        "planned_duration, priority, status, created_at, updated_at"
-        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "planned_duration, status, created_at, updated_at"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             "exec-1",
             "Study Math",
@@ -134,7 +133,6 @@ def test_data_persists_across_independent_connections(db_path: Path) -> None:
             540,
             660,
             120,
-            8,
             "scheduled",
             "2024-01-01T09:00:00+00:00",
             "2024-01-01T09:00:00+00:00",

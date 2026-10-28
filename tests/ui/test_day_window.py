@@ -182,7 +182,7 @@ def test_a_stale_version_is_a_conflict_not_an_overwrite(services) -> None:
 def test_the_scheduler_places_work_only_inside_the_dates_overridden_window(services) -> None:
     planning = services.planning_controller
     for name in ("Read", "Write", "Review"):
-        ok(planning.add_or_update_task(Task(name=name, category="study", estimated_duration_minutes=60, priority=5,
+        ok(planning.add_or_update_task(Task(name=name, category="study", estimated_duration_minutes=60,
                                             preferred_dates=[DAY],
                                             preferred_time_window=LocalTimeWindow(start_minute=0, end_minute=180))))
     window = DayWindowController(planning)
@@ -195,7 +195,7 @@ def test_the_scheduler_places_work_only_inside_the_dates_overridden_window(servi
     for placement in placed:
         assert local(DAY, 13, 30) <= placement.planned_start and placement.planned_end <= local(DAY, 16, 45)
 
-    ok(planning.add_or_update_task(Task(name="Extra", category="study", estimated_duration_minutes=60, priority=5,
+    ok(planning.add_or_update_task(Task(name="Extra", category="study", estimated_duration_minutes=60,
                                         preferred_dates=[DAY])))
     run = ok(DayScheduleController(planning, anchor_date=DAY, timezone=TZ).regenerate_for(DAY))
     assert len(ok(planning.get_placements(DAY))) == 3  # the fourth hour does not fit: it stays unscheduled

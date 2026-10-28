@@ -73,7 +73,6 @@ excludes = [
     "ruff",
     "app.main",
     "app.productivity.report_cli",
-    "app.productivity.predictor_comparison_cli",
     # Optional extras of the scientific stack that the application never uses.
     "matplotlib",
     "IPython",

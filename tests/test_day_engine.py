@@ -2,9 +2,6 @@
 v2): generate_day_schedule, precise_greedy/adhd_friendly candidate modes,
 the bounded short-gap bonus end to end, mandatory scheduling guarantees, and
 identity/consistency.
-
-Greedy Optimizer v1's own tests (tests/test_optimizer.py) are untouched and
-continue to cover the legacy engine.
 """
 
 from __future__ import annotations
@@ -36,19 +33,17 @@ def make_task(
     name: str = "Task",
     *,
     duration: int = 60,
-    priority: int = 5,
     category: str = "study",
     tags: list[str] | None = None,
     required: bool = False,
-    dependency_ids: list[uuid.UUID] | None = None,
     deadline: datetime | None = None,
     preferred_time_window: LocalTimeWindow | None = None,
     required_date: date | None = None,
     task_id: uuid.UUID | None = None,
 ) -> Task:
     kwargs = dict(
-        name=name, category=category, tags=tags or [], estimated_duration_minutes=duration, priority=priority,
-        required=required, dependency_ids=dependency_ids or [], deadline=deadline,
+        name=name, category=category, tags=tags or [], estimated_duration_minutes=duration,
+        required=required, deadline=deadline,
         preferred_time_window=preferred_time_window, required_date=required_date,
     )
     if task_id is not None:
@@ -80,7 +75,7 @@ def default_prefs(**override_kwargs) -> "DayPreferences":  # noqa: F821 - forwar
 
 def zero_neighbor_effects_prefs(**extra_reward_kwargs) -> "DayPreferences":  # noqa: F821
     """Zero fragmentation/tag-relation scoring, isolating 'earliest feasible
-    slot' behavior -- same convention tests/test_optimizer.py already uses."""
+    slot' behavior."""
     return default_prefs(
         reward=RewardPreferencesOverride(weight_fragmentation_penalty=0.0, weight_tag_relation=0.0, **extra_reward_kwargs)
     )
@@ -206,7 +201,7 @@ def test_short_gap_bonus_achieves_10_13_plus_13_minute_task_placement():
         ),
     )
     prev = make_fixed("Prev", 0, 613)
-    short_task = make_task("Quick", duration=13, priority=1)
+    short_task = make_task("Quick", duration=13)
     schedule = make_day_schedule([short_task], fixed_blocks=[prev])
 
     result = generate_day_schedule(schedule, prefs)
@@ -224,7 +219,7 @@ def test_short_gap_bonus_is_bounded_by_cap():
     )
     prev = make_fixed("Prev", 0, 600)
     following = make_fixed("Next", 613, 700)  # sandwiches a 13-min flush slot
-    task = make_task("Sandwiched", duration=13, priority=1)
+    task = make_task("Sandwiched", duration=13)
     schedule = make_day_schedule([task], fixed_blocks=[prev, following])
 
     result = generate_day_schedule(schedule, prefs)
@@ -243,11 +238,11 @@ def test_short_gap_bonus_disabled_with_zero_weight():
         reward=RewardPreferencesOverride(short_gap_bonus_weight=5.0, **isolate_kwargs),
     )
     prev = make_fixed("Prev", 0, 600)
-    task = make_task("Quick", duration=13, priority=1)
+    task = make_task("Quick", duration=13)
 
     result_disabled = generate_day_schedule(make_day_schedule([task], [prev]), prefs_disabled)
     result_enabled = generate_day_schedule(
-        make_day_schedule([make_task("Quick", duration=13, priority=1, task_id=task.id)], [prev]), prefs_enabled
+        make_day_schedule([make_task("Quick", duration=13, task_id=task.id)], [prev]), prefs_enabled
     )
 
     assert result_disabled.placements[0].score == 0.0
@@ -262,7 +257,7 @@ def test_short_gap_bonus_inactive_in_precise_mode():
         ),
     )
     prev = make_fixed("Prev", 0, 600)
-    task = make_task("Quick", duration=13, priority=1)
+    task = make_task("Quick", duration=13)
     schedule = make_day_schedule([task], fixed_blocks=[prev])
 
     result = generate_day_schedule(schedule, prefs)
@@ -277,8 +272,8 @@ def test_short_gap_bonus_inactive_in_precise_mode():
 
 def test_required_task_is_scheduled_ahead_of_optional_competing_for_the_same_slot():
     prefs = zero_neighbor_effects_prefs()
-    required = make_task("Required", duration=1440, priority=1, required=True)  # fills entire day
-    optional = make_task("Optional", duration=60, priority=10)  # higher priority but not required
+    required = make_task("Required", duration=1440, required=True)  # fills entire day
+    optional = make_task("Optional", duration=60)  # competes for the same day but is not required
     schedule = make_day_schedule([required, optional])
 
     result = generate_day_schedule(schedule, prefs)
@@ -287,20 +282,6 @@ def test_required_task_is_scheduled_ahead_of_optional_competing_for_the_same_slo
     assert required.id in placed_ids
     assert optional.id not in placed_ids
     assert any(entry.task_id == optional.id for entry in result.unscheduled)
-
-
-def test_optional_prerequisite_of_required_task_becomes_essential_without_mutating_flag():
-    prefs = zero_neighbor_effects_prefs()
-    prep = make_task("Prep", duration=60, required=False)  # optional on paper
-    dependent = make_task("Dependent", duration=60, required=True, dependency_ids=[prep.id])
-    schedule = make_day_schedule([prep, dependent])
-
-    result = generate_day_schedule(schedule, prefs)
-
-    placed_ids = {p.task_id for p in result.placements}
-    assert prep.id in placed_ids  # scheduled as essential for this run
-    assert dependent.id in placed_ids
-    assert prep.required is False  # stored flag never mutated
 
 
 def test_capacity_overload_raises_proven_infeasible():
@@ -375,18 +356,6 @@ def test_successful_result_contains_every_required_task_exactly_once():
     placed_ids = [p.task_id for p in result.placements if p.task_id in {t.id for t in required_tasks}]
     assert sorted(placed_ids, key=str) == sorted({t.id for t in required_tasks}, key=str)
     assert len(placed_ids) == len(set(placed_ids)) == 5
-
-
-def test_dependency_cycle_among_required_tasks_raises_before_mandatory_error():
-    prefs = default_prefs()
-    id_a, id_b = uuid.uuid4(), uuid.uuid4()
-    task_a = make_task("A", duration=30, required=True, dependency_ids=[id_b], task_id=id_a)
-    task_b = make_task("B", duration=30, required=True, dependency_ids=[id_a], task_id=id_b)
-    schedule = make_day_schedule([task_a, task_b])
-
-    with pytest.raises(ValueError) as excinfo:
-        generate_day_schedule(schedule, prefs)
-    assert not isinstance(excinfo.value, MandatoryTaskSchedulingError)
 
 
 def test_required_date_mismatch_is_proven_infeasible_for_this_day():
@@ -618,41 +587,6 @@ def test_fixed_blocks_are_included_explicitly_not_matched_by_name():
     assert len(result.fixed_blocks) == 1
     assert result.fixed_blocks[0].id == sleep_a.id
     assert result.fixed_blocks[0].label == "Sleep"
-
-
-# -----------------------------------------------------------------------------
-# External dependency context vs. genuinely unresolved
-# -----------------------------------------------------------------------------
-
-
-def test_external_dependency_context_unblocks_a_task():
-    prefs = default_prefs()
-    external_id = uuid.uuid4()
-    task = make_task("Dependent", duration=60, dependency_ids=[external_id])
-    schedule = make_day_schedule([task])
-
-    result = generate_day_schedule(
-        schedule, prefs, external_dependency_ends={external_id: DAY_START + timedelta(minutes=100)}
-    )
-
-    assert result.placements[0].task_id == task.id
-    assert _minutes(result.placements[0].planned_start) >= 100
-
-
-def test_unresolved_external_task_id_blocks_rather_than_being_ignored():
-    """Unlike legacy name-based dependencies (missing names are ignored), a
-    canonical dependency_id that resolves to nothing at all -- neither
-    local nor supplied as external context -- blocks its dependent."""
-    prefs = default_prefs()
-    unknown_id = uuid.uuid4()
-    task = make_task("Blocked", duration=60, dependency_ids=[unknown_id])
-    schedule = make_day_schedule([task])
-
-    result = generate_day_schedule(schedule, prefs)
-
-    assert result.placements == []
-    assert result.unscheduled[0].task_id == task.id
-    assert result.unscheduled[0].reason_code.value == "dependency_unresolved"
 
 
 # -----------------------------------------------------------------------------

@@ -173,7 +173,7 @@ def test_postgresql_enforces_the_partial_and_composite_constraints(pg_engine) ->
         session.add(project)
         session.commit()
         forged = models.Task(user_id=bob, id=uuid.uuid4(), project_id=project.id, name="B", category="c",
-                             estimated_duration_minutes=5, priority=5, required=False,
+                             estimated_duration_minutes=5, required=False,
                              created_at=now, updated_at=now, version=1)
         session.add(forged)
         with pytest.raises(IntegrityError):  # the composite foreign key includes user_id
@@ -187,7 +187,7 @@ def test_postgresql_backstops_the_placement_extension_object(pg_engine) -> None:
     factory = session_factory(pg_engine)
     with factory() as session:
         session.add(models.Task(user_id=owner, id=task_id, name="T", category="c", estimated_duration_minutes=5,
-                                priority=5, required=False, created_at=now, updated_at=now, version=1))
+                                required=False, created_at=now, updated_at=now, version=1))
         session.commit()
 
     def placement(metadata) -> models.Placement:

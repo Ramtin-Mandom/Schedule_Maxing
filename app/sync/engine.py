@@ -45,8 +45,8 @@ Push (prepare, then push_batch):
                                       are their shadows
         shadow is a tombstone, local is live -> a conflict (never a revival)
     Operations are ordered so references resolve: creates/updates by
-    ENTITY_ORDER (tasks after the tasks they depend on), then deletes in
-    reverse (dependents first). Each operation is written to sync_outbox with
+    ENTITY_ORDER (an occurrence after its series, a segment after its
+    predecessor), then deletes in reverse. Each operation is written to sync_outbox with
     a stable op_id and the local_rev it was built from.
     push_batch() sends pending operations (whole groups only) and records the
     answers in one transaction: an applied operation updates the shadow,
@@ -560,8 +560,7 @@ class SyncEngine:
             locals_ = [unit[0]] if isinstance(unit, tuple) else [local for local, _ in unit.upserts]
             found = set()
             for local in locals_:
-                refs = list(local.payload.get("dependency_ids") or [])
-                refs += [local.payload.get("series_id"), local.payload.get("series_predecessor_id")]
+                refs = [local.payload.get("series_id"), local.payload.get("series_predecessor_id")]
                 found.update(unit_of[ref] for ref in refs if ref and ref in unit_of)
             return found
 
@@ -705,8 +704,8 @@ class SyncEngine:
                 return
             visiting.add(task_id)
             payload = tasks[task_id][0].payload
-            # Dependencies, an occurrence's series and a segment's predecessor exist on the server first.
-            for reference in [*payload["dependency_ids"], payload.get("series_id"), payload.get("series_predecessor_id")]:
+            # An occurrence's series and a segment's predecessor exist on the server first.
+            for reference in [payload.get("series_id"), payload.get("series_predecessor_id")]:
                 if reference:
                     visit(reference)
             ordered_tasks.append(tasks[task_id])
@@ -721,18 +720,8 @@ class SyncEngine:
 
     def _ordered_deletes(self, deletes):
         rank = {entity_type: index for index, entity_type in enumerate(ENTITY_ORDER)}
-        # Dependents before what they depend on: executions first ... projects last; tasks that depend on
-        # other deleted tasks first.
-        task_deps = {}
-        for entity_type, wire_id, _, _, shadow, _ in deletes:
-            if entity_type == "task":
-                task_deps[wire_id] = set(shadow.record.get("dependency_ids") or [])
-
-        def depth(task_id: str, seen=frozenset()) -> int:
-            dependents = [other for other, deps in task_deps.items() if task_id in deps and other not in seen]
-            return 1 + max((depth(other, seen | {task_id}) for other in dependents), default=0)
-
-        return sorted(deletes, key=lambda item: (-rank[item[0]], -depth(item[1]) if item[0] == "task" else 0))
+        # What references a record goes first: executions first ... projects last.
+        return sorted(deletes, key=lambda item: -rank[item[0]])
 
     def _requeue_history_fields(self, account: Account) -> None:
         """

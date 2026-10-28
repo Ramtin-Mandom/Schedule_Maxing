@@ -51,7 +51,7 @@ def ok(result):
 
 
 def add(services, name: str, *, minutes: int = 60, window: tuple[int, int] | None = None, **extra) -> Task:
-    fields = dict(name=name, category="study", estimated_duration_minutes=minutes, priority=5, preferred_dates=[DAY])
+    fields = dict(name=name, category="study", estimated_duration_minutes=minutes, preferred_dates=[DAY])
     if window is not None:
         fields["preferred_time_window"] = LocalTimeWindow(start_minute=window[0], end_minute=window[1])
     fields.update(extra)

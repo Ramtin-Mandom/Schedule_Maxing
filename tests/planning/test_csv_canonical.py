@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import csv
 import io
-import json
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -23,7 +22,7 @@ from app.planning.application import PlanningService
 from app.planning.csv_canonical import is_canonical_csv, parse_canonical_csv
 from app.planning.csv_export import COLUMNS, COLUMNS_V1, export_planning_csv
 from app.planning.csv_import import CsvImportError, ImportMode
-from app.planning.errors import EntityInUseError, InvalidEntityError, InvalidReferenceError, VersionConflictError
+from app.planning.errors import InvalidEntityError, InvalidReferenceError, VersionConflictError
 from app.planning.models import FixedBlock, LocalTimeWindow, Project, RecurrenceSpec, ScheduledTask, Task
 from app.planning.repository import PlanningRepository
 from app.ui.planning_controller import PlanningController
@@ -50,19 +49,19 @@ def snapshot(service: PlanningService) -> dict:
 def populate(service: PlanningService) -> dict:
     project = service.save_project(Project(name="Thesis", description="Chapter 3, \"methods\""))
     base = Task(
-        name="Read, annotate", category="study", tags=["a,b", "c"], estimated_duration_minutes=45, priority=7,
+        name="Read, annotate", category="study", tags=["a,b", "c"], estimated_duration_minutes=45,
         project_id=project.id, preferred_dates=[DAY], preferred_time_window=LocalTimeWindow(start_minute=613, end_minute=1440),
         deadline=datetime(2026, 3, 3, 17, tzinfo=NY), created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
     )
     weekly = Task(
-        name="Weekly review", category="work", estimated_duration_minutes=30, priority=4, required=True,
-        required_date=DAY, dependency_ids=[base.id], created_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        name="Weekly review", category="work", estimated_duration_minutes=30, required=True,
+        required_date=DAY, created_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
         recurrence=RecurrenceSpec(frequency="weekly", interval=2, weekdays=[0, 4], end_date=date(2026, 6, 1)),
     )
-    doomed = Task(name="Dropped", category="chores", estimated_duration_minutes=15, priority=2,
+    doomed = Task(name="Dropped", category="chores", estimated_duration_minutes=15,
                   created_at=datetime(2026, 1, 3, tzinfo=timezone.utc))
     service.save_tasks([base, weekly, doomed])
-    service.update_task(base.model_copy(update={"priority": 8}), expected_version=1)  # version 2
+    service.update_task(base.model_copy(update={"points": 80}), expected_version=1)  # version 2
     service.delete_task(doomed.id, expected_version=1)  # a tombstone
     block = service.save_fixed_block(FixedBlock(
         label="Sleep", category="sleep", planned_date=DAY, timezone="America/New_York",
@@ -116,7 +115,7 @@ def test_export_import_round_trip_preserves_identity_and_every_field(exported, t
         assert snapshot(target) == original
 
         weekly = target.get_task(records["weekly"].id)
-        assert weekly.recurrence == records["weekly"].recurrence and weekly.dependency_ids == [records["base"].id]
+        assert weekly.recurrence == records["weekly"].recurrence
         assert target.get_task(records["base"].id).version == 2 and target.get_task(records["base"].id).project_id
         assert target.get_task(records["doomed"].id) is None  # arrived as a tombstone, stays one
         [block] = target.fixed_blocks_for_date(DAY)
@@ -178,7 +177,7 @@ def test_csv_versions_cannot_overwrite_newer_data(tmp_path: Path) -> None:
         records = populate(service)
         rows = read_rows(export_planning_csv(service, tmp_path / "planning.csv").path)
         # Someone edits the task after the export...
-        newer = service.update_task(service.get_task(records["base"].id).model_copy(update={"priority": 1}),
+        newer = service.update_task(service.get_task(records["base"].id).model_copy(update={"points": 10}),
                                     expected_version=2)
         base_row = next(row for row in rows if row["id"] == str(records["base"].id))
         base_row["name"] = "Stale edit"
@@ -232,39 +231,25 @@ def test_malformed_rows_are_all_reported_and_nothing_is_written(exported, tmp_pa
     assert [issue.line for issue in error.value.issues] == [2, 3, 5]
 
 
-@pytest.mark.parametrize("problem", ["missing_dependency", "missing_project", "cycle", "overlap", "dependent_of_deleted"])
+@pytest.mark.parametrize("problem", ["missing_project", "overlap"])
 def test_invalid_batches_roll_back_completely(tmp_path: Path, problem: str) -> None:
     connection, service = open_service(tmp_path / "app.db")
     try:
-        records = populate(service)
+        populate(service)
         before = snapshot(service)
-        batch_rows = read_rows(export_planning_csv(service, tmp_path / "planning.csv").path)
-        extra = Task(name="New and valid", category="study", estimated_duration_minutes=30, priority=5)
+        extra = Task(name="New and valid", category="study", estimated_duration_minutes=30)
         rows = []
-        if problem == "missing_dependency":
-            rows = [_task_row(extra.model_copy(update={"id": uuid.uuid4(), "dependency_ids": [uuid.uuid4()]}))]
-        elif problem == "missing_project":
+        if problem == "missing_project":
             rows = [_task_row(extra.model_copy(update={"id": uuid.uuid4(), "project_id": uuid.uuid4()}))]
-        elif problem == "cycle":
-            base_row = next(row for row in batch_rows if row["id"] == str(records["base"].id))
-            base_row["dependency_ids"] = json.dumps([str(records["weekly"].id)])
-            rows = [base_row]
         elif problem == "overlap":
             rows = [_block_row(FixedBlock(
                 label="Nap", planned_date=DAY, timezone="America/New_York",
                 planned_start=datetime(2026, 3, 2, 6, tzinfo=NY), planned_end=datetime(2026, 3, 2, 8, tzinfo=NY),
             ))]
-        elif problem == "dependent_of_deleted":
-            base_row = next(row for row in batch_rows if row["id"] == str(records["base"].id))
-            base_row["deleted_at"] = "2026-03-01T00:00:00+00:00"  # weekly still depends on it
-            rows = [base_row]
         rows = [_task_row(extra)] + rows
         path = write_rows(tmp_path / "batch.csv", rows)
 
-        expected = {
-            "missing_dependency": InvalidReferenceError, "missing_project": InvalidReferenceError,
-            "cycle": InvalidEntityError, "overlap": InvalidEntityError, "dependent_of_deleted": EntityInUseError,
-        }[problem]
+        expected = {"missing_project": InvalidReferenceError, "overlap": InvalidEntityError}[problem]
         with pytest.raises(expected):
             service.apply_record_batch(parse_canonical_csv(path.read_text(encoding="utf-8")), allow_updates=True)
         assert snapshot(service) == before  # the valid first row was not written either
@@ -276,12 +261,12 @@ def test_ownership_must_be_consistent(tmp_path: Path) -> None:
     connection, service = open_service(tmp_path / "app.db")
     try:
         owner, other = uuid.uuid4(), uuid.uuid4()
-        mixed = [_task_row(Task(name=f"T{i}", category="c", estimated_duration_minutes=5, priority=1, user_id=user))
+        mixed = [_task_row(Task(name=f"T{i}", category="c", estimated_duration_minutes=5, user_id=user))
                  for i, user in enumerate((owner, other))]
         with pytest.raises(InvalidEntityError, match="owners"):
             service.apply_record_batch(parse_canonical_csv(write_rows(tmp_path / "m.csv", mixed).read_text(encoding="utf-8")))
 
-        mine = service.save_task(Task(name="Mine", category="c", estimated_duration_minutes=5, priority=1, user_id=owner))
+        mine = service.save_task(Task(name="Mine", category="c", estimated_duration_minutes=5, user_id=owner))
         takeover = [_task_row(mine.model_copy(update={"user_id": other}))]
         with pytest.raises(InvalidEntityError, match="different owner"):
             service.apply_record_batch(
@@ -293,7 +278,7 @@ def test_ownership_must_be_consistent(tmp_path: Path) -> None:
 
 
 def test_format_rules(tmp_path: Path) -> None:
-    task = Task(name="T", category="c", estimated_duration_minutes=5, priority=1, preferred_dates=[DAY])
+    task = Task(name="T", category="c", estimated_duration_minutes=5, preferred_dates=[DAY])
     row = _task_row(task)
 
     with pytest.raises(CsvImportError, match="format version 1"):

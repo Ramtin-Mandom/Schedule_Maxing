@@ -56,7 +56,7 @@ def plan_day(services, day: date, names: list[str], points: int = 2) -> None:
     for index, name in enumerate(names):
         start = 480 + 70 * index
         ok(services.planning_controller.add_or_update_task(Task(
-            name=name, category="study", estimated_duration_minutes=60, priority=5, points=points,
+            name=name, category="study", estimated_duration_minutes=60, points=points,
             preferred_dates=[day], preferred_time_window=LocalTimeWindow(start_minute=start, end_minute=start + 60))))
     ok(DayScheduleController(services.planning_controller, anchor_date=day, timezone=TZ).make_schedule())
 
@@ -100,7 +100,7 @@ def test_bulk_actions_share_the_day_boards_state(services) -> None:
 def test_only_scheduled_tasks_are_affected_and_an_empty_day_is_a_no_op(services) -> None:
     plan_day(services, PAST, ["Placed"])
     ok(services.planning_controller.add_or_update_task(Task(  # on the date but never scheduled
-        name="Not placed", category="study", estimated_duration_minutes=30, priority=5, preferred_dates=[PAST])))
+        name="Not placed", category="study", estimated_duration_minutes=30, preferred_dates=[PAST])))
     run = ok(outcomes(services).set_day(PAST, C))
     assert run.detail.summary.scheduled_count == 1 and run.detail.summary.completed_count == 1
     assert [e.task_name for e in ok(services.execution_controller.list_executions())] == ["Placed"]
@@ -177,7 +177,7 @@ def test_points_are_stored_scheduled_and_aggregated_but_never_the_optimizer_scor
     ok(services.planning_controller.add_or_update_task(
         ok(services.planning_controller.get_task(essay.id)).model_copy(update={"points": 50}),
         expected_version=ok(services.planning_controller.get_task(essay.id)).version))
-    assert ok(page.load()).freshness.value == "current"  # points are not a scheduling input
+    assert ok(page.load()).freshness.value == "stale"  # points order the week/month allocation
     assert {p.task_id: p.score for p in ok(services.planning_controller.get_placements(PAST))} == scores
 
     status = TaskStatusController(services.execution_controller)

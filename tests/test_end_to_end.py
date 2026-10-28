@@ -33,7 +33,7 @@ TZ = "UTC"
 
 def _make_task(name: str, **overrides) -> Task:
     defaults = dict(
-        name=name, category="study", estimated_duration_minutes=60, priority=5,
+        name=name, category="study", estimated_duration_minutes=60,
         preferred_time_window=LocalTimeWindow(start_minute=540, end_minute=660),
     )
     defaults.update(overrides)
@@ -101,7 +101,7 @@ def test_full_pipeline_generation_execution_and_productivity_report(tmp_path):
     tasks/placements -> canonical execution -> start/complete ->
     ProductivityService report, as one coherent flow using only public APIs
     from each milestone."""
-    task = _make_task("Deep Work", category="work", priority=8)
+    task = _make_task("Deep Work", category="work")
     registry = TaskRegistry()
     registry.add(task)
     day_schedule = DaySchedule(date=DAY, timezone=TZ, task_ids=[task.id], tasks=registry)

@@ -10,7 +10,7 @@ import multiprocessing
 import sys
 
 if __name__ == "__main__":
-    # scikit-learn/joblib may start worker processes; in a packaged program each one re-runs this executable.
+    # Any multiprocessing worker re-runs this executable in a packaged program.
     multiprocessing.freeze_support()
     from app.desktop import main
 

@@ -29,7 +29,7 @@ def test_offline_records_reach_a_second_device_after_explicit_association(pair) 
     server, a, b = pair
     project = a.planning.create_project(Project(name="Thesis"))
     first = a.add_task("Read", project_id=project.id)
-    second = a.add_task("Summarize", dependency_ids=[first.id], required_date=MON)
+    second = a.add_task("Summarize", required_date=MON)
     block = a.add_block()
 
     a.sign_in("alice@example.com", associate=False)
@@ -43,7 +43,7 @@ def test_offline_records_reach_a_second_device_after_explicit_association(pair) 
 
     b.sign_in("alice@example.com")
     assert b.sync_now().status == "ok"
-    assert b.planning.get_task(second.id).dependency_ids == [first.id]
+    assert b.planning.get_task(second.id).required_date == MON and b.planning.get_task(first.id).project_id
     assert b.planning.get_project(project.id).name == "Thesis"
     assert b.planning.fixed_blocks_for_date(MON)[0].category == "sleep" and block.id
     assert b.dirty() == []  # applying pulled records produced no outbound changes
@@ -59,14 +59,14 @@ def test_offline_edits_coalesce_and_tombstones_propagate(pair) -> None:
     b.sync_now()
 
     stored = a.planning.get_task(task.id)
-    for priority in (6, 7, 8):  # three offline edits
-        stored = a.planning.update_task(stored.model_copy(update={"priority": priority}), expected_version=stored.version)
+    for points in (6, 7, 8):  # three offline edits
+        stored = a.planning.update_task(stored.model_copy(update={"points": points}), expected_version=stored.version)
     a.sync_now()
     remote = server.get("alice@example.com", f"/tasks/{task.id}")
-    assert (remote["priority"], remote["version"]) == (8, 2)  # one update, based on the acknowledged version 1
+    assert (remote["points"], remote["version"]) == (8, 2)  # one update, based on the acknowledged version 1
 
     b.sync_now()
-    assert b.planning.get_task(task.id).priority == 8
+    assert b.planning.get_task(task.id).points == 8
     b_task = b.planning.get_task(task.id)
     b.planning.delete_task(task.id, expected_version=b_task.version)
     b.sync_now()
@@ -96,7 +96,7 @@ def test_executions_sessions_feedback_and_legacy_history(pair) -> None:
     completed = a.executions.complete(execution.id, expected_version=resumed.version)
     a.executions.record_feedback(execution.id, expected_version=completed.version, focus_rating=4, note="good")
     legacy = a.executions.create_execution(task_name="Old", category="study", tag="", planned_date=1,
-                                           planned_start=540, planned_end=600, planned_duration=60, priority=5)
+                                           planned_start=540, planned_end=600, planned_duration=60)
     a.connection.execute("UPDATE executions SET id = 'legacy-7' WHERE id = ?", (legacy.id,))  # a pre-UUID id
     a.connection.execute("INSERT INTO execution_wire_ids (execution_id, wire_id) VALUES "
                          "('legacy-7', '00000000-0000-4000-8000-000000000007')")
@@ -135,11 +135,11 @@ def test_preferences_categories_and_schedule_freshness(pair) -> None:
     assert {state.status for state in states.values()} == {DayResultStatus.GENERATED}
     # ...and a local edit on B makes it stale, whatever the other device's record said.
     task = b.planning.list_tasks()[0]
-    b.planning.update_task(task.model_copy(update={"priority": 9}), expected_version=task.version)
+    b.planning.update_task(task.model_copy(update={"points": 90}), expected_version=task.version)
     assert b.controller.day_state(MON).value.status == DayResultStatus.STALE
 
 
-def test_rescheduling_cleanup_and_outside_dependencies_sync(pair) -> None:
+def test_rescheduling_cleanup_and_completed_work_sync(pair) -> None:
     server, a, b = pair
     a.sign_in("alice@example.com")
     b.sign_in("alice@example.com")
@@ -165,20 +165,21 @@ def test_rescheduling_cleanup_and_outside_dependencies_sync(pair) -> None:
     assert {occurrences[p.task_id].occurrence_slot for p in daily_placements} == {p.planned_date for p in daily_placements}
     assert len(b.planning.occurrences_of_series([daily.id])[daily.id]) == 7  # never a second occurrence of a slot
 
-    # A dependency completed on B and synced satisfies a dependent scheduled next week on A.
-    prerequisite = b.add_task("Prerequisite", required_date=MON)
+    # Work completed on B syncs to A before A schedules the next week.
+    finished_task = b.add_task("Finished", required_date=MON)
     assert b.controller.schedule_range(MON, MON, scope=RangeScope.ELIGIBLE).ok
-    [done] = [p for p in b.planning.placements_for_date(MON) if p.task_id == prerequisite.id]
-    execution = b.executions.get_or_create_canonical_execution(prerequisite, done)
+    [done] = [p for p in b.planning.placements_for_date(MON) if p.task_id == finished_task.id]
+    execution = b.executions.get_or_create_canonical_execution(finished_task, done)
     b.executions.start(execution.id)
     completed = b.executions.complete(execution.id)
     b.sync_now()
     a.sync_now()
     finished = completed.actual_final_end_at.date()  # the real completion instant (the device clock)
     next_monday = finished + timedelta(days=7 - finished.weekday())
-    dependent = a.add_task("Dependent", required_date=next_monday, dependency_ids=[prerequisite.id])
+    assert a.executions.get_execution(execution.id).status.value == "completed"
+    next_task = a.add_task("Next", required_date=next_monday)
     run = a.controller.schedule_range(next_monday, next_monday + timedelta(days=6), scope=RangeScope.ELIGIBLE).value
-    assert run.allocation.assignments.get(dependent.id) == next_monday
+    assert run.allocation.assignments.get(next_task.id) == next_monday
 
 
 def _placement(task_id, day: date, hour: int):

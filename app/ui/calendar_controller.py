@@ -332,7 +332,7 @@ class CalendarController(SchedulePageController):
             return ControllerResult.failure(preview.error, preview.cause)
         what = "this month" if period.mode == "month" else "this week"
         return ControllerResult.success(ResetPlan(
-            preview.value, describe_reset(preview.value, self._range_label(), self._names, what=what)))
+            preview.value, describe_reset(preview.value, self._range_label(), what=what)))
 
     def reset_period(self, plan: ResetPlan) -> ControllerResult[CalendarSnapshot]:
         """Apply exactly the previewed reset, atomically (refused, deleting nothing, if anything changed)."""

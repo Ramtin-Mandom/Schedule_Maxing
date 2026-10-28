@@ -10,7 +10,7 @@ one transaction; any failure rolls all of it back):
 
     executions (their work sessions stay attached to the tombstone),
     placements (removal_reason "reset"), schedule generation records,
-    fixed blocks, tasks (with their tags, dates, dependencies and recurrence
+    fixed blocks, tasks (with their tags, dates and recurrence
     rows), and projects.
 
 What is kept: the account itself (credentials, profile) and scheduling

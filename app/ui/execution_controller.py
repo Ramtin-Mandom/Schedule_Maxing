@@ -188,7 +188,6 @@ class ExecutionController:
         planned_start: int,
         planned_end: int,
         planned_duration: int,
-        priority: int,
     ) -> ControllerResult[TaskExecution]:
         return self._call(
             lambda: self._service.get_or_create_execution(
@@ -199,7 +198,6 @@ class ExecutionController:
                 planned_start=planned_start,
                 planned_end=planned_end,
                 planned_duration=planned_duration,
-                priority=priority,
             )
         )
 

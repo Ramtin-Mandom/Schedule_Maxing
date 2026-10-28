@@ -15,7 +15,6 @@ Supported for 1.0.0: **64-bit Windows 10 and Windows 11**. Only claim a Windows 
 | Bundled resources | `_internal\config\task_preference.yaml`, `_internal\assets\ScheduleMaxing.ico` | never |
 | Database | `%LOCALAPPDATA%\ScheduleMaxing\executions.db` | yes |
 | Settings | `%LOCALAPPDATA%\ScheduleMaxing\ui_settings.json`, `task_defaults.json` | yes |
-| Duration model | `%LOCALAPPDATA%\ScheduleMaxing\ml_duration_model.joblib` (+ `.meta.json`) | yes |
 | Logs | `%LOCALAPPDATA%\ScheduleMaxing\logs\schedule-maxing.log` (1 MB, 5 older files kept) | yes |
 | Database backups | `%LOCALAPPDATA%\ScheduleMaxing\backups\executions-v<schema>-<time>.db` (newest 5) | before a migration |
 | Update downloads | `%LOCALAPPDATA%\ScheduleMaxing\updates\` (at most one installer) | during an update |
@@ -67,13 +66,13 @@ that uses them. Also tests, samples, benchmarks and the command-line tools. The 
 those packages, the spec excludes them by name, and `check_bundle.py` fails the build if one appears.
 
 **The packaged self-test.** `ScheduleMaxing.exe --self-test report.json` (`app/selftest.py`) is how a build proves it
-works: bundled resources, the compiled dependencies (CustomTkinter, tzdata, pandas, scikit-learn, joblib, keyring's
+works: bundled resources, the compiled dependencies (CustomTkinter, tzdata, pydantic, PyYAML, keyring's
 Windows backend), database creation in the data folder, a schedule generated in every mode, an execution recorded, a
 CSV export and re-import, a restart with the data still there, and the real window with every page built. It refuses
 to run unless `SCHEDULE_MAXING_DATA_DIR` names a scratch folder, so it cannot touch real data.
 
-Expected size: about 190 MB unpacked (pandas, NumPy, SciPy and scikit-learn are most of it). Start-up takes several
-seconds because those libraries load at start.
+Expected size: well under the earlier ~190 MB unpacked, which was mostly pandas, NumPy, SciPy and scikit-learn
+(removed with the ML predictor); re-measure after the next build.
 
 The icon `assets/ScheduleMaxing.ico` is built from the artwork in `assets/icon/` (one PNG per size: 16, 24, 32, 48, 64,
 128 and 256 px) by `python packaging/windows/make_icon.py`. Run that again after changing an image; the `.ico` is

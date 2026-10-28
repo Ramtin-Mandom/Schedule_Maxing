@@ -33,7 +33,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 
-from pydantic import AwareDatetime, BaseModel, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -45,6 +45,11 @@ from backend.resources import BaseVersion, RecordMeta, Strict
 class SessionIn(Strict):
     started_at: AwareDatetime
     ended_at: AwareDatetime | None = None
+
+
+#: Fields executions no longer have, kept on the wire for 1.3.0 clients (which require them): accepted and
+#: ignored on input, always the neutral value on output. Remove once no 1.3.0 client remains.
+LEGACY_EXECUTION_WIRE_FIELDS = frozenset({"priority"})
 
 
 class ExecutionFields(Strict):
@@ -59,7 +64,8 @@ class ExecutionFields(Strict):
     planned_start: int | None = None
     planned_end: int | None = None
     planned_duration: int = Field(ge=0)
-    priority: int = Field(ge=1, le=10)
+    #: Legacy wire placeholder (LEGACY_EXECUTION_WIRE_FIELDS): whatever an older client sends, it is 5.
+    priority: int = 5
     #: The task's points when the execution was created (a snapshot); omitted/None when unknown.
     points: int | None = Field(default=None, ge=0)
     status: ExecutionStatus = ExecutionStatus.SCHEDULED
@@ -79,6 +85,11 @@ class ExecutionFields(Strict):
     actual_final_end_at: AwareDatetime | None = None
     #: Why a cancelled execution was cancelled (user / rescheduled / superseded); None otherwise or unknown.
     cancel_reason: CancelReason | None = None
+
+    @field_validator("priority", mode="before")
+    @classmethod
+    def _no_priority(cls, _value) -> int:
+        return 5
 
     @model_validator(mode="after")
     def _aggregate_rules(self):
@@ -161,7 +172,8 @@ class _ExecutionSpec:
         ))
 
     def serialize(self, session: Session, user_id: uuid.UUID, row) -> dict:
-        data = {name: getattr(row, name) for name in ExecutionFields.model_fields if name != "sessions"}
+        data = {name: getattr(row, name) for name in ExecutionFields.model_fields
+                if name != "sessions" and name not in LEGACY_EXECUTION_WIRE_FIELDS}
         data.update(
             id=row.id, version=row.version, created_at=row.created_at, updated_at=row.updated_at,
             deleted_at=row.deleted_at,
@@ -176,7 +188,7 @@ EXECUTIONS = _ExecutionSpec()
 
 #: The execution snapshot columns a TaskExecution carries (the rest are ids, status and audit fields).
 SNAPSHOT_FIELDS = (
-    "task_name", "category", "tag", "planned_date", "planned_start", "planned_end", "planned_duration", "priority",
+    "task_name", "category", "tag", "planned_date", "planned_start", "planned_end", "planned_duration",
     "points", "actual_active_duration_minutes", "duration_variance_minutes", "start_delay_minutes", "focus_rating",
     "energy_rating", "interruption_count", "note", "task_id", "scheduled_task_id", "canonical_planned_date",
     "canonical_timezone", "canonical_planned_start", "canonical_planned_end", "actual_first_start_at",

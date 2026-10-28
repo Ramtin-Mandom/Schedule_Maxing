@@ -191,8 +191,10 @@ Early 8:00 AM - 1:00 PM, Mid 1:00 PM - 6:00 PM and Late 6:00 PM - 11:00 PM.
   third is placed there, and the reward score only chooses where inside it.
 - It is not a hard constraint: when the third has no valid placement the task
   goes as close to it as it fits, rather than being left unscheduled.
-- Tasks have **no priority**: no engine reads the legacy `priority` field, and
-  **points** never affect placement.
+- Tasks have **no priority** and no dependencies (both removed, ADR-048).
+  **Points** never change a placement's score or time; when the date cannot
+  fit every task, allocation gives it to the higher-points tasks first
+  (ADR-049).
 - A task without a third (an import, an older record) falls back to its own
   stored preferred window, then to its category's preferred time.
 
@@ -242,8 +244,8 @@ An out-of-date schedule says why:
 - A native dialog, not a YAML editor.
 - It shows every field the current engine actually reads:
   - the scheduling window;
-  - the "Priority weight" (it now scales only the category's importance:
-    tasks have no priority of their own), and the preferred-time and
+  - the "Task weight" (it scales the category's importance: tasks have no
+    priority of their own), and the preferred-time and
     related-tag weights and distances;
   - the fragmentation penalty;
   - the preferred spacing (a **soft** preference, not a guaranteed break);

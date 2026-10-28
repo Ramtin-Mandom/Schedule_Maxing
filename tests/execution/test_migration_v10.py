@@ -18,6 +18,7 @@ from app.execution import db as db_module
 from app.execution.db import LATEST_SCHEMA_VERSION, MigrationError, get_connection, initialize_schema
 from app.planning.application import PlanningService
 from app.planning.repository import PlanningRepository
+from tests.execution.conftest import without_dropped_columns
 
 TASK = "11111111-1111-4111-8111-111111111111"
 ORIGINAL = "22222222-2222-4222-8222-222222222222"
@@ -31,7 +32,7 @@ TABLES = ("scheduled_tasks", "executions", "sync_dirty")
 
 def _rows(conn: sqlite3.Connection, table: str) -> list[dict]:
     conn.row_factory = sqlite3.Row
-    return [dict(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY 1, 2")]
+    return without_dropped_columns([dict(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY 1, 2")])
 
 
 def _build_v9_database(db_path: Path) -> None:

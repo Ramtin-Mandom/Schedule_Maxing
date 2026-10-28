@@ -75,7 +75,6 @@ def build_synthetic_dataset(repository: ExecutionRepository) -> FakeClock:
             tag="math",
             planned_start=540,
             planned_duration=60,
-            priority=8,
             active_minutes=actual_minutes,
             focus_rating=focus,
             energy_rating=energy,
@@ -84,22 +83,22 @@ def build_synthetic_dataset(repository: ExecutionRepository) -> FakeClock:
 
     _skip_after_start(
         service, clock, category="study", tag="math", planned_start=540, planned_duration=60,
-        priority=7, worked_minutes=10,
+        worked_minutes=10,
     )
     clock.advance(timedelta(hours=1))
     _skip_after_start(
         service, clock, category="study", tag="reading", planned_start=570, planned_duration=45,
-        priority=6, worked_minutes=5,
+        worked_minutes=5,
     )
     clock.advance(timedelta(hours=1))
     _skip_before_start(
-        service, category="study", tag="reading", planned_start=600, planned_duration=30, priority=5,
+        service, category="study", tag="reading", planned_start=600, planned_duration=30,
     )
 
     # Deliberately implausible completed duration (> 1440 minutes / one day).
     _complete(
         service, clock, category="study", tag="math", planned_start=540, planned_duration=60,
-        priority=9, active_minutes=1500,
+        active_minutes=1500,
     )
 
     clock.advance(timedelta(days=1))
@@ -108,7 +107,7 @@ def build_synthetic_dataset(repository: ExecutionRepository) -> FakeClock:
     for actual_minutes in (40, 50, 45):
         _complete(
             service, clock, category="study", tag="review", planned_start=1200, planned_duration=45,
-            priority=6, active_minutes=actual_minutes,
+            active_minutes=actual_minutes,
         )
         clock.advance(timedelta(hours=3))
 
@@ -120,15 +119,15 @@ def build_synthetic_dataset(repository: ExecutionRepository) -> FakeClock:
         focus = 5 if index % 2 == 0 else None
         _complete(
             service, clock, category="exercise", tag="cardio", planned_start=1080, planned_duration=30,
-            priority=5, active_minutes=actual_minutes, focus_rating=focus, energy_rating=4,
+            active_minutes=actual_minutes, focus_rating=focus, energy_rating=4,
         )
         clock.advance(timedelta(hours=4))
 
     _leave_paused(
         service, clock, category="exercise", tag="cardio", planned_start=1080, planned_duration=30,
-        priority=4, worked_minutes=15,
+        worked_minutes=15,
     )
-    _leave_scheduled(service, category="exercise", tag="strength", planned_start=1080, planned_duration=45, priority=3)
+    _leave_scheduled(service, category="exercise", tag="strength", planned_start=1080, planned_duration=45)
 
     clock.advance(timedelta(days=1))
 
@@ -136,7 +135,7 @@ def build_synthetic_dataset(repository: ExecutionRepository) -> FakeClock:
     for actual_minutes in (25, 35):
         _complete(
             service, clock, category="errand", tag="car", planned_start=780, planned_duration=30,
-            priority=4, active_minutes=actual_minutes,
+            active_minutes=actual_minutes,
         )
         clock.advance(timedelta(hours=5))
 
@@ -151,7 +150,6 @@ def _complete(
     tag: str,
     planned_start: int,
     planned_duration: int,
-    priority: int,
     active_minutes: int,
     focus_rating: int | None = None,
     energy_rating: int | None = None,
@@ -166,7 +164,6 @@ def _complete(
         planned_start=planned_start,
         planned_end=planned_start + planned_duration,
         planned_duration=planned_duration,
-        priority=priority,
     )
     service.start(execution.id)
     clock.advance(timedelta(minutes=active_minutes))
@@ -191,7 +188,6 @@ def _skip_before_start(
     tag: str,
     planned_start: int,
     planned_duration: int,
-    priority: int,
     planned_date: int = 1,
 ):
     execution = service.create_execution(
@@ -202,7 +198,6 @@ def _skip_before_start(
         planned_start=planned_start,
         planned_end=planned_start + planned_duration,
         planned_duration=planned_duration,
-        priority=priority,
     )
     return service.skip(execution.id)
 
@@ -215,7 +210,6 @@ def _skip_after_start(
     tag: str,
     planned_start: int,
     planned_duration: int,
-    priority: int,
     worked_minutes: int,
     planned_date: int = 1,
 ):
@@ -227,7 +221,6 @@ def _skip_after_start(
         planned_start=planned_start,
         planned_end=planned_start + planned_duration,
         planned_duration=planned_duration,
-        priority=priority,
     )
     service.start(execution.id)
     clock.advance(timedelta(minutes=worked_minutes))
@@ -242,7 +235,6 @@ def _leave_paused(
     tag: str,
     planned_start: int,
     planned_duration: int,
-    priority: int,
     worked_minutes: int,
     planned_date: int = 1,
 ):
@@ -254,7 +246,6 @@ def _leave_paused(
         planned_start=planned_start,
         planned_end=planned_start + planned_duration,
         planned_duration=planned_duration,
-        priority=priority,
     )
     service.start(execution.id)
     clock.advance(timedelta(minutes=worked_minutes))
@@ -268,7 +259,6 @@ def _leave_scheduled(
     tag: str,
     planned_start: int,
     planned_duration: int,
-    priority: int,
     planned_date: int = 1,
 ):
     return service.create_execution(
@@ -279,5 +269,4 @@ def _leave_scheduled(
         planned_start=planned_start,
         planned_end=planned_start + planned_duration,
         planned_duration=planned_duration,
-        priority=priority,
     )

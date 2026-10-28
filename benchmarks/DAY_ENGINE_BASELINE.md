@@ -3,7 +3,7 @@
 This records **provisional** measured performance of the new canonical day
 engine (`app.optimizer.generate_day_schedule`, added by Task 4) in both
 `precise_greedy` and `adhd_friendly` modes, on the same four fixtures used
-for the [Greedy Optimizer v1 baseline](BASELINE.md) (Task 1). It is a
+for the Greedy Optimizer v1 baseline (v1 has since been removed) (Task 1). It is a
 same-environment sanity check, not yet the rigorous, baseline-equivalent
 comparison Task 6 will do — see **Important caveat** below.
 

@@ -390,9 +390,6 @@ class CalendarPage(TaskFormActions, DayWindowActions, ctk.CTkFrame):
         if not plan.ok:
             self.notice.show("error", plan.error or "The reset could not be prepared.")
             return
-        if plan.value.blocked:
-            self.notice.show("error", plan.value.message)
-            return
         unit = "Week" if self.mode_name == "week" else "Month"
         if not self._confirm(f"Reset {unit}?", plan.value.message, f"Reset {unit}", danger=True):
             self.notice.show("info", "Reset cancelled; nothing was deleted.")

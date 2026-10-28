@@ -31,7 +31,7 @@ def _restore_installed_registry():
 
 def add(services, name: str) -> Task:
     result = services.planning_controller.add_or_update_task(
-        Task(name=name, category="study", estimated_duration_minutes=30, priority=5))
+        Task(name=name, category="study", estimated_duration_minutes=30))
     assert result.ok, result.error
     return result.value
 

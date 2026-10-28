@@ -157,7 +157,7 @@ def test_relevant_edits_make_a_restored_schedule_stale(tmp_path, project_root, e
     second = Session(db_path, project_root, tz="America/New_York" if edit == "timezone" else "UTC")
     try:
         if edit == "task":
-            ok(second.controller.add_or_update_task(study.model_copy(update={"priority": 9}),
+            ok(second.controller.add_or_update_task(study.model_copy(update={"points": 90}),
                                                     expected_version=study.version))
         elif edit == "fixed_block":
             start = datetime(2024, 6, 5, 12, tzinfo=timezone.utc)

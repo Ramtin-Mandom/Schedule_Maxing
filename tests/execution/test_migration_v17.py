@@ -13,6 +13,7 @@ import pytest
 from app.budget.repository import BudgetRepository
 from app.budget.service import BudgetService
 from app.execution.db import LATEST_SCHEMA_VERSION, get_connection, initialize_schema
+from tests.execution.conftest import without_dropped_columns
 
 PROJECT = "11111111-1111-4111-8111-111111111111"
 TASK = "22222222-2222-4222-8222-222222222222"
@@ -22,7 +23,9 @@ STAMP = "2026-02-01T10:00:00+00:00"
 
 def _snapshot(conn: sqlite3.Connection) -> dict[str, list[tuple]]:
     tables = ("projects", "tasks", "sync_dirty", "sync_accounts", "executions")
-    return {table: [tuple(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY 1")] for table in tables}
+    conn.row_factory = sqlite3.Row
+    return {table: [tuple(row.values()) for row in without_dropped_columns(
+        [dict(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY 1")])] for table in tables}
 
 
 def _build_v16_database(db_path: Path) -> dict[str, list[tuple]]:

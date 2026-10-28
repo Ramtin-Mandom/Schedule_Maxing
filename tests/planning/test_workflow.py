@@ -21,7 +21,7 @@ MON, TUE = date(2026, 9, 21), date(2026, 9, 22)
 
 
 def task(name: str, **extra) -> Task:
-    return Task(name=name, category="study", estimated_duration_minutes=60, priority=5, **extra)
+    return Task(name=name, category="study", estimated_duration_minutes=60, **extra)
 
 
 def dirty(connection) -> list[tuple]:

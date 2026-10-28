@@ -366,19 +366,19 @@ def test_project_task_defaults_precedence_and_persistence(tmp_path):
         project = ok(projects.create("Configured"))
         other = ok(projects.create("Untouched"))
         assert not project.task_defaults.configured  # a new project configures nothing
-        category = TaskDefault("Study", duration=50, priority=6, points=30)
+        category = TaskDefault("Study", duration=50, points=30)
         # Unset project values never replace the category's (or the application's) defaults.
         assert resolve_task_default(category, project.task_defaults) == category
-        assert resolve_task_default(TaskDefault("Task"), None) == TaskDefault("Task", 60, 5, 20)
+        assert resolve_task_default(TaskDefault("Task"), None) == TaskDefault("Task", 60, 20)
 
-        for bad in (("soon", "", ""), ("", "11", ""), ("", "", "-3")):
+        for bad in (("soon", ""), ("", "-3")):
             assert not projects.update(project.id, "Configured", "", expected_version=project.version,
                                        task_defaults=bad).ok
         saved = ok(projects.update(project.id, "Configured", "", expected_version=project.version,
-                                   task_defaults=("45m", "", "12")))
-        assert saved.task_defaults.model_dump() == {"duration_minutes": 45, "priority": None, "points": 12}
-        # The project's configured values win; the unset priority still comes from the category.
-        assert resolve_task_default(category, saved.task_defaults) == TaskDefault("Study", 45, 6, 12)
+                                   task_defaults=("45m", "12")))
+        assert saved.task_defaults.model_dump() == {"duration_minutes": 45, "points": 12}
+        # The project's configured values win.
+        assert resolve_task_default(category, saved.task_defaults) == TaskDefault("Study", 45, 12)
         assert not ok(opened.planning_controller.get_project(other.id)).task_defaults.configured  # not inherited
 
         # A new task with nothing typed for the duration takes the project's; a typed value always wins.
@@ -391,7 +391,7 @@ def test_project_task_defaults_precedence_and_persistence(tmp_path):
         # Changing the defaults affects future tasks only.
         current = ok(opened.planning_controller.get_project(project.id))
         ok(projects.update(project.id, "Configured", "", expected_version=current.version,
-                           task_defaults=("1h 30m", "9", "")))
+                           task_defaults=("1h 30m", "")))
         ok(projects.add_task(project.id, draft("Later", duration=""), DAY.isoformat()))
         durations = {t.name: t.estimated_duration_minutes for t in ok(opened.planning_controller.list_tasks())}
         assert durations == {"Defaulted": 45, "Explicit": 20, "Later": 90}
@@ -400,7 +400,7 @@ def test_project_task_defaults_precedence_and_persistence(tmp_path):
     reopened = open_app_services(path, timezone="UTC", project_root=str(tmp_path))
     try:
         stored = ok(reopened.planning_controller.get_project(project.id))
-        assert stored.task_defaults.model_dump() == {"duration_minutes": 90, "priority": 9, "points": None}
+        assert stored.task_defaults.model_dump() == {"duration_minutes": 90, "points": None}
         row = ok(ProjectsController(reopened.planning_controller, timezone="UTC").load(project.id)).selected
         assert row.task_defaults == stored.task_defaults
     finally:

@@ -5,7 +5,8 @@
 `docs/next-milestone-prompts/06-integration.md`.
 
 - **Source:** the unmodified committed tree of revision
-  `ec072e7e7b86655eff6240b8a936fd16ceb28ed7`, exported with `git archive` into a
+  `92c6993037964fb65eec0c2d46e3c0d914d46e0f` (tasks without priority or dependencies, points-first
+  allocation; day-engine results identical to the previous baseline, week results changed), exported with `git archive` into a
   scratch directory and run with `--source-root` (the checkout was never switched;
   the file records where the application was imported from).
 - **Environment:** CPython 3.10.11, Windows 10 (19045), pydantic 2.13.3,

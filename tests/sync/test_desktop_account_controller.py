@@ -68,7 +68,7 @@ class Desktop:
 
     def add(self, name: str) -> Task:
         return self.ok(self.services.planning_controller.add_or_update_task(
-            Task(name=name, category="study", estimated_duration_minutes=30, priority=5, preferred_dates=[MON])))
+            Task(name=name, category="study", estimated_duration_minutes=30, preferred_dates=[MON])))
 
     def names(self) -> set[str]:
         return {task.name for task in self.ok(self.services.planning_controller.list_tasks())}
@@ -183,7 +183,7 @@ def test_association_is_explicit_previewed_revalidated_and_keeps_ids(make_deskto
     desktop.add("Created signed in")  # the account's own new work, not the old ownerless record
     # The guest record changes after the preview (anything created now would be the active account's own).
     guest = desktop.services.planning_service.get_task(offline.id)
-    desktop.services.planning_service.update_task(guest.model_copy(update={"priority": 9}),
+    desktop.services.planning_service.update_task(guest.model_copy(update={"points": 90}),
                                                   expected_version=guest.version)
     stale = desktop.account.associate(preview.token)
     assert not stale.ok and "changed since this preview" in stale.error

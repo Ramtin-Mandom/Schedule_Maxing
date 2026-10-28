@@ -76,8 +76,9 @@ BASE_FIELDS: tuple[FieldSpec, ...] = (
               "Flexible tasks are placed only inside this part of the day; fixed blocks must lie inside it too. "
               "Also shown above the Day, Week and Month schedules.",
               "window", "Day"),
-    FieldSpec("reward.weight_importance", "Priority weight",
-              "How strongly higher-priority tasks win the better times.", "number", "Scoring"),
+    FieldSpec("reward.weight_importance", "Task weight",
+              "How much each task (times its category's importance) counts when tasks compete for the better "
+              "times.", "number", "Scoring"),
     FieldSpec("reward.weight_time_bonus", "Preferred-time weight",
               "How strongly a task is drawn toward its preferred time.", "number", "Scoring"),
     FieldSpec("reward.max_time_distance_minutes", "Preferred-time reach",
@@ -117,7 +118,7 @@ def field_specs(engine: OptimizerMode, categories: Iterable[str]) -> list[FieldS
     for category in categories:
         name = category.replace("_", " ").capitalize()
         specs.append(FieldSpec(f"category_multipliers:{category}", f"{name}: importance",
-                               "Multiplies the priority of this category's tasks (1 is neutral).", "category_number",
+                               "Multiplies the weight of this category's tasks (1 is neutral).", "category_number",
                                "Categories"))
         specs.append(FieldSpec(f"category_preferred_windows:{category}", f"{name}: preferred time",
                                "Used for tasks of this category that have no preferred time of their own.",

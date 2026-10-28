@@ -23,7 +23,7 @@ def test_native_projects(tmp_path, dialogs):
         pump(app, until=lambda: not page._busy and page.snapshot.selected is not None)
         assert page.snapshot.selected.name == "My project"
         planning = app.services.planning_controller
-        saved = planning.add_or_update_task(Task(name="Study", category="study", priority=5,
+        saved = planning.add_or_update_task(Task(name="Study", category="study",
                                                  estimated_duration_minutes=13, required_date=WEDNESDAY,
                                                  project_id=page.selected))
         assert saved.ok
@@ -126,7 +126,7 @@ def test_native_projects(tmp_path, dialogs):
         assert not project.task_defaults.configured and page.form.duration_field.get() == ""
         result = app.pages["projects"].controller.update(
             project.id, project.name, project.description, expected_version=project.version,
-            task_defaults=("45m", "", "12"))
+            task_defaults=("45m", "12"))
         assert result.ok
         page.on_show()
         pump(app, until=lambda: not page._busy and page.snapshot.selected.task_defaults.configured)

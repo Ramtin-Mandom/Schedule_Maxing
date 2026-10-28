@@ -41,7 +41,6 @@ _FIELDS = (
     "planned_start",
     "planned_end",
     "planned_duration",
-    "priority",
     "status",
     "created_at",
     "updated_at",

@@ -37,16 +37,16 @@ def test_two_devices_complete_workflow(server, make_device, tmp_path, monkeypatc
 
     # 1. Offline work before any account: every record type.
     project = laptop.planning.create_project(Project(name="Thesis"))
-    prerequisite = laptop.add_task("Read papers", project_id=project.id, required_date=MON)
-    writing = laptop.add_task("Write", dependency_ids=[prerequisite.id], required_date=MON + timedelta(days=1))
+    reading = laptop.add_task("Read papers", project_id=project.id, required_date=MON)
+    writing = laptop.add_task("Write", required_date=MON + timedelta(days=1))
     floating = laptop.add_task("Floating")
     daily = laptop.add_task("Daily review", recurrence={"frequency": "daily"})
     laptop.add_block(category="sleep")
     laptop.controller.set_engine_mode(OptimizerMode.ADHD_FRIENDLY)
     laptop.controller.set_date_overrides(MON, PreferenceOverrides(category_multipliers={"study": 1.5}))
     week = laptop.controller.schedule_range(MON, SUN, scope=RangeScope.ELIGIBLE).value
-    [placement] = [p for p in laptop.planning.placements_for_date(MON) if p.task_id == prerequisite.id]
-    execution = laptop.executions.get_or_create_canonical_execution(prerequisite, placement)
+    [placement] = [p for p in laptop.planning.placements_for_date(MON) if p.task_id == reading.id]
+    execution = laptop.executions.get_or_create_canonical_execution(reading, placement)
     started = laptop.executions.start(execution.id)
     laptop.executions.pause(execution.id, expected_version=started.version)
 
@@ -64,7 +64,7 @@ def test_two_devices_complete_workflow(server, make_device, tmp_path, monkeypatc
     # 3. The second device pulls everything; its schedule is current by its own recomputation.
     phone.sign_in("alice@example.com")
     phone.sync_now()
-    assert phone.planning.get_task(writing.id).dependency_ids == [prerequisite.id]
+    assert phone.planning.get_task(writing.id) is not None and reading.id
     assert phone.executions.get_execution(execution.id).status.value == "paused"
     assert phone.controller.resolve_preferences(MON).value.optimizer_mode == OptimizerMode.ADHD_FRIENDLY
     assert phone.planning.fixed_blocks_for_date(MON)[0].category == "sleep"
@@ -102,7 +102,7 @@ def test_two_devices_complete_workflow(server, make_device, tmp_path, monkeypatc
 
     # 6. Deletion propagates and is never resurrected by a stale edit.
     laptop.planning.delete_task(daily.id, expected_version=laptop.planning.get_task(daily.id).version)
-    edit(phone, daily.id, priority=9)
+    edit(phone, daily.id, estimated_duration_minutes=55)
     laptop.sync_now()
     phone.sync_now()
     [deleted_conflict] = phone.sync.list_conflicts()
@@ -123,15 +123,16 @@ def test_two_devices_complete_workflow(server, make_device, tmp_path, monkeypatc
     assert [p.planned_date for p in laptop.planning.list_placements() if p.task_id == floating.id] == [
         rerun.kept_elsewhere[floating.id].planned_date]
 
-    # 8. Outside-range dependency: completed on the phone, it satisfies a dependent the laptop schedules later.
+    # 8. Work completed on the phone syncs before the laptop schedules a later week.
     completed = phone.executions.complete(execution.id)
     phone.sync_now()
     laptop.sync_now()
     finished = completed.actual_final_end_at.date()
     later = finished + timedelta(days=7 - finished.weekday())
-    dependent = laptop.add_task("Follow-up", dependency_ids=[prerequisite.id], required_date=later)
+    assert laptop.executions.get_execution(execution.id).status.value == "completed"
+    follow_up = laptop.add_task("Follow-up", required_date=later)
     run = laptop.controller.schedule_range(later, later + timedelta(days=6), scope=RangeScope.ELIGIBLE).value
-    assert run.allocation.assignments.get(dependent.id) == later
+    assert run.allocation.assignments.get(follow_up.id) == later
 
     # 9. Rollback: a failed local compound change leaves nothing to push.
     before = laptop.dirty()
@@ -148,14 +149,14 @@ def test_two_devices_complete_workflow(server, make_device, tmp_path, monkeypatc
     from app.planning.models import Task
 
     with pytest.raises(RuntimeError):
-        laptop.planning.save_tasks([Task(name=f"T{i}", category="c", estimated_duration_minutes=5, priority=1)
+        laptop.planning.save_tasks([Task(name=f"T{i}", category="c", estimated_duration_minutes=5)
                                     for i in range(2)])
     monkeypatch.undo()
     assert laptop.dirty() == before
 
     # 10. A later edit on the laptop makes the phone's synced schedule stale after the next pull.
     phone.sync_now()
-    edit(laptop, prerequisite.id, priority=10)
+    edit(laptop, reading.id, estimated_duration_minutes=50)
     laptop.sync_now()
     phone.sync_now()
     assert phone.controller.day_state(MON).value.status == DayResultStatus.STALE

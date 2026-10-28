@@ -34,11 +34,11 @@ def store(path: Path):
 
 def populated(tmp_path: Path):
     connection, service = store(tmp_path / "source.db")
-    walk = service.create_task(Task(name="Walk", category="exercise", estimated_duration_minutes=30, priority=5,
+    walk = service.create_task(Task(name="Walk", category="exercise", estimated_duration_minutes=30,
                                     recurrence=RecurrenceSpec(frequency="daily", start_date=MON, timezone="UTC")))
     created = series_ops.expand_occurrences(service, MON, MON + timedelta(days=4)).created
     series_ops.delete_occurrence(service, created[0].id, expected_version=1, skip=True)
-    series_ops.edit_occurrence(service, created[1].model_copy(update={"priority": 9}), expected_version=1)
+    series_ops.edit_occurrence(service, created[1].model_copy(update={"points": 90}), expected_version=1)
     stored = service.get_task(walk.id)
     series_ops.edit_series(service, stored.model_copy(update={"name": "Run"}), expected_version=stored.version,
                            scope=EditScope.FUTURE, cutoff=MON + timedelta(days=3))
@@ -79,7 +79,7 @@ def test_an_older_file_without_recurrence_columns_still_imports_its_templates_as
     tmp_path: Path,
 ) -> None:
     connection, service = store(tmp_path / "source.db")
-    service.create_task(Task(name="Standup", category="work", estimated_duration_minutes=15, priority=5,
+    service.create_task(Task(name="Standup", category="work", estimated_duration_minutes=15,
                              recurrence=RecurrenceSpec(frequency="weekly", weekdays=[0])))
     exported = tmp_path / "old.csv"
     export_planning_csv(service, exported)
@@ -120,7 +120,7 @@ def test_a_file_cannot_rewrite_an_occurrences_identity(tmp_path: Path) -> None:
         parse_canonical_csv(buffer.getvalue())
     # Even a batch built in code (no derived-id check of its own) cannot move an occurrence to another series.
     occurrence = next(task for task in service.occurrences_of_series([walk.id])[walk.id] if task.deleted_at is None)
-    other = service.create_task(Task(name="Other", category="work", estimated_duration_minutes=15, priority=5,
+    other = service.create_task(Task(name="Other", category="work", estimated_duration_minutes=15,
                                      recurrence=RecurrenceSpec(frequency="daily", start_date=MON, timezone="UTC")))
     from app.planning.application import RecordBatch
     from app.planning.recurrence import occurrence_task_id

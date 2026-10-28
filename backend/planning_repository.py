@@ -48,7 +48,7 @@ from sqlalchemy.orm import Session
 
 from app.planning.application import task_planned_date
 from app.planning.errors import DuplicateEntityError, InvalidEntityError, ScopeError
-from app.planning.external_dependencies import ExecutionFact
+from app.planning.execution_facts import ExecutionFact
 from app.planning.history import (
     CompletionHistory,
     ExecutionHistory,
@@ -355,24 +355,8 @@ class ServerPlanningRepository:
     def existing_project_ids(self, project_ids: Iterable, *, include_deleted: bool = False) -> set[uuid.UUID]:
         return {row.id for row in self._by_ids(models.Project, project_ids, include_deleted)}
 
-    def dependents_of(self, task_ids: Iterable) -> dict[uuid.UUID, set[uuid.UUID]]:
-        ids = [uuid.UUID(str(value)) for value in task_ids]
-        if not ids:
-            return {}
-        rows = self._session.execute(
-            select(models.TaskDependency.task_id, models.TaskDependency.depends_on_id)
-            .join(models.Task, (models.Task.user_id == models.TaskDependency.user_id)
-                  & (models.Task.id == models.TaskDependency.task_id))
-            .where(models.TaskDependency.user_id == self._user_id, models.TaskDependency.depends_on_id.in_(ids),
-                   models.Task.deleted_at.is_(None))
-        )
-        dependents: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
-        for task_id, depends_on in rows:
-            dependents[depends_on].add(task_id)
-        return dict(dependents)
-
     def _tasks(self, rows: list) -> list[Task]:
-        # The child rows (tags, dates, dependencies, weekdays) were loaded with the rows, one query per kind.
+        # The child rows (tags, dates, weekdays) were loaded with the rows, one query per kind.
         return sorted((_task(row) for row in rows), key=lambda task: (task.created_at, str(task.id)))
 
     # ------------------------------------------------------------------

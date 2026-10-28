@@ -20,7 +20,7 @@ from tests.backend.conftest import (
 RESOURCES = ["projects", "tasks", "fixed-blocks", "placements", "preferences", "schedule-generations"]
 EDITS = {
     "projects": {"name": "Renamed"},
-    "tasks": {"priority": 9},
+    "tasks": {"points": 9},
     "fixed-blocks": {"category": "rest"},
     "placements": {"score": 7.25},
     "preferences": {"overrides": {"optimizer_mode": "precise_greedy"}},
@@ -135,7 +135,6 @@ def test_collections_are_bounded_and_paginated(client, alice) -> None:
 
 def test_content_is_validated_with_the_canonical_rules(client, alice) -> None:
     bad = [
-        ("tasks", task_payload(priority=11)),
         ("tasks", task_payload(deadline="2026-03-03T17:00:00")),  # naive
         ("tasks", task_payload(recurrence={"frequency": "daily", "weekdays": [1]})),
         ("fixed-blocks", block_payload(planned_end="2026-03-01T00:00:00Z")),
@@ -149,17 +148,17 @@ def test_content_is_validated_with_the_canonical_rules(client, alice) -> None:
 
 def test_task_fields_round_trip_exactly(client, alice) -> None:
     project = create(client, alice, "projects", {"name": "P"})
-    dependency = create(client, alice, "tasks", task_payload(name="First"))
     payload = task_payload(
         project_id=project["id"], tags=["a,b", "c"], required=True, required_date="2026-03-03",
         preferred_dates=["2026-03-02", "2026-03-04"], preferred_time_window={"start_minute": 613, "end_minute": 1440},
-        dependency_ids=[dependency["id"]], deadline="2026-03-05T17:00:00-05:00",
+        deadline="2026-03-05T17:00:00-05:00",
         recurrence={"frequency": "weekly", "interval": 2, "weekdays": [4, 0], "day_of_month": None,
                     "end_date": "2026-06-01", "count": None},
     )
     task = create(client, alice, "tasks", payload)
     assert task["deadline"] == "2026-03-05T17:00:00-05:00"  # the original offset is kept
-    assert task["recurrence"]["weekdays"] == [0, 4] and task["dependency_ids"] == [dependency["id"]]
+    assert task["recurrence"]["weekdays"] == [0, 4]
+    assert (task["priority"], task["dependency_ids"]) == (5, [])  # legacy wire placeholders
     assert {k: task[k] for k in ("tags", "preferred_dates", "preferred_time_window")} == {
         k: payload[k] for k in ("tags", "preferred_dates", "preferred_time_window")
     }
@@ -167,16 +166,20 @@ def test_task_fields_round_trip_exactly(client, alice) -> None:
 
 def test_task_references_must_be_live_records_of_the_caller(client, alice) -> None:
     project = create(client, alice, "projects", {"name": "P"})
-    dependency = create(client, alice, "tasks", task_payload(name="Dep"))
     client.delete(f"/projects/{project['id']}", params={"base_version": 1}, headers=alice)
 
-    for payload in (task_payload(project_id=project["id"]), task_payload(project_id=str(uuid.uuid4())),
-                    task_payload(dependency_ids=[str(uuid.uuid4())])):
+    for payload in (task_payload(project_id=project["id"]), task_payload(project_id=str(uuid.uuid4()))):
         response = client.post("/tasks", json=payload, headers=alice)
         assert response.status_code == 422 and response.json()["error"]["code"] == "invalid_reference"
-    task = create(client, alice, "tasks", task_payload(dependency_ids=[dependency["id"]]))
-    self_dependency = client.put(f"/tasks/{task['id']}", json=editable(task, dependency_ids=[task["id"]]), headers=alice)
-    assert self_dependency.status_code == 422
+
+
+def test_an_older_clients_priority_and_dependencies_are_accepted_and_ignored(client, alice) -> None:
+    other = create(client, alice, "tasks", task_payload(name="Other"))
+    task = create(client, alice, "tasks", task_payload(priority=9, dependency_ids=[other["id"], str(uuid.uuid4())]))
+    assert (task["priority"], task["dependency_ids"]) == (5, [])
+    unchanged = client.put(f"/tasks/{task['id']}", json=editable(task, priority=2, dependency_ids=[task["id"]]),
+                           headers=alice).json()
+    assert unchanged["version"] == task["version"]  # nothing a newer server stores changed
 
 
 def test_a_project_keeps_its_dates_completion_and_milestones(client, alice) -> None:
@@ -210,15 +213,12 @@ def test_a_project_keeps_its_dates_completion_and_milestones(client, alice) -> N
 
 def test_deletion_policies_protect_relationships(client, alice) -> None:
     project = create(client, alice, "projects", {"name": "P"})
-    dependency = create(client, alice, "tasks", task_payload(name="Dep", project_id=project["id"]))
-    dependent = create(client, alice, "tasks", task_payload(name="Uses dep", dependency_ids=[dependency["id"]]))
+    member = create(client, alice, "tasks", task_payload(name="Member", project_id=project["id"]))
 
     in_use = client.delete(f"/projects/{project['id']}", params={"base_version": 1}, headers=alice)
-    blocked = client.delete(f"/tasks/{dependency['id']}", params={"base_version": 1}, headers=alice)
-    assert in_use.json()["error"]["code"] == blocked.json()["error"]["code"] == "in_use"
+    assert in_use.json()["error"]["code"] == "in_use"
 
-    client.delete(f"/tasks/{dependent['id']}", params={"base_version": 1}, headers=alice)
-    assert client.delete(f"/tasks/{dependency['id']}", params={"base_version": 1}, headers=alice).status_code == 200
+    assert client.delete(f"/tasks/{member['id']}", params={"base_version": 1}, headers=alice).status_code == 200
     assert client.delete(f"/projects/{project['id']}", params={"base_version": 1}, headers=alice).status_code == 200
 
 

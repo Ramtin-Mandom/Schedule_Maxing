@@ -76,7 +76,7 @@ def test_every_class_has_words_not_only_a_colour() -> None:
 
 
 def task(name: str, points: int, minutes: int = 60) -> Task:
-    return Task(name=name, category="study", estimated_duration_minutes=minutes, priority=5, points=points)
+    return Task(name=name, category="study", estimated_duration_minutes=minutes, points=points)
 
 
 def placement(item: Task, hour: int, minutes: int = 60, day: date = DAY, score: float = 99.0) -> ScheduledTask:
@@ -87,7 +87,7 @@ def placement(item: Task, hour: int, minutes: int = 60, day: date = DAY, score: 
 
 def execution(of: ScheduledTask, status: ExecutionStatus, points: int | None, active: float | None = None) -> TaskExecution:
     now = "2026-09-21T20:00:00+00:00"
-    return TaskExecution(id=str(uuid.uuid4()), task_name="x", category="study", tag="", planned_duration=60, priority=5,
+    return TaskExecution(id=str(uuid.uuid4()), task_name="x", category="study", tag="", planned_duration=60,
                          status=status, created_at=now, updated_at=now, scheduled_task_id=of.id, points=points,
                          actual_active_duration_minutes=active)
 

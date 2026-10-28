@@ -1,5 +1,5 @@
 """Tests for app/planning/service.py: the selected-day service (exactly one
-Day Scheduler call), cross-day dependency context, and result staleness.
+Day Scheduler call), coarse-vs-detailed feasibility, and result staleness.
 """
 
 from __future__ import annotations
@@ -21,10 +21,10 @@ from app.planning.service import (
 TZ = "UTC"
 
 
-def make_task(name="Task", *, duration=60, priority=5, required=False, dependency_ids=None):
+def make_task(name="Task", *, duration=60, required=False):
     return Task(
-        name=name, category="study", estimated_duration_minutes=duration, priority=priority,
-        required=required, dependency_ids=dependency_ids or [],
+        name=name, category="study", estimated_duration_minutes=duration,
+        required=required,
     )
 
 
@@ -93,75 +93,6 @@ def test_generate_selected_day_does_not_touch_other_dates(monkeypatch):
     placed_ids = {p.task_id for p in result.placements}
     assert task_a.id in placed_ids
     assert task_b.id not in placed_ids
-
-
-# -----------------------------------------------------------------------------
-# Cross-day dependency contract
-# -----------------------------------------------------------------------------
-
-
-def test_earlier_date_prerequisite_treated_as_satisfied():
-    dates = week_dates(date(2024, 6, 3))
-    prereq = make_task("Prereq", duration=1440)  # forces separation onto an earlier day
-    dependent = make_task("Dependent", duration=60, dependency_ids=[prereq.id])
-    tasks = registry_of(prereq, dependent)
-    allocation = allocate_tasks(
-        start_date=dates[0], end_date=dates[-1], tasks=tasks, task_ids=[dependent.id, prereq.id],
-        preferences_by_date=prefs_for(dates),
-    )
-    dependent_date = allocation.assignments[dependent.id]
-    assert allocation.assignments[prereq.id] < dependent_date
-
-    result, _state = generate_selected_day(allocation, dependent_date, tasks, prefs_for(dates))
-
-    assert result.placements[0].task_id == dependent.id
-
-
-def test_same_date_dependency_resolved_locally():
-    day = date(2024, 6, 3)
-    prereq = make_task("Prereq", duration=30)
-    dependent = make_task("Dependent", duration=30, dependency_ids=[prereq.id])
-    tasks = registry_of(prereq, dependent)
-    allocation = allocate_tasks(
-        start_date=day, end_date=day, tasks=tasks, task_ids=[dependent.id, prereq.id],
-        preferences_by_date={day: resolve_day_preferences(date=day, timezone=TZ)},
-    )
-
-    result, _state = generate_selected_day(allocation, day, tasks, {day: resolve_day_preferences(date=day, timezone=TZ)})
-
-    placed_ids = {p.task_id for p in result.placements}
-    assert placed_ids == {prereq.id, dependent.id}
-    by_id = {p.task_id: p for p in result.placements}
-    assert by_id[prereq.id].planned_end <= by_id[dependent.id].planned_start
-
-
-def test_later_date_dependency_blocks_generation():
-    """If a dependency was (unrealistically) assigned a later date than its
-    dependent, the day scheduler must not treat it as satisfied."""
-    day = date(2024, 6, 3)
-    later_day = day + timedelta(days=1)
-    dep_id = uuid.uuid4()
-    dependent = make_task("Dependent", duration=60, dependency_ids=[dep_id])
-    tasks = registry_of(dependent)
-    allocation = allocate_tasks(
-        start_date=day, end_date=day, tasks=tasks, task_ids=[dependent.id],
-        preferences_by_date={day: resolve_day_preferences(date=day, timezone=TZ)},
-    )
-    # dependent itself was correctly left unallocated by allocate_tasks
-    # (its dependency is unresolved). Force it into "assigned to today"
-    # alongside a later-dated "prerequisite" to exercise the service's own
-    # date-comparison filtering in isolation, independent of whether
-    # allocate_tasks would naturally reach this exact state.
-    allocation = allocation.model_copy(
-        update={"assignments": {**allocation.assignments, dependent.id: day, dep_id: later_day}}
-    )
-
-    result, _state = generate_selected_day(
-        allocation, day, tasks, {day: resolve_day_preferences(date=day, timezone=TZ)}
-    )
-
-    assert result.placements == []
-    assert result.unscheduled[0].reason_code.value == "dependency_unresolved"
 
 
 # -----------------------------------------------------------------------------

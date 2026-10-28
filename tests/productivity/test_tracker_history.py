@@ -61,7 +61,7 @@ class Stack:
 
     def plan(self, name: str, start: datetime, **fields):
         task = self.planning.create_task(Task(user_id=self.owner, name=name, category="study",
-                                              estimated_duration_minutes=60, priority=5, **fields))
+                                              estimated_duration_minutes=60, **fields))
         return task, self.place(task, start)
 
     def attempt(self, task, placement) -> str:
@@ -175,11 +175,11 @@ def test_a_move_and_a_regeneration_keep_one_occurrence_on_its_current_date(stack
 def test_recurring_occurrences_share_a_type_and_renamed_or_deleted_tasks_keep_their_history(stack) -> None:
     rule = RecurrenceSpec(frequency="daily", start_date=MON, timezone="UTC")
     series = stack.planning.create_task(Task(name="Standup", category="work", estimated_duration_minutes=15,
-                                             priority=5, recurrence=rule))
+                                             recurrence=rule))
     days = [MON, MON + timedelta(days=1)]
     occurrences = stack.planning.materialize_occurrences([
         Task(id=occurrence_task_id(series.id, day), name="Standup", category="work", estimated_duration_minutes=15,
-             priority=5, series_id=series.id, occurrence_slot=day, required_date=day, series_version=series.version)
+             series_id=series.id, occurrence_slot=day, required_date=day, series_version=series.version)
         for day in days])
     for occurrence, day in zip(occurrences, days):
         stack.complete(occurrence, stack.place(occurrence, at(day, 9), 15), at(day, 10), minutes=15)

@@ -28,7 +28,7 @@ Maintain separation between:
 - dependencies/PERT — ordering and dependency logic
 - reward/scoring — desirability of valid choices
 - optimizers/engines — search/placement strategies
-- analytics/ML — prediction and historical analysis
+- analytics — prediction and historical analysis
 - UI — presentation and orchestration; do not duplicate domain logic
 - sync/API/storage — persistence and remote synchronization
 Hard constraints must not be replaced by reward penalties.

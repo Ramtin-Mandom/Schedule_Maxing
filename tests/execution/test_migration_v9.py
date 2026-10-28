@@ -21,6 +21,7 @@ from app.planning import series as series_ops
 from app.planning.application import PlanningService
 from app.planning.recurrence import occurrence_task_id
 from app.planning.repository import PlanningRepository
+from tests.execution.conftest import without_dropped_columns
 
 TEMPLATE = "11111111-1111-4111-8111-111111111111"
 ORDINARY = "22222222-2222-4222-8222-222222222222"
@@ -35,7 +36,7 @@ TABLES = ("tasks", "task_recurrence_weekdays", "scheduled_tasks", "executions", 
 
 def _rows(conn: sqlite3.Connection, table: str) -> list[dict]:
     conn.row_factory = sqlite3.Row
-    return [dict(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY 1, 2")]
+    return without_dropped_columns([dict(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY 1, 2")])
 
 
 def _build_v8_database(db_path: Path) -> None:
