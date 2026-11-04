@@ -7,17 +7,20 @@ Actions from three workflow files in `.github/workflows/`:
 |---|---|---|---|
 | **CI** | `ci.yml` | every pull request (and by hand) | the change is tested, compiled and linted — once; nothing later tests it again |
 | **Release** (desktop delivery) | `release.yml` | a pushed tag `vX.Y.Z`, or by hand (dry run) | a GitHub Release with the Windows installer, which installed copies update to |
-| **Deploy backend** (server deployment) | `deploy-backend.yml` | a push to `main` whose pull request passed CI, or by hand | the backend on Render runs that commit |
+| **Deploy backend** (server deployment) | `deploy-backend.yml` | a pushed release tag `vX.Y.Z` whose pull request passed CI, or by hand | the backend on Render runs that commit |
 
 The project ships two different things, so it has two delivery paths:
 
 - the **desktop app** is delivered as a versioned Windows installer; a release is a deliberate act (a tag);
-- the **backend** (`backend/`, optional — the desktop works without it) is deployed continuously from `main`.
+- the **backend** (`backend/`, optional — the desktop works without it) is deployed by the same release tag.
+  Render's own Auto-Deploy is kept on, so Render also deploys every merge to `main` by itself; the
+  workflow's tag run then redeploys the released commit and checks it.
 
 ```mermaid
 flowchart LR
     push[pull request] --> ci[CI<br/>test, desktop-only,<br/>direct-desktop, postgres]
-    ci -- passed, merged to main --> gate{deployment<br/>switched on?}
+    ci -- passed, merged to main --> rtag[tag vX.Y.Z]
+    rtag --> gate{deployment<br/>switched on?}
     gate -- yes --> resolve[resolve<br/>commit on main,<br/>its pull request passed CI]
     resolve --> approve[production environment<br/>optional approval]
     approve --> deploy[Render deploy<br/>wait until live]
@@ -108,10 +111,11 @@ both jobs are skipped and nothing contacts Render.
 
 ### What happens
 
-1. **Trigger.** A push to `main` (a merged pull request). A pull request by itself, or a fork, never
-   starts a deployment. Or someone starts it by hand.
+1. **Trigger.** A pushed release tag `vX.Y.Z` — the same tag that starts `release.yml`, so the
+   backend and the desktop release go out together. A merge to `main`, a pull request or a fork never
+   starts it. Or someone starts it by hand.
 2. **`resolve`** decides which commit is deployed and refuses anything else:
-   - the pushed commit, or for a manual run the commit given as `ref` (blank: the tip of `main`);
+   - the tagged commit, or for a manual run the commit given as `ref` (blank: the tip of `main`);
    - it must be on `main`;
    - CI must have passed for the pull request it came from.
 3. **`deploy`** runs in the `production` environment. If that environment has required reviewers,
@@ -119,7 +123,9 @@ both jobs are skipped and nothing contacts Render.
    - **Settings are present** — fails early, naming what is missing, never printing a value.
    - **Start the Render deploy** — asks Render's API to deploy that exact commit
      (`POST /v1/services/{id}/deploys` with `commitId`), so what goes live is what CI tested, not
-     whatever `main` is by then.
+     whatever `main` is by then. If Render is already deploying (its own Auto-Deploy of a merge),
+     it queues the request and answers without a deploy id; the step then follows the newest deploy
+     of that commit in the service's deploy list.
    - **Wait until it is live** — polls the deploy every 15 seconds for up to 30 minutes. `live`
      continues; `build_failed`, `update_failed`, `pre_deploy_failed`, `canceled` or `deactivated`
      fails the job.
@@ -152,7 +158,7 @@ stopped first and must not be left to this pipeline; see
 
 | Failure | State of production | What to do |
 |---|---|---|
-| Build, pre-deploy (migration) or start-up fails on Render | the previous version keeps serving; it never went live | fix on `main`; the next green CI run deploys again |
+| Build, pre-deploy (migration) or start-up fails on Render | the previous version keeps serving; it never went live | fix on `main`, then release again or run the workflow by hand |
 | Live, but `/health` or `/ready` fails | the **new** version is serving | roll back (below), or fix forward |
 | Not live after 30 minutes | unknown — look at the Render dashboard | re-run the workflow once Render has settled |
 
@@ -175,8 +181,9 @@ Nothing below is done by the repository; an operator does it once.
 
 1. **Create the service and database on Render** by following
    [render-deployment.md](render-deployment.md), and confirm it works by hand first.
-2. **Turn Render's own Auto-Deploy off** for the service (Settings > Build & Deploy). Otherwise
-   Render also deploys every push itself, before CI has finished.
+2. **Render's own Auto-Deploy** (Settings > Build & Deploy) is optional. It is currently **on**:
+   Render deploys every merge to `main` itself, without the CI gate or the health checks, and the
+   workflow only runs for releases. Turn it off to make the release tag the only way to deploy.
 3. **Create a Render API key** (Account Settings > API Keys) and note the **service id**
    (`srv-…`, in the service's dashboard address). The key can act on the whole Render workspace,
    so keep it only in the environment secret below.
@@ -195,8 +202,8 @@ Nothing below is done by the repository; an operator does it once.
    variable `BACKEND_DEPLOY_ENABLED` = `true`. Delete it, or set anything else, to switch
    deployment off again without touching the workflow.
 
-`workflow_run` triggers are read from the default branch, so the workflow starts deploying only
-once `deploy-backend.yml` is on `main`.
+A tag push runs the workflow file as it is in the tagged commit, so a tag starts deploying only
+once that commit contains this version of `deploy-backend.yml`.
 
 ## 4. Secrets and variables
 

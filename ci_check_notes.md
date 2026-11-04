@@ -34,6 +34,16 @@ work it out again from failure logs.
 
 ## Pending
 
+### 2026-11-04: Backend deploy runs on release tags, follows a queued Render deploy (clean_up)
+- Changed: `deploy-backend.yml` trigger push to `main` -> push of a `vX.Y.Z` tag (same pattern as `release.yml`)
+  plus the manual run; "Start the Render deploy" now looks up the deploy of `$SHA` in `/deploys?limit=20` when
+  Render answers without an id.
+- Intent: the owner's request; every merge to `main` failed the workflow because Render's Auto-Deploy (staying on)
+  deploys merges itself.
+- Depends on it: `tests/test_deploy_workflow.py` (`test_only_a_release_tag_or_a_manual_run_starts_it`,
+  `test_a_queued_render_deploy_is_followed_not_failed`), `tests/test_workflows.py`.
+- CI risk: none for the test jobs; the Render lookup is only exercised by a real tag push.
+
 ## Checked
 
 ### 2026-10-27: First CI run of engine-remake (run 40083410138, abd5da7)
@@ -167,9 +177,9 @@ work it out again from failure logs.
 
 ## Open CI items
 
-- `Deploy backend` failed on `main` for `9e37656` and `dfd53d6`: "Render accepted the request without a deploy
-  id; check the Render dashboard" (not a test failure). Waiting on the owner: check the Render service and
-  the `production` environment secrets.
+- `Deploy backend` failed on every merge to `main` (latest `be226f4`, run 40625746637): "Render accepted the
+  request without a deploy id". Cause: Render's Auto-Deploy (kept on by the owner) was already deploying the
+  merge, so the API request was queued. Addressed on `clean_up` (Pending entry); unverified until a release tag runs it.
 - `engine-remake`: the two test fixes of 2026-10-27 are uncommitted; the dialog fix is confirmed only by the
   next CI run (`test`, `desktop-only`).
 - Starlette warns "Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead". Waiting on

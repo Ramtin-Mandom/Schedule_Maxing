@@ -878,7 +878,7 @@ Three GitHub Actions workflows take a change from a commit to its users; [docs/c
 | --- | --- | --- |
 | **CI** (`ci.yml`) | every push and pull request | full test suite, compile check and Ruff, plus desktop-only, direct-desktop and PostgreSQL jobs |
 | **Release** (`release.yml`) | a pushed tag `vX.Y.Z` matching `app/version.py` | verify, test, build and test the Windows installer, then publish a GitHub Release that installed copies update to |
-| **Deploy backend** (`deploy-backend.yml`) | CI passing for a push to `main`, or a manual run (also used for rollback) | deploys that exact commit to the Render web service, waits until it is live, then checks `/health` and `/ready` |
+| **Deploy backend** (`deploy-backend.yml`) | a pushed release tag `vX.Y.Z` whose pull request passed CI, or a manual run (also used for rollback) | deploys that exact commit to the Render web service, waits until it is live, then checks `/health` and `/ready` |
 
 Backend deployment is off until an operator sets the repository variable `BACKEND_DEPLOY_ENABLED=true` and fills in the `production` environment (Render API key, service id, public address); no secret is stored in the repository.
 

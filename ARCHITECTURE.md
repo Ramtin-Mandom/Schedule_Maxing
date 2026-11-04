@@ -844,7 +844,7 @@ desktop loads; `tests/test_desktop_isolation.py` (slow) guards it.
   [CODEBASE_MAP.md](CODEBASE_MAP.md#backend-configuration-names).
 - **Desktop delivery:** tag `vX.Y.Z` equal to `app/version.py` → `release.yml` builds on Windows → GitHub
   Release → in-app updater verifies SHA256 and runs the installer.
-- **Backend delivery:** `deploy-backend.yml` deploys a `main` commit whose PR passed CI (gated by
+- **Backend delivery:** `deploy-backend.yml` deploys a release-tagged `main` commit whose PR passed CI (gated by
   `BACKEND_DEPLOY_ENABLED`), then checks `/health` and `/ready`; migrations run as the pre-deploy command.
 - **Constraints:** the desktop must run with only `requirements-desktop.txt`; only `app/runtime.py` decides
   source vs packaged; one process per local database; one SQLite connection per desktop session
