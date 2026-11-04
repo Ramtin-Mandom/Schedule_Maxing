@@ -81,7 +81,7 @@ FastAPI/PostgreSQL account server.
 | In-app updater | Implemented | `app/update/`, `app/ui/update_*.py` | `tests/update/*` | Live GitHub feed Unverified. Since pull request #22 the automatic check runs on every launch (no once-a-day limit), "Skip this version" is gone, and the update flow is built even when local storage cannot open; HTTPS setup for sync moves to the first request (Code-inspected) |
 | Windows installer build and release workflow | Implemented | `packaging/windows/`, `.github/workflows/release.yml` | `tests/test_packaging_config.py`, `test_release_workflow.py` | No build was run here |
 | Code signing | Not Implemented | Hooks in `build_windows.ps1` and `downloader.verify_signature` | `docs/windows-distribution.md` | Releases are unsigned |
-| Backend continuous deployment | Unverified | `.github/workflows/deploy-backend.yml` | `tests/test_deploy_workflow.py` (configuration only) | Never run against Render (`docs/ci-cd.md`) |
+| Backend continuous deployment | Unverified | `.github/workflows/deploy-backend.yml` | `tests/test_deploy_workflow.py` (configuration only) | Runs on release tags (`vX.Y.Z`) since 2026-11-04; failed on every merge to `main` before, because Render's own Auto-Deploy (still on) deploys merges and queued the request. The queued-deploy handling is not yet run against Render |
 | Scheduling across DST changes or overnight | Not Implemented | Refused in `app/planning/time.py` | Explicit errors | By decision (ADR-034) |
 
 ## C. Known bugs and limitations
@@ -184,7 +184,7 @@ checklist is in `docs/windows-distribution.md`).
 | Backend configuration | Environment variables only (`backend/settings.py`; names in [CODEBASE_MAP.md](CODEBASE_MAP.md#backend-configuration-names)). `.env.example` has placeholders. A local `.env` exists, is gitignored, and was not read |
 | Databases | The desktop uses SQLite (`%LOCALAPPDATA%\ScheduleMaxing\executions.db`). The server uses PostgreSQL through 20 Alembic revisions. The ordinary test suite runs the server on SQLite |
 | Default backend URL | `config.settings.DEFAULT_BACKEND_URL` points at a Render host. Availability was not checked |
-| Deployment | Desktop: tag, then `release.yml`, then a GitHub Release, then the updater. Backend: `deploy-backend.yml` to Render, gated by `BACKEND_DEPLOY_ENABLED`; never run for real according to the docs |
+| Deployment | Desktop: tag, then `release.yml`, then a GitHub Release, then the updater. Backend: Render's Auto-Deploy on every merge to `main`, then `deploy-backend.yml` on the release tag (redeploy plus `/health` and `/ready`), gated by `BACKEND_DEPLOY_ENABLED` |
 | CI | `ci.yml`: `test`, `security-scan`, `desktop-only`, `direct-desktop`, `postgres`. Runs on pull requests and by hand. Results on GitHub were not checked in this session |
 | Authentication | Implemented and tested in-process (section B). Not exercised against a live server |
 | Synchronization | Implemented and tested against an in-process backend. Inert unless signed in |
