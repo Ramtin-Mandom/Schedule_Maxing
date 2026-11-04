@@ -163,6 +163,17 @@ class DeferredPage(ctk.CTkFrame):
                     return
         super().__setattr__(name, value)
 
+    def __delattr__(self, name: str) -> None:
+        # The counterpart of __setattr__: an attribute that was forwarded to the built page is removed there.
+        state = self.__dict__
+        page = state.get("page")
+        if page is not None and name not in state:
+            for target in (page, getattr(page, "content", None)):
+                if target is not None and name in vars(target):
+                    delattr(target, name)
+                    return
+        super().__delattr__(name)
+
     @property
     def built(self) -> bool:
         return self.page is not None

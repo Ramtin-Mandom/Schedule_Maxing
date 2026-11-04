@@ -59,7 +59,9 @@ jobs:
       - name: Known vulnerabilities in the locked dependencies
         run: |
           python -m pip install pip-audit
-          python -m pip_audit --requirement requirements/requirements.lock --no-deps --disable-pip
+          # CVE-2026-114605 (dnspython 2.8.0): the fix (2.9.0+) needs Python 3.11; reachable only with
+          # EMAIL_DNS_CHECK on (off by default). Revisit by 2027-02-04 or on the move to Python 3.11.
+          python -m pip_audit --requirement requirements/requirements.lock --no-deps --disable-pip --ignore-vuln CVE-2026-114605
 
       - name: Scan tracked files for credentials
         # Every tracked file against the reviewed baseline: a secret-looking string that is not in
