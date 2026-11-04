@@ -93,7 +93,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # For tests and disposable databases only (docs/backend.md): the values are dropped with the columns; the
+    # For tests and disposable databases only (docs/backend/backend.md): the values are dropped with the columns; the
     # backfilled completions stay (they are ordinary executions).
     for table in BLOCK_TABLES:
         with op.batch_alter_table(table) as batch:

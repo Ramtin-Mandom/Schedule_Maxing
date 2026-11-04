@@ -17,7 +17,7 @@ REST CRUD today, batch synchronization later -- goes through a Mutator, which
        the record a mutation returns is that snapshot, so the response, the
        change feed and a sync retry agree exactly.
 
-Change ordering (for incremental pull, docs/backend.md): each user has a
+Change ordering (for incremental pull, docs/backend/backend.md): each user has a
 counter, users.change_seq. A mutation begins with
 `UPDATE users SET change_seq = change_seq WHERE id = :user`, which takes the
 user's row lock (PostgreSQL) / the database write lock (SQLite) and holds it
@@ -129,7 +129,7 @@ class Mutator:
 
     def create(self, spec: ResourceSpec, payload) -> dict:
         """
-        Create one record. Recurrence (docs/recurrence.md): an occurrence
+        Create one record. Recurrence (docs/features/recurrence.md): an occurrence
         whose id already exists with the same content -- another device
         materialized the same slot -- is accepted as it is stored (no new
         version, no change-log entry: the devices converge); with different
@@ -185,7 +185,7 @@ class Mutator:
     ) -> dict:
         """
         Tombstone one record. For a placement, removal_reason/superseded_by_id
-        are its removal provenance (docs/execution-rescheduling.md): an explicit
+        are its removal provenance (docs/features/execution-rescheduling.md): an explicit
         REST delete is "deleted"; a synchronized delete reports the reason
         the device recorded (None = unknown, e.g. from an older client). For an
         occurrence, occurrence_state says why it was removed (default deleted).

@@ -1,5 +1,5 @@
 """
-What the desktop does NOT do while it starts (docs/desktop-performance-round3.md):
+What the desktop does NOT do while it starts (docs/history/desktop-performance-round3.md):
 importing app.app loads none of the pages that are built on first show, and the credential store is found only when it is needed.
 """
 

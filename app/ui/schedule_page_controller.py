@@ -38,7 +38,7 @@ imported "sleep" or the legacy default "fixed"), the form shows the
 fallback "other"; leaving it at "other" keeps the stored category rather
 than silently replacing it.
 
-Recurring series (docs/recurrence.md): a series definition is listed as its
+Recurring series (docs/features/recurrence.md): a series definition is listed as its
 own row ("repeats", or "needs setup" when it was saved before series
 repeated) whenever it can produce a date of the page, and its materialized
 occurrences are the page's ordinary rows ("repeat"). Saving an occurrence
@@ -50,7 +50,7 @@ first (PlanningController.schedule_range).
 
 The desktop form (Milestone 4) saves through blank_draft/editor_options/
 draft_for/save_draft/delete_description with app/ui/task_form_model.py's
-minute-precise rules (docs/desktop-task-form.md). submit_task_form and
+minute-precise rules (docs/features/desktop-task-form.md). submit_task_form and
 form_state_for remain for existing headless callers and keep the legacy
 form's rules (30-minute grid, required tag; a `priority` value is ignored); the schedulers'
 own rules are untouched either way.

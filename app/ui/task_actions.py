@@ -84,7 +84,7 @@ class TaskFormActions:
         if not editing:
             draft = replace(draft, date=self.page_controller.form_date.isoformat())
         if editing and draft.recurrence_role == "occurrence":
-            # One occurrence of a repeating task: ask what the change applies to (docs/recurrence.md).
+            # One occurrence of a repeating task: ask what the change applies to (docs/features/recurrence.md).
             ChoiceDialog(self, title="Change a repeating task", prompt="Apply this change to:", options=[
                 ("occurrence", "Only this occurrence"),
                 ("future", "This and every later occurrence"),

@@ -44,6 +44,20 @@ work it out again from failure logs.
   `test_a_queued_render_deploy_is_followed_not_failed`), `tests/test_workflows.py`.
 - CI risk: none for the test jobs; the Render lookup is only exercised by a real tag push.
 
+### 2026-11-04: Repository cleanup: docs/ and requirements/ reorganized, dead UI modules removed (clean_up)
+- Changed: `requirements-{desktop,database,backend,direct,build}.txt` and `requirements.lock` -> `requirements/{desktop,
+  database,backend,direct,build}.txt`, `requirements/requirements.lock`; old `requirements.txt` -> `requirements/dev.txt`
+  (root `requirements.txt` and `requirements-backend.txt` are now one-line includes). Knowledge-base docs moved from the
+  root into `docs/architecture/` and `docs/development/`; every other doc into a `docs/` topic folder (ADR-050); agent
+  prompt collections and `schedule_maxing_icons.zip` deleted. Removed the unreachable `app/ui/feedback_dialog.py`,
+  `app/ui/cohort_view.py`, `app/ui/duration_suggestion.py`.
+- Intent: the owner's cleanup request (ROADMAP R3 for the UI modules).
+- Depends on it: `ci.yml` (`desktop-only`, `direct-desktop` installs, `pip_audit --requirement`), `release.yml`,
+  `build_windows.ps1`, `tests/test_workflows.py` (`REPOSITORY_PATH` now also matches `requirements/...`),
+  `tests/test_packaging_config.py`, `tests/direct/test_direct_config.py` (message names `requirements/direct.txt`),
+  `secret-scan-baseline.json` (renamed doc entries).
+- CI risk: `security-scan` (baseline file names changed; detect-secrets was not run locally); Linux paths in pip `-r`.
+
 ## Checked
 
 ### 2026-10-27: First CI run of engine-remake (run 40083410138, abd5da7)

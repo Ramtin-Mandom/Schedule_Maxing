@@ -626,7 +626,7 @@ class AccountController:
                                             "current code, or sign in again.", result.cause)
         return result
 
-    # -- account security (docs/account-security.md) ----------------------------------------
+    # -- account security (docs/backend/account-security.md) ----------------------------------------
 
     def change_password(self, current: str, new: str, confirm: str) -> ControllerResult[SignInResult]:
         """

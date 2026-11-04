@@ -4,7 +4,7 @@ backend/planning_api.py
 The scheduling application API for the web UI (Milestone 4): typed HTTP
 operations over the shared planning layer -- app.planning.application.
 PlanningService and app/planning/workflow.py -- documented in
-docs/web-api.md and in the OpenAPI schema.
+docs/backend/web-api.md and in the OpenAPI schema.
 
     GET  /planning/capabilities          what this deployment profile offers
     GET  /planning/snapshot              a bounded range: tasks, blocks, placements, per-date freshness
@@ -13,14 +13,14 @@ docs/web-api.md and in the OpenAPI schema.
     POST /planning/generate              selected-date generation (full or incremental), saved atomically
     POST /planning/reset/preview         what a range reset would remove (nothing is written)
     POST /planning/reset                 the confirmed reset
-    POST /planning/placements/{id}/reschedule  move one placement (docs/execution-rescheduling.md)
+    POST /planning/placements/{id}/reschedule  move one placement (docs/features/execution-rescheduling.md)
     POST /planning/placements/{id}/release     release a placement's manual intent (it is not moved)
-    POST /planning/recurrence/expand     materialize a range's recurring occurrences (docs/recurrence.md)
+    POST /planning/recurrence/expand     materialize a range's recurring occurrences (docs/features/recurrence.md)
     POST /planning/occurrences/{id}/edit    change one occurrence ("this occurrence")
     POST /planning/occurrences/{id}/delete  skip or delete one occurrence
     POST /planning/series/{id}/edit      change a series: this and later occurrences, or the entire series
     POST /planning/series/{id}/delete    delete this and later occurrences, or the entire series
-    GET  /planning/analytics/schedule-cohort  planned-versus-actual report of a date range (docs/analytics.md)
+    GET  /planning/analytics/schedule-cohort  planned-versus-actual report of a date range (docs/features/analytics.md)
     POST /planning/csv/preview           validate a canonical v2 CSV against what is stored, apply nothing
     POST /planning/csv/import            apply it (all or nothing)
     GET  /planning/csv/export            the canonical v2 CSV of a range or of everything
@@ -190,7 +190,7 @@ class SnapshotOut(BaseModel):
     placements: list[PlacementOut]
     days: list[DayStateOut]
     #: The placements generation keeps as manual intent: preserved ones, and older ones whose recorded lineage
-    #: proves they are a move's destination (docs/execution-rescheduling.md, "Manual placements").
+    #: proves they are a move's destination (docs/features/execution-rescheduling.md, "Manual placements").
     preserved_placement_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
@@ -279,7 +279,7 @@ class GeneratedDayOut(BaseModel):
     unscheduled: list[UnscheduledOut] | None
     unscheduled_count: int | None
     total_score: float
-    #: The day's objective under its mode, recomputed after generation (docs/scheduling-modes.md): baseline
+    #: The day's objective under its mode, recomputed after generation (docs/features/scheduling-modes.md): baseline
     #: reward B(S), the mode's component, the objective, first start / last finish (minutes into the day
     #: window), idle and fixed minutes. Null for an already-current answer.
     evaluation: dict[str, Any] | None = None

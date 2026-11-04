@@ -1,4 +1,4 @@
-"""Reusable task types and placement planning snapshots (docs/productivity-redesign-plan.md, contract A).
+"""Reusable task types and placement planning snapshots (docs/history/productivity-redesign-plan.md, contract A).
 
 Expand only -- additive, nullable or defaulted, so a server of the previous
 version keeps working against the upgraded schema:
@@ -178,7 +178,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # For tests and disposable databases only (docs/backend.md): task types, type assignments and planning
+    # For tests and disposable databases only (docs/backend/backend.md): task types, type assignments and planning
     # snapshots are dropped with their tables and columns. It fails while a task-type revision exists (the
     # narrow entity-type constraint cannot hold), like 0012's.
     op.drop_table('placement_revision_task_tags')

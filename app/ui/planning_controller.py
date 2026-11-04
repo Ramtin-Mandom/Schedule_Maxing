@@ -128,7 +128,7 @@ class RangeScheduleResult:
     replacement: PlacementReplacement
     #: Always empty since Milestone 6: a run never removes placements outside its range (kept for compatibility).
     superseded_ids: list[uuid.UUID] = field(default_factory=list)
-    #: The recurrence expansion of the range that ran first (docs/recurrence.md).
+    #: The recurrence expansion of the range that ran first (docs/features/recurrence.md).
     expansion: ExpansionResult | None = None
     #: Range task id -> its occurrence's live placement outside the range, left there and not placed again.
     kept_elsewhere: dict[uuid.UUID, ScheduledTask] = field(default_factory=dict)
@@ -247,7 +247,7 @@ class PlanningController:
         return self._call(op)
 
     # ------------------------------------------------------------------
-    # Recurring series (app/planning/series.py; docs/recurrence.md)
+    # Recurring series (app/planning/series.py; docs/features/recurrence.md)
     # ------------------------------------------------------------------
 
     def list_series(self) -> ControllerResult[list[Task]]:
@@ -751,7 +751,7 @@ class PlanningController:
         self, start_date: date_, end_date: date_, *, scope: RangeScope = RangeScope.ELIGIBLE
     ) -> ControllerResult[AllocationResult]:
         def op() -> AllocationResult:
-            workflow.expand_range(self._service, start_date, end_date)  # occurrences first (docs/recurrence.md)
+            workflow.expand_range(self._service, start_date, end_date)  # occurrences first (docs/features/recurrence.md)
             inputs = self._scheduling_inputs(start_date, end_date, scope)
             result = workflow.allocate(inputs)
             self._allocation, self._allocation_inputs = result, inputs
@@ -824,7 +824,7 @@ class PlanningController:
         """
 
         def op() -> RangeScheduleResult:
-            # The range's recurring occurrences are materialized first (bounded, idempotent; docs/recurrence.md).
+            # The range's recurring occurrences are materialized first (bounded, idempotent; docs/features/recurrence.md).
             expansion = workflow.expand_range(self._service, start_date, end_date)
             inputs = self._scheduling_inputs(start_date, end_date, scope)
             allocation = workflow.allocate(inputs)

@@ -29,7 +29,7 @@ first; open the test file only at that test, and the code only at the frame it p
    (`tests/tk_cleanup.py`), a module-level cache, `config.settings.DATA_DIR` not isolated, an environment variable a
    test set without `monkeypatch`.
 3. **`TclError: invalid command name "tcl_findLibrary"`** in a real-window test: the known flake
-   (`docs/testing.md`). Rerun that test alone; if it passes, it is the flake, not your change.
+   (`docs/development/testing.md`). Rerun that test alone; if it passes, it is the flake, not your change.
 4. **Skipped locally, failing in CI:** `-m postgres` and the `BACKEND_TESTS_ON_POSTGRES=1` suites need a disposable
    `TEST_DATABASE_URL`. Start one with `docker compose -f docker-compose.postgres-test.yml up -d` and use
    `TEST_DATABASE_URL=postgresql://sm_test@127.0.0.1:55432/schedule_maxing_test`. Never point it at a real database.
@@ -45,10 +45,10 @@ first; open the test file only at that test, and the code only at the frame it p
 | `desktop-only` | An `app/` module imports a server package (fastapi, sqlalchemy, psycopg, alembic, jwt, argon2, httpx, uvicorn) at top level, or a test outside `tests/backend|sync|web|direct` needs one. Make the import lazy or move the test |
 | `direct-desktop` | Direct mode imported an HTTP/JWT package, or a direct-mode test depends on SQLite-only behaviour |
 | `postgres` | SQL that works on SQLite but not PostgreSQL: types, ordering without `ORDER BY`, case-sensitive comparisons, timezone-naive timestamps, constraint names |
-| `security-scan` / pip-audit | A vulnerable pinned version in `requirements.lock`: upgrade it and the matching `requirements-*.txt` |
+| `security-scan` / pip-audit | A vulnerable pinned version in `requirements/requirements.lock`: upgrade it and the matching `requirements-*.txt` |
 | `security-scan` / detect-secrets | A new secret-looking string. If it really is not a secret, update the baseline (`detect-secrets scan --baseline secret-scan-baseline.json`) and review the diff; if it is one, remove it and rotate it |
 
-To reproduce `desktop-only` locally, use a throwaway venv with only `requirements-desktop.txt` and `pytest`, then run
+To reproduce `desktop-only` locally, use a throwaway venv with only `requirements/desktop.txt` and `pytest`, then run
 `python -m pytest --ignore=tests/backend --ignore=tests/sync --ignore=tests/web --ignore=tests/direct`.
 
 ## 4. The workflow YAML tests

@@ -16,7 +16,7 @@ recovery copy for the case where one succeeds and is later found to be wrong.
 
 Failures propagate (sqlite3.Error, OSError): the caller refuses to migrate a
 database it could not back up. To restore, close the app and copy a backup
-over executions.db (docs/windows-distribution.md).
+over executions.db (docs/deployment/windows-distribution.md).
 """
 
 from __future__ import annotations

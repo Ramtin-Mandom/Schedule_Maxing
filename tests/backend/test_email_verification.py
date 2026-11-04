@@ -1,5 +1,5 @@
 """
-Signup email verification and transactional email (docs/email.md): address validation, the pending
+Signup email verification and transactional email (docs/backend/email.md): address validation, the pending
 registration that holds no credentials, tokens, the outbox and its retries, the provider webhook and
 the operator's diagnostic. Every email goes to a FakeMail; nothing leaves the process.
 """

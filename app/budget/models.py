@@ -2,7 +2,7 @@
 app/budget/models.py
 
 The budget records. Each is owner-scoped and sync-ready like the planning
-records (docs/sync-contract.md): a UUID, an owner (user_id; None is the
+records (docs/architecture/sync-contract.md): a UUID, an owner (user_id; None is the
 ownerless local workspace), UTC audit timestamps, a version and a
 `deleted_at` tombstone. Amounts are integer minor units (app/budget/money.py).
 

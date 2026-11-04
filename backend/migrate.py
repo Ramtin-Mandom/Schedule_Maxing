@@ -99,7 +99,7 @@ def upgrade(engine: Engine, revision: str = "head") -> None:
 
 
 def downgrade(engine: Engine, revision: str) -> None:
-    """For tests and disposable databases only; a real database is only ever upgraded (docs/backend.md)."""
+    """For tests and disposable databases only; a real database is only ever upgraded (docs/backend/backend.md)."""
     config = alembic_config()
     with _migration_transaction(engine) as connection:
         config.attributes["connection"] = connection

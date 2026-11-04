@@ -1,5 +1,5 @@
 """Known-answer tests of the schedule-cohort report (app/productivity/schedule_cohort.py,
-docs/analytics.md) over hand-built histories: every rate with its numerator and
+docs/features/analytics.md) over hand-built histories: every rate with its numerator and
 denominator, exclusions, lineage (moves and regeneration), cutoff reconstruction,
 missing data, and reporting-timezone boundaries including DST."""
 

@@ -1,4 +1,4 @@
-"""Manual placements on the server (docs/execution-rescheduling.md, "Manual
+"""Manual placements on the server (docs/features/execution-rescheduling.md, "Manual
 placements"): a hosted move's destination is manual and preserved, a full
 generation keeps it, the snapshot names it, and the release endpoint releases
 only the intent (version-checked); an older client's placement update cannot

@@ -1,4 +1,4 @@
-"""Scoped changes of recurring series (app/planning/series.py, docs/recurrence.md): this occurrence, this and
+"""Scoped changes of recurring series (app/planning/series.py, docs/features/recurrence.md): this occurrence, this and
 every later occurrence (an atomic split with explicit lineage, no overlapping segments, no duplicate slots),
 the entire series (in place, or a split at the start for a rule or time-zone change); started/finished and
 individually edited occurrences are preserved and named; execution history is never touched; stale versions

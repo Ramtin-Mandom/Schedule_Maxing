@@ -1,4 +1,4 @@
-"""Task types and placement planning snapshots (docs/productivity-redesign-plan.md, contract A) through the
+"""Task types and placement planning snapshots (docs/history/productivity-redesign-plan.md, contract A) through the
 shared PlanningService on the local SQLite repository: type identity and ownership, recurring-series
 inheritance, and snapshots that are captured when a placement is saved and never rewritten -- by edits of the
 task or its type, a regeneration, a move, or a restart."""

@@ -119,7 +119,7 @@ class GenerationRecord(BaseModel):
         return value.astimezone(timezone.utc)
 
 
-#: Task fields added with recurrence expansion (docs/recurrence.md). Left out of a task's content while unset,
+#: Task fields added with recurrence expansion (docs/features/recurrence.md). Left out of a task's content while unset,
 #: so every fingerprint computed before them is unchanged; series_version is provenance, never content.
 _RECURRENCE_TASK_FIELDS = ("series_id", "occurrence_slot", "occurrence_state", "series_predecessor_id")
 _RECURRENCE_RULE_FIELDS = ("start_date", "timezone")

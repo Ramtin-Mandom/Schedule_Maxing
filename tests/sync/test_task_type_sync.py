@@ -1,4 +1,4 @@
-"""Task types and planning snapshots through synchronization (docs/productivity-redesign-plan.md, step 3):
+"""Task types and planning snapshots through synchronization (docs/history/productivity-redesign-plan.md, step 3):
 a second device reconstructs the same types, snapshots and tracker analytics from the server; deleted execution
 history withdraws its points everywhere and is not resurrected; a server without the "task_types" feature never
 erases what a device recorded, and the held records are uploaded once the server supports them."""

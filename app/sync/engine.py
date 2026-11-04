@@ -1,7 +1,7 @@
 """
 app/sync/engine.py
 
-The synchronization rules (docs/sync-protocol.md), independent of threads
+The synchronization rules (docs/architecture/sync-protocol.md), independent of threads
 and of the network: SyncService (app/sync/service.py) calls these steps and
 performs the network calls *between* them, never inside a SQLite
 transaction.
@@ -78,7 +78,7 @@ also undoes the rest of that local move: its replacement (which the server
 never accepted) is discarded, and the execution the move cancelled goes
 back to its server state (or, never synchronized, to `scheduled`).
 
-Milestone 6 (docs/sync-protocol.md, "Conflicts"):
+Milestone 6 (docs/architecture/sync-protocol.md, "Conflicts"):
     series_changed   an occurrence expanded here from an older (or since
                      deleted) series. One that only followed its series (no
                      exception state) follows the server's series at once,
@@ -455,12 +455,12 @@ class SyncEngine:
             return count
 
     # ------------------------------------------------------------------
-    # Recurring series (docs/recurrence.md)
+    # Recurring series (docs/features/recurrence.md)
     # ------------------------------------------------------------------
 
     @staticmethod
     def _uses_new_mode(local: LocalRecord) -> bool:
-        """Whether a preference layer or schedule record names a mode added with docs/scheduling-modes.md."""
+        """Whether a preference layer or schedule record names a mode added with docs/features/scheduling-modes.md."""
         if local.entity_type == "preference":
             mode = local.payload.get("overrides", {}).get("optimizer_mode") if local.payload else None
         elif local.entity_type == "schedule_generation":
@@ -1016,7 +1016,7 @@ class SyncEngine:
         original plan of a moved or regenerated occurrence stays readable. A
         removed occurrence of a series this device has is stored too: its slot
         stays reserved here, so a local expansion never mints it again
-        (docs/recurrence.md).
+        (docs/features/recurrence.md).
         """
         if entity_type == "task" and record.get("series_id"):
             return self.records.planning.get_task(uuid.UUID(record["series_id"]), include_deleted=True) is not None

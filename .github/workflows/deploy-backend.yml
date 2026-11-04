@@ -1,6 +1,6 @@
 name: Deploy backend
 
-# Deploys the server backend (backend/) to its Render web service (docs/ci-cd.md, "Backend deployment"):
+# Deploys the server backend (backend/) to its Render web service (docs/deployment/ci-cd.md, "Backend deployment"):
 #
 #   resolve -> deploy (start the Render deploy of one exact commit, wait until it is live,
 #   then check /health and /ready on the public address).
@@ -16,7 +16,7 @@ name: Deploy backend
 # is on main and whose pull request passed CI is ever deployed. If Render's own Auto-Deploy is on, Render
 # also deploys every merge to main by itself; a request made while such a deploy is running is queued,
 # and the workflow then follows the queued deploy of its commit. Migrations are run by Render itself
-# (pre-deploy or start command, docs/render-deployment.md); no database address is known here.
+# (pre-deploy or start command, docs/deployment/render-deployment.md); no database address is known here.
 
 on:
   push:

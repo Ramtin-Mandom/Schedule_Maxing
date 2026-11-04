@@ -1,4 +1,4 @@
-"""Manual placements and generation scope (docs/execution-rescheduling.md, "Manual
+"""Manual placements and generation scope (docs/features/execution-rescheduling.md, "Manual
 placements" and "Scope"): a move's destination is the user's manual intent --
 every generation keeps it until it is released, across restarts; releasing
 changes nothing but the intent; an older placement is preserved only when its

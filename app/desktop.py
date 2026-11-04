@@ -18,7 +18,7 @@ Storage is always local here. The direct PostgreSQL mode needs database
 credentials, which a distributed client must never hold, so this entry point
 ignores SCHEDULE_MAXING_STORAGE and SCHEDULE_MAXING_ENV_FILE and takes no
 --storage option; that mode stays a development tool of `python -m app.app`
-(docs/direct-postgres.md).
+(docs/deployment/direct-postgres.md).
 """
 
 from __future__ import annotations

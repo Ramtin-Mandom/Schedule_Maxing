@@ -106,7 +106,7 @@ def test_identities_carry_no_secret_and_no_orm_object(backend, engine) -> None:
     identity = backend.register(email="safe@example.com", password=PASSWORD)
     session = backend.sign_in(email="safe@example.com", password=PASSWORD)
     fields = {field.name for field in dataclasses.fields(identity)}
-    # credential_epoch is a counter (docs/backend.md "Password recovery"), not a secret.
+    # credential_epoch is a counter (docs/backend/backend.md "Password recovery"), not a secret.
     assert fields == {"id", "email", "username", "display_name", "version", "created_at", "updated_at",
                       "credential_epoch", "email_verified"}
     for value in (repr(identity), repr(session.identity), repr(session.profile())):

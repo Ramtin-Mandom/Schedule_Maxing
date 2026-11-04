@@ -104,7 +104,7 @@ _STALE_TEXT = {
 
 
 def mode_summary(evaluation, window_start_minute: int) -> str:
-    """One line on what the day's mode achieved (docs/scheduling-modes.md), in words and local clock times."""
+    """One line on what the day's mode achieved (docs/features/scheduling-modes.md), in words and local clock times."""
     label = ENGINE_LABELS.get(OptimizerMode(evaluation.mode), evaluation.mode)
     if evaluation.scheduled_count == 0:
         return f"{label}: nothing was scheduled, so the mode had nothing to arrange."

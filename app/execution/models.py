@@ -96,7 +96,7 @@ class ExecutionStatus(str, Enum):
 
 class CancelReason(str, Enum):
     """
-    Why an attempt was cancelled (docs/execution-rescheduling.md). A
+    Why an attempt was cancelled (docs/features/execution-rescheduling.md). A
     cancellation is never a skip: analytics keep "the user did not do it"
     (skipped) apart from "the plan was withdrawn". None on a cancelled
     attempt means unknown (cancelled before reasons were recorded).

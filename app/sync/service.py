@@ -2,7 +2,7 @@
 app/sync/service.py
 
 SyncService: the application-level entry point for synchronization
-(docs/sync-protocol.md). Tk-free; app/ui/app_services.py creates one per
+(docs/architecture/sync-protocol.md). Tk-free; app/ui/app_services.py creates one per
 desktop session; the Account page (app/ui/account_page.py, through
 AccountController) is its screen: status, sign-in, password recovery,
 association, Sync now and the conflict comparison.
@@ -69,7 +69,7 @@ After a failure only the backoff decides the next attempt. The desktop
 reports its window's activity (set_activity): while it is not focused the
 interval is `background_interval`, while minimized the pending count is not
 looked at, and regaining focus syncs at once when the last success is older
-than `interval` (ADR in DECISIONS.md). Sync now is never delayed.
+than `interval` (ADR in docs/architecture/DECISIONS.md). Sync now is never delayed.
 
 Account switches never interleave with a sync (Milestone 4, the local web
 profile): sign_in, sign_out, set_transport and association wait for a
@@ -84,7 +84,7 @@ update_profile, check_connectivity) go through the transport, and
 association can be previewed and confirmed exactly (association_preview /
 associate_local_data(confirmation=...)).
 
-Capability negotiation (docs/recurrence.md): each sync asks the server for
+Capability negotiation (docs/features/recurrence.md): each sync asks the server for
 its protocol features once per session (transport.capabilities, cached for
 the transport and token). Records carrying recurrence data -- configured
 series, occurrences, lineage, and the placements and executions of
@@ -130,11 +130,11 @@ def _push_units(batch: list) -> list[list]:
 
 
 RECURRENCE_FEATURE = "recurrence_occurrences"
-#: Placement origin/manual intent and execution cancel reasons (docs/execution-rescheduling.md).
+#: Placement origin/manual intent and execution cancel reasons (docs/features/execution-rescheduling.md).
 MANUAL_PLACEMENTS_FEATURE = "manual_placements"
-#: Early Finish, Night Owl and Catch-Up as preference/schedule-record values (docs/scheduling-modes.md).
+#: Early Finish, Night Owl and Catch-Up as preference/schedule-record values (docs/features/scheduling-modes.md).
 SCHEDULING_MODES_FEATURE = "scheduling_modes"
-#: Task types and placement planning snapshots (docs/productivity-redesign-plan.md).
+#: Task types and placement planning snapshots (docs/history/productivity-redesign-plan.md).
 TASK_TYPES_FEATURE = "task_types"
 #: A project's planned dates, completion and milestones.
 PROJECT_DETAILS_FEATURE = "project_details"
@@ -634,7 +634,7 @@ class SyncService:
         return self._authorized(token, transport.profile)
 
     def account_request(self, method: str, path: str, body: dict | None = None) -> dict:
-        """One authenticated request to an account-security route of the backend (docs/account-security.md)."""
+        """One authenticated request to an account-security route of the backend (docs/backend/account-security.md)."""
         transport, token = self._require_session()
         return self._authorized(token, lambda fresh: transport.account_request(method, path, fresh, body))
 

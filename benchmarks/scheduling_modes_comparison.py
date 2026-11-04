@@ -1,7 +1,7 @@
 """
 benchmarks/scheduling_modes_comparison.py
 
-Runs the five scheduling modes (docs/scheduling-modes.md) on identical,
+Runs the five scheduling modes (docs/features/scheduling-modes.md) on identical,
 deterministic day scenarios and records, per scenario and mode: runtime,
 baseline reward B(S) (recomputed), the engine's stored insertion score, the
 mode component and objective, scheduled/unscheduled counts and minutes with

@@ -2,7 +2,7 @@
 app/planning/occurrence.py
 
 Occurrence and supersession identity for placements (Milestone 3, made
-recurrence-aware in docs/recurrence.md), defined before any rescheduling
+recurrence-aware in docs/features/recurrence.md), defined before any rescheduling
 cleanup relies on it.
 
 An *occurrence* is one intended performance of a task. A placement

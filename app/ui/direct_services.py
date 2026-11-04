@@ -1,7 +1,7 @@
 """
 app/ui/direct_services.py
 
-The desktop's direct-PostgreSQL storage mode (docs/direct-postgres.md):
+The desktop's direct-PostgreSQL storage mode (docs/deployment/direct-postgres.md):
 the counterpart of app/ui/app_services.py's SQLite AppServices, with the
 same surface the app uses -- planning/execution/productivity controllers, a
 workspace with an epoch and a result guard, switch_workspace(), close() --

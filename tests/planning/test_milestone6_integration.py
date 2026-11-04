@@ -1,4 +1,4 @@
-"""Milestone 6 across layers (docs/scheduling-modes.md, execution-rescheduling.md, recurrence.md): a mode
+"""Milestone 6 across layers (docs/features/scheduling-modes.md, execution-rescheduling.md, recurrence.md): a mode
 chosen through the desktop controller is persisted, survives a restart, and drives Day, range and REST
 generation with matching evaluations; a manual move survives an Early Finish regeneration; a date override
 beats the user default; Catch-Up without history plans exactly like Normal; old Normal/ADHD saves read

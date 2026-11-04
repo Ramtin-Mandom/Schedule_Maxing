@@ -1,4 +1,4 @@
-"""The productivity tracker (app/productivity/tracker.py, docs/productivity-redesign-plan.md contracts B-E).
+"""The productivity tracker (app/productivity/tracker.py, docs/history/productivity-redesign-plan.md contracts B-E).
 
 Pure cases build TrackerData by hand to pin the formulas: green-day streaks, ties, the partial current day and
 week, averages over elapsed days, unknown points and zero denominators. Service cases run the real SQLite

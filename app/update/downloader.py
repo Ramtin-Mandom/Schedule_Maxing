@@ -16,7 +16,7 @@ On any failure or cancellation the partial file is deleted and nothing is
 left that could be run. Files of earlier downloads are removed first, so the
 folder holds at most one installer.
 
-Trust model (docs/windows-distribution.md): HTTPS to GitHub plus the
+Trust model (docs/deployment/windows-distribution.md): HTTPS to GitHub plus the
 checksum protect against a corrupted or truncated download and against a
 file swapped on the way. They do not prove who built it -- the checksum
 comes from the same release. That proof is a code signature;

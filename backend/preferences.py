@@ -10,7 +10,7 @@ exactly the layers and rules scheduling uses on the desktop
     stored user layer -> the user's stored layer of that date
 
 Only the caller's own live layers are read. Reading the template needs
-PyYAML (requirements-backend.txt); nothing else from the desktop is imported.
+PyYAML (requirements/backend.txt); nothing else from the desktop is imported.
 """
 
 from __future__ import annotations

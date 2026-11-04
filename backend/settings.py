@@ -23,7 +23,7 @@ Optional (with defaults):
                                     cookie-authenticated requests are accepted besides the
                                     server's own origin (CSRF/origin checks only -- not CORS)
 
-Server protections (Milestone 6, docs/backend.md "Protections"):
+Server protections (Milestone 6, docs/backend/backend.md "Protections"):
     ALLOWED_HOSTS                   Host header values served (comma-separated); empty = any
                                     (development only). Behind a proxy, list the public host.
     CORS_ORIGINS                    origins allowed to call the API from a browser page on another
@@ -60,7 +60,7 @@ Password recovery (all of these, or recovery answers 503 recovery_unavailable):
     DELIVERY_TIMEOUT_SECONDS        10
     RECOVERY_TOKEN_TTL_MINUTES      30 (5..1440)
 
-Email verification and transactional email (docs/email.md). Without APP_PUBLIC_URL, a sender
+Email verification and transactional email (docs/backend/email.md). Without APP_PUBLIC_URL, a sender
 (SMTP_SENDER) and a provider, registration answers 503 email_unavailable:
     APP_PUBLIC_URL                  the server's own public origin, https (http only for localhost), no
                                     path -- e.g. https://api.example.com. Emailed links are built from
@@ -79,15 +79,15 @@ Email verification and transactional email (docs/email.md). Without APP_PUBLIC_U
                                     cannot receive mail. A DNS timeout refuses nothing, and passing
                                     proves nothing about the mailbox or who owns it
     REQUIRE_VERIFIED_EMAIL          "false"; "true" refuses record access (403 email_unverified) to
-                                    accounts whose address was never verified (docs/email.md)
+                                    accounts whose address was never verified (docs/backend/email.md)
     OUTBOX_WORKER_ENABLED           "true": a background thread sends queued email and retries
 
-Account security (docs/account-security.md):
+Account security (docs/backend/account-security.md):
     MFA_ENCRYPTION_KEY              a Fernet key used only to encrypt TOTP secrets at rest, e.g. from
                                     python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
                                     Without it two-step sign-in cannot be set up (503 mfa_unavailable)
     MFA_ENCRYPTION_KEY_PREVIOUS     the key being rotated away from: still decrypts, never encrypts
-                                    (docs/api-security.md, "Keys and rotation")
+                                    (docs/backend/api-security.md, "Keys and rotation")
     MFA_ISSUER                      "Schedule Maxing": the name authenticator apps show
     API_DOCS_ENABLED                /docs, /redoc and /openapi.json: on by default, off by default when
                                     ENVIRONMENT=production. Publishing them is a choice, not a flaw:
