@@ -1,7 +1,7 @@
 """
 app/planning/series.py
 
-Recurring series as concrete work (docs/recurrence.md): materializing the
+Recurring series as concrete work (docs/features/recurrence.md): materializing the
 occurrences of a date range, and editing or deleting "this occurrence",
 "this and every later occurrence" or "the entire series". Works on any
 PlanningService (the SQLite repository, or the server's), through its public

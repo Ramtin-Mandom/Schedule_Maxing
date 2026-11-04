@@ -10,7 +10,7 @@ often an inner label). Moving or resizing the application window costs the
 Windows compositor (dwm.exe) work for every visible child window -- measured
 on the Day page with 200 tasks: about 556 child windows and 22-24% of one core
 in dwm.exe while the window is dragged, against 7-10% for an empty window
-(docs/desktop-performance-round3.md). Each widget here is ONE native window
+(docs/history/desktop-performance-round3.md). Each widget here is ONE native window
 and draws natively (no Python canvas redraw on every <Configure>), so the
 available-task chips and the status-board cards need a fraction of them.
 

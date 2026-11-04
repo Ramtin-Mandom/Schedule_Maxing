@@ -22,7 +22,7 @@ Fixed block fields: label, category, points, date, start and end.
 To Do fields: name, category, points and tags. A To Do is a checklist item:
 it has no duration, time or date, and is never scheduled.
 
-Repeating (docs/recurrence.md): "Repeats" makes a task a recurring series
+Repeating (docs/features/recurrence.md): "Repeats" makes a task a recurring series
 whose start date is the form's date and whose time zone is the page's (an
 edited series keeps its own): daily / weekly (weekdays, default the start
 date's) / monthly (a day of month, default the start date's; months without
@@ -126,11 +126,11 @@ class TaskDraft:
     deadline_time: str = ""
     project_id: uuid.UUID | None = None
     tags: tuple[str, ...] = ()
-    #: The reusable task type (docs/productivity-redesign-plan.md): None keeps the stored type, or gives a new
+    #: The reusable task type (docs/history/productivity-redesign-plan.md): None keeps the stored type, or gives a new
     #: task a type of its own. new_type_label, when set, names a type to create and use instead.
     task_type_id: uuid.UUID | None = None
     new_type_label: str = ""
-    # -- repeating (a series; docs/recurrence.md) --------------------------------------
+    # -- repeating (a series; docs/features/recurrence.md) --------------------------------------
     #: "" (does not repeat), "daily", "weekly" or "monthly".
     repeat: str = ""
     repeat_interval: str = "1"

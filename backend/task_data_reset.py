@@ -26,7 +26,7 @@ account removes its copy on its next pull, a stale queued update or delete
 from another device is answered with "deleted" (never a revival), and a
 replayed old operation answers its recorded outcome. The server keeps
 tombstones and revision history, as everywhere in this backend
-(docs/execution-rescheduling.md: "the server never purges history rows");
+(docs/features/execution-rescheduling.md: "the server never purges history rows");
 after a reset they appear in no read, list, sync snapshot or analytics.
 """
 

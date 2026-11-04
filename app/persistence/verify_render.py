@@ -2,7 +2,7 @@
 app/persistence/verify_render.py
 
 An explicit, opt-in verification of the direct PostgreSQL storage against a
-real database (docs/render-direct-desktop.md). It never runs by itself:
+real database (docs/deployment/render-direct-desktop.md). It never runs by itself:
 importing this module does nothing, no test hook calls it, and every mode
 must be chosen on the command line.
 
@@ -530,7 +530,7 @@ def _zone(value: str) -> str:
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python -m app.persistence.verify_render",
                                 description="Opt-in verification of direct PostgreSQL storage (see "
-                                            "docs/render-direct-desktop.md). Prints a safe summary only.")
+                                            "docs/deployment/render-direct-desktop.md). Prints a safe summary only.")
     p.add_argument("--env-file", metavar="PATH", help="read DATABASE_URL from this file (the environment still wins)")
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--check-only", action="store_true", help="connection, TLS and schema revision; writes nothing")

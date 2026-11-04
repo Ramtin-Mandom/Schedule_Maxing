@@ -1,5 +1,5 @@
 """
-Authorization and API security (docs/api-security.md). Two accounts, one adversarial: whatever Bob sends --
+Authorization and API security (docs/backend/api-security.md). Two accounts, one adversarial: whatever Bob sends --
 Alice's ids, guessed ids, forged owner fields, mixed batches -- Alice's data is neither shown to him nor
 changed. Plus the transport-level controls: token validation, CSRF, CORS, headers, limits, error hygiene
 and the email-change flow. test_isolation.py covers the plain CRUD routes one by one; this file covers

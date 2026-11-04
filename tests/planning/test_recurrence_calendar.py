@@ -1,4 +1,4 @@
-"""The calendar of a recurring series (app/planning/recurrence.py, docs/recurrence.md): daily/weekly/monthly
+"""The calendar of a recurring series (app/planning/recurrence.py, docs/features/recurrence.md): daily/weekly/monthly
 intervals and selectors, Monday-anchored weeks, skipped (never clamped) month days, leap years, inclusive end
 dates, counts from the anchor independent of the requested window, arithmetic seeking far into the future
 (checked against brute force), the work budget, deterministic identity, cadence compatibility and DST days."""

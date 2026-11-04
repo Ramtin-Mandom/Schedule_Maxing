@@ -13,7 +13,7 @@ Importing this package reads nothing and connects nowhere. Entry points:
     settings = load_direct_settings(env_file=".env")   # explicit file; the process environment wins
     backend = open_direct_backend(settings)             # checks the schema revision; never migrates
 
-It needs the packages of requirements-direct.txt (SQLAlchemy, psycopg,
+It needs the packages of requirements/direct.txt (SQLAlchemy, psycopg,
 Alembic, argon2-cffi, python-dotenv); without them open_direct_backend()
 raises DirectModeUnavailableError naming the missing package.
 

@@ -1,6 +1,6 @@
 """
 .github/workflows/deploy-backend.yml: the properties the backend deployment must keep, checked by
-reading the file (the workflow itself only runs on GitHub; docs/ci-cd.md, "Backend deployment").
+reading the file (the workflow itself only runs on GitHub; docs/deployment/ci-cd.md, "Backend deployment").
 
 Jobs are found by what they do and ordered by their `needs` (tests/workflow_files.py); what every
 workflow must keep is in tests/test_workflows.py.

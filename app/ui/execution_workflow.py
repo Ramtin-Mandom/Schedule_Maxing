@@ -11,7 +11,7 @@ execution (if any) and an explicit `now`, never stored.
       (app/execution/lifecycle.py); a placement with no execution behaves as
       `scheduled` (its execution is created only when the user acts).
       Reschedule is offered only while nothing has started
-      (docs/execution-rescheduling.md); otherwise the reason is given.
+      (docs/features/execution-rescheduling.md); otherwise the reason is given.
     - Overdue is derived, not a status: a not-started placement whose planned
       end has passed. In-progress or paused work past its planned end keeps
       its state and is marked as running late.

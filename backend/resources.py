@@ -8,12 +8,12 @@ the server exactly when it is valid locally.
 
 Input schemas forbid unknown fields: a client cannot send user_id, version,
 created_at, updated_at or deleted_at -- those are owned by the server.
-Relationship rules (docs/sync-contract.md sections 4-6), all checked inside
+Relationship rules (docs/architecture/sync-contract.md sections 4-6), all checked inside
 the caller's user scope only:
     project      delete refused (409 in_use) while live tasks belong to it
     task         project_id must be a live record of the user; deleting it
                  tombstones its live placements (each logged). Recurrence
-                 (docs/recurrence.md): an occurrence names one of the user's
+                 (docs/features/recurrence.md): an occurrence names one of the user's
                  series and its id is derived from (series, slot); its
                  identity, and a segment's lineage, never change. Tasks have
                  no priority or dependencies: `priority` and `dependency_ids`
@@ -251,7 +251,7 @@ class TaskFields(Strict):
     dependency_ids: list[uuid.UUID] = Field(default_factory=list)
     deadline: AwareDatetime | None = None
     recurrence: RecurrenceSpec | None = None
-    #: Recurrence identity, exception state, provenance and lineage (docs/recurrence.md). An older client
+    #: Recurrence identity, exception state, provenance and lineage (docs/features/recurrence.md). An older client
     #: omits them: an update then keeps the stored values (see with_stored_omissions).
     series_id: uuid.UUID | None = None
     occurrence_slot: date_ | None = None
@@ -332,7 +332,7 @@ class PlacementFields(Strict):
     planned_end: AwareDatetime
     score: float = 0.0
     optimization_metadata: dict[str, Any] = Field(default_factory=dict)
-    #: The task's category when the placement was saved (docs/execution-rescheduling.md).
+    #: The task's category when the placement was saved (docs/features/execution-rescheduling.md).
     task_category: str | None = Field(default=None, min_length=1, max_length=100)
     #: The rest of the planning snapshot (the task's name, tags, points, estimate and type when the placement was
     #: saved). Each null = not recorded; a recorded value never changes (an omitted one keeps what is stored).
@@ -346,7 +346,7 @@ class PlacementFields(Strict):
     removal_reason: PlacementRemovalReason | None = None
     superseded_by_id: uuid.UUID | None = None
     #: How it came to be (generated / manual; None = unknown) and the user's manual intent: generation keeps a
-    #: preserved placement until it is released (docs/execution-rescheduling.md, "Manual placements").
+    #: preserved placement until it is released (docs/features/execution-rescheduling.md, "Manual placements").
     origin: PlacementOrigin | None = None
     preserved: bool = False
 
@@ -556,7 +556,7 @@ _OCCURRENCE_BOOKKEEPING = {"occurrence_state", "series_version"}
 def with_stored_omissions(row, payload: TaskFields) -> TaskFields:
     """
     The update `payload` with every recurrence field it omits taken from the
-    stored `row` (docs/recurrence.md, "older clients"): an older client's
+    stored `row` (docs/features/recurrence.md, "older clients"): an older client's
     update can never erase an occurrence's identity, exception state,
     provenance or a series' lineage and anchor -- and its content edit of an
     occurrence that still followed its series marks it modified.
@@ -628,7 +628,7 @@ _SERIES_CONTENT = frozenset({"project_id", "name", "category", "tags", "estimate
 
 def _check_series_precondition(session, user_id, series, payload: TaskFields) -> None:
     """
-    The series precondition of a new live occurrence (docs/sync-protocol.md,
+    The series precondition of a new live occurrence (docs/architecture/sync-protocol.md,
     "Recurring series"): its series is live, the slot is still one of the
     series' dates, and an occurrence that follows its series (no exception
     state) carries the series' current content. Versions cannot be compared

@@ -1,5 +1,5 @@
 """Placement origin, manual intent and execution cancel reasons (Milestone 6,
-docs/execution-rescheduling.md "Manual placements").
+docs/features/execution-rescheduling.md "Manual placements").
 
 Expand only -- every change is additive, nullable or defaulted, so a server
 of the previous version keeps working against the upgraded schema (it
@@ -61,7 +61,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # For tests and disposable databases only (docs/backend.md): origins, manual intent and reasons are dropped.
+    # For tests and disposable databases only (docs/backend/backend.md): origins, manual intent and reasons are dropped.
     for table in ('execution_revisions', 'executions'):
         with op.batch_alter_table(table) as batch:
             batch.drop_constraint(f'ck_{table}_cancel_reason', type_='check')

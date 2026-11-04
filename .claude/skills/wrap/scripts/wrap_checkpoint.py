@@ -39,7 +39,8 @@ from pathlib import Path
 
 SCHEMA = 1
 CHECKPOINT_NAME = "wrap-checkpoint.json"
-KB_DOCS = ("ARCHITECTURE.md", "ROADMAP.md", "CURRENT_STATE.md", "DECISIONS.md", "CODEBASE_MAP.md")
+KB_DOCS = ("docs/architecture/ARCHITECTURE.md", "docs/development/ROADMAP.md", "docs/development/CURRENT_STATE.md",
+           "docs/architecture/DECISIONS.md", "docs/architecture/CODEBASE_MAP.md")
 AGENT_DOCS = ("AGENTS.md", "CLAUDE.md")
 DELETED = "deleted"
 LIST_LIMIT = 60
@@ -174,8 +175,8 @@ def fingerprints(root: Path, paths: list[str]) -> dict[str, str]:
 
 
 def documented_commit_in_current_state(root: Path) -> str | None:
-    """The commit CURRENT_STATE.md says it was verified against (a fallback baseline)."""
-    path = root / "CURRENT_STATE.md"
+    """The commit docs/development/CURRENT_STATE.md says it was verified against (a fallback baseline)."""
+    path = root / "docs/development/CURRENT_STATE.md"
     if not path.is_file():
         return None
     match = re.search(r"^\|\s*Commit\s*\|\s*`([0-9a-f]{7,40})`", path.read_text(encoding="utf-8", errors="replace"),
@@ -245,7 +246,7 @@ def build_status(root: Path) -> dict:
     if base is None and head:
         documented = documented_commit_in_current_state(root)
         if documented and is_commit(root, documented) and is_ancestor(root, documented, head):
-            base, base_kind = git(root, "rev-parse", documented).strip(), "commit recorded in CURRENT_STATE.md"
+            base, base_kind = git(root, "rev-parse", documented).strip(), "commit recorded in docs/development/CURRENT_STATE.md"
         else:
             notes.append("No usable baseline: inspect the subsystems named by the recent commits below and the "
                          "working tree, rather than assuming the documents are current.")

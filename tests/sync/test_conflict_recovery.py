@@ -1,5 +1,5 @@
 """Synchronization conflicts and interruption recovery for recurrence, execution and manual intent
-(docs/sync-protocol.md, "Conflicts", "Retention and cursors", "Failures"): an occurrence expanded offline
+(docs/architecture/sync-protocol.md, "Conflicts", "Retention and cursors", "Failures"): an occurrence expanded offline
 follows a concurrent series edit instead of getting around it; a local exception survives a series edit;
 an exception under a series deleted elsewhere is a durable conflict whose only safe choice retires it, never
 resurrecting anything; accepting the server's execution keeps the work only this device recorded; a request

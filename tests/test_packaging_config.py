@@ -1,7 +1,7 @@
 """
 The Windows packaging configuration (packaging/windows): checked without building anything, so a
 mistake in the spec, the installer script or the build helpers is caught by the development suite.
-A real build is verified by packaging/windows/smoke_test.py (docs/windows-distribution.md).
+A real build is verified by packaging/windows/smoke_test.py (docs/deployment/windows-distribution.md).
 """
 
 from __future__ import annotations
@@ -61,10 +61,10 @@ def test_spec_bundles_only_the_named_resources():
 
 
 def test_build_environment_is_the_desktop_runtime_plus_the_packager():
-    lines = [line.strip() for line in (ROOT / "requirements-build.txt").read_text(encoding="utf-8").splitlines()
+    lines = [line.strip() for line in (ROOT / "requirements/build.txt").read_text(encoding="utf-8").splitlines()
              if line.strip() and not line.startswith("#")]
-    assert lines[0] == "-r requirements-desktop.txt" and [line.split(">")[0] for line in lines[1:]] == ["pyinstaller"]
-    desktop_requirements = (ROOT / "requirements-desktop.txt").read_text(encoding="utf-8").lower()
+    assert lines[0] == "-r desktop.txt" and [line.split(">")[0] for line in lines[1:]] == ["pyinstaller"]
+    desktop_requirements = (ROOT / "requirements/desktop.txt").read_text(encoding="utf-8").lower()
     assert "pyinstaller" not in desktop_requirements
 
 

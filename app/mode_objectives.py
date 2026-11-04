@@ -1,7 +1,7 @@
 """
 app/mode_objectives.py
 
-Scheduling objectives of the five user-facing modes (docs/scheduling-modes.md),
+Scheduling objectives of the five user-facing modes (docs/features/scheduling-modes.md),
 on top of the one canonical day engine (app/optimizer.py). Modes are
 objectives, not separate optimizers: every mode uses the same hard
 constraints (window, fixed blocks and kept work, durations, deadlines,

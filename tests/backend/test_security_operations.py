@@ -1,5 +1,5 @@
 """
-Operations (docs/security-operations.md): cleanup of expired authentication leftovers, redacted security
+Operations (docs/backend/security-operations.md): cleanup of expired authentication leftovers, redacted security
 events and counters, a restore of a database copy, and the whole account journey end to end --
 signup -> verification -> welcome -> sign-in -> two-step sign-in -> sync -> password change -> reset ->
 session revocation -- on an isolated database with fake mail.

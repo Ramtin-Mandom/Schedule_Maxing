@@ -1,4 +1,4 @@
-"""Recurrence expansion on the local store (app/planning/series.py, docs/recurrence.md): concrete occurrences
+"""Recurrence expansion on the local store (app/planning/series.py, docs/features/recurrence.md): concrete occurrences
 with derived identity and a reserved slot per (series, slot); series definitions are never scheduled;
 repeated, overlapping, restarted and retried expansion are no-ops; budgets bound the work and leave nothing
 half-written; legacy templates need configuration while their saved placements map to occurrences (ambiguous

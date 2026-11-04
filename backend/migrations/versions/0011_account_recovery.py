@@ -1,4 +1,4 @@
-"""Password recovery, credential epochs and shared rate limiting (Milestone 6, docs/backend.md).
+"""Password recovery, credential epochs and shared rate limiting (Milestone 6, docs/backend/backend.md).
 
 Expand only -- a server of the previous version keeps working against the
 upgraded schema:
@@ -64,7 +64,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # For tests and disposable databases only (docs/backend.md): recovery tokens and counters are dropped.
+    # For tests and disposable databases only (docs/backend/backend.md): recovery tokens and counters are dropped.
     op.drop_index('ix_rate_limit_buckets_expiry', table_name='rate_limit_buckets')
     op.drop_table('rate_limit_buckets')
     op.drop_index('ix_password_recovery_tokens_user', table_name='password_recovery_tokens')

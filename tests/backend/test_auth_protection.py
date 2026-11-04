@@ -1,5 +1,5 @@
 """
-Authentication protections (docs/backend.md "Protections"): the client address behind proxies
+Authentication protections (docs/backend/backend.md "Protections"): the client address behind proxies
 (backend/protection.py), sliding-window limits (backend/rate_limit.py), failed sign-in tracking
 (backend/login_guard.py), the bound on concurrent password hashing (backend/passwords.py) and the
 recovery reset's check before hashing (backend/recovery.py).

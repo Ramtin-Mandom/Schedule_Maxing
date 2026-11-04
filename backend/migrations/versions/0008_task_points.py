@@ -44,7 +44,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # For tests and disposable databases only (docs/backend.md): the points are dropped with the columns.
+    # For tests and disposable databases only (docs/backend/backend.md): the points are dropped with the columns.
     for table in (*EXECUTION_TABLES, *TASK_TABLES):
         with op.batch_alter_table(table) as batch:
             batch.drop_constraint(f'ck_{table}_points', type_='check')

@@ -37,7 +37,7 @@ Optimistic concurrency (replaces Milestone 2's last-write-wins):
       to the service clock; created_at is never changed). Saving unchanged
       content still checks the precondition but is a no-op. Soft deletion
       is a logical mutation too (+1). `version` is this device's local edit
-      revision, not a server version (see docs/sync-contract.md).
+      revision, not a server version (see docs/architecture/sync-contract.md).
     - Ownership (`user_id`) is immutable through updates; placements always
       carry their task's owner.
 
@@ -57,7 +57,7 @@ can never be reused by a create.
       precondition, removes superseded placements outside the range (see
       app/planning/occurrence.py), and saves the range's provenance -- all
       in one transaction.
-    - Placement provenance (Milestone 5, docs/execution-rescheduling.md):
+    - Placement provenance (Milestone 5, docs/features/execution-rescheduling.md):
       every placement tombstone records why it left the plan
       (PlacementRemovalReason: REGENERATED for replacements and supersession,
       TASK_DELETED for a task's cascade, RESET for resets, RESCHEDULED for an
@@ -556,7 +556,7 @@ class PlanningService:
             )
 
     # ------------------------------------------------------------------
-    # Task types (docs/productivity-redesign-plan.md, contract A)
+    # Task types (docs/history/productivity-redesign-plan.md, contract A)
     # ------------------------------------------------------------------
 
     def list_task_types(self, *, include_deleted: bool = False) -> list[TaskType]:
@@ -837,7 +837,7 @@ class PlanningService:
         return len(live)
 
     # ------------------------------------------------------------------
-    # Recurring series (app/planning/series.py drives these; docs/recurrence.md)
+    # Recurring series (app/planning/series.py drives these; docs/features/recurrence.md)
     # ------------------------------------------------------------------
 
     def list_series(self, *, include_deleted: bool = False) -> list[Task]:
@@ -1238,7 +1238,7 @@ class PlanningService:
            fingerprint and the committed placements' digest.
 
         Placements dated outside the range are never touched (Milestone 6,
-        docs/execution-rescheduling.md "Scope"): a generation does not place
+        docs/features/execution-rescheduling.md "Scope"): a generation does not place
         an occurrence that is live elsewhere -- it reports it -- so nothing
         outside the range is superseded; moving work across dates is the
         explicit reschedule. `superseded_ids` and `history_protected_ids` stay
@@ -1330,7 +1330,7 @@ class PlanningService:
         return self._repository.get_placements([placement_id], include_deleted=include_deleted).get(placement_id)
 
     # ------------------------------------------------------------------
-    # Manual intent (docs/execution-rescheduling.md, "Manual placements")
+    # Manual intent (docs/features/execution-rescheduling.md, "Manual placements")
     # ------------------------------------------------------------------
 
     def preserved_placement_ids(self, placements: Iterable[ScheduledTask]) -> set[uuid.UUID]:
@@ -1401,7 +1401,7 @@ class PlanningService:
         return self._repository.history_bounds()
 
     # ------------------------------------------------------------------
-    # Explicit rescheduling (docs/execution-rescheduling.md)
+    # Explicit rescheduling (docs/features/execution-rescheduling.md)
     # ------------------------------------------------------------------
 
     def reschedule_source(self, placement_id: uuid.UUID, *, expected_version: int) -> tuple[ScheduledTask, Task]:
@@ -1630,7 +1630,7 @@ class PlanningService:
                 tasks = self._repository.list_tasks_planned_in_range(start_date, end_date, timezone_name=timezone_name)
             else:
                 tasks = self._repository.list_tasks_eligible_for_range(start_date, end_date, timezone_name=timezone_name)
-            # A series definition is never scheduled itself: its materialized occurrences are (docs/recurrence.md).
+            # A series definition is never scheduled itself: its materialized occurrences are (docs/features/recurrence.md).
             series = [task for task in tasks if task.is_series]
             tasks = [task for task in tasks if not task.is_series]
             fixed_blocks = self._repository.list_fixed_blocks(start_date, end_date)
@@ -2261,7 +2261,7 @@ class PlanningService:
 
     def _check_recurrence_rules(self, tasks: list[Task], stored_by_id: Mapping[uuid.UUID, Task]) -> None:
         """
-        The recurrence invariants of a task save (docs/recurrence.md), checked
+        The recurrence invariants of a task save (docs/features/recurrence.md), checked
         before anything is written:
 
             - an occurrence's identity (series_id, occurrence_slot) and a

@@ -3,7 +3,7 @@
 Additive only. Existing accounts, sessions and credentials are unchanged:
 nobody has a second factor until they enroll one, existing sessions simply
 have no label, and password hashes are untouched (the longer minimum applies
-to passwords chosen from now on; see docs/account-security.md).
+to passwords chosen from now on; see docs/backend/account-security.md).
 """
 
 from alembic import op

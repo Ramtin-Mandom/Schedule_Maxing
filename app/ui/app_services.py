@@ -17,9 +17,9 @@ would silently never be saved.
 
 Nothing web-related happens here: no HTTP server, listening socket, browser
 session, cloud database or backend module is imported or started
-(docs/desktop-web-boundaries.md; tests/test_desktop_isolation.py).
+(docs/architecture/desktop-web-boundaries.md; tests/test_desktop_isolation.py).
 
-Workspace (docs/desktop-web-boundaries.md): every controller works in one
+Workspace (docs/architecture/desktop-web-boundaries.md): every controller works in one
 explicit owner scope, chosen by SyncService.workspace_scope() -- the
 selected account, else the account active on this device, else the
 ownerless local workspace -- so records of different owners are never

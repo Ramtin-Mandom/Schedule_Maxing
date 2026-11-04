@@ -1,4 +1,4 @@
-"""The desktop's explicit workspace and process boundaries (docs/desktop-web-boundaries.md),
+"""The desktop's explicit workspace and process boundaries (docs/architecture/desktop-web-boundaries.md),
 headless and without any web package:
 
 - every controller works in one owner scope chosen by SyncService.workspace_scope():

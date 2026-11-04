@@ -2,12 +2,12 @@
 app/planning/history.py
 
 The read model analytics use for the planned-versus-actual history of a
-date range (Milestone 5, docs/analytics.md): one bounded, owner-scoped,
+date range (Milestone 5, docs/features/analytics.md): one bounded, owner-scoped,
 consistent snapshot of
 
     - every placement -- live or tombstoned -- whose planned start lies in
       [start_utc, end_utc), and every placement those superseded, on any
-      date (walking superseded_by_id back, docs/execution-rescheduling.md);
+      date (walking superseded_by_id back, docs/features/execution-rescheduling.md);
     - the live executions of the in-range placements, with their work
       sessions;
     - the tasks all those placements belong to (deleted tasks included), for

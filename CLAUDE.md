@@ -62,20 +62,20 @@ After the whole batch is complete, give one concise summary containing:
 - important remaining limitations
 Avoid verbose per-task summaries unless requested.
 Project Knowledge Base (documentation navigation)
-Six root documents describe the repository. Load only the document -- and only the section -- the current task needs; never read all six by default.
-- CODEBASE_MAP.md: where a feature lives, what a change affects, which tests to run. Start with its "If You Need to Change X, Look Here" table.
-- ARCHITECTURE.md: system design, boundaries, module dependencies, file reference and feature-to-file map.
-- WORKFLOW.md: run-time behaviour -- the Make Schedule call chain, engine internals, rules/constraints, decision order and error handling.
-- CURRENT_STATE.md: what currently works, is partial or broken (a dated snapshot).
-- ROADMAP.md: planned and unfinished work, when planning development.
-- DECISIONS.md: established architectural decisions; read the relevant record before changing one.
+Six knowledge-base documents in docs/architecture/ and docs/development/ describe the repository (docs/README.md indexes all documentation). Load only the document -- and only the section -- the current task needs; never read all six by default.
+- docs/architecture/CODEBASE_MAP.md: where a feature lives, what a change affects, which tests to run. Start with its "If You Need to Change X, Look Here" table.
+- docs/architecture/ARCHITECTURE.md: system design, boundaries, module dependencies, file reference and feature-to-file map.
+- docs/architecture/WORKFLOW.md: run-time behaviour -- the Make Schedule call chain, engine internals, rules/constraints, decision order and error handling.
+- docs/development/CURRENT_STATE.md: what currently works, is partial or broken (a dated snapshot).
+- docs/development/ROADMAP.md: planned and unfinished work, when planning development.
+- docs/architecture/DECISIONS.md: established architectural decisions; read the relevant record before changing one.
 Keep them accurate in the same change that makes them wrong:
-- module responsibilities, important paths or dependencies changed -> update CODEBASE_MAP.md
-- architectural boundaries or major data flows changed -> update ARCHITECTURE.md
-- execution flow, engine behaviour or an enforced rule/constraint changed -> update WORKFLOW.md
-- a feature's state or a known limitation changed -> update CURRENT_STATE.md
-- a milestone or deliverable status changed -> update ROADMAP.md
-- a consequential decision made or superseded -> add or amend a record in DECISIONS.md
+- module responsibilities, important paths or dependencies changed -> update docs/architecture/CODEBASE_MAP.md
+- architectural boundaries or major data flows changed -> update docs/architecture/ARCHITECTURE.md
+- execution flow, engine behaviour or an enforced rule/constraint changed -> update docs/architecture/WORKFLOW.md
+- a feature's state or a known limitation changed -> update docs/development/CURRENT_STATE.md
+- a milestone or deliverable status changed -> update docs/development/ROADMAP.md
+- a consequential decision made or superseded -> add or amend a record in docs/architecture/DECISIONS.md
 Do not rewrite unchanged documentation just to refresh dates or commit hashes.
 At the end of a session the user can run /wrap (.claude/skills/wrap/SKILL.md), which detects changes since the last wrap and applies these updates incrementally.
 CI check notes

@@ -1,13 +1,3 @@
-# Development/CI: the desktop runtime, test and lint tools, and (via -r) the
-# optional backend/web server so the full test suite runs locally and in CI.
-# Install everything below (including both included files) with:
-#     python -m pip install -r requirements.txt
--r requirements-desktop.txt
-python-dotenv>=1.0.0
-pytest>=8.0.0
-ruff>=0.16.0
-
-# Backend (server) dependencies, so the full test suite runs locally and in CI.
-# Includes SQLAlchemy, psycopg[binary], Alembic, and the HTTP/auth runtime.
--r requirements-backend.txt
-httpx>=0.27
+# Everything for development and CI: the desktop, the backend, tests and Ruff.
+# The dependency files live in requirements/ (see README.md, "Installation").
+-r requirements/dev.txt

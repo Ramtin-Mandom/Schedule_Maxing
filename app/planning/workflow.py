@@ -25,7 +25,7 @@ the stored layers they come from.
 Generation (generate) for a contiguous run of dates inside an allocation
 range, in one of two modes:
 
-Every generation keeps (plan_reservations; docs/execution-rescheduling.md,
+Every generation keeps (plan_reservations; docs/features/execution-rescheduling.md,
 "Manual placements" and "Scope"), whatever the mode:
 
     - history: a placement whose execution started or finished stays exactly
@@ -276,7 +276,7 @@ class GenerationOutcome:
     #: Per generated date: the placements kept exactly as they were (incremental, or protected history).
     kept_ids: dict[date_, list[uuid.UUID]] = field(default_factory=dict)
     reschedule: RescheduleResult | None = None
-    #: The recurrence expansion of the allocation range that ran first (docs/recurrence.md).
+    #: The recurrence expansion of the allocation range that ran first (docs/features/recurrence.md).
     expansion: ExpansionResult | None = None
     #: Per generated date: non-blocking problems of kept history (it stays exactly as recorded).
     notices: dict[date_, list[PlacementProblem]] = field(default_factory=dict)
@@ -570,7 +570,7 @@ def plan_reservations(
     service: PlanningService, inputs: SchedulingInputs, dates: list[date_], *, mode: GenerationMode
 ) -> Reservations:
     """
-    What a generation of `dates` keeps (docs/execution-rescheduling.md,
+    What a generation of `dates` keeps (docs/features/execution-rescheduling.md,
     "Manual placements" and "Scope"):
 
         - every saved placement whose execution started or finished
@@ -1019,7 +1019,7 @@ def _local_minute(instant: datetime, tz_name: str) -> int:
 
 
 # -----------------------------------------------------------------------------
-# Explicit rescheduling (docs/execution-rescheduling.md)
+# Explicit rescheduling (docs/features/execution-rescheduling.md)
 # -----------------------------------------------------------------------------
 
 

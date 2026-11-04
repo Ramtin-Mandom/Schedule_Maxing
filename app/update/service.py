@@ -8,7 +8,7 @@ through app/ui/update_controller.py):
     download(release)   -> the installer, verified (app/update/downloader.py)
     launch_installer()  -> start it and return, so the application can close
 
-Design (docs/windows-distribution.md, "Updates"): an update is the next
+Design (docs/deployment/windows-distribution.md, "Updates"): an update is the next
 version's ordinary installer, run over the installed one. The installer
 waits for this application to close, replaces the program's own files and
 starts the new version (packaging/windows/ScheduleMaxing.iss, /RELAUNCH=1).

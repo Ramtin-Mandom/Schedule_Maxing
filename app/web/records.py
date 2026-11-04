@@ -9,7 +9,7 @@ the scoped PlanningService: owner, references, versions, the fixed-block
 invariants and the deletion policy are its rules, not re-implemented here.
 
 Differences from the hosted server, by design: versions are this device's
-local edit revisions (docs/sync-contract.md), placements are read through
+local edit revisions (docs/architecture/sync-contract.md), placements are read through
 /planning/snapshot and written only by generation, and executions are not
 exposed by the local profile yet.
 """
