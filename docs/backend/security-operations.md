@@ -98,6 +98,12 @@ Handling policy:
 | A real secret in the repository | rotate it first (see api-security.md, "Keys and rotation"), then remove it; history rewriting is secondary -- a pushed secret is compromised |
 | A false positive | allowlist the exact finding in the scanner's configuration with a comment, never a whole path |
 
+Currently ignored findings:
+
+| Id | Package | Why | Revisit |
+| --- | --- | --- | --- |
+| CVE-2026-114605 (GHSA-45c3-73f7-pv4m) | dnspython 2.8.0 | excessive CPU in `dns.name.from_wire_parser()`; the fixed releases (2.9.0+) need Python 3.11 and the project is on 3.10. Reached only through email-validator's deliverability check, i.e. only with `EMAIL_DNS_CHECK` on (off by default) -- keep it off until the upgrade | by 2027-02-04, or when moving to Python 3.11 (then upgrade dnspython and drop the ignore) |
+
 ## Backups and restoration
 
 The server's database holds every account. Back it up and test restoring it.
