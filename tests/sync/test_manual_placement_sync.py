@@ -1,8 +1,8 @@
-"""Manual placements across devices (docs/execution-rescheduling.md "Manual placements", docs/sync-protocol.md):
-a move made on one device is manual intent on the other, so the other device's generation keeps it; a release
-travels back; a generation-superseded attempt reaches the server as a system cancellation (never a skip); and
-with a server that does not know manual placements the fields are not sent and a pulled record without them
-never erases the local intent."""
+"""Manual placements across devices (docs/features/execution-rescheduling.md "Manual placements",
+docs/architecture/sync-protocol.md): a move made on one device is manual intent on the other, so the other
+device's generation keeps it; a release travels back; a generation-superseded attempt reaches the server as a
+system cancellation (never a skip); and with a server that does not know manual placements the fields are not
+sent and a pulled record without them never erases the local intent."""
 
 from __future__ import annotations
 

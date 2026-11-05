@@ -1,7 +1,7 @@
 """
 app/planning/catch_up.py
 
-The history evidence of the Catch-Up mode (docs/scheduling-modes.md): per
+The history evidence of the Catch-Up mode (docs/features/scheduling-modes.md): per
 historical category, how often the user skipped versus completed work in a
 fixed lookback window, turned into a bounded per-task bonus.
 

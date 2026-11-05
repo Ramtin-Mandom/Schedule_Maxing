@@ -1,6 +1,6 @@
 """
 .github/workflows/deploy-backend.yml: the properties the backend deployment must keep, checked by
-reading the file (the workflow itself only runs on GitHub; docs/ci-cd.md, "Backend deployment").
+reading the file (the workflow itself only runs on GitHub; docs/deployment/ci-cd.md, "Backend deployment").
 
 Jobs are found by what they do and ordered by their `needs` (tests/workflow_files.py); what every
 workflow must keep is in tests/test_workflows.py.
@@ -36,10 +36,20 @@ CHECK_NAME = "pr_tests_passed.sh"
 CHECK = (SCRIPTS / CHECK_NAME).read_text(encoding="utf-8")
 
 
-def test_only_a_push_to_main_or_a_manual_run_starts_it():
+def test_only_a_release_tag_or_a_manual_run_starts_it():
     assert "workflow_dispatch" in TRIGGERS
-    assert TRIGGERS["push"] == {"branches": ["main"]}  # no other branch, no tag
+    # The release tag release.yml publishes from; a merge to main (a branch push) never deploys.
+    _, release = load("release.yml")
+    assert TRIGGERS["push"] == {"tags": triggers(release)["push"]["tags"]}
+    assert "branches" not in TRIGGERS["push"]
     assert not {"pull_request", "pull_request_target", "schedule", "workflow_run"} & set(TRIGGERS)
+
+
+def test_a_queued_render_deploy_is_followed_not_failed():
+    # Render's Auto-Deploy may already be deploying; the request is then queued without a deploy id.
+    deploy = steps_text(JOBS, DEPLOY)
+    assert "/deploys?limit=" in deploy
+    assert "select(.commit.id == $sha)" in deploy
 
 
 def test_the_tests_run_once_for_pull_requests_and_never_for_a_push_or_a_tag():

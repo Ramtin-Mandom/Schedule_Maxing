@@ -1,6 +1,6 @@
 """
 .github/workflows/release.yml: the properties a release pipeline must keep, checked by reading the
-file (the workflow itself only runs on GitHub; docs/windows-distribution.md, "Releasing").
+file (the workflow itself only runs on GitHub; docs/deployment/windows-distribution.md, "Releasing").
 
 Jobs are found by what they do and ordered by their `needs` (tests/workflow_files.py); what every
 workflow must keep is in tests/test_workflows.py.

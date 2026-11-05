@@ -43,7 +43,7 @@ jobs:
 
   security-scan:
     # Known vulnerabilities in the locked dependencies and committed secrets
-    # (docs/security-operations.md, "Dependencies": what to do with a finding).
+    # (docs/backend/security-operations.md, "Dependencies": what to do with a finding).
     runs-on: ubuntu-latest
 
     steps:
@@ -59,18 +59,20 @@ jobs:
       - name: Known vulnerabilities in the locked dependencies
         run: |
           python -m pip install pip-audit
-          python -m pip_audit --requirement requirements.lock --no-deps --disable-pip
+          # CVE-2026-114605 (dnspython 2.8.0): the fix (2.9.0+) needs Python 3.11; reachable only with
+          # EMAIL_DNS_CHECK on (off by default). Revisit by 2027-02-04 or on the move to Python 3.11.
+          python -m pip_audit --requirement requirements/requirements.lock --no-deps --disable-pip --ignore-vuln CVE-2026-114605
 
       - name: Scan tracked files for credentials
         # Every tracked file against the reviewed baseline: a secret-looking string that is not in
-        # secret-scan-baseline.json fails the job (docs/security-operations.md says what to do then).
+        # secret-scan-baseline.json fails the job (docs/backend/security-operations.md says what to do then).
         run: |
           python -m pip install detect-secrets==1.5.0
           git ls-files -z | xargs -0 detect-secrets-hook --baseline secret-scan-baseline.json
 
   desktop-only:
-    # The desktop app without any optional web/server package (docs/desktop-web-boundaries.md):
-    # only requirements-desktop.txt is installed, and every suite that needs no backend runs.
+    # The desktop app without any optional web/server package (docs/architecture/desktop-web-boundaries.md):
+    # only requirements/desktop.txt is installed, and every suite that needs no backend runs.
     runs-on: ubuntu-latest
 
     steps:
@@ -83,7 +85,7 @@ jobs:
           cache: "pip"
 
       - name: Install desktop dependencies only
-        run: python -m pip install -r requirements-desktop.txt pytest
+        run: python -m pip install -r requirements/desktop.txt pytest
 
       - name: Install virtual desktop
         # Openbox: a window manager for the one test that minimizes a real window (tests/ui/test_activity_window.py).
@@ -99,8 +101,8 @@ jobs:
         run: xvfb-run -a python -m pytest --ignore=tests/backend --ignore=tests/sync --ignore=tests/web --ignore=tests/direct
 
   direct-desktop:
-    # The desktop's optional direct PostgreSQL mode (docs/direct-postgres.md) with only its own
-    # packages (requirements-direct.txt): no FastAPI, Uvicorn, HTTPX or PyJWT, and no JWT secret.
+    # The desktop's optional direct PostgreSQL mode (docs/deployment/direct-postgres.md) with only its own
+    # packages (requirements/direct.txt): no FastAPI, Uvicorn, HTTPX or PyJWT, and no JWT secret.
     # A throwaway PostgreSQL service container (trust authentication, no secret involved).
     runs-on: ubuntu-latest
     services:
@@ -129,7 +131,7 @@ jobs:
           cache: "pip"
 
       - name: Install direct-mode dependencies only
-        run: python -m pip install -r requirements-direct.txt pytest
+        run: python -m pip install -r requirements/direct.txt pytest
 
       - name: Install virtual desktop
         run: sudo apt-get update && sudo apt-get install -y xvfb xauth python3-tk
@@ -145,7 +147,7 @@ jobs:
 
   postgres:
     # The backend and sync suites against a real, throwaway PostgreSQL
-    # (docs/backend.md). The service container uses trust authentication on the
+    # (docs/backend/backend.md). The service container uses trust authentication on the
     # runner's private network, so no secret is involved.
     runs-on: ubuntu-latest
     services:

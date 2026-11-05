@@ -1,0 +1,20 @@
+# Server (backend/) runtime dependencies only: no desktop UI. Install on the server with:
+#     python -m pip install -r requirements/backend.txt
+# The backend reuses the canonical pydantic models in app/planning and
+# app/execution, which need nothing beyond these packages.
+fastapi>=0.115,<1
+# Imported directly by backend error handling; FastAPI constrains compatibility.
+starlette
+uvicorn>=0.30,<1
+# The database packages shared with the direct desktop mode (SQLAlchemy, Alembic, psycopg, argon2-cffi).
+-r database.txt
+PyJWT>=2.15,<3
+# Two-step sign-in (backend/mfa.py): TOTP codes, and encryption of their secrets at rest.
+pyotp>=2.9,<3
+cryptography>=43
+pydantic>=2.10.0
+# Server-side preference resolution (backend/preferences.py): the YAML template
+# layer is read with PyYAML, and IANA time zones need tzdata where the host has
+# no system time zone database (Windows, minimal container images).
+PyYAML>=6.0,<7
+tzdata>=2024.1

@@ -3,7 +3,7 @@ backend/record_mapping.py
 
 The one field <-> column mapping of the record content that is stored
 relationally (backend/models.py): a task's tags, preferred dates,
-recurrence and recurrence identity (docs/recurrence.md), and a
+recurrence and recurrence identity (docs/features/recurrence.md), and a
 preference layer's overrides. The same
 functions write and read a live row (tasks, preferences) and a revision row
 (task_revisions, preference_revisions) -- they share their content columns

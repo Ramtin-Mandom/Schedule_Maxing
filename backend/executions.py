@@ -2,7 +2,7 @@
 backend/executions.py
 
 The execution aggregate on the server: a TaskExecution snapshot plus its
-ordered work sessions (docs/sync-contract.md section 3 -- sessions have no
+ordered work sessions (docs/architecture/sync-contract.md section 3 -- sessions have no
 identity of their own outside the aggregate).
 
 Writes are deliberately narrow so history cannot be corrupted:
@@ -142,7 +142,7 @@ class ActionIn(Strict, BaseVersion):
     #: When the action happened (e.g. recorded offline); defaults to the server time. Not in the future.
     at: AwareDatetime | None = None
     #: cancel only: why (default "user"). "rescheduled"/"superseded" are the system's cancellations of an attempt
-    #: whose placement stopped being the plan before it started (docs/execution-rescheduling.md).
+    #: whose placement stopped being the plan before it started (docs/features/execution-rescheduling.md).
     cancel_reason: CancelReason | None = None
 
 

@@ -4,7 +4,7 @@ The CustomTkinter desktop app of Schedule Maxing.
 Run from the project root with:
 
     python -m app.app                                        # local SQLite storage (default; works offline)
-    python -m app.app --storage postgres --env-file .env     # direct PostgreSQL storage (docs/direct-postgres.md)
+    python -m app.app --storage postgres --env-file .env     # direct PostgreSQL storage (docs/deployment/direct-postgres.md)
 
 Shell (Milestone 4, app/ui/shell.py): a left sidebar that starts collapsed
 and opens with its hamburger button (or Ctrl+B; Ctrl+1..9 jump to a page),
@@ -12,7 +12,7 @@ and one page at a time: Day, Week and Month Schedule, Project Schedule,
 Productivity, Settings, Account and About. The app
 opens on Day. Execute stays on Day and Productivity has its own page.
 Appearance (light/dark) and the interface size are saved beside the database
-(app/ui/ui_settings.py). docs/desktop-layout.md describes the layout.
+(app/ui/ui_settings.py). docs/features/desktop-layout.md describes the layout.
 
 Data flow (Milestone 2): every page is backed by the application's SQLite
 database. A widget callback calls a Tk-free presenter
@@ -26,7 +26,7 @@ fresh read of what was committed. There is no widget-owned task collection.
 - Tasks and fixed blocks are created, edited, and deleted by UUID; the task
   list is keyboard-operable (Enter edits, Delete removes, the Menu key or
   Shift+F10 opens its actions), so nothing depends on clicking the canvas.
-- Day (app/ui/day_page.py, docs/desktop-day.md) shows one date's timeline
+- Day (app/ui/day_page.py, docs/features/desktop-day.md) shows one date's timeline
   and makes its schedule through the shared workflow; Week and Month
   (app/ui/calendar_page.py) are real calendar periods in the planning
   timezone whose days open on Day.
@@ -842,7 +842,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="python -m app.app", description="The Schedule Maxing desktop app.")
     parser.add_argument("--storage", choices=settings.STORAGE_MODES, default=None,
                         help=f"local (default; the SQLite database, works offline) or postgres (direct PostgreSQL "
-                             f"storage, docs/direct-postgres.md). Default: {settings.STORAGE_ENV_VAR}, else local.")
+                             f"storage, docs/deployment/direct-postgres.md). Default: {settings.STORAGE_ENV_VAR}, else local.")
     parser.add_argument("--env-file", metavar="PATH", default=None,
                         help=f"with --storage postgres: read DATABASE_URL from this file (the environment still "
                              f"wins). Default: {settings.ENV_FILE_ENV_VAR}, else the environment only.")

@@ -1,4 +1,4 @@
-"""Recurrence expansion: series anchors, occurrence identity, exceptions and lineage (docs/recurrence.md).
+"""Recurrence expansion: series anchors, occurrence identity, exceptions and lineage (docs/features/recurrence.md).
 
 Expand only -- every column is nullable and nothing is back-filled, so a
 server of the previous version keeps working against the upgraded schema (it
@@ -93,7 +93,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # For tests and disposable databases only (docs/backend.md): series anchors, occurrence identity and
+    # For tests and disposable databases only (docs/backend/backend.md): series anchors, occurrence identity and
     # exception states are dropped with the columns (materialized occurrences remain as ordinary tasks).
     with op.batch_alter_table('task_revisions') as batch:
         for name, _ in reversed(_checks('task_revisions')):

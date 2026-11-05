@@ -2,7 +2,7 @@
 app/execution/instance_lock.py
 
 One application process per database file (Milestone 4 desktop/web
-boundary, docs/desktop-web-boundaries.md).
+boundary, docs/architecture/desktop-web-boundaries.md).
 
 SQLite itself keeps concurrent processes' transactions safe, but the
 desktop app and the local web service (python -m app.web) each also own a

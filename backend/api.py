@@ -192,7 +192,7 @@ class UserOut(BaseModel):
     version: int
     created_at: datetime
     updated_at: datetime
-    #: False: the address was never proved to be the account owner's (docs/email.md, "Existing accounts").
+    #: False: the address was never proved to be the account owner's (docs/backend/email.md, "Existing accounts").
     email_verified: bool = False
 
 

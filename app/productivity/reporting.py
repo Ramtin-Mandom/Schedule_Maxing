@@ -8,7 +8,7 @@ repository, data prep, segmenting, insight generation, and prediction
 together. Nothing here executes SQL directly (that stays inside
 app/execution/repository.py).
 
-Two views, deliberately separate (docs/analytics.md):
+Two views, deliberately separate (docs/features/analytics.md):
     - the terminal-outcome statistics (generate_report/build_dashboard,
       unchanged): executions filtered by created_at; completion among
       resolved executions = completed / (completed + skipped + cancelled);

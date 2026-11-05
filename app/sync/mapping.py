@@ -7,7 +7,7 @@ representation of the backend (backend/resources.py, backend/executions.py).
 Identity: planning records use their UUID on both sides. An execution's
 wire id is its id when that is a UUID, otherwise the durable mapping in
 execution_wire_ids, and the non-UUID local id travels as `legacy_id`
-(docs/sync-contract.md section 3) -- a pulled execution with a legacy_id is
+(docs/architecture/sync-contract.md section 3) -- a pulled execution with a legacy_id is
 stored under that id again, never reminted.
 
 Executions are an aggregate whose server copy changes only through
@@ -90,7 +90,7 @@ def _with_legacy_task_wire(payload: dict) -> dict:
                           for name, value in LEGACY_TASK_WIRE_FIELDS.items()}}
 
 
-#: Task fields a record from a server older than recurrence expansion (docs/recurrence.md) does not have.
+#: Task fields a record from a server older than recurrence expansion (docs/features/recurrence.md) does not have.
 _TASK_FIELDS_SINCE_RECURRENCE = ("series_id", "occurrence_slot", "occurrence_state", "series_version",
                                  "series_predecessor_id")
 #: An occurrence's bookkeeping: two devices' copies of one slot converge when everything else is equal.
@@ -103,7 +103,7 @@ _PLACEMENT_FIELDS = ("task_id", "planned_date", "timezone", "planned_start", "pl
                      "optimization_metadata", "task_category")
 #: Removal provenance: written by the server with a tombstone (never part of a create/update payload).
 _PLACEMENT_REMOVAL_FIELDS = ("removal_reason", "superseded_by_id")
-#: Origin and manual intent (docs/execution-rescheduling.md): sent only to a server with "manual_placements".
+#: Origin and manual intent (docs/features/execution-rescheduling.md): sent only to a server with "manual_placements".
 _PLACEMENT_INTENT_FIELDS = ("origin", "preserved")
 _GENERATION_FIELDS = (
     "planned_date", "timezone", "engine_mode", "range_start", "range_end", "range_scope", "allocation_id",
@@ -259,7 +259,7 @@ class LocalRecords:
     def reserved_slot_payload(self, record: LocalRecord) -> dict:
         """
         A locally tombstoned occurrence the server never had, as a create of a
-        tombstone: its slot stays reserved there too (docs/recurrence.md).
+        tombstone: its slot stays reserved there too (docs/features/recurrence.md).
         """
         return {**record.payload, **(self.task_removal(record) or {})}
 

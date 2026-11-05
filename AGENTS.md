@@ -73,17 +73,17 @@ At the end of the entire requested batch, briefly report:
 - meaningful remaining limitations
 Do not produce lengthy per-task reports unless requested.
 7. Project knowledge base (documentation navigation)
-Five root documents describe the repository. Load only the document -- and only the section -- the current task needs; never read all five by default.
-- CODEBASE_MAP.md: where a feature lives, what a change affects, which tests to run. Start with its "If You Need to Change X, Look Here" table.
-- ARCHITECTURE.md: system design, boundaries and major data flows.
-- CURRENT_STATE.md: what currently works, is partial or broken (a dated snapshot).
-- ROADMAP.md: planned and unfinished work, when planning development.
-- DECISIONS.md: established architectural decisions; read the relevant record before changing one.
+Five knowledge-base documents in docs/architecture/ and docs/development/ describe the repository (docs/README.md indexes all documentation). Load only the document -- and only the section -- the current task needs; never read all five by default.
+- docs/architecture/CODEBASE_MAP.md: where a feature lives, what a change affects, which tests to run. Start with its "If You Need to Change X, Look Here" table.
+- docs/architecture/ARCHITECTURE.md: system design, boundaries and major data flows.
+- docs/development/CURRENT_STATE.md: what currently works, is partial or broken (a dated snapshot).
+- docs/development/ROADMAP.md: planned and unfinished work, when planning development.
+- docs/architecture/DECISIONS.md: established architectural decisions; read the relevant record before changing one.
 Keep them accurate in the same change that makes them wrong:
-- module responsibilities, important paths or dependencies changed -> update CODEBASE_MAP.md
-- architectural boundaries or major data flows changed -> update ARCHITECTURE.md
-- a feature's state or a known limitation changed -> update CURRENT_STATE.md
-- a milestone or deliverable status changed -> update ROADMAP.md
-- a consequential decision made or superseded -> add or amend a record in DECISIONS.md
+- module responsibilities, important paths or dependencies changed -> update docs/architecture/CODEBASE_MAP.md
+- architectural boundaries or major data flows changed -> update docs/architecture/ARCHITECTURE.md
+- a feature's state or a known limitation changed -> update docs/development/CURRENT_STATE.md
+- a milestone or deliverable status changed -> update docs/development/ROADMAP.md
+- a consequential decision made or superseded -> add or amend a record in docs/architecture/DECISIONS.md
 Do not rewrite unchanged documentation just to refresh dates or commit hashes.
 The end-of-session procedure for these updates is .claude/skills/wrap/SKILL.md (/wrap in Claude Code); other agents can follow the same steps and its helper script.

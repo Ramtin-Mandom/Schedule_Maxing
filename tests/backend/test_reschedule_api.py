@@ -1,5 +1,5 @@
 """The server side of explicit rescheduling and placement provenance
-(docs/execution-rescheduling.md): the planning REST endpoint and its
+(docs/features/execution-rescheduling.md): the planning REST endpoint and its
 reconciliation path, the sync "reschedule" action (atomic, idempotent per
 op_id, with every changed record in the result), removal provenance on
 deletes and cascades, the category snapshot, and user isolation."""

@@ -16,7 +16,7 @@ repository-wide exploration, no unrelated refactors.
 | Models / data | `app/planning/models.py`, `app/execution/models.py` | Tasks have points; no priority or dependencies (ADR-048) |
 | Hard constraints | `app/optimizer.py` (engine checks), `app/planning/fixed_block_rules.py`, `app/planning/time.py` | A hard constraint decides *whether* a placement is allowed. Never turn one into a score penalty |
 | Reward / scoring | `app/reward.py`, `app/mode_objectives.py` | Decides *how good* a valid placement is |
-| Engines | `app/optimizer.py` (the minute-precise day engine), modes in `docs/scheduling-modes.md` | Normal, ADHD friendly, Early Finish, Night Owl, Catch-Up. Do not change baseline output unless the task says so |
+| Engines | `app/optimizer.py` (the minute-precise day engine), modes in `docs/features/scheduling-modes.md` | Normal, ADHD friendly, Early Finish, Night Owl, Catch-Up. Do not change baseline output unless the task says so |
 | Planning service | `app/planning/` (`service`, `application`, `allocation`, `recurrence`, `series`, `csv_import`/`csv_export`) | Allocation is points first (ADR-049); legacy CSV `priority`/`dependencies` columns are ignored |
 | Execution tracking | `app/execution/` (`service`, `lifecycle`, `db`, `backup`, `instance_lock`) | `db.py` owns local SQLite migrations; `backup.py` copies the file before any migration |
 | Productivity | `app/productivity/` | |
@@ -28,15 +28,15 @@ repository-wide exploration, no unrelated refactors.
 | Entry points | `app/desktop.py` (production), `app/app.py` (dev, `--storage postgres`), `app/main.py` (CLI), `app/web` | |
 | Packaging | `packaging/windows/` (`build_windows.ps1`, `ScheduleMaxing.spec`, `.iss`, `check_bundle.py`, `smoke_test.py`) | |
 
-Docs worth reading only when the task is in their area: `docs/scheduling-modes.md`, `docs/sync-protocol.md`,
-`docs/desktop-web-boundaries.md`, `docs/windows-distribution.md`, `docs/ci-cd.md`, `docs/testing.md`.
+Docs worth reading only when the task is in their area: `docs/features/scheduling-modes.md`, `docs/architecture/sync-protocol.md`,
+`docs/architecture/desktop-web-boundaries.md`, `docs/deployment/windows-distribution.md`, `docs/deployment/ci-cd.md`, `docs/development/testing.md`.
 
 ## Boundaries that tests enforce
 
-- **Desktop without the server.** The desktop must import and run with only `requirements-desktop.txt`: no FastAPI,
+- **Desktop without the server.** The desktop must import and run with only `requirements/desktop.txt`: no FastAPI,
   SQLAlchemy, psycopg, Alembic, PyJWT, argon2, httpx. A top-level import of one of those in `app/` (outside the
   direct/web modules) breaks the `desktop-only` CI job and the packaged build. Import optional packages lazily.
-- **Direct PostgreSQL mode** has its own minimal set (`requirements-direct.txt`): no HTTP or JWT packages.
+- **Direct PostgreSQL mode** has its own minimal set (`requirements/direct.txt`): no HTTP or JWT packages.
 - **Nothing private in the bundle:** no `.env`, server code, DB driver, key or log (`check_bundle.py`).
 - **Bundled resources are read-only:** read them through `runtime.resource_path("config", "task_preference.yaml")`;
   write only under `runtime.data_dir()` (`%LOCALAPPDATA%\ScheduleMaxing`).
@@ -48,6 +48,6 @@ Docs worth reading only when the task is in their area: `docs/scheduling-modes.m
 2. Changing a storage format, sync record or public model? Inspect only its direct call sites and keep old data
    readable (add a migration in `app/execution/db.py` or `backend/migrate.py` rather than rewriting data).
 3. New dependency? Add it to the right requirements file (`-desktop`, `-backend`, `-direct`, `-build`) and
-   `requirements.lock`; a desktop dependency must also be bundled by the PyInstaller spec.
+   `requirements/requirements.lock`; a desktop dependency must also be bundled by the PyInstaller spec.
 4. Tests: focused while working, `pytest -m dev` + `ruff check .` once at the end. For failures, see the
    `schedule-maxing-debugging` skill.

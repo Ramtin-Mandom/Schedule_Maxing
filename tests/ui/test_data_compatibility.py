@@ -63,13 +63,13 @@ def column_names(connection, table: str) -> list[str]:
 V7_PLACEMENT_COLUMNS = ("task_category", "removal_reason", "superseded_by_id")
 #: Schema v8 (task points and the execution snapshot of them) -- absent from a Milestone 3 database.
 V8_COLUMNS = ("points",)
-#: Schema v9 (recurrence expansion, docs/recurrence.md) -- task columns a Milestone 3 database lacks.
+#: Schema v9 (recurrence expansion, docs/features/recurrence.md) -- task columns a Milestone 3 database lacks.
 V9_TASK_COLUMNS = ("recurrence_start_date", "recurrence_timezone", "series_id", "occurrence_slot", "occurrence_state",
                    "series_version", "series_predecessor_id")
-#: Schema v10 (manual placements, docs/execution-rescheduling.md) -- placement and execution columns.
+#: Schema v10 (manual placements, docs/features/execution-rescheduling.md) -- placement and execution columns.
 V10_PLACEMENT_COLUMNS = {"origin": None, "preserved": 0}
 V10_EXECUTION_COLUMNS = ("cancel_reason",)
-#: Schema v12 (task types and placement planning snapshots, docs/productivity-redesign-plan.md).
+#: Schema v12 (task types and placement planning snapshots, docs/history/productivity-redesign-plan.md).
 V12_TASK_COLUMNS = ("task_type_id",)
 V12_PLACEMENT_COLUMNS = ("task_name", "task_tags", "task_points", "task_estimate_minutes", "task_type_id",
                          "task_type_label")

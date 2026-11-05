@@ -190,7 +190,7 @@ def test_a_missing_optional_package_is_named(tmp_path, blocked) -> None:
     )
     result = _run_blocked(tmp_path, blocked, code)
     assert result.returncode == 0, result.stderr[-2000:]
-    assert "UNAVAILABLE" in result.stdout and blocked in result.stdout.lower() and "requirements-direct.txt" in result.stdout
+    assert "UNAVAILABLE" in result.stdout and blocked in result.stdout.lower() and "requirements/direct.txt" in result.stdout
 
 
 def test_a_missing_dotenv_package_is_named(tmp_path) -> None:

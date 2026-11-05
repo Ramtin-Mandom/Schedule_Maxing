@@ -6,7 +6,7 @@
 #     -> dist/ScheduleMaxing/ScheduleMaxing.exe   (a folder: "onedir"; the installer hides it from the user)
 #
 # Normally run through packaging/windows/build_windows.ps1, from an environment made of
-# requirements-build.txt only (docs/windows-distribution.md). Every path below comes from this
+# requirements/build.txt only (docs/deployment/windows-distribution.md). Every path below comes from this
 # file's own location, never from the working directory.
 #
 # What goes in:   the desktop application (entry point app/desktop.py), its read-only resources

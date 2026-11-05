@@ -73,7 +73,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # For tests and disposable databases only (docs/backend.md): the details are dropped with their tables
+    # For tests and disposable databases only (docs/backend/backend.md): the details are dropped with their tables
     # and columns.
     op.drop_table('project_revision_milestones')
     op.drop_table('project_milestones')

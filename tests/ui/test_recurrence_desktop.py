@@ -1,4 +1,4 @@
-"""Recurring series in the desktop's reusable form and page controller (docs/recurrence.md), headless: the
+"""Recurring series in the desktop's reusable form and page controller (docs/features/recurrence.md), headless: the
 form's Repeats fields round-trip and validate (a series starts on the page's date in its time zone; it takes no
 deadline; an occurrence does not repeat itself); series rows appear (with "needs setup" for templates saved
 before series repeated, which the form then configures); Make Schedule materializes the occurrences first;

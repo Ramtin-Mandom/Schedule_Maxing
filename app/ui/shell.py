@@ -449,7 +449,7 @@ class AppShell(ctk.CTkFrame):
         """
         Hide `page` in a withdrawn window of its own (Tk's `wm manage`) instead of as a hidden child:
         moving or resizing the application window costs the Windows compositor work for every native child
-        window it holds, hidden ones included (docs/desktop-performance-round3.md, "Round 3b"). Shown again,
+        window it holds, hidden ones included (docs/history/desktop-performance-round3.md, "Round 3b"). Shown again,
         it becomes a child again (_attach). Widgets are always built while their page is attached.
         """
         if str(page) in self._detached:

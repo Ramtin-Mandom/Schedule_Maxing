@@ -1,4 +1,4 @@
-"""Five scheduling modes (docs/scheduling-modes.md).
+"""Five scheduling modes (docs/features/scheduling-modes.md).
 
 Widens the mode CHECK constraints so a preference layer may choose
 early_finish, night_owl or catch_up, and a schedule record may name them:

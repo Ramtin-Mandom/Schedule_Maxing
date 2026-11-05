@@ -1,7 +1,7 @@
 """
 backend/sync.py
 
-Batch synchronization (docs/sync-protocol.md).
+Batch synchronization (docs/architecture/sync-protocol.md).
 
 POST /sync/push {"operations": [...]} applies up to MAX_PUSH_OPERATIONS
 operations, in order, through the same Mutator as the REST endpoints -- the
@@ -39,7 +39,7 @@ failure (the failing one its own error, the others "group_failed").
 Operations outside groups are independent: a failure affects only that
 operation, earlier and later ones still apply.
 
-Placements (Milestone 5, docs/execution-rescheduling.md):
+Placements (Milestone 5, docs/features/execution-rescheduling.md):
     - action "reschedule" on a placement moves it atomically in one unit, with
       base_version = the moved placement's version and a payload naming the
       replacement (replacement_id, planned_date, timezone, planned_start,
@@ -57,7 +57,7 @@ Placements (Milestone 5, docs/execution-rescheduling.md):
       stored as a tombstone at once (Mutator.create_placement_history) --
       nothing live is created or changed.
 
-Recurring series (docs/recurrence.md):
+Recurring series (docs/features/recurrence.md):
     - occurrences travel as tasks with series_id/occurrence_slot (their id is
       derived from both). A create repeating an occurrence the server already
       has with the same content is answered "applied" with the stored record
@@ -79,7 +79,7 @@ holds those operations instead of letting their fields be dropped. An older
 client that omits the fields cannot erase them here (backend/resources.py
 keeps omitted fields on update). Likewise "manual_placements": placement
 origin and manual intent and execution cancel reasons
-(docs/execution-rescheduling.md) are sent only to a server that lists it;
+(docs/features/execution-rescheduling.md) are sent only to a server that lists it;
 an older client's placement update without them keeps the stored values.
 
 Pull is GET /changes (backend/api.py): the per-user, gap-free, commit-ordered
@@ -125,7 +125,7 @@ MAX_PUSH_OPERATIONS = 200
 #: The synchronization protocol this server speaks, and its optional features (GET /sync/capabilities).
 SYNC_PROTOCOL_VERSION = 2
 #: "task_types": task-type records synchronize, tasks carry task_type_id and placements their planning snapshot
-#: (docs/productivity-redesign-plan.md). A client holds its type records back from a server without it.
+#: (docs/history/productivity-redesign-plan.md). A client holds its type records back from a server without it.
 #: "project_details": a project carries its planned dates, completion and milestones.
 #: "task_kinds": a task carries its kind (flexible / todo) and preferred third of the day, a fixed block its points.
 #: "budget": budget balances, entries, occurrence edits, income ideas and wishlist items synchronize (app/budget);

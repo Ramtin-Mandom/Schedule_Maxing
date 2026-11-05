@@ -51,14 +51,14 @@ imports, those two columns ignored.
     removal_reason  placement tombstone: why it was removed (app.planning.models.PlacementRemovalReason), or empty
     superseded_by_id  placement tombstone: the placement that replaced it, or empty
     points          task: its points (0..1000); optional on import (missing: the default, 1)
-    --- appended with recurrence expansion (still format version 2; optional on import, docs/recurrence.md) ---
+    --- appended with recurrence expansion (still format version 2; optional on import, docs/features/recurrence.md) ---
     series_id       occurrence task: its series' UUID, or empty
     occurrence_slot occurrence task: its original local slot date (YYYY-MM-DD), or empty
     occurrence_state  occurrence task: modified / skipped / deleted / superseded, or empty
     series_version  occurrence task: the series version it was materialized from, or empty
     series_predecessor_id  series task: the segment it continues, or empty
     --- appended with manual placements (still format version 2; optional on import,
-        docs/execution-rescheduling.md "Manual placements") ---
+        docs/features/execution-rescheduling.md "Manual placements") ---
     origin          placement: generated / manual, or empty if unknown (an import then keeps the stored origin
                     and manual intent of an existing placement)
     preserved       placement: true when generation keeps it as the user's manual intent, else false (or empty)

@@ -1,4 +1,4 @@
-"""Schema v9 in app/execution/db.py (docs/recurrence.md): a populated v8 database -- a legacy recurring
+"""Schema v9 in app/execution/db.py (docs/features/recurrence.md): a populated v8 database -- a legacy recurring
 template, its placements on two dates (one date ambiguous: two live placements), a completed execution
 recorded against one of them, an ordinary task and synchronization state -- upgrades with every existing
 value intact, the new columns NULL (the template needs configuration; nothing is guessed), nothing marked

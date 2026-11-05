@@ -1,5 +1,5 @@
-"""Recurring series across devices (docs/recurrence.md, docs/sync-protocol.md): two devices expanding the same
-rule converge on one record per slot (pushed or pulled); a slot skipped before it ever synced stays reserved on
+"""Recurring series across devices (docs/features/recurrence.md, docs/architecture/sync-protocol.md): two devices
+expanding the same rule converge on one record per slot (pushed or pulled); a slot skipped before it ever synced stays reserved on
 the server and on a fresh device; concurrent rule edits conflict instead of minting another occurrence; a
 cross-date move reaches the other device as one unit; and an older server without recurrence support never
 receives recurrence data (it is held, not dropped)."""

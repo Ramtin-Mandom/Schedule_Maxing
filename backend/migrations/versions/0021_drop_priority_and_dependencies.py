@@ -53,7 +53,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # For tests and disposable databases only (docs/backend.md): every task and execution gets the legacy
+    # For tests and disposable databases only (docs/backend/backend.md): every task and execution gets the legacy
     # priority, and no dependency comes back.
     for table in reversed(PROJECT_TABLES):
         with op.batch_alter_table(table) as batch:

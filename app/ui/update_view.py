@@ -1,7 +1,7 @@
 """
 app/ui/update_view.py
 
-The update notice and the Settings "Updates" section (docs/windows-distribution.md, "Updates").
+The update notice and the Settings "Updates" section (docs/deployment/windows-distribution.md, "Updates").
 
 UpdateFlow connects the Tk-free UpdateController (app/ui/update_controller.py)
 to the window. Nothing here blocks the interface: checking, downloading and

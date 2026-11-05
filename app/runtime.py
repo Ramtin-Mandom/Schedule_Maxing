@@ -3,7 +3,7 @@ app/runtime.py
 
 Where this process runs from and where its files live -- the one module that
 knows the difference between a source checkout (`python -m app.desktop`) and
-the packaged Windows application (PyInstaller, docs/windows-distribution.md).
+the packaged Windows application (PyInstaller, docs/deployment/windows-distribution.md).
 
     bundled, read-only resources   resource_root() / resource_path(...)
         source:   the repository root

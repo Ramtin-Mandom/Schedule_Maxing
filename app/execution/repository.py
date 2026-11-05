@@ -179,7 +179,7 @@ class ExecutionRepository:
     def wire_id(self, execution_id: str) -> uuid.UUID:
         """
         The stable identity this execution has outside this device (see
-        docs/sync-contract.md): the id itself when it is a UUID, otherwise
+        docs/architecture/sync-contract.md): the id itself when it is a UUID, otherwise
         the mapping assigned once (by migration v4 or at creation). The
         local id is never rewritten.
         """
@@ -380,7 +380,7 @@ class ExecutionRepository:
         ExecutionService.reset_all_history) are expected to gate it behind
         a user confirmation; this method itself performs no confirmation.
         It is a local purge, not a synchronizable deletion (see
-        docs/sync-contract.md); deleting one execution is a tombstone. A
+        docs/architecture/sync-contract.md); deleting one execution is a tombstone. A
         scoped repository purges only its owner's executions.
         """
         owner_sql, owner_params = self._owner_sql()

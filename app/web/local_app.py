@@ -9,7 +9,7 @@ second copy of any scheduling or sync logic.
     create_local_app(LocalWebConfig(db_path=..., timezone=...))  # then serve it with uvicorn
     python -m app.web --data-dir DIR --timezone Europe/Berlin        # the launcher (app/web/__main__.py)
 
-What it serves (docs/web-api.md, "Local profile"):
+What it serves (docs/backend/web-api.md, "Local profile"):
 
     - the same planning API as the hosted server (backend/planning_api.py's
       router) and the same record endpoints (/projects, /tasks, /fixed-blocks,

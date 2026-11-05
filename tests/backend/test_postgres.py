@@ -1,6 +1,6 @@
 """PostgreSQL verification (optional): the real production database engine.
 
-Run with a *disposable* database (see docs/backend.md):
+Run with a *disposable* database (see docs/backend/backend.md):
 
     TEST_DATABASE_URL=postgresql://user@localhost:5432/schedule_maxing_test python -m pytest -m postgres
 
