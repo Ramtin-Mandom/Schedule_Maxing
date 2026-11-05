@@ -156,6 +156,21 @@ def test_replacing_a_built_page_method_through_the_wrapper_reaches_the_page(app)
     assert vars(projects)["marker"] == 1 and not hasattr(projects.page, "marker")
 
 
+def test_deleting_a_replaced_method_through_the_wrapper_restores_the_page_method(app) -> None:
+    # What monkeypatch's undo does since pytest 9.2: delete the instance attribute it set through the wrapper.
+    projects = app.pages["projects"]
+    projects.ensure()
+    original = projects.page._ask_date
+    projects._ask_date = lambda task: "asked"
+    del projects._ask_date
+    assert "_ask_date" not in vars(projects.page) and projects._ask_date == original
+    projects.marker = 1
+    del projects.marker  # a wrapper attribute is deleted from the wrapper
+    assert "marker" not in vars(projects)
+    with pytest.raises(AttributeError):
+        del projects._never_set
+
+
 def test_appearance_and_layout_reach_a_page_built_later(app) -> None:
     from app.ui.shell_state import LayoutMode
 
