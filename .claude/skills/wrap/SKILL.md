@@ -1,6 +1,6 @@
 ---
 name: wrap
-description: End-of-session documentation sync. Detects what changed since the last /wrap (commits, staged, unstaged and untracked files), verifies it against the code, updates only the affected parts of ARCHITECTURE.md, ROADMAP.md, CURRENT_STATE.md, DECISIONS.md and CODEBASE_MAP.md, advances a local checkpoint, and prints a handoff summary. Never edits application code, commits or pushes.
+description: End-of-session documentation sync. Detects what changed since the last /wrap (commits, staged, unstaged and untracked files), verifies it against the code, updates only the affected parts of docs/architecture/ARCHITECTURE.md, docs/development/ROADMAP.md, docs/development/CURRENT_STATE.md, docs/architecture/DECISIONS.md and docs/architecture/CODEBASE_MAP.md, advances a local checkpoint, and prints a handoff summary. Never edits application code, commits or pushes.
 argument-hint: "[optional focus or notes, e.g. 'only the sync work' or 'baseline']"
 disable-model-invocation: true
 allowed-tools:
@@ -25,7 +25,7 @@ User notes for this run (may be empty): $ARGUMENTS
 
 ## Rules (non-negotiable)
 
-- **Write only** to `ARCHITECTURE.md`, `ROADMAP.md`, `CURRENT_STATE.md`, `DECISIONS.md` and `CODEBASE_MAP.md`.
+- **Write only** to `docs/architecture/ARCHITECTURE.md`, `docs/development/ROADMAP.md`, `docs/development/CURRENT_STATE.md`, `docs/architecture/DECISIONS.md` and `docs/architecture/CODEBASE_MAP.md`.
   - Also `AGENTS.md`/`CLAUDE.md`, under the conditions in step 6.
   - Also `ci_check_notes.md`, only to add missing Pending entries (step 4).
   - Also the checkpoint, and only through the script.
@@ -74,7 +74,7 @@ Run `status`. Then act on its verdict:
   for contradictions (step 5), fix only real inconsistencies, then advance. Do not treat these changes as
   feature work.
 - **REVIEW NEEDED** — Continue with step 2.
-- **BASELINE NEEDED** — There is no checkpoint and no usable commit in `CURRENT_STATE.md`.
+- **BASELINE NEEDED** — There is no checkpoint and no usable commit in `docs/development/CURRENT_STATE.md`.
   - Read each document's header and its "Verified against commit" line.
   - Use the recent commits listed to find the subsystems that changed.
   - Check those subsystems against the documents.
@@ -114,7 +114,7 @@ files; search them by symbol.
 | Tests added or changed | CURRENT_STATE; CODEBASE_MAP if test locations changed |
 
 This is default guidance. Update any document a change genuinely affects, and nothing else. Use
-`CODEBASE_MAP.md` section D to find related files and tests. Follow dependencies only as far as the change
+`docs/architecture/CODEBASE_MAP.md` section D to find related files and tests. Follow dependencies only as far as the change
 reaches.
 
 ### 3. Verify before documenting
@@ -132,32 +132,32 @@ For each change that will affect a status claim:
 4. Compare the result against the ROADMAP acceptance criteria and any missing integration.
 5. When you cannot verify something, say why, and record it as *Unverified* rather than guessing.
 
-Use the status words already in `CURRENT_STATE.md`: Implemented, Partially Implemented, Not Implemented,
+Use the status words already in `docs/development/CURRENT_STATE.md`: Implemented, Partially Implemented, Not Implemented,
 Broken, Unverified. Keep four things distinct: implemented, tested, operational, and externally verified.
 
 ### 4. Edit the documents incrementally
 
 Use targeted edits that keep each document's structure and wording.
 
-- **ARCHITECTURE.md:** only for changed components, data flows, boundaries, or auth, sync, concurrency or
+- **docs/architecture/ARCHITECTURE.md:** only for changed components, data flows, boundaries, or auth, sync, concurrency or
   storage design. Keep Mermaid diagrams matching the code. Minor changes don't belong here.
-- **ROADMAP.md:**
+- **docs/development/ROADMAP.md:**
   - Tick a deliverable `[x]` only when it is verified complete against its acceptance criteria.
   - Keep partial work open, with a status note.
   - Add only *confirmed* new work, in Part 1 or Part 2. Your own ideas go in Part 3, marked as needing approval.
   - Never delete unfinished requirements because related code appeared.
   - Never invent product requirements.
-- **CURRENT_STATE.md:**
+- **docs/development/CURRENT_STATE.md:**
   - Update the affected rows: feature statuses, bugs, limitations, test results, infrastructure.
   - Change the "Generated" date and "Commit" rows only when you change this file's content.
   - Record tests run this session in section D, with real results.
-- **DECISIONS.md:**
+- **docs/architecture/DECISIONS.md:**
   - Append an ADR only for a real, consequential decision made in the changes.
   - Use the next free ID and the existing record template, and add it to the index.
   - Do not invent a rationale: use *Inferred* or "Rationale not recorded" where that is the truth.
   - For a superseded decision, mark the old record *Superseded by ADR-NNN* and link both ways. Never delete a
     record.
-- **CODEBASE_MAP.md:**
+- **docs/architecture/CODEBASE_MAP.md:**
   - Add new important modules to sections B and C.
   - Remove deleted ones and correct moved paths.
   - Update dependencies (section E), test locations, and the section D change guide.

@@ -441,21 +441,21 @@ def as_instants(value):
     return value
 
 
-#: Placement fields added by revision 0007 (docs/execution-rescheduling.md). A record written before it has
+#: Placement fields added by revision 0007 (docs/features/execution-rescheduling.md). A record written before it has
 #: them all null: an unknown category snapshot and removal provenance are never back-filled or guessed.
 PLACEMENT_FIELDS_SINCE_0007 = {"task_category": None, "removal_reason": None, "superseded_by_id": None}
 #: 0008: an existing task gets the default points; an existing execution's snapshot is unknown.
 TASK_FIELDS_SINCE_0008 = {"points": 1}
 EXECUTION_FIELDS_SINCE_0008 = {"points": None}
-#: 0009 (docs/recurrence.md): no existing task is an occurrence, a segment or a configured series.
+#: 0009 (docs/features/recurrence.md): no existing task is an occurrence, a segment or a configured series.
 TASK_FIELDS_SINCE_0009 = {"series_id": None, "occurrence_slot": None, "occurrence_state": None, "series_version": None,
                           "series_predecessor_id": None}
 RECURRENCE_FIELDS_SINCE_0009 = {"start_date": None, "timezone": None}
-#: 0010 (docs/execution-rescheduling.md): an existing placement's origin is unknown and it carries no manual intent
+#: 0010 (docs/features/execution-rescheduling.md): an existing placement's origin is unknown and it carries no manual intent
 #: (a proven move is recognized from its lineage when read, not rewritten); an execution's cancel reason is unknown.
 PLACEMENT_FIELDS_SINCE_0010 = {"origin": None, "preserved": False}
 EXECUTION_FIELDS_SINCE_0010 = {"cancel_reason": None}
-#: 0013 (docs/productivity-redesign-plan.md): a historical task record has no type and an existing placement no
+#: 0013 (docs/history/productivity-redesign-plan.md): a historical task record has no type and an existing placement no
 #: planning snapshot (unknown, never back-filled). A *live* task gets its deterministic type (live_task_at_head).
 TASK_FIELDS_SINCE_0013 = {"task_type_id": None}
 PLACEMENT_FIELDS_SINCE_0013 = {"task_name": None, "task_tags": None, "task_points": None,
@@ -778,7 +778,7 @@ def test_a_failing_0007_rolls_back_to_a_working_0006(blank_engine) -> None:
 
 
 def test_0009_adds_recurrence_identity_without_touching_any_record(predecessor) -> None:
-    """0008 -> 0009 (docs/recurrence.md): every row stays; templates get no guessed anchor (they need configuration)."""
+    """0008 -> 0009 (docs/features/recurrence.md): every row stays; templates get no guessed anchor (they need configuration)."""
     upgrade(predecessor, "0008")
     tables = ("tasks", "task_revisions", "placements", "executions", "change_log", "record_revisions",
               "sync_operations")
@@ -820,7 +820,7 @@ def test_0009_downgrades_a_disposable_database_and_upgrades_again(predecessor) -
 
 
 def test_0010_adds_origin_intent_and_cancel_reasons_without_touching_any_record(predecessor) -> None:
-    """0009 -> 0010 (docs/execution-rescheduling.md): every row stays; origins and reasons are unknown, not guessed."""
+    """0009 -> 0010 (docs/features/execution-rescheduling.md): every row stays; origins and reasons are unknown, not guessed."""
     upgrade(predecessor, "0009")
     tables = ("placements", "placement_revisions", "executions", "execution_revisions", "change_log",
               "record_revisions", "sync_operations")

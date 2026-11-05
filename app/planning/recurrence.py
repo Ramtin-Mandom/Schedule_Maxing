@@ -1,7 +1,7 @@
 """
 app/planning/recurrence.py
 
-The calendar of a recurring series (docs/recurrence.md): which local dates a
+The calendar of a recurring series (docs/features/recurrence.md): which local dates a
 configured RecurrenceSpec produces and each occurrence's deterministic
 identity. Pure and
 storage-free -- app/planning/series.py materializes, edits and deletes the

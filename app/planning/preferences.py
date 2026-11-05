@@ -66,7 +66,7 @@ from app.reward import RewardSettings, load_reward_settings
 
 class OptimizerMode(str, Enum):
     """
-    The scheduling mode a day's preferences request (docs/scheduling-modes.md).
+    The scheduling mode a day's preferences request (docs/features/scheduling-modes.md).
 
     A mode is an *objective* over one shared search: every mode runs the
     canonical greedy event-candidate engine (app/optimizer.py) under the same

@@ -31,7 +31,7 @@ class DirectModeUnavailableError(DirectPersistenceError):
     def __init__(self, missing: str) -> None:
         super().__init__(
             f"Direct PostgreSQL mode needs the optional package '{missing}'. Install it with: "
-            "python -m pip install -r requirements-direct.txt"
+            "python -m pip install -r requirements/direct.txt"
         )
 
 

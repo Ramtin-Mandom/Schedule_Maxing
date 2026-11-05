@@ -1,24 +1,27 @@
 name: Deploy backend
 
-# Deploys the server backend (backend/) to its Render web service (docs/ci-cd.md, "Backend deployment"):
+# Deploys the server backend (backend/) to its Render web service (docs/deployment/ci-cd.md, "Backend deployment"):
 #
 #   resolve -> deploy (start the Render deploy of one exact commit, wait until it is live,
 #   then check /health and /ready on the public address).
 #
-# Starts by itself for a push to main (a merged pull request), or by hand (Actions > Deploy backend >
-# Run workflow) for a chosen commit of main: an earlier commit is a code rollback.
+# Starts by itself for a release tag vX.Y.Z (the same tag that starts release.yml), or by hand
+# (Actions > Deploy backend > Run workflow) for a chosen commit of main: an earlier commit is a code
+# rollback. A merge to main does not start it.
 #
 # The tests are not run again here: the commit is deployed only if CI passed for the pull request it
 # came from (.github/scripts/pr_tests_passed.sh).
 #
 # Nothing runs unless the repository variable BACKEND_DEPLOY_ENABLED is "true". Only a commit that
-# is on main and whose pull request passed CI is ever deployed. The Render service must have Auto-Deploy
-# off, so this workflow is the only thing that deploys it. Migrations are run by Render itself
-# (pre-deploy or start command, docs/render-deployment.md); no database address is known here.
+# is on main and whose pull request passed CI is ever deployed. If Render's own Auto-Deploy is on, Render
+# also deploys every merge to main by itself; a request made while such a deploy is running is queued,
+# and the workflow then follows the queued deploy of its commit. Migrations are run by Render itself
+# (pre-deploy or start command, docs/deployment/render-deployment.md); no database address is known here.
 
 on:
   push:
-    branches: [main]
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
   workflow_dispatch:
     inputs:
       ref:
@@ -116,13 +119,25 @@ jobs:
             -H "Authorization: Bearer $RENDER_API_KEY" \
             -H "Accept: application/json" -H "Content-Type: application/json" \
             -d "{\"commitId\": \"$SHA\"}")"
-          id="$(jq -r '.id // empty' <<< "$response")"
+          id="$(jq -r '.id // empty' <<< "$response" 2> /dev/null || true)"
+          # While another deploy is running (Render's Auto-Deploy, for one) Render queues the request and
+          # answers without a deploy id: find the newest deploy of this commit in the service's list.
+          for attempt in 1 2 3 4 5 6; do
+            [ -n "$id" ] && break
+            sleep 10
+            id="$(curl -sS --fail --max-time 30 \
+              "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys?limit=20" \
+              -H "Authorization: Bearer $RENDER_API_KEY" -H "Accept: application/json" \
+              | jq -r --arg sha "$SHA" \
+                '[.[] | (.deploy // .) | select(.commit.id == $sha)] | sort_by(.createdAt) | last | .id // empty' \
+              || true)"
+          done
           if [ -z "$id" ]; then
-            echo "Render accepted the request without a deploy id; check the Render dashboard." >&2
+            echo "Render accepted the request but no deploy of $SHA is listed; check the Render dashboard." >&2
             exit 1
           fi
           echo "id=$id" >> "$GITHUB_OUTPUT"
-          echo "Started Render deploy $id of $SHA."
+          echo "Following Render deploy $id of $SHA."
 
       - name: Wait until it is live
         env:

@@ -1,5 +1,5 @@
 """
-Account security (docs/account-security.md): the password policy, recovery under abuse, password change,
+Account security (docs/backend/account-security.md): the password policy, recovery under abuse, password change,
 sessions and their revocation, refresh rotation, two-step sign-in and security notifications.
 """
 

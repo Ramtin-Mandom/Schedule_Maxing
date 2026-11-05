@@ -1,4 +1,4 @@
-"""Schema v10 in app/execution/db.py (docs/execution-rescheduling.md, "Manual placements"): a populated v9
+"""Schema v10 in app/execution/db.py (docs/features/execution-rescheduling.md, "Manual placements"): a populated v9
 database -- a generated placement, a placement moved by the user before origins existed (its predecessor is a
 'rescheduled' tombstone) and a cancelled execution -- upgrades with every existing value intact, origins and
 cancel reasons unknown (NULL), no stored intent and nothing marked for synchronization. The proven move is

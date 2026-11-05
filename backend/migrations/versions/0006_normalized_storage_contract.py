@@ -18,7 +18,7 @@ change_log.payload and sync_operations.result, and drop ix_placements_user_task
 
 Writers: after this revision the JSON columns no longer exist, so any
 application process of the previous version must be stopped before the
-upgrade starts and replaced by this version (see docs/backend.md).
+upgrade starts and replaced by this version (see docs/backend/backend.md).
 
 Revision ID: 0006
 Revises: 0005

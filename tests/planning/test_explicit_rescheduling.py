@@ -1,10 +1,10 @@
 """Explicit rescheduling and the regeneration audit on the local SQLite store
-(docs/execution-rescheduling.md): a move keeps the original plan and names
+(docs/features/execution-rescheduling.md): a move keeps the original plan and names
 its replacement; a regeneration leaves unchanged placements alone and gives
 every removed one its reason and successor; chains of moves stay traceable;
 started or finished history is never replaced through any generation entry
 point; an occurrence of a recurring series keeps its identity when it moves to
-another date (docs/recurrence.md); a failed move changes nothing (change
+another date (docs/features/recurrence.md); a failed move changes nothing (change
 capture included); owner scopes hold."""
 
 from __future__ import annotations

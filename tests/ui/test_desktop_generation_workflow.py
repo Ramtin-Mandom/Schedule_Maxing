@@ -253,7 +253,7 @@ def test_a_canonical_csv_is_previewed_without_writing_then_imported(services, tm
 
 def test_preference_views_and_engine_catalog_for_the_day_and_settings_screens(services) -> None:
     controller = services.planning_controller
-    assert set(controller.engine_descriptions()) == set(OptimizerMode)  # all five modes (docs/scheduling-modes.md)
+    assert set(controller.engine_descriptions()) == set(OptimizerMode)  # all five modes (docs/features/scheduling-modes.md)
     ok(controller.set_user_overrides(PreferenceOverrides(optimizer_mode=OptimizerMode.ADHD_FRIENDLY)))
     ok(controller.set_date_overrides(TUE, PreferenceOverrides(optimizer_mode=OptimizerMode.PRECISE_GREEDY)))
 

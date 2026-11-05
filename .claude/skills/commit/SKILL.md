@@ -196,7 +196,7 @@ The user runs commands with the Run button the app adds to each fenced `bash` bl
   - **Changes:** bullets grouped by area (e.g. UI, sync, storage, docs), each naming the user-visible or
     developer-visible effect, with the key files in backticks where helpful.
   - **Testing:** only what is known: tests the commits add or change (by file), and checks the commit messages
-    or documentation in the diff record as run, attributed as such ("recorded in CURRENT_STATE.md"). You run no
+    or documentation in the diff record as run, attributed as such ("recorded in docs/development/CURRENT_STATE.md"). You run no
     tests; never claim something passed that nothing in the repository records. End with an unchecked
     checklist for the user: `- [ ] CI passes on this pull request` and any manual check the change calls for.
   - **Notes for reviewers** (omit when empty): behaviour changes, trade-offs, migrations or settings, known

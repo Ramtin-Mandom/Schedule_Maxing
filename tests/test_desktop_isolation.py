@@ -1,4 +1,4 @@
-"""The desktop app runs without any optional web/server component (docs/desktop-web-boundaries.md).
+"""The desktop app runs without any optional web/server component (docs/architecture/desktop-web-boundaries.md).
 
 Each test starts a fresh interpreter (tests/isolation_probe.py) in which the web/server
 packages -- FastAPI, Starlette, uvicorn, SQLAlchemy, Alembic, psycopg, PyJWT, argon2,
@@ -80,7 +80,7 @@ def test_python_m_app_app_launches_offline_and_closes_cleanly(tmp_path: Path) ->
 
 
 # -----------------------------------------------------------------------------
-# Static layering: the import direction of docs/desktop-web-boundaries.md
+# Static layering: the import direction of docs/architecture/desktop-web-boundaries.md
 # -----------------------------------------------------------------------------
 
 SHARED_LAYERS = ("app/planning", "app/execution", "app/sync", "app/productivity", "config")

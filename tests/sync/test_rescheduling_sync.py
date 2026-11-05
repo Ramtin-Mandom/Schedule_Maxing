@@ -1,4 +1,4 @@
-"""Explicit rescheduling across devices (docs/execution-rescheduling.md): an
+"""Explicit rescheduling across devices (docs/features/execution-rescheduling.md): an
 offline move reaches the server as one atomic operation and the other
 device as one consistent set of records; a lost response is retried under
 the same op_id with nothing duplicated; competing moves, work started

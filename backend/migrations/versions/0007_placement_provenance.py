@@ -1,4 +1,4 @@
-"""Placement provenance and multi-record sync outcomes (Milestone 5, docs/execution-rescheduling.md).
+"""Placement provenance and multi-record sync outcomes (Milestone 5, docs/features/execution-rescheduling.md).
 
 Expand only -- every change is additive and nullable, so a server of the
 previous version keeps working against the upgraded schema (it neither
@@ -77,7 +77,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # For tests and disposable databases only (docs/backend.md): the provenance is dropped with the columns.
+    # For tests and disposable databases only (docs/backend/backend.md): the provenance is dropped with the columns.
     op.drop_table('sync_operation_related_records')
     with op.batch_alter_table('placement_revisions') as batch:
         batch.drop_constraint('ck_placement_revisions_superseded_by', type_='check')

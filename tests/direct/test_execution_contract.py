@@ -1,10 +1,10 @@
 """The execution lifecycle and the explicit reschedule contract
-(docs/execution-rescheduling.md), driven identically against every storage
+(docs/features/execution-rescheduling.md), driven identically against every storage
 path: the desktop's local SQLite services, the direct PostgreSQL services
 (app/persistence -- SQLite server schema by default, PostgreSQL with
 BACKEND_TESTS_ON_POSTGRES=1) and the hosted REST API over the same server
 database. One transition table, one set of invariants. The REST driver needs
-FastAPI; in the direct-only environment (requirements-direct.txt) it is
+FastAPI; in the direct-only environment (requirements/direct.txt) it is
 skipped and the other two still run."""
 
 from __future__ import annotations

@@ -16,14 +16,14 @@ Key properties:
       `project_scheduled_task_display` where display fields are needed.
     - Audit timestamps are aware UTC datetimes with a monotonically
       increasing integer `version`, not left implicit.
-    - Sync-ready metadata (Milestone 3, see docs/sync-contract.md): every
+    - Sync-ready metadata (Milestone 3, see docs/architecture/sync-contract.md): every
       persisted entity here (Project, Task, FixedBlock, ScheduledTask) has
       an owner (`user_id`; None = a local, ownerless record), created_at/
       updated_at, a local edit revision (`version`), and a soft-deletion
       tombstone (`deleted_at`; None = live). Normal reads only ever return
       live records.
 
-Recurrence (docs/recurrence.md): a Task whose `recurrence` is set is a
+Recurrence (docs/features/recurrence.md): a Task whose `recurrence` is set is a
 *series definition*. It is never itself scheduled. Its rule is configured
 when it names an explicit local start date and IANA time zone
 (RecurrenceSpec.start_date/timezone); a rule without them (every template
@@ -147,7 +147,7 @@ class RecurrenceSpec(BaseModel):
 
 class OccurrenceState(str, Enum):
     """
-    The exception state of one materialized occurrence (docs/recurrence.md).
+    The exception state of one materialized occurrence (docs/features/recurrence.md).
     None (the usual case) means the occurrence follows its series definition.
     """
 
@@ -352,7 +352,7 @@ def derived_task_type_id(root_task_id: uuid.UUID) -> uuid.UUID:
 
 class TaskType(BaseModel):
     """
-    A reusable, owner-scoped kind of work (docs/productivity-redesign-plan.md,
+    A reusable, owner-scoped kind of work (docs/history/productivity-redesign-plan.md,
     contract A): a stable identity with a display label. Independent of a
     task's category and tags, and distinct from an occurrence: every
     occurrence of a recurring series shares its series' type.
@@ -425,7 +425,7 @@ class Task(BaseModel):
     #: Set: this task is a series definition (never scheduled itself; see the module docstring).
     recurrence: RecurrenceSpec | None = None
 
-    # -- recurrence identity (docs/recurrence.md) ---------------------------------------
+    # -- recurrence identity (docs/features/recurrence.md) ---------------------------------------
     #: An occurrence: the series it was materialized from (immutable). None for every other task.
     series_id: uuid.UUID | None = None
     #: An occurrence: its original local slot date in the series' time zone (immutable, whatever date it is
@@ -616,7 +616,7 @@ def fixed_block_execution_id(block_id: uuid.UUID) -> uuid.UUID:
 class PlacementRemovalReason(str, Enum):
     """
     Why a placement stopped being part of the plan (set on its tombstone; see
-    docs/execution-rescheduling.md). A tombstone without a reason was removed
+    docs/features/execution-rescheduling.md). A tombstone without a reason was removed
     before reasons were recorded: its reason is unknown and never guessed.
     """
 
@@ -635,7 +635,7 @@ class PlacementRemovalReason(str, Enum):
 
 class PlacementOrigin(str, Enum):
     """
-    How a placement came to be (docs/execution-rescheduling.md, "Manual
+    How a placement came to be (docs/features/execution-rescheduling.md, "Manual
     placements"). None on a placement means unknown: it was saved before
     origins were recorded, and is never guessed from its coordinates.
     """
@@ -664,7 +664,7 @@ class ScheduledTask(BaseModel):
     None when it was not recorded (a placement saved before snapshots):
     unknown, never back-filled from the current task.
 
-    Removal provenance (docs/execution-rescheduling.md): a tombstone keeps
+    Removal provenance (docs/features/execution-rescheduling.md): a tombstone keeps
     its planned values and records why it was removed (removal_reason) and,
     when it was replaced for the same occurrence, by which placement
     (superseded_by_id). Both are None on a live placement.

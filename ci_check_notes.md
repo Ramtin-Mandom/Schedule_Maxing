@@ -36,6 +36,48 @@ work it out again from failure logs.
 
 ## Checked
 
+### 2026-11-04: pytest 9.2 monkeypatch undo, dnspython CVE, moved ci.yml baseline line (d4cd99e + uncommitted)
+- Changed: `DeferredPage.__delattr__` added (`app/ui/pages.py`); `ci.yml` pip-audit step ignores CVE-2026-114605
+  (two comment lines added above the baselined `ci.yml` value).
+- Outcome (runs 41915814648, 41930831564):
+  - CI environment (`test`, `desktop-only`): CI resolved pytest 9.2, whose undo deletes an instance attribute the
+    patch added; `DeferredPage.__setattr__` had forwarded it to the built page, so the delete on the wrapper failed
+    (`tests/ui/test_async_storage.py::test_a_workspace_change_...`). Fixed in d4cd99e; new
+    `tests/ui/test_deferred_pages.py::test_deleting_a_replaced_method_through_the_wrapper_restores_the_page_method`
+    fails without it (uncommitted).
+  - needs decision -> decided (`security-scan`): dnspython 2.8.0 CVE-2026-114605; fixed releases need Python 3.11.
+    Owner chose to ignore it; recorded in `docs/backend/security-operations.md` (revisit 2027-02-04).
+  - CI environment (`security-scan`, predicted from the first log): `ci.yml` baseline line 67 -> 69, fixed by hand
+    (uncommitted); hook exit 0 over every tracked file.
+
+### 2026-11-04: Backend deploy runs on release tags, follows a queued Render deploy (clean_up)
+- Changed: `deploy-backend.yml` trigger push to `main` -> push of a `vX.Y.Z` tag (same pattern as `release.yml`)
+  plus the manual run; "Start the Render deploy" now looks up the deploy of `$SHA` in `/deploys?limit=20` when
+  Render answers without an id.
+- Intent: the owner's request; every merge to `main` failed the workflow because Render's Auto-Deploy (staying on)
+  deploys merges itself.
+- Depends on it: `tests/test_deploy_workflow.py` (`test_only_a_release_tag_or_a_manual_run_starts_it`,
+  `test_a_queued_render_deploy_is_followed_not_failed`), `tests/test_workflows.py`.
+- CI risk: none for the test jobs; the Render lookup is only exercised by a real tag push.
+- Outcome: workflow tests pass locally (2026-11-04); the Render lookup stays an open item until a tag runs it.
+
+### 2026-11-04: Repository cleanup: docs/ and requirements/ reorganized, dead UI modules removed (clean_up)
+- Changed: `requirements-{desktop,database,backend,direct,build}.txt` and `requirements.lock` -> `requirements/{desktop,
+  database,backend,direct,build}.txt`, `requirements/requirements.lock`; old `requirements.txt` -> `requirements/dev.txt`
+  (root `requirements.txt` and `requirements-backend.txt` are now one-line includes). Knowledge-base docs moved from the
+  root into `docs/architecture/` and `docs/development/`; every other doc into a `docs/` topic folder (ADR-050); agent
+  prompt collections and `schedule_maxing_icons.zip` deleted. Removed the unreachable `app/ui/feedback_dialog.py`,
+  `app/ui/cohort_view.py`, `app/ui/duration_suggestion.py`.
+- Intent: the owner's cleanup request (ROADMAP R3 for the UI modules).
+- Depends on it: `ci.yml` (`desktop-only`, `direct-desktop` installs, `pip_audit --requirement`), `release.yml`,
+  `build_windows.ps1`, `tests/test_workflows.py` (`REPOSITORY_PATH` now also matches `requirements/...`),
+  `tests/test_packaging_config.py`, `tests/direct/test_direct_config.py` (message names `requirements/direct.txt`),
+  `secret-scan-baseline.json` (renamed doc entries).
+- CI risk: `security-scan` (baseline file names changed; detect-secrets was not run locally); Linux paths in pip `-r`.
+- Outcome: checked (2026-11-04). `direct-desktop` and `postgres` passed on CI with the new paths; `test` and
+  `desktop-only` failed only on the pytest 9.2 error above; the renamed baseline entries pass the hook locally
+  (CI's secret scan never reached them: pip-audit failed first).
+
 ### 2026-10-27: First CI run of engine-remake (run 40083410138, abd5da7)
 - Changed: nothing new; the run checked the dependency/priority removal (entry below) on CI.
 - Outcome: `postgres`, `direct-desktop` (Alembic 0021 on PostgreSQL 17) and `security-scan` passed. Two test
@@ -153,7 +195,15 @@ work it out again from failure logs.
   accepted test credential. Adding or removing lines above one makes `detect-secrets-hook` rewrite the baseline and
   exit 123, even though no new secret appeared. Fix the moved `line_number`s by hand. Never let the hook rewrite the
   baseline on Windows: it writes backslash paths and CRLF, which CI then rejects. To check, run the hook against a
-  copy of the baseline in the scratchpad (it refuses an unstaged baseline in place).
+  copy of the baseline in the scratchpad (it refuses an unstaged baseline in place). On Windows the hook reports
+  `\` paths, so every entry looks moved: convert the copy's file names to `os.sep` first, then exit 0 means CI agrees.
+- **A failed step hides the later ones.** In `security-scan`, pip-audit failing skips the secret scan; in `test`,
+  failing pytest skips `compileall` and Ruff. Run every later step locally before calling a job green.
+- **CI resolves the newest pytest and Ruff.** pytest 9.2 (2026-11) changed `monkeypatch.setattr` undo on instances:
+  it deletes the attribute when it was not in the instance `__dict__`, so a proxy object needs a `__delattr__`
+  matching its `__setattr__`. Ruff on CI can be newer than `.venv`: check with the resolved version.
+- **Some fixed releases need Python 3.11.** The project and CI are on 3.10 (dnspython 2.9+ needs 3.11); check
+  `requires_python` on PyPI before pinning a fix.
 - **A regenerated scheduling-mode baseline adds a "secret".** `benchmarks/results/prompt1_scheduling_mode_baseline.json`
   records the git revision it ran from; a new 40-hex revision is a new `Hex High Entropy String` for
   `security-scan`. Update that entry's `hashed_secret` (the SHA-1 of the revision string) and `line_number` by
@@ -167,12 +217,14 @@ work it out again from failure logs.
 
 ## Open CI items
 
-- `Deploy backend` failed on `main` for `9e37656` and `dfd53d6`: "Render accepted the request without a deploy
-  id; check the Render dashboard" (not a test failure). Waiting on the owner: check the Render service and
-  the `production` environment secrets.
+- `Deploy backend` failed on every merge to `main` (latest `be226f4`, run 40625746637): "Render accepted the
+  request without a deploy id". Cause: Render's Auto-Deploy (kept on by the owner) was already deploying the
+  merge, so the API request was queued. Addressed on `clean_up` (Pending entry); unverified until a release tag runs it.
 - `engine-remake`: the two test fixes of 2026-10-27 are uncommitted; the dialog fix is confirmed only by the
   next CI run (`test`, `desktop-only`).
 - Starlette warns "Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead". Waiting on
   the owner: adding `httpx2` means a new dependency in `requirements.txt` and `requirements.lock`.
+- pip-audit ignores CVE-2026-114605 (dnspython, needs Python 3.11 to fix): revisit by 2027-02-04 or on the move to
+  3.11, then drop the ignore. Keep `EMAIL_DNS_CHECK` off until then.
 - `gh` is installed and logged in, but a shell opened before the install has the old PATH. If `gh` is not found,
   call `C:\Program Files\GitHub CLI\gh.exe` directly.

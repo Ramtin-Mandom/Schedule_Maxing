@@ -1,4 +1,4 @@
-"""Recurring series on the server (docs/recurrence.md): occurrences are owner-scoped tasks whose id derives from
+"""Recurring series on the server (docs/features/recurrence.md): occurrences are owner-scoped tasks whose id derives from
 (series, slot) and whose identity never changes; an older client's update cannot erase recurrence fields it
 does not know; a repeated identical occurrence create converges while a different one conflicts; suppressed
 slots arrive as tombstones and stay reserved; the database enforces one record per (user, series, slot);

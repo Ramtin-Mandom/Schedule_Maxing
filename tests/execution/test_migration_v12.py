@@ -1,4 +1,4 @@
-"""Schema v12 in app/execution/db.py (docs/productivity-redesign-plan.md, contract A): a populated v11 database
+"""Schema v12 in app/execution/db.py (docs/history/productivity-redesign-plan.md, contract A): a populated v11 database
 -- two unrelated tasks with the same name, a recurring series, its continuing segment and an occurrence of each,
 a deleted task, a placement and synchronization state -- upgrades with every existing value intact. Every task
 gets its deterministic type (occurrences and continued segments share their series root's; same-name tasks stay

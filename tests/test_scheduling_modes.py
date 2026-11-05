@@ -1,4 +1,4 @@
-"""The five scheduling modes on the canonical day engine (app/mode_objectives.py, docs/scheduling-modes.md):
+"""The five scheduling modes on the canonical day engine (app/mode_objectives.py, docs/features/scheduling-modes.md):
 Normal and ADHD placements are unchanged; Early Finish and Night Owl keep the same work (same tasks and
 durations) and every hard constraint while finishing earlier / starting later with fewer gaps, never doing
 worse than the baseline on their objective, and agreeing with an exhaustive reference on small fixtures;

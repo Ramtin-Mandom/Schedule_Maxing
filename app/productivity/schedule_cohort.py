@@ -2,7 +2,7 @@
 app/productivity/schedule_cohort.py
 
 The schedule-cohort report (Milestone 5; the full contract is
-docs/analytics.md): planned-versus-actual measures over the *intended
+docs/features/analytics.md): planned-versus-actual measures over the *intended
 occurrences* of a reporting date range, including planned work that never
 got an execution. Pure: it reads only a ScheduleHistory
 (app/planning/history.py) and explicit parameters -- no database, no host

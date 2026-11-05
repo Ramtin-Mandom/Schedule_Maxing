@@ -1,5 +1,5 @@
 """The desktop app and the optional local web service side by side
-(docs/desktop-web-boundaries.md): they never share one database at the same time --
+(docs/architecture/desktop-web-boundaries.md): they never share one database at the same time --
 whichever starts second is refused, clearly, before touching anything -- and they apply
 the same workspace rule, so after a restart both work in the device's active account
 instead of one of them failing to create records in it."""

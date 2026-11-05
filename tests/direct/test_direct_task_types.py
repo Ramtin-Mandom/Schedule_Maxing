@@ -1,4 +1,4 @@
-"""Task types and placement planning snapshots on the server schema (docs/productivity-redesign-plan.md,
+"""Task types and placement planning snapshots on the server schema (docs/history/productivity-redesign-plan.md,
 contract A), through the direct services -- the same PlanningService as the desktop's SQLite path:
 
     - the live rows and the immutable record revisions round-trip the type and the whole snapshot;

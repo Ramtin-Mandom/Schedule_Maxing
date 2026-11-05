@@ -9,7 +9,7 @@
 ; settings, the trained model, logs and backups) in %LOCALAPPDATA%\ScheduleMaxing, and its saved sign-in
 ; in Windows Credential Manager. This installer writes only to its own install folder: installing,
 ; upgrading and uninstalling leave that data exactly as it was. Nothing below may reference the user's
-; application-data folders. Removing the data is a separate, manual step (docs/windows-distribution.md).
+; application-data folders. Removing the data is a separate, manual step (docs/deployment/windows-distribution.md).
 ;
 ; Silent use (also what the in-app updater runs):
 ;     ScheduleMaxing-Setup-1.2.3.exe /SILENT /NORESTART /RELAUNCH=1

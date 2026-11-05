@@ -4,7 +4,7 @@ optimizer.py
 The canonical day engine: generate_day_schedule places one day's flexible
 tasks around its fixed blocks under hard constraints (day window, fixed
 blocks, durations, deadlines, required work), scored by app.reward, for every
-scheduling mode (docs/scheduling-modes.md). evaluate_day_output reports a
+scheduling mode (docs/features/scheduling-modes.md). evaluate_day_output reports a
 generated day's final reward and mode metrics.
 
 Placement search does not score every feasible minute: see the "Shared

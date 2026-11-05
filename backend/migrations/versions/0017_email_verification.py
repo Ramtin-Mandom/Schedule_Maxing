@@ -4,7 +4,7 @@ Additive only. Existing accounts keep their data, credentials and sessions;
 `users.email_verified_at` stays NULL for them: they are *not* declared
 verified. Such an account is verified when its owner confirms an emailed
 link while signed in, or resets the password through an emailed link
-(docs/email.md, "Existing accounts").
+(docs/backend/email.md, "Existing accounts").
 """
 
 from alembic import op

@@ -61,7 +61,7 @@ whole-model blobs. Existing `executions`/`work_sessions` rows, ids, and
 timestamps are not rewritten.
 
 Version 4 (Milestone 3 / sync-ready local records, see
-docs/sync-contract.md and _migrate_v3_to_v4): every synchronizable table
+docs/architecture/sync-contract.md and _migrate_v3_to_v4): every synchronizable table
 (projects, tasks, fixed_blocks, scheduled_tasks, executions, and the new
 preference_overrides and schedule_generations) carries an owner (user_id,
 NULL for a local ownerless record), UTC audit timestamps, an integer local
@@ -73,7 +73,7 @@ link-insert trigger is recreated to reject links to tombstoned
 tasks/placements. Additive only: released v1-v3 migrations are unchanged.
 
 Version 5 (Milestone 3 / synchronization client, see app/sync and
-docs/sync-protocol.md): change capture triggers that record every local
+docs/architecture/sync-protocol.md): change capture triggers that record every local
 write to a synchronizable row in sync_dirty in the same transaction (and
 stamp records created while an account is active with its owner);
 sync_control (suppresses capture while pulled records are applied);
@@ -86,7 +86,7 @@ Version 6 (Milestone 4, the local web profile): sync_accounts.last_synced_at
 (the last successful synchronization, shown by the sync status) and
 local_settings (non-secret settings such as the backend URL). Additive.
 
-Version 7 (Milestone 5, docs/execution-rescheduling.md): placement
+Version 7 (Milestone 5, docs/features/execution-rescheduling.md): placement
 provenance -- scheduled_tasks.task_category (the task's category when the
 placement was saved), removal_reason and superseded_by_id (why a tombstone
 left the plan, and its replacement). A CHECK keeps both removal columns
@@ -98,7 +98,7 @@ deleted is still refused by the repository).
 
 Version 8: Task.points and each execution's snapshot of them.
 
-Version 9 (docs/recurrence.md): recurrence expansion -- a series' explicit
+Version 9 (docs/features/recurrence.md): recurrence expansion -- a series' explicit
 anchor date and time zone, each materialized occurrence's immutable
 (series_id, occurrence_slot) identity with a unique index (tombstones
 included, so suppressed slots stay reserved), its exception state and
@@ -107,7 +107,7 @@ provenance, and series lineage. See _V9_STATEMENTS.
 Version 10: placement origin and manual intent (preserved), and the reason
 of an execution's cancellation. See _V10_STATEMENTS.
 
-Version 12 (docs/productivity-redesign-plan.md, contract A): reusable task
+Version 12 (docs/history/productivity-redesign-plan.md, contract A): reusable task
 types (task_types, tasks.task_type_id) and the planning snapshot of a
 placement (its task's name, tags, points, estimate and type when it was
 saved). See _migrate_v11_to_v12: existing tasks get a deterministic type;
@@ -730,7 +730,7 @@ _V4_STATEMENTS: tuple[str, ...] = (
     "ON schedule_generations(COALESCE(user_id, ''), planned_date) WHERE deleted_at IS NULL",
     # A stable wire identity for executions whose local id is not a UUID
     # (legacy/fixture ids are preserved exactly, never reminted -- see
-    # docs/sync-contract.md). UUID-shaped ids are their own wire id.
+    # docs/architecture/sync-contract.md). UUID-shaped ids are their own wire id.
     """
     CREATE TABLE IF NOT EXISTS execution_wire_ids (
         execution_id TEXT PRIMARY KEY REFERENCES executions(id) ON DELETE CASCADE,
@@ -871,7 +871,7 @@ def _v5_capture_triggers() -> tuple[str, ...]:
 
 def _capture_triggers(tables: tuple[tuple[str, str], ...], *, work_sessions: bool) -> tuple[str, ...]:
     """
-    Change capture (app/sync, docs/sync-protocol.md). Every local write to a
+    Change capture (app/sync, docs/architecture/sync-protocol.md). Every local write to a
     synchronizable row -- whatever code path makes it: a service method, CSV
     import, rescheduling cleanup, a work session, a history reset -- bumps
     that record's local revision in sync_dirty inside the same transaction,
@@ -1033,7 +1033,7 @@ _V6_STATEMENTS: tuple[str, ...] = (
 #: The placement removal reasons (app.planning.models.PlacementRemovalReason), for the v7 CHECK.
 PLACEMENT_REMOVAL_REASONS = ("rescheduled", "regenerated", "deleted", "task_deleted", "reset")
 
-# Version 7 (Milestone 5, docs/execution-rescheduling.md): placement provenance.
+# Version 7 (Milestone 5, docs/features/execution-rescheduling.md): placement provenance.
 # task_category is the task's category when the placement was saved (a
 # historical snapshot); removal_reason/superseded_by_id say why a tombstone
 # stopped being part of the plan and which placement replaced it. Existing
@@ -1072,7 +1072,7 @@ _V8_STATEMENTS: tuple[str, ...] = (
 #: app.planning.models.OccurrenceState values, for the v9 CHECK.
 OCCURRENCE_STATES = ("modified", "skipped", "deleted", "superseded")
 
-# Version 9 (docs/recurrence.md): recurrence expansion. A series definition's
+# Version 9 (docs/features/recurrence.md): recurrence expansion. A series definition's
 # explicit anchor (recurrence_start_date, a local date) and IANA time zone;
 # a materialized occurrence's immutable identity (series_id -- the series
 # task -- and occurrence_slot, its original local slot date), its exception
@@ -1112,7 +1112,7 @@ _V9_STATEMENTS: tuple[str, ...] = (
 PLACEMENT_ORIGINS = ("generated", "manual")
 CANCEL_REASONS = ("user", "rescheduled", "superseded")
 
-# Version 10 (docs/execution-rescheduling.md, "Manual placements"): a
+# Version 10 (docs/features/execution-rescheduling.md, "Manual placements"): a
 # placement's origin (generated / manual; NULL = unknown, saved before
 # origins were recorded) and its manual intent (`preserved`: schedule
 # generation keeps it until the intent is released), and why a cancelled
@@ -1131,7 +1131,7 @@ _V10_STATEMENTS: tuple[str, ...] = (
 )
 
 
-# Schema v11 (scheduling modes, docs/scheduling-modes.md): preference layers may choose the three new modes.
+# Schema v11 (scheduling modes, docs/features/scheduling-modes.md): preference layers may choose the three new modes.
 # SQLite cannot change a column CHECK, so preference_overrides is rebuilt with its rows unchanged (ids, owners,
 # versions, documents), its live-scope index and its change-capture triggers. Copying into the new table
 # fires no trigger (the new table has none yet), and DROP TABLE fires none, so nothing is marked for
@@ -1166,7 +1166,7 @@ _V11_STATEMENTS: tuple[str, ...] = (
 )
 
 
-# Version 12 (docs/productivity-redesign-plan.md, contract A): task types and placement planning snapshots.
+# Version 12 (docs/history/productivity-redesign-plan.md, contract A): task types and placement planning snapshots.
 # task_types is one owner-scoped row per reusable type (tombstones kept). tasks.task_type_id is deliberately
 # not a foreign key: a pulled task may name a type this device has not received yet. The scheduled_tasks
 # columns extend task_category (v7): the task's name, tags (a JSON list; NULL = not recorded, '[]' = none),
@@ -1204,7 +1204,7 @@ _V12_STATEMENTS: tuple[str, ...] = (
 )
 
 
-# Version 13 (docs/productivity-redesign-plan.md, step 3): task types synchronize like every other record --
+# Version 13 (docs/history/productivity-redesign-plan.md, step 3): task types synchronize like every other record --
 # the standard capture and owner triggers (replacing v12's owner-only trigger), and every type that already
 # exists is marked for upload once (a server that already derived the same type answers with its own copy).
 _V13_STATEMENTS: tuple[str, ...] = (

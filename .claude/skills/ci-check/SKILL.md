@@ -47,11 +47,11 @@ its first collection error. Find the rest yourself.
   - the environment a test needs: a fixture (the `window_manager` fixture), or a system package or environment
     variable in the workflow's install step. Explain it in a workflow comment.
 - **Fix clear regressions in the same run.** The cause must be certain (reproduced, or proven with a small script),
-  the fix local, and the intended behaviour documented (a test, the notes, DECISIONS.md, a docstring). Add a test
+  the fix local, and the intended behaviour documented (a test, the notes, docs/architecture/DECISIONS.md, a docstring). Add a test
   that fails without the fix: check it by running the test with the fix stashed. If the fix would change behaviour
   someone may have meant, or would reach across subsystems, report it and ask instead.
 - **Intent decides, not the diff.** A test is stale only when the change was deliberate. Evidence: a Pending entry
-  in `ci_check_notes.md`, the user's request, commit messages, DECISIONS.md/CURRENT_STATE.md, and the shape of the
+  in `ci_check_notes.md`, the user's request, commit messages, docs/architecture/DECISIONS.md/CURRENT_STATE.md, and the shape of the
   diff (a rename touching every call site). When intent is still unclear, ask; don't guess.
 - Never add `continue-on-error`, change what a job runs, or point tests at a real database.
 - Don't commit, push or stage. Use the project Python: `.venv/Scripts/python` (3.10, same as CI).
@@ -118,7 +118,7 @@ Write a compact failure list: job → test id or check → one-line error. Never
 For each contract, `Grep` the **old** name, path or value (and the new one, to see what's already updated) in
 `tests/` (calls, imports, `monkeypatch.setattr("module.attr")` strings, `conftest.py` fixtures, expected strings
 and numbers, golden files), `.github/workflows/`, `.github/scripts/`, `packaging/` (including
-`packaging/windows/build_windows.ps1`), `pyproject.toml`, `requirements*.txt`, `requirements.lock`, and the docs a
+`packaging/windows/build_windows.ps1`), `pyproject.toml`, `requirements*.txt`, `requirements/requirements.lock`, and the docs a
 test reads.
 
 Then sweep the changed code **and** the tests that exercise it for the failure classes this repository has hit on
@@ -132,7 +132,7 @@ CI (more in the notes' environment facts):
 | `timeout=` below a few seconds, `time.sleep`, wall-clock deltas, `after(N)` racing another `after(M)` | Linux and xvfb timing differs | wait on a condition; reason about which callback runs first |
 | `\\` in paths, `\r\n`, `%LOCALAPPDATA%`, `os.startfile`, `winreg`, `msvcrt`, a file name that differs only in case | Windows-only | `Path`, `os.linesep`, `config/settings.py` data paths |
 | a font size or pixel width, DPI scaling | Linux Tk fonts and metrics differ | assert relationships, not pixels |
-| a new third-party import, or one that crosses the desktop/web boundary | `desktop-only` (no `fastapi`, `starlette`, `uvicorn`, `sqlalchemy`, `alembic`, `psycopg`, `jwt`, `argon2`, `httpx`) and `direct-desktop` (no `fastapi`, `starlette`, `uvicorn`, `httpx`, `jwt`) | top-level imports in `app/`; the package is in `requirements.txt`, `requirements.lock` and the matching `requirements-*.txt` |
+| a new third-party import, or one that crosses the desktop/web boundary | `desktop-only` (no `fastapi`, `starlette`, `uvicorn`, `sqlalchemy`, `alembic`, `psycopg`, `jwt`, `argon2`, `httpx`) and `direct-desktop` (no `fastapi`, `starlette`, `uvicorn`, `httpx`, `jwt`) | top-level imports in `app/`; the package is in `requirements.txt`, `requirements/requirements.lock` and the matching `requirements-*.txt` |
 | a `tests/...`, `packaging/...`, `.github/scripts/...` or `requirements*.txt` path a workflow names | moved or removed | the path exists |
 | any changed file that has entries in `secret-scan-baseline.json` | lines added or removed above a baselined value make `security-scan` exit 123 | fix the moved `line_number`s by hand; check with the hook against a scratchpad copy of the baseline (notes: "Moving a baselined line") |
 | a failure that looks like a library behaving differently | CI resolves `requirements*.txt` ranges to the newest release | `.venv/Scripts/python -m pip install --dry-run --ignore-installed -q -r <file> --report <scratchpad>/ci-resolve.json`, compared with `pip list`; cap the range or adapt the code |
@@ -179,7 +179,7 @@ Run in this order; rerun only what failed while debugging.
    - `postgres` / `direct-desktop` on PostgreSQL: only if backend, sync or direct code changed and the user agrees
      to start the disposable database (`docker compose -f docker-compose.postgres-test.yml up -d`; see the
      `schedule-maxing-debugging` skill);
-   - `security-scan`: new secret-looking strings, and changed pins in `requirements.lock`;
+   - `security-scan`: new secret-looking strings, and changed pins in `requirements/requirements.lock`;
    - anything that only Linux shows (a WM fixture, a Linux-only race): mark it "needs the next CI run".
 
 ## 7. Update the memory

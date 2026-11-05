@@ -12,7 +12,7 @@ Design:
       and every relationship is a *composite* foreign key that includes
       user_id -- a row can only ever reference rows of the same user, which
       the database itself enforces.
-    - Every synchronizable record has the metadata of docs/sync-contract.md:
+    - Every synchronizable record has the metadata of docs/architecture/sync-contract.md:
       created_at/updated_at (server clock, UTC), a server `version` (1 on
       create, +1 per accepted mutation; used by SQLAlchemy as the
       optimistic-concurrency column, so every UPDATE also compares it), and
@@ -67,7 +67,7 @@ from backend.database import JSONDocument, UTCDateTime
 EXECUTION_STATUSES = ("scheduled", "in_progress", "paused", "completed", "skipped", "cancelled")
 OPTIMIZER_MODES = ("precise_greedy", "adhd_friendly", "early_finish", "night_owl", "catch_up")
 RECURRENCE_FREQUENCIES = ("daily", "weekly", "monthly")
-#: app.planning.models.OccurrenceState (docs/recurrence.md).
+#: app.planning.models.OccurrenceState (docs/features/recurrence.md).
 OCCURRENCE_STATES = ("modified", "skipped", "deleted", "superseded")
 #: app.planning.models.TaskKind / PreferredTime.
 TASK_KINDS = ("flexible", "todo")
@@ -80,9 +80,9 @@ BUDGET_RECURRENCES = ("none", "daily", "weekly", "biweekly", "monthly")
 BUDGET_OVERRIDE_STATES = ("modified", "skipped")
 BUDGET_MAX_AMOUNT_MINOR = 10 ** 13 - 1
 SYNC_STATUSES = ("applied", "conflict", "rejected")
-#: app.planning.models.PlacementRemovalReason (docs/execution-rescheduling.md).
+#: app.planning.models.PlacementRemovalReason (docs/features/execution-rescheduling.md).
 PLACEMENT_REMOVAL_REASONS = ("rescheduled", "regenerated", "deleted", "task_deleted", "reset")
-#: app.planning.models.PlacementOrigin and app.execution.models.CancelReason (docs/execution-rescheduling.md).
+#: app.planning.models.PlacementOrigin and app.execution.models.CancelReason (docs/features/execution-rescheduling.md).
 PLACEMENT_ORIGINS = ("generated", "manual")
 CANCEL_REASONS = ("user", "rescheduled", "superseded")
 
@@ -478,7 +478,7 @@ class _ExecutionContent:
     """The TaskExecution snapshot: its audit copy of what was planned is history, not a live reference."""
 
     legacy_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    #: Historical identity (docs/sync-contract.md section 7): may name a task/placement never persisted.
+    #: Historical identity (docs/architecture/sync-contract.md section 7): may name a task/placement never persisted.
     task_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     scheduled_task_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     historical_reference: Mapped[bool] = mapped_column(Boolean, nullable=False)
@@ -681,7 +681,7 @@ class PlacementTaskTag(Base):
 
 class Execution(_Record, _ExecutionContent, Base):
     """
-    A TaskExecution. `id` is the wire id (docs/sync-contract.md section 3);
+    A TaskExecution. `id` is the wire id (docs/architecture/sync-contract.md section 3);
     `legacy_id` keeps a non-UUID local id exactly. task_id/scheduled_task_id
     are historical identity and never cascade: they may name records that
     were never persisted (historical_reference). linked_task_id /

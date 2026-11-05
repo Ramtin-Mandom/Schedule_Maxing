@@ -14,7 +14,8 @@ from tests.workflow_files import ROOT, grants, load, named_secrets_only, needs, 
 NAMES = [path.name for path in workflow_paths()]
 
 #: Files of this repository that a step may name: they must exist, or the step fails only on GitHub.
-REPOSITORY_PATH = re.compile(r"(?:(?:tests|packaging|\.github[/\\]scripts)[/\\][\w./\\-]+|requirements[\w-]*\.txt)")
+REPOSITORY_PATH = re.compile(
+    r"(?:(?:tests|packaging|requirements|\.github[/\\]scripts)[/\\][\w./\\-]+|requirements[\w-]*\.txt)")
 #: A release tag (v4, v4.1.2) or a full commit.
 PINNED = re.compile(r"@(v\d+(\.\d+)*|[0-9a-f]{40})$")
 

@@ -1,7 +1,7 @@
 """
 backend/protection.py
 
-Request-level protections installed by backend/app.py (docs/backend.md,
+Request-level protections installed by backend/app.py (docs/backend/backend.md,
 "Protections"). What the application guarantees, and what the operator's
 reverse proxy must still supply, are separated there.
 
@@ -85,7 +85,7 @@ def client_address(request: Request, trusted_proxies: Iterable[str], client_ip_h
             _warned_untrusted_forwarding = True
             LOG.warning("A request with X-Forwarded-For came from %s, which is not in TRUSTED_PROXIES; the header "
                         "is ignored and rate limits count that address. If it is your reverse proxy, list it "
-                        "(docs/render-deployment.md, \"Client addresses\").", peer or "an unknown peer")
+                        "(docs/deployment/render-deployment.md, \"Client addresses\").", peer or "an unknown peer")
         return str(peer_ip) if peer_ip is not None else peer
     if client_ip_header:
         # A header the trusted proxy sets itself: exactly one line holding one address, or it is not believed.

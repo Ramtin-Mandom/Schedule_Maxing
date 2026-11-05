@@ -105,7 +105,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # For tests and disposable databases only (docs/backend.md); fails while such a revision exists, like 0019's.
+    # For tests and disposable databases only (docs/backend/backend.md); fails while such a revision exists, like 0019's.
     with op.batch_alter_table('record_revisions') as batch:
         batch.drop_constraint('ck_record_revisions_entity_type', type_='check')
         batch.create_check_constraint('ck_record_revisions_entity_type', _in('entity_type', OLD_ENTITY_TYPES))

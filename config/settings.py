@@ -102,7 +102,7 @@ DEFAULT_TIMEZONE = resolve_default_timezone()
 # SCHEDULE_MAXING_DATA_DIR overrides keep pointing at the same file.
 EXECUTION_DB_FILENAME = "executions.db"
 
-# The synchronization backend (app/sync, docs/sync-protocol.md): the Schedule
+# The synchronization backend (app/sync, docs/architecture/sync-protocol.md): the Schedule
 # Maxing API. The app still works fully offline -- nothing is sent until an
 # account signs in on the Account page. SCHEDULE_MAXING_BACKEND_URL names
 # another server (e.g. http://127.0.0.1:8000 while developing), or "off" for
@@ -121,7 +121,7 @@ def resolve_backend_url(value: str | None) -> str | None:
 
 BACKEND_URL = resolve_backend_url(os.environ.get("SCHEDULE_MAXING_BACKEND_URL"))
 
-# Updates (app/update, docs/windows-distribution.md): the GitHub repository whose published
+# Updates (app/update, docs/deployment/windows-distribution.md): the GitHub repository whose published
 # Releases are the application's update channel. Only its latest stable release is ever
 # offered. SCHEDULE_MAXING_UPDATE_REPOSITORY names another one ("owner/name", e.g. a fork);
 # SCHEDULE_MAXING_UPDATE_CHECK=off turns update checks off entirely. Public addresses, not
@@ -149,7 +149,7 @@ GENERATION_PROCESS_ENV_VAR = "SCHEDULE_MAXING_GENERATION_PROCESS"
 GENERATION_PROCESS = (os.environ.get(GENERATION_PROCESS_ENV_VAR) or "").strip().lower() not in (
     "off", "none", "false", "0")
 
-# Where the desktop app stores its records (docs/direct-postgres.md):
+# Where the desktop app stores its records (docs/deployment/direct-postgres.md):
 #   "local"    -- the SQLite database above; works offline (the default)
 #   "postgres" -- direct PostgreSQL storage (app/persistence), for private development
 # Chosen with `python -m app.app --storage postgres [--env-file .env]` or

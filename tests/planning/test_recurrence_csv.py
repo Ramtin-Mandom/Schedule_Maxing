@@ -1,4 +1,4 @@
-"""The canonical planning CSV with recurring series (docs/recurrence.md): a complete export -- series anchors,
+"""The canonical planning CSV with recurring series (docs/features/recurrence.md): a complete export -- series anchors,
 occurrences with their identity and exception states, lineage and reserved-slot tombstones -- imports into an
 empty store exactly; re-importing it is a no-op; an older file without the recurrence columns still imports
 (its templates need configuration); and a file cannot rewrite an occurrence's identity."""

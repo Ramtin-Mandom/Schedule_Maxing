@@ -3,7 +3,7 @@ SQLite services, the direct PostgreSQL services (server schema; SQLite by
 default, PostgreSQL with BACKEND_TESTS_ON_POSTGRES=1) and the HTTP route
 GET /planning/analytics/schedule-cohort must agree, and each user sees only
 their own history. The HTTP comparison needs FastAPI and is skipped in the
-direct-only environment (requirements-direct.txt)."""
+direct-only environment (requirements/direct.txt)."""
 
 from __future__ import annotations
 

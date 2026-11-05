@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
-    Builds the Windows application and its installer (docs/windows-distribution.md).
+    Builds the Windows application and its installer (docs/deployment/windows-distribution.md).
 
 .DESCRIPTION
     From the repository root, in Windows PowerShell 5.1 or later:
 
         packaging\windows\build_windows.ps1
 
-    1. creates or reuses the build environment .venv-build from requirements-build.txt
+    1. creates or reuses the build environment .venv-build from requirements/build.txt
        (the desktop runtime and PyInstaller only -- no server package can be packaged);
     2. runs the development test suite (skip with -SkipTests);
     3. builds dist\ScheduleMaxing\ScheduleMaxing.exe with packaging\windows\ScheduleMaxing.spec;
@@ -177,7 +177,7 @@ try {
     }
     Assert-PythonVersion $BuildPython "The build environment" "Rebuild it with -Clean (and -Python <Python $PythonVersion> if needed)."
     Invoke-Checked $BuildPython @("-m", "pip", "install", "--disable-pip-version-check", "--quiet", "--upgrade", "pip")
-    Invoke-Checked $BuildPython @("-m", "pip", "install", "--disable-pip-version-check", "--quiet", "-r", "requirements-build.txt")
+    Invoke-Checked $BuildPython @("-m", "pip", "install", "--disable-pip-version-check", "--quiet", "-r", "requirements/build.txt")
     $bits = (& $BuildPython -c "import struct; print(struct.calcsize('P') * 8)").Trim()
     if ($bits -ne "64") { throw "The build needs a 64-bit Python (found $bits-bit)." }
 

@@ -1,13 +1,13 @@
 """
 app/productivity/tracker.py
 
-The productivity tracker (docs/productivity-redesign-plan.md, contracts B-E):
+The productivity tracker (docs/history/productivity-redesign-plan.md, contracts B-E):
 awards, averages, per-type breakdowns and time views, computed from
 authoritative records every time -- there is no stored counter or award
 ledger, so a reopened or deleted completion simply stops counting and a
 re-completion counts once.
 
-Three date bases, never mixed (docs/analytics.md):
+Three date bases, never mixed (docs/features/analytics.md):
 
     execution-created   the existing terminal-outcome statistics
                         (ProductivityService.generate_report/build_dashboard);

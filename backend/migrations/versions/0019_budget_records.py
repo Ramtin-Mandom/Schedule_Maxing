@@ -148,7 +148,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # For tests and disposable databases only (docs/backend.md): budget records are dropped with their tables.
+    # For tests and disposable databases only (docs/backend/backend.md): budget records are dropped with their tables.
     # It fails while a budget revision exists (the narrow entity-type constraint cannot hold), like 0013's.
     with op.batch_alter_table('record_revisions') as batch:
         batch.drop_constraint('ck_record_revisions_entity_type', type_='check')
