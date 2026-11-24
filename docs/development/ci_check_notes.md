@@ -34,7 +34,22 @@ work it out again from failure logs.
 
 ## Pending
 
+### 2026-11-23: Retired desktop code and consolidated documentation (main working tree)
+
+- Changed: Removed the old Execute, History and Data adapters, raw execution exporter, unexposed duration
+  predictor and obsolete scheduler helpers. Moved the six knowledge-base guides to `docs/` and benchmark
+  Markdown to `docs/history/benchmarks/`.
+- Intent: Preserve the mounted UI and shared service contracts while eliminating unused code and stale navigation.
+- Depends on it: Packaged self-test, offline probe, planning and execution tests, direct and sync integrations,
+  and `/wrap` and `/ci-check` documentation paths.
+- CI risk: Verify the source and packaged self-test paths and the credential baseline after documentation moves.
+
 ## Checked
+
+PR [#24](https://github.com/Ramtin-Mandom/Schedule_Maxing/pull/24) and PR [#25](https://github.com/Ramtin-Mandom/Schedule_Maxing/pull/25)
+both merged. Each final run passed `test`, `security-scan`, `desktop-only`, `direct-desktop` and `postgres`.
+[Engine-remake run](https://github.com/Ramtin-Mandom/Schedule_Maxing/actions/runs/40501046182),
+[cleanup run](https://github.com/Ramtin-Mandom/Schedule_Maxing/actions/runs/41959633756)
 
 ### 2026-11-04: pytest 9.2 monkeypatch undo, dnspython CVE, moved ci.yml baseline line (d4cd99e + uncommitted)
 - Changed: `DeferredPage.__delattr__` added (`app/ui/pages.py`); `ci.yml` pip-audit step ignores CVE-2026-114605
@@ -217,11 +232,8 @@ work it out again from failure logs.
 
 ## Open CI items
 
-- `Deploy backend` failed on every merge to `main` (latest `be226f4`, run 40625746637): "Render accepted the
-  request without a deploy id". Cause: Render's Auto-Deploy (kept on by the owner) was already deploying the
-  merge, so the API request was queued. Addressed on `clean_up` (Pending entry); unverified until a release tag runs it.
-- `engine-remake`: the two test fixes of 2026-10-27 are uncommitted; the dialog fix is confirmed only by the
-  next CI run (`test`, `desktop-only`).
+- The last recorded `Deploy backend` run (`be226f4`, run 40625746637) failed after Render queued the request.
+  PR #25 merged the queue handling and tag trigger. As of 2026-11-23 the tag-triggered path has no recorded run.
 - Starlette warns "Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead". Waiting on
   the owner: adding `httpx2` means a new dependency in `requirements.txt` and `requirements.lock`.
 - pip-audit ignores CVE-2026-114605 (dnspython, needs Python 3.11 to fix): revisit by 2027-02-04 or on the move to

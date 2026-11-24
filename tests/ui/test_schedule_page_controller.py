@@ -202,29 +202,35 @@ def test_delete_targets_the_selected_id_even_after_rows_are_reordered(stack: Sta
 # -----------------------------------------------------------------------------
 
 
-def test_make_schedule_saves_placements_and_shows_them_as_current(stack: Stack) -> None:
+def schedule(page: SchedulePageController):
+    return page.planning.schedule_range(page.anchor_date, page.end_date)
+
+
+def test_range_generation_saves_placements_and_shows_them_as_current(stack: Stack) -> None:
     ok(stack.page.submit_task_form(fixed("Lecture", day="1", start="480", end="600")))
     ok(stack.page.submit_task_form(flexible("Study", day="1", start="480", end="720")))
 
-    run = ok(stack.page.make_schedule())
+    run = ok(schedule(stack.page))
 
     [placement] = stack.service.placements_for_date(MON)
-    assert run.placed_count == 1 and run.unscheduled == []
+    assert sum(len(output.placements) for output in run.outputs.values()) == 1
+    assert not run.allocation.unallocated and not any(output.unscheduled for output in run.outputs.values())
+    snapshot = ok(stack.page.load())
     assert placement.planned_start >= datetime(2024, 6, 3, 10, tzinfo=timezone.utc)  # after the lecture
     # Every date of the page was generated -- the dates that placed nothing are current too.
-    assert run.snapshot.day_status == {day: DayResultStatus.GENERATED for day in run.snapshot.dates}
-    assert "current" in run.snapshot.status_text
-    assert [item.mode for item in run.snapshot.canvas_items if item.name == "Study"] == ["optimized"]
-    [executable] = run.snapshot.executables
+    assert snapshot.day_status == {day: DayResultStatus.GENERATED for day in snapshot.dates}
+    assert "current" in snapshot.status_text
+    assert [item.mode for item in snapshot.canvas_items if item.name == "Study"] == ["optimized"]
+    [executable] = snapshot.executables
     assert executable.placement == placement and executable.task.name == "Study"
 
 
 def test_rescheduling_reuses_placement_ids_timestamps_and_scores(stack: Stack) -> None:
     ok(stack.page.submit_task_form(flexible("Study", day="2")))
-    ok(stack.page.make_schedule())
+    ok(schedule(stack.page))
     before = stack.service.placements_for_date(date(2024, 6, 4))
 
-    ok(stack.page.make_schedule())
+    ok(schedule(stack.page))
 
     assert stack.service.placements_for_date(date(2024, 6, 4)) == before  # same ids, instants, scores, versions
 
@@ -234,12 +240,12 @@ def test_make_schedule_never_touches_dates_outside_the_page(db_path, tmp_path) -
     try:
         other_day = SchedulePageController(week.planning, number_of_days=1, anchor_date=date(2024, 6, 20), timezone="UTC")
         ok(other_day.submit_task_form(flexible("Later")))
-        ok(other_day.make_schedule())
+        ok(schedule(other_day))
         later = week.service.placements_for_date(date(2024, 6, 20))
         assert len(later) == 1
 
         ok(week.page.submit_task_form(flexible("This week", day="1")))
-        ok(week.page.make_schedule())
+        ok(schedule(week.page))
 
         assert week.service.placements_for_date(date(2024, 6, 20)) == later
         assert "Later" not in [row.name for row in ok(week.page.load()).rows]  # planned for another range
@@ -249,17 +255,17 @@ def test_make_schedule_never_touches_dates_outside_the_page(db_path, tmp_path) -
 
 def test_failed_save_keeps_the_previous_schedule_and_its_status(stack: Stack, monkeypatch) -> None:
     ok(stack.page.submit_task_form(flexible("Study", day="1")))
-    ok(stack.page.make_schedule())
+    ok(schedule(stack.page))
     before = stack.service.placements_for_date(MON)
 
     def fail(*args, **kwargs):
         raise RuntimeError("disk I/O error (injected)")
 
     monkeypatch.setattr(stack.service, "reschedule_range", fail)
-    result = stack.page.make_schedule()
+    result = schedule(stack.page)
 
     assert not result.ok
-    assert "injected" in result.error and "Nothing was saved" in result.error
+    assert "injected" in result.error
     monkeypatch.undo()
     assert stack.service.placements_for_date(MON) == before
     assert ok(stack.planning.day_state(MON)).status == DayResultStatus.GENERATED
@@ -267,7 +273,7 @@ def test_failed_save_keeps_the_previous_schedule_and_its_status(stack: Stack, mo
 
 def test_failed_generation_saves_nothing(stack: Stack) -> None:
     ok(stack.page.submit_task_form(flexible("Keep", day="2")))
-    ok(stack.page.make_schedule())
+    ok(schedule(stack.page))
     before = stack.service.placements_for_date(date(2024, 6, 4))
     # A required task that fits the day's aggregate capacity but no single free interval.
     ok(stack.planning.add_or_update_task(Task(
@@ -280,7 +286,7 @@ def test_failed_generation_saves_nothing(stack: Stack) -> None:
         planned_end=datetime(2024, 6, 3, 13, 20, tzinfo=timezone.utc),
     )))
 
-    result = stack.page.make_schedule()
+    result = schedule(stack.page)
 
     assert not result.ok and "Could not generate 2024-06-03" in result.error
     assert stack.service.placements_for_date(date(2024, 6, 4)) == before
@@ -289,7 +295,7 @@ def test_failed_generation_saves_nothing(stack: Stack) -> None:
 
 def test_editing_after_scheduling_marks_the_saved_schedule_stale(stack: Stack) -> None:
     ok(stack.page.submit_task_form(flexible("Study", day="1")))
-    ok(stack.page.make_schedule())
+    ok(schedule(stack.page))
 
     snapshot = ok(stack.page.submit_task_form(flexible("New", day="2")))
 
@@ -309,8 +315,9 @@ def test_reopen_restores_everything_and_the_unchanged_schedule_stays_current(db_
     ok(first.page.submit_task_form(fixed("Lecture", day="1", start="480", end="540")))
     ok(first.page.submit_task_form(flexible("Study", day="1")))
     ok(first.page.submit_task_form(flexible("Study", day="2")))
-    run = ok(first.page.make_schedule())
-    saved_rows, saved_executables = run.snapshot.rows, run.snapshot.executables
+    ok(schedule(first.page))
+    saved = ok(first.page.load())
+    saved_rows, saved_executables = saved.rows, saved.executables
     first.close()
 
     second = Stack(db_path, tmp_path)
@@ -327,9 +334,10 @@ def test_reopen_restores_everything_and_the_unchanged_schedule_stays_current(db_
         stale = ok(second.page.submit_task_form(flexible("New", day="3")))
         assert set(stale.day_status.values()) == {DayResultStatus.STALE}
 
-        rerun = ok(second.page.make_schedule())
-        assert set(rerun.snapshot.day_status.values()) == {DayResultStatus.GENERATED}
-        kept = [e.placement.id for e in rerun.snapshot.executables if e.task.name != "New"]
+        ok(schedule(second.page))
+        refreshed = ok(second.page.load())
+        assert set(refreshed.day_status.values()) == {DayResultStatus.GENERATED}
+        kept = [e.placement.id for e in refreshed.executables if e.task.name != "New"]
         assert kept == [e.placement.id for e in saved_executables]  # unchanged placements keep their ids
     finally:
         second.close()
@@ -343,7 +351,8 @@ def test_reopen_restores_everything_and_the_unchanged_schedule_stays_current(db_
 def _schedule_with_history(stack: Stack):
     ok(stack.page.submit_task_form(fixed("Lecture", day="1", start="480", end="540")))
     ok(stack.page.submit_task_form(flexible("Study", day="1")))
-    snapshot = ok(stack.page.make_schedule()).snapshot
+    ok(schedule(stack.page))
+    snapshot = ok(stack.page.load())
     [executable] = snapshot.executables
     execution = ok(stack.executions.get_or_create_canonical_execution(executable.task, executable.placement))
     ok(stack.executions.start(execution.id))
@@ -421,7 +430,7 @@ def write_csv(path: Path, body: str) -> str:
 
 def test_import_uses_the_page_anchor_and_marks_saved_schedules_stale(stack: Stack, tmp_path: Path) -> None:
     ok(stack.page.submit_task_form(flexible("Existing", day="1")))
-    ok(stack.page.make_schedule())
+    ok(schedule(stack.page))
 
     run = ok(stack.page.import_csv(write_csv(tmp_path / "a.csv", "2,Imported,study,t,false,540,720,60,5,\n"), ImportMode.APPEND))
 

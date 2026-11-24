@@ -1,10 +1,9 @@
 """Tests for app/planning/service.py: the selected-day service (exactly one
-Day Scheduler call), coarse-vs-detailed feasibility, and result staleness.
+Day Scheduler call), coarse-vs-detailed feasibility, and allocation identity.
 """
 
 from __future__ import annotations
 
-import uuid
 from datetime import date, timedelta
 
 from app.optimizer import MandatoryTaskSchedulingError
@@ -15,7 +14,6 @@ from app.planning.service import (
     DayResultStatus,
     generate_selected_day,
     initial_state,
-    mark_stale_if_outdated,
 )
 
 TZ = "UTC"
@@ -37,10 +35,6 @@ def registry_of(*tasks: Task) -> TaskRegistry:
 
 def prefs_for(dates: list[date]) -> dict[date, "DayPreferences"]:  # noqa: F821
     return {d: resolve_day_preferences(date=d, timezone=TZ) for d in dates}
-
-
-def allocate_week(tasks: TaskRegistry, task_ids: list[uuid.UUID], dates: list[date], prefs: dict):
-    return allocate_tasks(start_date=dates[0], end_date=dates[-1], tasks=tasks, task_ids=task_ids, preferences_by_date=prefs)
 
 
 # -----------------------------------------------------------------------------
@@ -178,40 +172,3 @@ def test_generated_state_tied_to_allocation_id():
 
     assert state.status == DayResultStatus.GENERATED
     assert state.generated_from_allocation_id == allocation.id
-
-
-def test_new_allocation_run_marks_prior_generated_state_stale():
-    dates = week_dates(date(2024, 6, 3))
-    task = make_task(duration=60)
-    tasks = registry_of(task)
-    prefs = prefs_for(dates)
-
-    first_allocation = allocate_week(tasks, [task.id], dates, prefs)
-    _result, state = generate_selected_day(first_allocation, first_allocation.assignments[task.id], tasks, prefs)
-
-    second_allocation = allocate_week(tasks, [task.id], dates, prefs)
-    assert second_allocation.id != first_allocation.id  # a fresh allocation run has a new identity
-
-    updated_state = mark_stale_if_outdated(state, second_allocation.id)
-
-    assert updated_state.status == DayResultStatus.STALE
-    assert updated_state.result is state.result  # prior result kept, only relabeled
-
-
-def test_state_stays_generated_when_allocation_id_matches():
-    dates = week_dates(date(2024, 6, 3))
-    task = make_task(duration=60)
-    tasks = registry_of(task)
-    prefs = prefs_for(dates)
-    allocation = allocate_week(tasks, [task.id], dates, prefs)
-    _result, state = generate_selected_day(allocation, allocation.assignments[task.id], tasks, prefs)
-
-    unchanged = mark_stale_if_outdated(state, allocation.id)
-
-    assert unchanged.status == DayResultStatus.GENERATED
-
-
-def test_allocated_only_state_is_never_marked_stale():
-    state = initial_state(date(2024, 6, 3))
-    result = mark_stale_if_outdated(state, uuid.uuid4())
-    assert result.status == DayResultStatus.ALLOCATED

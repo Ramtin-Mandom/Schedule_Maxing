@@ -8,7 +8,6 @@ import json
 from pathlib import Path
 
 from app.execution.repository import ExecutionRepository
-from app.productivity.buckets import TimeBucket
 from app.productivity.exporters import export_report_to_csv, export_report_to_json
 from app.productivity.filters import ObservationFilters
 from app.productivity.reporting import ProductivityService
@@ -58,20 +57,6 @@ def test_generate_report_last_7_days_can_be_empty(populated_repository) -> None:
     assert report.insights == []
 
 
-def test_predict_duration_via_service(populated_repository) -> None:
-    from app.productivity.buckets import TimeBucket
-
-    repository: ExecutionRepository = populated_repository[0]
-    service = ProductivityService(repository, thresholds=THRESHOLDS)
-
-    prediction = service.predict_duration(
-        category="study", time_bucket=TimeBucket.MORNING, original_estimate_minutes=60
-    )
-
-    assert prediction.sample_count > 0
-    assert prediction.predicted_duration_minutes > 0
-
-
 def test_export_report_to_json_round_trips(populated_repository, tmp_path: Path) -> None:
     repository: ExecutionRepository = populated_repository[0]
     service = ProductivityService(repository, thresholds=THRESHOLDS)
@@ -106,7 +91,7 @@ def test_export_report_to_csv_round_trips(populated_repository, tmp_path: Path) 
 
 
 # ----------------------------------------------------------------------
-# filters parameter (days + dimension filters) on generate_report/predict_duration
+# filters parameter (days + dimension filters) on generate_report
 # ----------------------------------------------------------------------
 
 
@@ -141,20 +126,6 @@ def test_generate_report_omitted_filters_matches_period_only_call(populated_repo
     with_none_filters = service.generate_report(period="all_time", filters=None)
 
     assert without_filters_arg.observation_count == with_none_filters.observation_count
-
-
-def test_predict_duration_respects_category_filter(populated_repository) -> None:
-    repository: ExecutionRepository = populated_repository[0]
-    service = ProductivityService(repository, thresholds=THRESHOLDS)
-
-    prediction = service.predict_duration(
-        category="exercise",
-        time_bucket=TimeBucket.EVENING,
-        original_estimate_minutes=30,
-        filters=ObservationFilters(category="exercise"),
-    )
-
-    assert prediction.sample_count > 0
 
 
 # ----------------------------------------------------------------------

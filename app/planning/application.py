@@ -75,9 +75,6 @@ can never be reused by a create.
       task_id/scheduled_task_id and snapshot (see app/execution/db.py,
       "Execution <-> planning links"). PlacementReplacement.
       removed_with_history_ids reports such placements so a UI can say so.
-    - Dependency cycles are stored as given by the single-record API:
-      detecting them is the PERT layer's job (allocation and the day
-      scheduler report them). The bulk importers reject them.
     - Fixed blocks are scheduling inputs with hard invariants (Milestone 4
       preflight, app/planning/fixed_block_rules.py): every write that stores
       a live block -- create, update, set_fixed_blocks_for_date and both

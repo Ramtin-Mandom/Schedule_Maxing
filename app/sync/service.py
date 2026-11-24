@@ -69,7 +69,7 @@ After a failure only the backoff decides the next attempt. The desktop
 reports its window's activity (set_activity): while it is not focused the
 interval is `background_interval`, while minimized the pending count is not
 looked at, and regaining focus syncs at once when the last success is older
-than `interval` (ADR in docs/architecture/DECISIONS.md). Sync now is never delayed.
+than `interval` (ADR in docs/DECISIONS.md). Sync now is never delayed.
 
 Account switches never interleave with a sync (Milestone 4, the local web
 profile): sign_in, sign_out, set_transport and association wait for a

@@ -39,15 +39,15 @@ from pathlib import Path
 
 SCHEMA = 1
 CHECKPOINT_NAME = "wrap-checkpoint.json"
-KB_DOCS = ("docs/architecture/ARCHITECTURE.md", "docs/development/ROADMAP.md", "docs/development/CURRENT_STATE.md",
-           "docs/architecture/DECISIONS.md", "docs/architecture/CODEBASE_MAP.md")
+KB_DOCS = ("docs/ARCHITECTURE.md", "docs/FEATURE_MAP.md", "docs/DECISIONS.md",
+           "docs/CURRENT_STATE.md", "docs/ROADMAP.md", "docs/Workflow.md")
 AGENT_DOCS = ("AGENTS.md", "CLAUDE.md")
 DELETED = "deleted"
 LIST_LIMIT = 60
 
 # (category, path prefixes or exact paths) -- first match wins. Exact paths have no trailing slash.
 RULES = (
-    ("knowledge-base", (*KB_DOCS, "ci_check_notes.md")),
+    ("knowledge-base", (*KB_DOCS, "docs/development/ci_check_notes.md")),
     ("agent-instructions", AGENT_DOCS),
     ("agent-tooling", (".claude/",)),
     ("schema", ("backend/migrations/", "backend/models.py", "app/execution/db.py")),
@@ -175,8 +175,8 @@ def fingerprints(root: Path, paths: list[str]) -> dict[str, str]:
 
 
 def documented_commit_in_current_state(root: Path) -> str | None:
-    """The commit docs/development/CURRENT_STATE.md says it was verified against (a fallback baseline)."""
-    path = root / "docs/development/CURRENT_STATE.md"
+    """The commit docs/CURRENT_STATE.md says it was verified against (a fallback baseline)."""
+    path = root / "docs/CURRENT_STATE.md"
     if not path.is_file():
         return None
     match = re.search(r"^\|\s*Commit\s*\|\s*`([0-9a-f]{7,40})`", path.read_text(encoding="utf-8", errors="replace"),
@@ -246,7 +246,7 @@ def build_status(root: Path) -> dict:
     if base is None and head:
         documented = documented_commit_in_current_state(root)
         if documented and is_commit(root, documented) and is_ancestor(root, documented, head):
-            base, base_kind = git(root, "rev-parse", documented).strip(), "commit recorded in docs/development/CURRENT_STATE.md"
+            base, base_kind = git(root, "rev-parse", documented).strip(), "commit recorded in docs/CURRENT_STATE.md"
         else:
             notes.append("No usable baseline: inspect the subsystems named by the recent commits below and the "
                          "working tree, rather than assuming the documents are current.")
@@ -438,10 +438,12 @@ def check_doc_paths(root: Path, docs: tuple[str, ...] = KB_DOCS) -> dict[str, li
         for match in PATH_TOKEN.finditer(path.read_text(encoding="utf-8", errors="replace")):
             raw = match.group(1) or match.group(2)
             candidate = raw.split(":")[0].split("#")[0].rstrip(",.;)").rstrip("/")
-            if any(mark in candidate for mark in ("<", "NN", "vN", "{")) or candidate.startswith("http") \
+            if any(mark in candidate for mark in ("<", "NN", "vN", "{")) or raw.startswith(("http", "mailto:")) \
                     or candidate in GENERATED_FILES:
                 continue
-            if candidate.startswith(CHECKED_ROOTS):
+            if match.group(2):
+                exists = (path.parent / candidate).exists()
+            elif candidate.startswith(CHECKED_ROOTS):
                 exists = bool(list(root.glob(candidate))) if "*" in candidate else (root / candidate).exists()
             elif "/" not in candidate and re.fullmatch(r"[\w.*-]+\.(md|txt|toml|json|yml|yaml|lock|py)", candidate):
                 # A bare file name (often package-relative in a table cell): it must exist somewhere.
@@ -464,7 +466,7 @@ def main(argv: list[str] | None = None) -> int:
                                 help="changed paths that were NOT documented and must be reviewed next time")
     advance_parser.add_argument("--note", default=None)
     sub.add_parser("show", help="print the raw checkpoint")
-    sub.add_parser("check-paths", help="list repository paths named in the five documents that do not exist")
+    sub.add_parser("check-paths", help="list repository paths named in the six guides that do not exist")
     args = parser.parse_args(argv)
     try:
         root = repo_root()

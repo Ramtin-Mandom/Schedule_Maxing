@@ -544,7 +544,7 @@ class DayScheduleController(SchedulePageController):
         mode = GenerationMode.INCREMENTAL if state.status == Freshness.STALE and state.placements else GenerationMode.FULL
         return self._run(day, mode)
 
-    def make_schedule(self) -> ControllerResult[DayRun]:  # type: ignore[override] - the Day page's own result
+    def make_schedule(self) -> ControllerResult[DayRun]:
         return self.make_schedule_for(self._anchor)
 
     def regenerate_for(self, day: date_) -> ControllerResult[DayRun]:

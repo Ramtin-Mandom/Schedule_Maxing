@@ -1,6 +1,6 @@
 CLAUDE.md
 Project Context
-This is a scheduling/productivity application containing domain models, constraints, dependency logic, reward/scoring, multiple scheduling engines, persistence/sync, analytics, and a CustomTkinter desktop UI.
+Schedule Maxing is an offline-first CustomTkinter desktop planner with a shared day engine, task outcomes, productivity reports, budgeting, and optional account sync.
 Implement only the active request. Preserve working behavior and existing architecture unless the task requires a change.
 Efficient Working Method
 Queued tasks
@@ -62,21 +62,20 @@ After the whole batch is complete, give one concise summary containing:
 - important remaining limitations
 Avoid verbose per-task summaries unless requested.
 Project Knowledge Base (documentation navigation)
-Six knowledge-base documents in docs/architecture/ and docs/development/ describe the repository (docs/README.md indexes all documentation). Load only the document -- and only the section -- the current task needs; never read all six by default.
-- docs/architecture/CODEBASE_MAP.md: where a feature lives, what a change affects, which tests to run. Start with its "If You Need to Change X, Look Here" table.
-- docs/architecture/ARCHITECTURE.md: system design, boundaries, module dependencies, file reference and feature-to-file map.
-- docs/architecture/WORKFLOW.md: run-time behaviour -- the Make Schedule call chain, engine internals, rules/constraints, decision order and error handling.
-- docs/development/CURRENT_STATE.md: what currently works, is partial or broken (a dated snapshot).
-- docs/development/ROADMAP.md: planned and unfinished work, when planning development.
-- docs/architecture/DECISIONS.md: established architectural decisions; read the relevant record before changing one.
-Keep them accurate in the same change that makes them wrong:
-- module responsibilities, important paths or dependencies changed -> update docs/architecture/CODEBASE_MAP.md
-- architectural boundaries or major data flows changed -> update docs/architecture/ARCHITECTURE.md
-- execution flow, engine behaviour or an enforced rule/constraint changed -> update docs/architecture/WORKFLOW.md
-- a feature's state or a known limitation changed -> update docs/development/CURRENT_STATE.md
-- a milestone or deliverable status changed -> update docs/development/ROADMAP.md
-- a consequential decision made or superseded -> add or amend a record in docs/architecture/DECISIONS.md
-Do not rewrite unchanged documentation just to refresh dates or commit hashes.
-At the end of a session the user can run /wrap (.claude/skills/wrap/SKILL.md), which detects changes since the last wrap and applies these updates incrementally.
+
+Before implementing new work, open the [documentation index](docs/README.md) and inspect the relevant sections of all six guides.
+
+- Components, boundaries and major data flows. [Architecture](docs/ARCHITECTURE.md)
+- Feature-to-code navigation, call sites and focused tests. Start with the change table. [Feature map](docs/FEATURE_MAP.md)
+- Important design choices, reasoning and compatibility constraints. [Decisions](docs/DECISIONS.md)
+- Verified capabilities, gaps and known issues. [Current state](docs/CURRENT_STATE.md)
+- Open priorities, dependencies and completed milestones. [Roadmap](docs/ROADMAP.md)
+- Inputs, processing, persisted results and outputs for product workflows. [Workflow](docs/Workflow.md)
+
+Before closing the task, compare all six guides with the final diff and verification results. Update affected sections and linked guides in the same change. Record capabilities and checks in Current State, priorities and milestones in Roadmap, and design choices in Decisions. Update Workflow for changes to inputs, execution, rules or outputs. Update Architecture and Feature Map for changes to boundaries, entry points, paths or tests. Keep historical records and avoid date-only edits.
+
+The `/wrap` procedure supports this review. [.claude/skills/wrap/SKILL.md](.claude/skills/wrap/SKILL.md)
+
 CI check notes
-ci_check_notes.md (repository root) is what /ci-check (.claude/skills/ci-check/SKILL.md) reads first, so it can fix CI in one pass. After every major structural change, add an entry under its "Pending" heading in the same change, using the file's template. Its "What counts as a structural change" list defines major: renamed/moved/removed or re-signatured public code, changed defaults/settings/storage fields/UI text that tests look up, moved paths, new background threads/processes/timers, new real-window behaviour, dependency or workflow changes. Do not read it for unrelated tasks.
+
+Record major structural changes under Pending in the same change using the notes' template. `/ci-check` uses those entries when reviewing workflow results. [CI check notes](docs/development/ci_check_notes.md)

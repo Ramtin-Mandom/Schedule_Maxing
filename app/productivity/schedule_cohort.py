@@ -425,44 +425,6 @@ def read_schedule_cohort_report(
     )
 
 
-def read_schedule_history_and_report(
-    source: ScheduleHistorySource,
-    *,
-    start_date: date,
-    end_date: date,
-    timezone_name: str,
-    as_of: datetime,
-    now: datetime,
-    thresholds: ProductivityThresholds = ProductivityThresholds(),
-) -> tuple[ScheduleHistory, ScheduleCohortReport]:
-    """read_schedule_cohort_report, also returning the history it was built from (history browsing)."""
-    if as_of.tzinfo is None or now.tzinfo is None:
-        raise ValueError("as_of and now must be aware instants")
-    if as_of > now:
-        raise ValueError("as_of cannot be later than the current time.")
-    window = report_window(start_date, end_date, timezone_name)
-    history = source.schedule_history(window.start_utc, window.end_utc)
-    return history, build_schedule_cohort_report(history, window, as_of=as_of, thresholds=thresholds)
-
-
-def lineage(history: ScheduleHistory, placement_id: uuid.UUID) -> list[ScheduledTask]:
-    """The placement and everything it superseded, oldest plan first (following superseded_by_id back)."""
-    placements = history.placements
-    predecessors: dict[uuid.UUID, list[ScheduledTask]] = defaultdict(list)
-    for placement in placements.values():
-        if placement.superseded_by_id is not None:
-            predecessors[placement.superseded_by_id].append(placement)
-    chain, frontier, seen = [], [placement_id], set()
-    while frontier:
-        current = frontier.pop()
-        if current in seen or current not in placements:
-            continue
-        seen.add(current)
-        chain.append(placements[current])
-        frontier.extend(p.id for p in predecessors[current])
-    return sorted(chain, key=lambda p: (p.deleted_at is None, p.deleted_at or p.created_at, str(p.id)))
-
-
 def build_schedule_cohort_report(
     history: ScheduleHistory,
     window: ReportWindow,

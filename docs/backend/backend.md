@@ -450,6 +450,21 @@ transaction**: if any step fails, the database stays at the revision it had.
 On SQLite (tests) the transaction is explicit and foreign keys are checked
 before the commit.
 
+### Priority and dependency removal (0021)
+
+The server from `v1.3.0` expects revision `0020`. Revision `0021` drops dependency tables
+and priority columns from live records and snapshots. The old server's queries require those
+columns, so take it out of traffic before upgrading a `0020` database. Verify a recoverable
+backup, then start the new server and check `/ready`. A downgrade restores the column and table
+shapes with default priority values and empty dependency tables. Recover original values from
+the backup. [Migration source](../../backend/migrations/versions/0021_drop_priority_and_dependencies.py)
+
+HTTP sync supplies placeholder priority and dependency fields for 1.3.0 clients. A direct
+PostgreSQL desktop checks for its exact schema head. Locally, new desktops migrate SQLite v18
+to v19 and automatically back up the file before upgrade. A published 1.3.0 desktop needs the
+pre-upgrade file if it is restored. [Sync compatibility](../architecture/sync-protocol.md#removed-task-fields-legacy-wire-placeholders),
+[deployment procedure](../deployment/ci-cd.md#migrations)
+
 ### Normalized storage (0004-0006)
 
 Revisions 0004-0006 move the structured JSON of revision 0003 into the

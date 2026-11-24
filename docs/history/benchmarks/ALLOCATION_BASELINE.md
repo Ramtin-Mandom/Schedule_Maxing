@@ -2,7 +2,7 @@
 
 Deterministic, seeded week/month allocation benchmark for
 `app.planning.allocation.allocate_tasks`. See
-[`allocation_baseline.py`](allocation_baseline.py)
+[`allocation_baseline.py`](../../../benchmarks/allocation_baseline.py)
 (`python -m benchmarks.allocation_baseline`).
 
 ## Method

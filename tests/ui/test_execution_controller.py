@@ -1,5 +1,5 @@
 """Tests for app/ui/execution_controller.py: duplicate prevention, action
-gating, live elapsed time, and structured (non-raising) error handling.
+gating, timed completion, and structured (non-raising) error handling.
 
 None of these instantiate Tk/CustomTkinter -- pure controller/service logic.
 """
@@ -71,27 +71,6 @@ def test_get_or_create_execution_survives_a_schedule_refresh_simulation(
 
 
 # ----------------------------------------------------------------------
-# available_actions
-# ----------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("status", "expected"),
-    [
-        (ExecutionStatus.SCHEDULED, ("start", "complete", "skip")),
-        (ExecutionStatus.IN_PROGRESS, ("pause", "complete", "skip")),
-        (ExecutionStatus.PAUSED, ("resume", "complete", "skip")),
-        (ExecutionStatus.COMPLETED, ("reopen",)),
-        (ExecutionStatus.SKIPPED, ("reopen",)),
-    ],
-)
-def test_available_actions_per_status(
-    execution_controller: ExecutionController, status: ExecutionStatus, expected: tuple[str, ...]
-) -> None:
-    assert execution_controller.available_actions(status) == expected
-
-
-# ----------------------------------------------------------------------
 # Invalid actions: structured error, never an exception
 # ----------------------------------------------------------------------
 
@@ -116,11 +95,11 @@ def test_action_on_missing_execution_returns_error_result(execution_controller: 
 
 
 # ----------------------------------------------------------------------
-# Live elapsed time (paused time excluded)
+# Completing timed and untimed work
 # ----------------------------------------------------------------------
 
 
-def test_elapsed_active_minutes_excludes_paused_time(
+def test_completed_duration_excludes_paused_time(
     controller_with_clock: ExecutionController, clock: FakeClock
 ) -> None:
     created = controller_with_clock.get_or_create_execution(**make_snapshot_kwargs())
@@ -129,28 +108,20 @@ def test_elapsed_active_minutes_excludes_paused_time(
     controller_with_clock.start(execution_id)
     clock.advance(timedelta(minutes=10))  # 10 minutes of real work
 
-    elapsed = controller_with_clock.elapsed_active_minutes(execution_id, now=clock())
-    assert elapsed.value == pytest.approx(10.0)
-
     controller_with_clock.pause(execution_id)
     clock.advance(timedelta(hours=2))  # a 2-hour paused gap -- must not count
-
-    elapsed_while_paused = controller_with_clock.elapsed_active_minutes(execution_id, now=clock())
-    assert elapsed_while_paused.value == pytest.approx(10.0)  # unchanged while paused
 
     controller_with_clock.resume(execution_id)
     clock.advance(timedelta(minutes=5))  # 5 more minutes of real work
 
-    final_elapsed = controller_with_clock.elapsed_active_minutes(execution_id, now=clock())
-    assert final_elapsed.value == pytest.approx(15.0)
+    completed = controller_with_clock.complete(execution_id)
+    assert completed.ok and completed.value.actual_active_duration_minutes == pytest.approx(15.0)
 
 
-def test_elapsed_active_minutes_for_never_started_execution_is_zero(
+def test_untimed_completion_leaves_the_duration_unknown(
     execution_controller: ExecutionController,
 ) -> None:
     created = execution_controller.get_or_create_execution(**make_snapshot_kwargs())
 
-    elapsed = execution_controller.elapsed_active_minutes(created.value.id)
-
-    assert elapsed.ok
-    assert elapsed.value == 0.0
+    completed = execution_controller.complete(created.value.id)
+    assert completed.ok and completed.value.actual_active_duration_minutes is None

@@ -113,16 +113,20 @@ def rows(page: SchedulePageController) -> dict[str, list]:
     return found
 
 
-def test_a_series_row_then_its_occurrences_after_make_schedule(week: SchedulePageController) -> None:
+def generate_range(page: SchedulePageController) -> ControllerResult:
+    return page.planning.generate(page.anchor_date, page.end_date)
+
+
+def test_a_series_row_then_its_occurrences_after_generation(week: SchedulePageController) -> None:
     assert week.save_draft(weekly_draft()).ok
     [series_row] = rows(week)["repeats"]
     assert "Mon, Thu" in series_row.time_text and "repeat" not in rows(week)
 
-    run = week.make_schedule()
+    run = generate_range(week)
     assert run.ok, run.error
     repeats = rows(week)["repeat"]
     assert sorted(row.date for row in repeats) == [MON, MON + timedelta(days=3)]
-    assert {e.placement.planned_date for e in run.value.snapshot.executables} == {MON, MON + timedelta(days=3)}
+    assert {e.placement.planned_date for e in week.load().value.executables} == {MON, MON + timedelta(days=3)}
     assert week.scope_choices(series_row.ref).value == [("series", "The entire series")]
     assert [value for value, _ in week.scope_choices(repeats[0].ref).value] == ["occurrence", "future", "series"]
 
@@ -149,7 +153,7 @@ def test_a_template_saved_before_series_repeated_shows_needs_setup_and_the_form_
 
 def test_edit_scopes_from_one_occurrence(week: SchedulePageController) -> None:
     week.save_draft(weekly_draft(repeat="daily", repeat_weekdays=()))
-    week.make_schedule()
+    generate_range(week)
     by_date = {row.date: row for row in rows(week)["repeat"]}
 
     only_tuesday = by_date[MON + timedelta(days=1)]
@@ -163,21 +167,21 @@ def test_edit_scopes_from_one_occurrence(week: SchedulePageController) -> None:
     assert week.save_draft(replace(draft, points="9"), editing=from_thursday.ref, scope="future").ok
     labels = rows(week)
     assert len(labels["repeats"]) == 2  # the series now ends on Wednesday; a new segment starts Thursday
-    week.make_schedule()
+    generate_range(week)
     later = [row for row in rows(week)["repeat"] if row.date >= MON + timedelta(days=3)]
     assert later and all(week.planning.get_task(row.ref.id).value.points == 9 for row in later)
 
 
 def test_removal_scopes_from_one_occurrence(week: SchedulePageController) -> None:
     week.save_draft(weekly_draft(repeat="daily", repeat_weekdays=()))
-    week.make_schedule()
+    generate_range(week)
     by_date = {row.date: row for row in rows(week)["repeat"]}
     monday = by_date[MON]
     assert [value for value, _ in week.removal_choices(monday.ref).value] == ["skip", "occurrence", "future", "series"]
     assert "repeating task" in week.delete_description(monday.ref).value
 
     assert week.delete(monday.ref, scope="skip").ok
-    week.make_schedule()  # never regenerated
+    generate_range(week)  # never regenerated
     assert MON not in {row.date for row in rows(week)["repeat"]}
     skipped = week.planning.get_task_including_deleted(monday.ref.id).value
     assert skipped.occurrence_state == OccurrenceState.SKIPPED
@@ -204,7 +208,7 @@ def test_a_make_schedule_result_started_before_an_account_switch_is_dropped(tmp_
 
         def slow_schedule() -> ControllerResult:
             release.wait(timeout=5)
-            return page.make_schedule()  # expansion and generation run in the worker, in the old workspace
+            return generate_range(page)  # expansion and generation run in the worker, in the old workspace
 
         assert run_in_background(widget, slow_schedule, delivered.append, registry=registry, still_current=guard)
         services.switch_workspace(OwnerScope.account(alice))
@@ -221,6 +225,6 @@ def test_a_make_schedule_result_started_before_an_account_switch_is_dropped(tmp_
 
 def test_rows_identify_occurrences_by_id_not_name(week: SchedulePageController) -> None:
     week.save_draft(weekly_draft(repeat="daily", repeat_weekdays=()))
-    week.make_schedule()
+    generate_range(week)
     refs = [row.ref for row in rows(week)["repeat"]]
     assert len({ref.id for ref in refs}) == 7 and all(isinstance(ref, RowRef) for ref in refs)

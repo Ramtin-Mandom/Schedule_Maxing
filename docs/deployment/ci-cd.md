@@ -5,20 +5,19 @@ Actions from three workflow files in `.github/workflows/`:
 
 | Workflow | File | Starts on | Result |
 |---|---|---|---|
-| **CI** | `ci.yml` | every pull request (and by hand) | the change is tested, compiled and linted — once; nothing later tests it again |
+| **CI** | `ci.yml` | pull requests or manual dispatch | tests, compile and lint checks, dependency audit, and credential scan |
 | **Release** (desktop delivery) | `release.yml` | a pushed tag `vX.Y.Z`, or by hand (dry run) | a GitHub Release with the Windows installer, which installed copies update to |
 | **Deploy backend** (server deployment) | `deploy-backend.yml` | a pushed release tag `vX.Y.Z` whose pull request passed CI, or by hand | the backend on Render runs that commit |
 
 The project ships two different things, so it has two delivery paths:
 
 - the **desktop app** is delivered as a versioned Windows installer; a release is a deliberate act (a tag);
-- the **backend** (`backend/`, optional — the desktop works without it) is deployed by the same release tag.
-  Render's own Auto-Deploy is kept on, so Render also deploys every merge to `main` by itself; the
-  workflow's tag run then redeploys the released commit and checks it.
+- the **backend** workflow starts from the same release tag. It runs independently of desktop publishing.
+  Render Auto-Deploy can also deploy branch changes independently when enabled.
 
 ```mermaid
 flowchart LR
-    push[pull request] --> ci[CI<br/>test, desktop-only,<br/>direct-desktop, postgres]
+    push[pull request] --> ci[CI<br/>test, security-scan, desktop-only,<br/>direct-desktop, postgres]
     ci -- passed, merged to main --> rtag[tag vX.Y.Z]
     rtag --> gate{deployment<br/>switched on?}
     gate -- yes --> resolve[resolve<br/>commit on main,<br/>its pull request passed CI]
@@ -26,8 +25,8 @@ flowchart LR
     approve --> deploy[Render deploy<br/>wait until live]
     deploy --> check["check /health and /ready"]
 
-    tag[tag vX.Y.Z] --> verify[verify<br/>tag = app version]
-    tag --> rtest[test<br/>full suite]
+    rtag --> verify[verify<br/>tag = app version]
+    rtag --> rtest[test<br/>check PR CI result]
     verify --> build[build on Windows<br/>PyInstaller, Inno Setup,<br/>installer test, checksums]
     rtest --> build
     build --> publish[GitHub Release]
@@ -36,12 +35,12 @@ flowchart LR
 
 ## 1. Continuous integration (`ci.yml`)
 
-Runs on every push to any branch and on every pull request. Four independent jobs, all on
-`ubuntu-latest` with Python 3.10; a commit is green only when all four pass.
+Runs on `pull_request` and `workflow_dispatch`. Five independent jobs run on `ubuntu-latest` with Python 3.10.
 
 | Job | Installs | What it proves |
 |---|---|---|
 | `test` | `requirements.txt` (everything) | the complete suite (`xvfb-run -a python -m pytest`, real windows on a virtual display), `python -m compileall .`, `python -m ruff check .` |
+| `security-scan` | `pip-audit` and `detect-secrets` | audits `requirements/requirements.lock` and scans tracked files against the reviewed credential baseline |
 | `desktop-only` | `requirements/desktop.txt` + pytest | the desktop app needs no web/server package: it first fails if FastAPI, Starlette, Uvicorn, SQLAlchemy, Alembic, psycopg, PyJWT, argon2 or HTTPX is importable, then runs every suite except `tests/backend`, `tests/sync`, `tests/web`, `tests/direct` ([desktop-web-boundaries.md](../architecture/desktop-web-boundaries.md)) |
 | `direct-desktop` | `requirements/direct.txt` + pytest | the optional direct PostgreSQL mode works with no HTTP/JWT package, against a PostgreSQL 17 service container ([direct-postgres.md](direct-postgres.md)) |
 | `postgres` | `requirements.txt` | the `postgres`-marked tests, then `tests/backend`, `tests/sync` and `tests/direct` again on a real PostgreSQL 17 instead of SQLite ([backend.md](../backend/backend.md#tests)) |
@@ -63,11 +62,10 @@ run them again: the backend deployment and the release both call
 `.github/scripts/pr_tests_passed.sh`, which finds the last pull request merged into `main` that the
 commit contains and requires CI to have passed for the commit it was merged from. Two consequences:
 
-- A pull request whose last commit says `[skip ci]` has no CI run, so what it merges is neither
-  deployed nor releasable until CI has passed for that commit (Actions > CI > Run workflow, on the
-  pull request's branch).
-- A commit pushed **straight to `main`** is not tested by anything; it rides on the last pull
-  request's result. Change code through pull requests.
+- A pull request whose last commit says `[skip ci]` needs a successful run before the normal release or
+  backend workflow gate can pass. Trigger it from Actions > CI > Run workflow on the PR's branch.
+- A push straight to `main` can inherit the previous PR's result in that gate. Use PRs for changes that
+  will be released.
 
 ## 2. Desktop delivery (`release.yml`)
 
@@ -82,7 +80,7 @@ git push origin v1.2.3
 | Job | Runs on | What it does |
 |---|---|---|
 | `verify` | Ubuntu | the tag must be exactly `v` + the version in `app/version.py`, and no release for it may exist yet |
-| `test` | Ubuntu | no second test run: the tagged commit must be on `main` and CI must have passed for the pull request it came from (`pr_tests_passed.sh`) |
+| `test` | Ubuntu | checks that the tagged commit is on `main` and the containing PR passed CI (`pr_tests_passed.sh`). The repository variable `SKIP_RELEASE_TESTS` can skip this job |
 | `build` | Windows | needs `verify` and `test`. Packaging and start-up tests on Windows, PyInstaller build with bundle checks and a packaged self-test (`packaging\windows\build_windows.ps1`), the Inno Setup installer, an install / restart / upgrade / uninstall test of that installer, checksum verification, then the installer and `SHA256SUMS.txt` are uploaded as a workflow artifact |
 | `publish` | Ubuntu | needs `build`; tag pushes only. Creates a stable GitHub Release (not a draft, not a pre-release, marked latest) with exactly the installer and `SHA256SUMS.txt` |
 
@@ -111,9 +109,8 @@ both jobs are skipped and nothing contacts Render.
 
 ### What happens
 
-1. **Trigger.** A pushed release tag `vX.Y.Z` — the same tag that starts `release.yml`, so the
-   backend and the desktop release go out together. A merge to `main`, a pull request or a fork never
-   starts it. Or someone starts it by hand.
+1. **Trigger.** A pushed release tag `vX.Y.Z` or a manual run. The desktop release starts independently
+   from the tag and can publish before the backend has deployed.
 2. **`resolve`** decides which commit is deployed and refuses anything else:
    - the tagged commit, or for a manual run the commit given as `ref` (blank: the tip of `main`);
    - it must be on `main`;
@@ -137,8 +134,8 @@ both jobs are skipped and nothing contacts Render.
      never automatic.
    - **Summary** — commit, Render deploy id and address on the run's summary page.
 
-Deployments never overlap: a second one waits for the first (`concurrency: deploy-backend`), and
-if several are waiting GitHub keeps only the newest.
+GitHub serializes runs of this workflow under `concurrency: deploy-backend`. Render's own branch deployments
+can overlap a GitHub run, causing Render to queue the requested deploy.
 
 ### Migrations
 
@@ -149,16 +146,18 @@ On PostgreSQL an upgrade is one transaction, so a failed migration leaves the sc
 previous revision, the deploy ends as `pre_deploy_failed` or `update_failed`, and the workflow
 fails. The readiness check afterwards confirms the live service sees a fully migrated database.
 
-Schema changes must stay compatible with the version still serving (add first, remove later).
-The one documented exception — the normalized-storage revisions 0004-0006 — needs the old service
-stopped first and must not be left to this pipeline; see
-[backend.md](../backend/backend.md#normalized-storage-0004-0006).
+Additive schema changes allow a handoff while the old process is still in traffic. Contract migrations
+`0004`–`0006` and `0021` remove data the previous server expects. For these cutovers, confirm a restorable
+backup and take the old service out of traffic before upgrading. A live branch Auto-Deploy can start that
+upgrade independently, so coordinate it with the cutover. [Normalized storage](../backend/backend.md#normalized-storage-0004-0006),
+[revision 0021](../backend/backend.md#priority-and-dependency-removal-0021)
 
 ### When a deployment fails
 
 | Failure | State of production | What to do |
 |---|---|---|
-| Build, pre-deploy (migration) or start-up fails on Render | the previous version keeps serving; it never went live | fix on `main`, then release again or run the workflow by hand |
+| Build or migration fails on Render | the deploy stays on the previous release. A failed migration transaction rolls back | fix on `main`, then release again or run the workflow by hand |
+| Start-up fails after a committed migration | Render can still route traffic to the previous release. Check whether its code supports the resulting schema | finish the cutover or restore the prior schema and release |
 | Live, but `/health` or `/ready` fails | the **new** version is serving | roll back (below), or fix forward |
 | Not live after 30 minutes | unknown — look at the Render dashboard | re-run the workflow once Render has settled |
 
@@ -169,11 +168,11 @@ Actions > Deploy backend > Run workflow:
 - **ref** — full SHA of a commit on `main`. Blank deploys the tip of `main`.
 - **smoke_check** — also run the smoke check (writes throwaway data, see above).
 
-A **code rollback** is a manual run with the SHA of the last good commit. The same rules apply:
-the commit must be on `main` and have passed CI. This redeploys code only. The schema is never
-downgraded automatically; an older commit keeps working as long as the migrations since then were
-additive. Otherwise restore a database backup or run a checked Alembic downgrade by hand
-([render-deployment.md](render-deployment.md#backups-and-rollback)).
+A **code rollback** is a manual run with the SHA of the last good commit on `main` whose CI passed.
+The workflow redeploys code and leaves the database revision as-is. `/ready` requires the running code's
+exact Alembic head. Rolling back across `0021` requires restoring the pre-upgrade backup to recover
+previous dependency and priority values. For other revisions, use a validated database restore or a
+checked Alembic downgrade. [Backups and rollback](render-deployment.md#backups-and-rollback)
 
 ### One-time setup
 
@@ -242,11 +241,12 @@ Environment settings. GitHub never holds it, and CI uses none of the above.
 
 ## 6. Limitations
 
-- The deployment workflow has not yet been run against a real Render service from this
-  repository; its Render API calls follow Render's public API reference as of October 2026.
-  Do the first deployment by hand (Run workflow) and watch it.
-- One environment only (`production`); there is no staging service and no preview deployments.
-- Every green push to `main` is deployed, including changes that do not touch `backend/`.
+- The last recorded GitHub backend deployment used the old merge trigger and failed when Render queued
+  the request. As of 2026-11-23 there is no recorded run of the new tag-triggered path. Public `/health`
+  and `/ready` returned 200 on retry. The endpoints report service readiness and omit the deployed SHA.
+  [Last deploy run](https://github.com/Ramtin-Mandom/Schedule_Maxing/actions/runs/40625746637)
+- The workflow targets a single `production` environment. Render branch Auto-Deploy may deploy merges to
+  `main` outside the release workflow.
 - No automatic rollback: a deployment that goes live and then fails its checks is reported, and
   rolled back by a person.
 - Database backups are Render's (paid plans); the pipeline takes none before a migration.

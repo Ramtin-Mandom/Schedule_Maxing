@@ -1,6 +1,6 @@
 ---
 name: wrap
-description: End-of-session documentation sync. Detects what changed since the last /wrap (commits, staged, unstaged and untracked files), verifies it against the code, updates only the affected parts of docs/architecture/ARCHITECTURE.md, docs/development/ROADMAP.md, docs/development/CURRENT_STATE.md, docs/architecture/DECISIONS.md and docs/architecture/CODEBASE_MAP.md, advances a local checkpoint, and prints a handoff summary. Never edits application code, commits or pushes.
+description: End-of-session documentation sync. Detects what changed since the last /wrap, verifies it against the code, updates affected sections of the six knowledge-base guides and linked documentation, advances a local checkpoint, and prints a handoff summary. Never edits application code, commits or pushes.
 argument-hint: "[optional focus or notes, e.g. 'only the sync work' or 'baseline']"
 disable-model-invocation: true
 allowed-tools:
@@ -25,9 +25,10 @@ User notes for this run (may be empty): $ARGUMENTS
 
 ## Rules (non-negotiable)
 
-- **Write only** to `docs/architecture/ARCHITECTURE.md`, `docs/development/ROADMAP.md`, `docs/development/CURRENT_STATE.md`, `docs/architecture/DECISIONS.md` and `docs/architecture/CODEBASE_MAP.md`.
+- Review `docs/ARCHITECTURE.md`, `docs/FEATURE_MAP.md`, `docs/DECISIONS.md`, `docs/CURRENT_STATE.md`,
+  `docs/ROADMAP.md` and `docs/Workflow.md`. Update affected sections and linked Markdown guides under `docs/`.
   - Also `AGENTS.md`/`CLAUDE.md`, under the conditions in step 6.
-  - Also `ci_check_notes.md`, only to add missing Pending entries (step 4).
+  - Also `docs/development/ci_check_notes.md`, only to add missing Pending entries (step 4).
   - Also the checkpoint, and only through the script.
 - **Never:**
   - edit application code, tests, configs or dependencies;
@@ -74,7 +75,7 @@ Run `status`. Then act on its verdict:
   for contradictions (step 5), fix only real inconsistencies, then advance. Do not treat these changes as
   feature work.
 - **REVIEW NEEDED** — Continue with step 2.
-- **BASELINE NEEDED** — There is no checkpoint and no usable commit in `docs/development/CURRENT_STATE.md`.
+- **BASELINE NEEDED** — There is no checkpoint and no usable commit in `docs/CURRENT_STATE.md`.
   - Read each document's header and its "Verified against commit" line.
   - Use the recent commits listed to find the subsystems that changed.
   - Check those subsystems against the documents.
@@ -101,20 +102,20 @@ files; search them by symbol.
 
 | Change type | Documents usually affected |
 |---|---|
-| New feature implemented | CURRENT_STATE, ROADMAP, CODEBASE_MAP |
-| Existing feature modified | CURRENT_STATE, CODEBASE_MAP |
-| Architectural change | ARCHITECTURE, DECISIONS, CODEBASE_MAP |
-| Database or schema change | ARCHITECTURE, CODEBASE_MAP, CURRENT_STATE |
-| File moved, renamed or deleted | CODEBASE_MAP (and every other document naming the old path) |
+| New feature implemented | CURRENT_STATE, ROADMAP, FEATURE_MAP, Workflow |
+| Existing feature modified | CURRENT_STATE, FEATURE_MAP, Workflow |
+| Architectural change | ARCHITECTURE, DECISIONS, FEATURE_MAP, Workflow |
+| Database or schema change | ARCHITECTURE, FEATURE_MAP, CURRENT_STATE, Workflow |
+| File moved, renamed or deleted | FEATURE_MAP and guides naming the old path |
 | Bug fixed | CURRENT_STATE; ROADMAP if it is tracked there |
 | New known bug | CURRENT_STATE; ROADMAP if action is needed |
 | Milestone completed | ROADMAP, CURRENT_STATE |
 | Important design decision | DECISIONS; ARCHITECTURE if affected |
-| API or interface change | ARCHITECTURE, CODEBASE_MAP |
-| Tests added or changed | CURRENT_STATE; CODEBASE_MAP if test locations changed |
+| API or interface change | ARCHITECTURE, FEATURE_MAP, Workflow |
+| Tests added or changed | CURRENT_STATE and FEATURE_MAP if test locations changed |
 
 This is default guidance. Update any document a change genuinely affects, and nothing else. Use
-`docs/architecture/CODEBASE_MAP.md` section D to find related files and tests. Follow dependencies only as far as the change
+`docs/FEATURE_MAP.md` section D to find related files and tests. Follow dependencies only as far as the change
 reaches.
 
 ### 3. Verify before documenting
@@ -132,39 +133,41 @@ For each change that will affect a status claim:
 4. Compare the result against the ROADMAP acceptance criteria and any missing integration.
 5. When you cannot verify something, say why, and record it as *Unverified* rather than guessing.
 
-Use the status words already in `docs/development/CURRENT_STATE.md`: Implemented, Partially Implemented, Not Implemented,
+Use the status words already in `docs/CURRENT_STATE.md`: Implemented, Partially Implemented, Not Implemented,
 Broken, Unverified. Keep four things distinct: implemented, tested, operational, and externally verified.
 
 ### 4. Edit the documents incrementally
 
 Use targeted edits that keep each document's structure and wording.
 
-- **docs/architecture/ARCHITECTURE.md:** only for changed components, data flows, boundaries, or auth, sync, concurrency or
+- **docs/ARCHITECTURE.md:** only for changed components, data flows, boundaries, or auth, sync, concurrency or
   storage design. Keep Mermaid diagrams matching the code. Minor changes don't belong here.
-- **docs/development/ROADMAP.md:**
+- **docs/ROADMAP.md:**
   - Tick a deliverable `[x]` only when it is verified complete against its acceptance criteria.
   - Keep partial work open, with a status note.
   - Add only *confirmed* new work, in Part 1 or Part 2. Your own ideas go in Part 3, marked as needing approval.
   - Never delete unfinished requirements because related code appeared.
   - Never invent product requirements.
-- **docs/development/CURRENT_STATE.md:**
+- **docs/CURRENT_STATE.md:**
   - Update the affected rows: feature statuses, bugs, limitations, test results, infrastructure.
   - Change the "Generated" date and "Commit" rows only when you change this file's content.
   - Record tests run this session in section D, with real results.
-- **docs/architecture/DECISIONS.md:**
+- **docs/DECISIONS.md:**
   - Append an ADR only for a real, consequential decision made in the changes.
   - Use the next free ID and the existing record template, and add it to the index.
   - Do not invent a rationale: use *Inferred* or "Rationale not recorded" where that is the truth.
   - For a superseded decision, mark the old record *Superseded by ADR-NNN* and link both ways. Never delete a
     record.
-- **docs/architecture/CODEBASE_MAP.md:**
+- **docs/FEATURE_MAP.md:**
   - Add new important modules to sections B and C.
   - Remove deleted ones and correct moved paths.
   - Update dependencies (section E), test locations, and the section D change guide.
   - Keep it a coherent map, not an appended list.
+- **docs/Workflow.md:** Update the feature's input, validation, processing, storage effects, and output
+  when an entry point, enforced rule, foreground or background step, or data flow changes.
 - **Commit references.** A "Verified against commit" line in a document: update it only in documents you
   otherwise change this run.
-- **ci_check_notes.md** (the memory of `/ci-check`): for every structural change in the review list (the file's
+- **docs/development/ci_check_notes.md** (the memory of `/ci-check`): for every structural change in the review list (the file's
   "What counts as a structural change" list) that has no entry yet, add one under "Pending" with its template.
   Never move, edit or delete existing entries; `/ci-check` settles them.
 
@@ -172,7 +175,7 @@ Use targeted edits that keep each document's structure and wording.
 
 - Run `check-paths`, which must report all paths existing. Fix stale references in the documents.
 - Search the documents for any deleted or renamed path from the status list.
-- Check that statuses agree across CURRENT_STATE, ROADMAP and CODEBASE_MAP, and that no ROADMAP item is ticked
+- Check that statuses agree across CURRENT_STATE, ROADMAP and FEATURE_MAP, and that no ROADMAP item is ticked
   without verified implementation.
 - Check each new ADR cites evidence.
 - **Mermaid** (only for diagrams you changed): one statement per line; no `;` inside sequence messages; quote
@@ -218,7 +221,7 @@ are *assumed*:
 
 **Next Session Context**
 3–6 sentences another agent can resume from: the branch, what is in flight, what to do next, and where to
-start (a CODEBASE_MAP section).
+start (a FEATURE_MAP section).
 
 **Checkpoint**
 - The previous checkpoint and the new one, or "not advanced", with the reason.

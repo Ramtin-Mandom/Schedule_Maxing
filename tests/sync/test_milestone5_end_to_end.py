@@ -1,4 +1,4 @@
-"""Milestone 5 end to end through the desktop controllers and two devices, against the
+"""Milestone 5 end to end through the planning controller and execution service on two devices, against the
 FastAPI backend (PostgreSQL with BACKEND_TESTS_ON_POSTGRES=1 and a disposable
 TEST_DATABASE_URL, else SQLite): plan and optimize, look without writing, work with a
 pause across a restart, skip / cancel / leave overdue / move, regenerate, then compare
@@ -14,7 +14,6 @@ from app.execution.repository import ExecutionRepository
 from app.execution.service import ExecutionService
 from app.planning.application import RangeScope
 from app.productivity.reporting import ProductivityService
-from app.ui.execution_controller import ExecutionController
 from tests.sync.conftest import MON, InProcessTransport
 
 EMAIL = "alice@example.com"
@@ -36,10 +35,8 @@ def ok(result):
     return result.value
 
 
-def executions(device, clock) -> ExecutionController:
-    return ExecutionController(ExecutionService(ExecutionRepository(device.connection), clock),
-                               sync_state=lambda execution_id: device.sync.record_sync_state("execution", execution_id),
-                               clock=clock)
+def executions(device, clock) -> ExecutionService:
+    return ExecutionService(ExecutionRepository(device.connection), clock)
 
 
 def report(device):
@@ -73,31 +70,34 @@ def test_the_milestone_workflow_across_restart_devices_and_sign_in(alice_server,
     ctl = executions(a, clock)
     for task in tasks.values():  # looking at every item writes nothing
         placement = placement_of(a, task.id)
-        assert ok(ctl.describe(placement, ok(ctl.find_execution_for_placement(placement.id)))).status_text == "Not started"
+        assert ctl.find_execution_for_placement(placement.id) is None
     assert a.connection.execute("SELECT COUNT(*) FROM executions").fetchone()[0] == 0
 
     finish = placement_of(a, tasks["Finish"].id)
     clock.now = finish.planned_start
-    started = ok(ctl.perform(tasks["Finish"], finish, "start", None))
+    attempt = ctl.get_or_create_canonical_execution(tasks["Finish"], finish)
+    started = ctl.start(attempt.id, expected_version=attempt.version)
     clock.now += timedelta(minutes=20)
-    paused = ok(ctl.perform(tasks["Finish"], finish, "pause", started))
+    paused = ctl.pause(started.id, expected_version=started.version)
     a.reopen()  # the app restarts while the work is paused
     ctl = executions(a, clock)
-    assert ok(ctl.find_execution_for_placement(finish.id)) == paused
+    assert ctl.find_execution_for_placement(finish.id) == paused
     clock.now += timedelta(minutes=10)
-    resumed = ok(ctl.perform(tasks["Finish"], finish, "resume", paused))
+    resumed = ctl.resume(paused.id, expected_version=paused.version)
     clock.now += timedelta(minutes=20)
-    done = ok(ctl.perform(tasks["Finish"], finish, "complete", resumed))
+    done = ctl.complete(resumed.id, expected_version=resumed.version)
     assert done.actual_active_duration_minutes == 40.0
 
-    ok(ctl.perform(tasks["Skip"], placement_of(a, tasks["Skip"].id), "skip", None))
-    ok(ctl.perform(tasks["Cancel"], placement_of(a, tasks["Cancel"].id), "cancel", None))
+    skipped = ctl.get_or_create_canonical_execution(tasks["Skip"], placement_of(a, tasks["Skip"].id))
+    ctl.skip(skipped.id, expected_version=skipped.version)
+    cancelled = ctl.get_or_create_canonical_execution(tasks["Cancel"], placement_of(a, tasks["Cancel"].id))
+    ctl.cancel(cancelled.id, expected_version=cancelled.version)
     move = placement_of(a, tasks["Move"].id)
     latest = max(p.planned_end for p in a.planning.placements_for_date(MON))
     target = latest + timedelta(minutes=60)
     ok(a.controller.reschedule_placement(move.id, expected_version=move.version, planned_date=MON,
                                          start_minute=target.hour * 60 + target.minute, duration_minutes=60))
-    assert "not yet confirmed" in ok(ctl.describe(finish, done)).sync_text  # pending until the server confirms
+    assert a.sync.record_sync_state("execution", done.id) == "pending"
 
     ok(a.controller.schedule_range(MON, MON, scope=RangeScope.ELIGIBLE))  # regenerate: history protected
     assert placement_of(a, tasks["Finish"].id).id == finish.id
@@ -106,7 +106,7 @@ def test_the_milestone_workflow_across_restart_devices_and_sign_in(alice_server,
     assert summary(report(a)) == expected  # moves and regeneration never multiply the occurrences
 
     assert a.sync_now().status == "ok"
-    assert ok(ctl.describe(finish, ok(ctl.get_execution(done.id)))).sync_text == "Confirmed by the server."
+    assert a.sync.record_sync_state("execution", done.id) == "synced"
     b.sign_in(EMAIL)
     assert b.sync_now().status == "ok"
     assert summary(report(b)) == expected
@@ -119,8 +119,10 @@ def test_the_milestone_workflow_across_restart_devices_and_sign_in(alice_server,
     # A conflict: B starts the untouched work offline while A skips it; it stays until resolved.
     untouched = placement_of(a, tasks["Untouched"].id)
     b_ctl = executions(b, clock)
-    ok(b_ctl.perform(b.planning.get_task(tasks["Untouched"].id), untouched, "start", None))
-    ok(ctl.perform(tasks["Untouched"], untouched, "skip", None))
+    b_attempt = b_ctl.get_or_create_canonical_execution(b.planning.get_task(tasks["Untouched"].id), untouched)
+    b_ctl.start(b_attempt.id, expected_version=b_attempt.version)
+    a_attempt = ctl.get_or_create_canonical_execution(tasks["Untouched"], untouched)
+    ctl.skip(a_attempt.id, expected_version=a_attempt.version)
     assert a.sync_now().status == "ok"
     b.sync_now()
     b.sync_now()

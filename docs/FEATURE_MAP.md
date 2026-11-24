@@ -1,12 +1,12 @@
-# Codebase map
+# Feature map
 
 A navigation and change-impact guide. Use section D first: find the change you need, open the
 "Start here" files, follow only the listed dependencies, run the listed tests. System design is in
 [ARCHITECTURE.md](ARCHITECTURE.md); run-time behaviour (call chains, engine internals, rules and constraints)
-in [WORKFLOW.md](WORKFLOW.md); feature status in [CURRENT_STATE.md](../development/CURRENT_STATE.md).
+in [Workflow.md](Workflow.md); feature status in [CURRENT_STATE.md](CURRENT_STATE.md).
 
-Paths verified against commit `c2b19c0` on 2026-10-24. Dependencies marked **(import)** were checked in
-the source; others are call-level or conceptual relationships.
+This map reflects the current checkout. Dependencies marked **(import)** are direct imports. The other
+relationships document calls or shared responsibilities. [Documentation index](README.md)
 
 ## A. Repository structure
 
@@ -25,7 +25,7 @@ app/                    desktop application and the shared domain layer (also im
   csv_safety.py         spreadsheet-formula neutralising for exports
   planning/             canonical planning domain + application services (see C.2)
   execution/            local SQLite infrastructure + execution tracking (see C.3)
-  productivity/         analytics, tracker, cohort, median predictor (see C.4)
+  productivity/         analytics, tracker and schedule-cohort reports (see C.4)
   budget/               budgeting domain: money, models, recurrence, BudgetService, stats/forecast, SQLite repository (see C.3a)
   sync/                 offline-first sync client (see C.5)
   persistence/          optional direct-PostgreSQL desktop storage (dev only)
@@ -56,14 +56,14 @@ Ignore: `.venv*`, `__pycache__`, `.pytest_cache`, `.ruff_cache`, `build/`, `dist
 | Task creation/editing (UI) | `app/ui/task_editor.py`, `app/ui/task_form_model.py` | `app/ui/task_defaults.py`, `time_fields.py`, `clock_input.py`, `app/ui/planning_controller.py` | `tests/ui/test_task_form_model.py`, `test_task_editor_widgets.py`, `test_task_defaults.py` | Planning models, fixed-block rules |
 | Task/record model | `app/planning/models.py` | `app/planning/repository.py`, `backend/resources.py`, `backend/record_mapping.py`, `app/sync/mapping.py` | `tests/planning/test_models.py`, `test_planning_repository.py`, `test_task_types_and_snapshots.py` | Every layer |
 | Persisted planning (CRUD, ranges, resets) | `app/planning/application.py` (`PlanningService`) | `app/planning/repository.py`, `errors.py`, `scope.py`, `task_data_reset.py` | `tests/planning/test_application_service.py`, `test_reset.py`, `test_owner_scope.py`, `test_concurrency.py` | Sync capture triggers |
-| Scheduling (day engine, modes) | `app/optimizer.py`, `app/mode_objectives.py` | `app/planning/catch_up.py`, `app/planning/preferences.py`, `app/planning/time.py`, `app/reward.py`; desktop runs it through `app/planning/engine_process.py` | `tests/test_day_engine.py`, `test_scheduling_modes.py`, `test_optimizer_candidates.py`, `test_optimizer_differential.py`, `tests/test_engine_process.py` | `benchmarks/scheduling_mode_baseline.py --check` |
+| Scheduling (day engine, modes) | `app/optimizer.py`, `app/mode_objectives.py` | `app/planning/catch_up.py`, `app/planning/preferences.py`, `app/planning/time.py`, `app/reward.py`, `app/planning/engine_process.py` | `tests/test_day_engine.py`, `test_scheduling_modes.py`, `test_optimizer_candidates.py`, `test_optimizer_differential.py`, `tests/test_engine_process.py` | [Scheduling baseline](history/benchmarks/PROMPT1_SCHEDULING_BASELINE.md) |
 | Scheduling workflow (generate/save/freshness) | `app/planning/workflow.py` | `app/planning/service.py`, `allocation.py` (points-first order), `provenance.py` | `tests/planning/test_workflow.py`, `test_allocation*.py`, `tests/ui/test_desktop_generation_workflow.py` | Day page, backend `planning_api.py` |
 | Reward / preferences | `app/reward.py`, `app/planning/preferences.py` | `config/task_preference.yaml`, `backend/preferences.py`, `app/ui/preferences_model.py`, `preferences_editor.py` | `tests/test_reward.py`, `tests/planning/test_preferences.py`, `tests/ui/test_settings_controller.py` | Settings page, Day Preferences |
 | Hard constraints | `app/optimizer.py` (canonical engine checks), `app/planning/fixed_block_rules.py`, `app/planning/time.py` | `app/planning/compat.py` | `tests/test_day_engine.py`, `tests/planning/test_fixed_block_rules.py`, `tests/backend/test_fixed_block_writes.py` | Allocation, engine |
 | Recurring tasks | `app/planning/recurrence.py`, `app/planning/series.py` | `app/planning/occurrence.py`, `RecurrenceSpec` in `models.py` | `tests/planning/test_recurrence_*.py`, `tests/ui/test_recurrence_desktop.py`, `tests/sync/test_recurrence_sync.py`, `tests/backend/test_recurrence_api.py` | `docs/features/recurrence.md` |
-| Rescheduling / manual placements | `app/planning/workflow.py: reschedule_placement`, `PlanningService.apply_reschedule` | `app/ui/execution_workflow.py`, `app/ui/day_timeline.py` | `tests/planning/test_explicit_rescheduling.py`, `test_manual_placements.py`, `tests/sync/test_rescheduling_sync.py` | `docs/features/execution-rescheduling.md` |
+| Rescheduling / manual placements | `app/planning/workflow.py: reschedule_placement`, `PlanningService.apply_reschedule` | `backend/planning_api.py`, `app/ui/day_timeline.py` (release manual intent) | `tests/planning/test_explicit_rescheduling.py`, `test_manual_placements.py`, `tests/sync/test_rescheduling_sync.py` | [Execution and rescheduling](features/execution-rescheduling.md) |
 | CSV import/export | `app/planning/csv_import.py`, `csv_canonical.py`, `csv_export.py` | `app/planning/compat.py`, `app/csv_safety.py`, `app/main.py` | `tests/planning/test_csv_*.py`, `tests/test_import_safety.py`, `tests/test_main_cli.py` | Day page, `/planning/csv/*` |
-| Execution tracking | `app/execution/service.py`, `lifecycle.py` | `repository.py`, `models.py`, `fixed_block_completion.py`, `direct_completion.py`, `app/ui/execution_controller.py`, `execution_workflow.py` | `tests/execution/test_service.py`, `test_canonical_service.py`, `test_task_outcomes.py`, `tests/ui/test_execution_*.py` | Backend `executions.py`, `outcomes.py` |
+| Execution tracking | `app/execution/service.py`, `lifecycle.py` | `repository.py`, `models.py`, `fixed_block_completion.py`, `direct_completion.py`, `app/ui/execution_controller.py` | `tests/execution/test_service.py`, `test_canonical_service.py`, `test_task_outcomes.py`, `tests/ui/test_execution_*.py` | Backend `executions.py`, `outcomes.py` |
 | Day board / outcomes | `app/ui/day_page.py`, `app/ui/day_controller.py` | `day_timeline.py`, `day_outcomes.py`, `task_status_board.py`, `task_status.py`, `task_actions.py`, `day_window*.py` | `tests/ui/test_day_*.py`, `test_task_status.py` | `app/productivity/day_summary.py` |
 | Week/Month calendars | `app/ui/calendar_page.py`, `calendar_controller.py` | `calendar_model.py`, `calendar_view.py`, `selected_day_panel.py` | `tests/ui/test_calendar_*.py` | Day summaries |
 | Projects | `app/ui/planning_pages.py` (`ProjectsPage`), `app/ui/projects_controller.py` | `Project`/`ProjectMilestone` in `models.py`, `app/productivity/project_stats.py` | `tests/ui/test_projects_allocation.py`, `test_project_details.py`, `test_planning_pages.py` | Productivity Project section |
@@ -71,7 +71,6 @@ Ignore: `.venv*`, `__pycache__`, `.pytest_cache`, `.ruff_cache`, `build/`, `dist
 | Budgeting page (General / Stats / Future) | `app/ui/budget_page.py` (`BudgetingPage`), `app/ui/budget_controller.py` (`BudgetController`) | `budget_future.py`, `budget_charts.py`; composition `AppServices.budget_controller()` / `DirectAppServices.budget_controller()`; wiring `app/app.py: _build_workspace_pages`, nav `shell_state.py` | `tests/ui/test_budget_controller.py`; real-window `tests/ui/test_budget_page.py` | `app/budget/stats.py` |
 | Day page money widgets | `app/ui/day_money.py` (`MoneyTotals`, `MoneyStrip`, `DayMoneyDialog`) | `app/ui/day_page.py` (`_show_money`, `open_money`, `_save_money`), `BudgetController.day` / `set_day_amounts` | `tests/ui/test_budget_controller.py`; real-window `tests/ui/test_budget_page.py` | Budgeting page |
 | Productivity analytics | `app/productivity/reporting.py`, `tracker.py` | `stats.py`, `segments.py`, `day_summary.py`, `schedule_cohort.py`, `app/planning/history.py`, `app/ui/productivity_controller.py`, `productivity_page.py`, `tracker_view.py`, `productivity_charts.py` | `tests/productivity/test_tracker*.py`, `test_reporting.py`, `test_schedule_cohort*.py`, `tests/ui/test_productivity_*.py`, `test_tracker_view.py` | `docs/features/analytics.md` |
-| Duration prediction | `app/productivity/prediction.py` | none (service only) | `tests/productivity/test_prediction.py` | Median-based only |
 | Settings / preferences UI | `app/ui/pages.py` (`SettingsPage`), `app/ui/settings_controller.py` | `preferences_editor.py`, `preferences_model.py`, `ui_settings.py`, `task_defaults.py` | `tests/ui/test_settings_page.py`, `test_settings_controller.py` | Reward/preferences |
 | Desktop shell / navigation (page groups: Settings / Account / How to Use) | `app/ui/shell.py`, `shell_state.py` | `layout.py`, `components.py`, `paint_widgets.py`, `theme.py`, `guide_page.py`, `guide_content.py` | `tests/ui/test_desktop_shell.py`, `test_shell_foundation.py`, `test_guide.py` | All pages |
 | UI responsiveness | `app/ui/background.py` | `tk_lifecycle.py`, `diagnostics.py`, `layout.py`, `paint_widgets.py`, `activity.py`, `page_freshness.py`, `pages.py` (`DeferredPage`), `shell.py` (page size) | `tests/ui/test_background_executor.py`, `test_async_storage.py`, `test_responsiveness_regressions.py`, `test_bounded_rendering.py`, `test_deferred_pages.py`, `test_page_freshness*.py`, `test_activity*.py`, `tests/test_startup_cost.py` (helper: `tests/tk_cleanup.py`) | `benchmarks/desktop_responsiveness.py`, `docs/history/desktop-responsiveness-*.md`, `docs/history/desktop-performance-round3.md` |
@@ -112,7 +111,7 @@ Grouped by package. Short paths inside a table are relative to that section's pa
 | `application.py` | `PlanningService` (CRUD, range reads, `reschedule_range`, `apply_reschedule`, resets with preview, batch apply, history), `open_planning_service` | `execution.db`, `repository`, `provenance`, `occurrence`, `history`, `preferences`, `scope`, `execution_facts` | UI controllers, workflow, CSV, CLI, `backend/planning_repository.py` (implements its storage interface), `app/persistence/planning.py` |
 | `repository.py` | `PlanningRepository`: the only SQL for planning tables; row mapping functions | `execution.db` | `application.py`, `sync/engine.py`, `ui/app_services.py` |
 | `workflow.py` | The one scheduling orchestration: `read_inputs`, `allocate`, `preview_allocation`, `day_freshness`, `generate`/`generate_from`, `reschedule_placement`, reservations, preference views | `optimizer`, `allocation`, `application`, `service`, `catch_up`, `series`, `provenance`, `mode_objectives` | `ui/planning_controller.py`, `backend/planning_api.py`, `app/web` |
-| `service.py` | `generate_selected_day` (calls the engine once per date), `SelectedDayState`, `week_states` | `optimizer`, `allocation`, `provenance` | `workflow.py` |
+| `service.py` | `generate_selected_day` (calls the engine once per date) and the controller's selected-day state type | `optimizer`, `allocation`, `provenance` | `workflow.py`, `app/ui/planning_controller.py` |
 | `engine_process.py` | `run_engine` (the hook `_generate_date` calls the engine through), `EngineProcess` (one spawned worker process, in-thread fallback; ADR-044) | stdlib `concurrent.futures`, `multiprocessing` | `workflow.py`; installed by `ui/app_services.py` |
 | `allocation.py` | `allocate_tasks` (task → date for week/month, order: points desc, deadline, duration desc, id), `week_dates`, `month_dates`, diagnostics | models, `preferences`, `time` | `workflow.py`, `service.py` |
 | `preferences.py` | `OptimizerMode`, `ENGINE_LABELS`, preference layers (`PreferenceRecord`, scopes), `resolve_day_preferences`, adapters to `RewardSettings` | `reward` | Engine, workflow, Settings UI, `backend/preferences.py` |
@@ -136,7 +135,7 @@ Grouped by package. Short paths inside a table are relative to that section's pa
 | `models.py` | `TaskExecution`, `WorkSession`, `ExecutionStatus`, `CancelReason` | Snapshot fields (name, category, points) |
 | `fixed_block_completion.py`, `direct_completion.py` | Completing fixed blocks; completing a task with no placement (Projects panel) | |
 | `backup.py`, `instance_lock.py` | Copy before migration (+ pruning); one process per database file | |
-| `exporters.py`, `errors.py` | Raw execution CSV/JSON export; typed errors | |
+| `errors.py` | Typed execution and transition errors | |
 
 ### C.3a Budget (`app/budget/`)
 
@@ -157,7 +156,7 @@ scheduling stack imports this package (`tests/budget/test_budget_service.py` che
 `tracker.py` (awards, points, averages, task-type and time views), `project_stats.py`,
 `schedule_cohort.py` (planned vs actual), `day_summary.py` (day aggregates and colour class),
 `stats.py`/`segments.py`/`buckets.py`/`filters.py`/`insights.py`/`trends.py` (execution statistics),
-`data_prep.py` (executions → observations), `prediction.py` (median duration predictor), `exporters.py`, `report_cli.py`.
+`data_prep.py` (executions → observations), `exporters.py` (report export), `report_cli.py`.
 Pure functions except `reporting.py` and `data_prep.py`.
 
 ### C.5 Sync client (`app/sync/`)
@@ -182,8 +181,8 @@ Pure functions except `reporting.py` and `data_prep.py`.
 | Planning controllers | `planning_controller.py` (Tk-free facade over workflow/services; CSV), `schedule_page_controller.py`, `day_controller.py`, `calendar_controller.py`, `projects_controller.py` |
 | Pages and views | `day_page.py`, `day_timeline.py`, `day_window.py`, `day_window_bar.py`, `day_outcomes.py`, `task_status_board.py`, `calendar_page.py`, `calendar_view.py`, `calendar_model.py`, `selected_day_panel.py`, `planning_pages.py` |
 | Task form | `task_editor.py`, `task_form_model.py`, `task_defaults.py`, `time_fields.py`, `clock_input.py`, `task_actions.py`, `task_status.py` |
-| Execution | `execution_controller.py`, `execution_workflow.py` |
-| Productivity | `productivity_controller.py`, `productivity_page.py`, `tracker_view.py`, `productivity_charts.py`, `history_model.py` |
+| Execution | `execution_controller.py` drives outcome changes and reads saved attempts |
+| Productivity | `productivity_controller.py`, `productivity_page.py`, `tracker_view.py`, `productivity_charts.py` |
 | Budgeting | `budget_controller.py` (Tk-free; view rows, stats wording), `budget_page.py` (General, Stats), `budget_future.py` (Future), `budget_charts.py`, `day_money.py` (Day page strip, totals, amounts dialog) |
 | Settings | `settings_controller.py`, `preferences_editor.py`, `preferences_model.py`, `ui_settings.py` |
 | Account and sync | `account_controller.py`, `account_page.py`, `conflict_view.py` |
@@ -244,15 +243,15 @@ files and keeps the fast ones. Two exceptions:
 
 | Requested change | Start here | Also inspect | Tests to run |
 |---|---|---|---|
-| Reward calculation / weights | `app/reward.py: calculate_task_score` | `config/task_preference.yaml`, `app/planning/preferences.py` (adapters, `RewardPreferences`), `backend/preferences.py`, `app/ui/preferences_model.py` | `tests/test_reward.py`, `tests/planning/test_preferences.py`, `tests/test_scheduling_modes.py`, `python -m benchmarks.scheduling_mode_baseline --check` (baseline drift is a behavior change) |
+| Reward calculation / weights | `app/reward.py: calculate_task_score` | `config/task_preference.yaml`, `app/planning/preferences.py` (adapters, `RewardPreferences`), `backend/preferences.py`, `app/ui/preferences_model.py` | `tests/test_reward.py`, `tests/planning/test_preferences.py`, `tests/test_scheduling_modes.py`, [scheduling baseline](history/benchmarks/PROMPT1_SCHEDULING_BASELINE.md) |
 | Add a scheduling mode / engine | `app/planning/preferences.py: OptimizerMode, ENGINE_LABELS` | `app/optimizer.py: generate_day_schedule, _refine_time_objective`, `app/mode_objectives.py`, `app/planning/workflow.py`; **check constraints**: `app/execution/db.py: SCHEDULING_MODES` (new local migration) and `backend/models.py: OPTIMIZER_MODES` (new Alembic revision); `docs/features/scheduling-modes.md` | `tests/test_scheduling_modes.py`, `tests/test_day_engine.py`, `tests/execution/test_db.py`, `tests/backend/test_migrations.py` |
 | Change engine search behavior | `app/optimizer.py` (canonical section after `MandatoryTaskSchedulingError`) | `app/reward.py` (event breakpoints follow its formulas), `app/planning/time.py`, benchmarks | `tests/test_day_engine.py`, `test_optimizer_candidates.py`, `test_optimizer_differential.py`, `tests/planning/test_generation_characterization.py` |
-| Week/month allocation order | `app/planning/allocation.py: _allocation_order` | `app/planning/workflow.py: allocate`, `provenance.py` (points are a fingerprint input) | `tests/planning/test_allocation.py`, `python -m benchmarks.scheduling_mode_baseline --check` (week results) |
+| Week/month allocation order | `app/planning/allocation.py: _allocation_order` | `app/planning/workflow.py: allocate`, `provenance.py` (points are a fingerprint input) | `tests/planning/test_allocation.py`, [scheduling baseline](history/benchmarks/PROMPT1_SCHEDULING_BASELINE.md) (week results) |
 | Add/modify a task attribute | `app/planning/models.py: Task` | Local: `app/planning/repository.py` (`_task_to_row`, `_row_to_task`), new migration in `app/execution/db.py`. Server: `backend/models.py` + new Alembic revision, `backend/record_mapping.py`, `backend/resources.py` (`TaskFields`), revision tables via `backend/snapshots.py`. Sync: `app/sync/mapping.py`. CSV: `csv_export.py`, `csv_canonical.py`. UI: `app/ui/task_form_model.py`, `task_editor.py` | `tests/planning/test_models.py`, `test_planning_repository.py`, `test_csv_canonical.py`, `tests/execution/test_db.py`, `tests/backend/test_migrations.py`, `test_normalized_storage.py`, `tests/sync/test_protocol.py` |
 | Change local SQLite schema | `app/execution/db.py: MIGRATIONS` (append; never edit applied versions) | Repositories, `_capture_triggers` for synchronizable tables, `app/execution/backup.py` | `tests/execution/test_db.py`, add `tests/execution/test_migration_vN.py`, `tests/ui/test_data_compatibility.py` |
 | Change server schema | `backend/models.py` + `backend/migrations/versions/00NN_*.py` | `backend/migrate.py`, `record_mapping.py`, `snapshots.py`, direct mode (`app/persistence/`) | `tests/backend/test_migrations.py`, `test_normalized_migration.py`; `-m postgres` with `TEST_DATABASE_URL` |
 | Fix a sync bug | `app/sync/engine.py` (prepare/apply/resolve) | `app/sync/store.py`, `mapping.py`, `service.py`; server `backend/sync.py`, `mutations.py`, `api.py` (`/changes`); `docs/architecture/sync-protocol.md` | `tests/sync/test_protocol.py`, `test_two_devices.py`, `test_conflict_recovery.py`, `tests/backend/test_sync_push.py`, `test_change_log.py` |
-| Add execution behavior (new action/outcome) | `app/execution/lifecycle.py` | `app/execution/service.py`, `models.py`; server `backend/executions.py`, `outcomes.py`, `mutations.py`; `app/sync/mapping.py: execution_changes`; direct `app/persistence/executions.py`; UI `app/ui/execution_controller.py`, `execution_workflow.py`, `task_status.py` | `tests/execution/test_service.py`, `test_task_outcomes.py`, `tests/backend/test_executions.py`, `tests/direct/test_execution_contract.py`, `tests/sync/test_execution_history_sync.py` |
+| Add execution behavior (new action/outcome) | `app/execution/lifecycle.py` | `app/execution/service.py`, `models.py`, server `backend/executions.py`, `outcomes.py`, `mutations.py`, `app/sync/mapping.py: execution_changes`, `app/persistence/executions.py`, and UI `app/ui/execution_controller.py`, `task_status.py`, `day_outcomes.py` | `tests/execution/test_service.py`, `test_task_outcomes.py`, `tests/backend/test_executions.py`, `tests/direct/test_execution_contract.py`, `tests/sync/test_execution_history_sync.py` |
 | Change productivity statistics | `app/productivity/tracker.py` (tracker figures) or `stats.py` (execution stats) | `reporting.py`, `day_summary.py`, `project_stats.py`, `app/planning/history.py`, `app/ui/tracker_view.py`, `productivity_page.py`; `docs/features/analytics.md` | `tests/productivity/test_tracker.py`, `test_tracker_history.py`, `test_stats.py`, `tests/ui/test_productivity_page.py`, `test_tracker_view.py` |
 | Fix UI responsiveness | `app/ui/background.py` | The page's `*_page.py` (look for synchronous calls on the Tk thread), `layout.py`, `paint_widgets.py`, `tk_lifecycle.py`, `diagnostics.py`; `docs/history/desktop-responsiveness-*.md` | `tests/ui/test_responsiveness_regressions.py`, `test_background_executor.py`, `test_async_storage.py`, `test_bounded_rendering.py`; `benchmarks/desktop_responsiveness.py` |
 | Add a backend endpoint | Router module (`backend/api.py`, `planning_api.py`, `security_api.py` …) | `backend/app.py` (include the router), `errors.py` (error shape), `resources.py` (schemas), `api.current_user_id` / `throttle`, `protection.py`; client side `app/sync/transport.py` if the desktop calls it; `docs/backend/web-api.md` | `tests/backend/test_resources.py`, `test_api_security.py`, `test_server_security.py`, `test_isolation.py` |
