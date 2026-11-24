@@ -7,10 +7,10 @@ feature's state changes. See the [repository diagnosis](history/diagnosis.md),
 | | |
 |---|---|
 | Audited | 2026-11-23 |
-| Commit | `c030585` plus the local retired-code and documentation cleanup |
-| Branch | `main`. PR #24 merged the engine remake and PR #25 merged repository cleanup and the tag-based backend workflow |
-| App version | Source and latest published installer both report 1.3.0. The published `v1.3.0` is `dfd53d6`, 16 commits before `c030585`. Backend API version is 1.0.0 |
-| Local and server schema | Main uses SQLite v19 and Alembic `0021`. The `v1.3.0` tag uses SQLite v18 and Alembic `0020`. See the [cutover notes](backend/backend.md#priority-and-dependency-removal-0021) |
+| Commit | `fdd9b41` plus the 1.3.1 release preparation |
+| Release preparation | 2026-11-24. PR #24 merged the engine remake and PR #25 merged repository cleanup and the tag-based backend workflow |
+| App version | Source reports 1.3.1. The preceding published installer, `v1.3.0`, was built from `dfd53d6`. Backend API version is 1.0.0. [Published Windows releases](https://github.com/Ramtin-Mandom/Schedule_Maxing/releases) |
+| Local and server schema | The 1.3.1 source supports SQLite v19 and Alembic `0021`. A read-only check confirmed the local desktop database is already on v19. The `v1.3.0` tag uses SQLite v18 and Alembic `0020`. [Cutover notes](backend/backend.md#priority-and-dependency-removal-0021) |
 
 Current audit results appear first in section D. Earlier results keep their dates and revisions.
 
@@ -29,7 +29,7 @@ and can sync to a FastAPI/PostgreSQL account server.
 | Sync client ↔ backend | Implemented | GitHub PostgreSQL job passed the backend, sync and direct-mode suites. Authenticated hosted behavior is unverified |
 | Backend API | Implemented | GitHub SQLite and PostgreSQL jobs passed |
 | Hosted deployment (Render) | Public endpoints reachable on retry | `/health` and `/ready` returned 200. The exact revision and new tag-triggered deploy path remain unverified |
-| Windows installer and updater | 1.3.0 published | The release build and publish jobs passed for `dfd53d6`. The current `main` has no new installer |
+| Windows installer and updater | 1.3.1 prepared | The release build and publish jobs previously passed for `dfd53d6`. The 1.3.1 build is the intended installer for SQLite v19. [Published Windows releases](https://github.com/Ramtin-Mandom/Schedule_Maxing/releases) |
 
 ## B. Feature implementation matrix
 
@@ -74,7 +74,7 @@ and can sync to a FastAPI/PostgreSQL account server.
 | Browser web UI | Not Implemented in this repository | — | No frontend sources; `docs/backend/web-api.md` is its API contract | |
 | Android client | Not Implemented in this repository | — | No Android sources | The README author note records it as an original goal |
 | In-app updater | Implemented | `app/update/`, `app/ui/update_*.py` | `tests/update/*` | Live GitHub feed Unverified. Since pull request #22 the automatic check runs on every launch (no once-a-day limit), "Skip this version" is gone, and the update flow is built even when local storage cannot open; HTTPS setup for sync moves to the first request (Code-inspected) |
-| Windows installer build and release workflow | Implemented | `packaging/windows/`, `.github/workflows/release.yml` | GitHub `v1.3.0` build and publish passed | Main's post-release changes await a new installer |
+| Windows installer build and release workflow | Implemented | `packaging/windows/`, `.github/workflows/release.yml` | GitHub `v1.3.0` build and publish passed | The 1.3.1 tag delivers the post-1.3.0 desktop changes |
 | Code signing | Partial | Optional signing in `build_windows.ps1`; placeholder in `downloader.verify_signature` | `docs/deployment/windows-distribution.md` | The updater checks SHA-256 and has no Authenticode enforcement |
 | Backend continuous deployment | Tag-triggered path unverified | `.github/workflows/deploy-backend.yml` | `tests/test_deploy_workflow.py`, GitHub Actions history | The prior merge-triggered workflow failed. No tag-triggered run is recorded. Render Auto-Deploy is an independent path |
 | Scheduling across DST changes or overnight | Not Implemented | Refused in `app/planning/time.py` | Explicit errors | By decision (ADR-034) |
