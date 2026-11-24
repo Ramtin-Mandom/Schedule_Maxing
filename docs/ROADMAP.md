@@ -78,9 +78,9 @@ Items the repository names as future work or as "not yet" limitations, in priori
 ### M4. Verify the first post-1.3.0 release and backend cutover
 
 - **Priority:** High
-- **Status:** Main contains the engine remake and cleanup. Five CI jobs passed on each PR. The published
-  installer is still `v1.3.0`. The public backend reported ready on retry, but the audit could not identify
-  its build or schema revision. The tag-triggered deployment path has no recorded run.
+- **Status:** The 1.3.1 desktop version is prepared for SQLite v19. A read-only check confirmed the local
+  desktop database is already on v19. The backend reported ready during the audit. Its deployed build and
+  schema revision remain unverified. [Published Windows releases](https://github.com/Ramtin-Mandom/Schedule_Maxing/releases)
 - **Dependencies:** Render service access, a tested database backup and restore plan, and an operator who can
   coordinate the cutover. The tag-triggered workflow also requires `BACKEND_DEPLOY_ENABLED=true`.
 - **Modules:** `.github/workflows/deploy-backend.yml`, `docs/deployment/render-deployment.md`, `backend/smoke_check.py`.
@@ -88,8 +88,9 @@ Items the repository names as future work or as "not yet" limitations, in priori
   - [ ] Identify the active server commit and Alembic revision. Verify a backup and restore on disposable data.
   - [ ] Rehearse the `0021` deployment with the old service out of traffic. Verify health, readiness and the
     authenticated smoke check on a disposable or staging service.
-  - [ ] Bump the desktop version. Build and verify a fresh install and an upgrade from 1.3.0 using a copy of a
-    v18 database. Exercise old-client sync against the upgraded API before releasing.
+  - [x] Bump the desktop version to 1.3.1 for SQLite v19 compatibility.
+  - [ ] Build and verify a fresh install and an upgrade from 1.3.0 using a copy of a v18 database. Exercise
+    old-client sync against the upgraded API before marking the backend cutover complete.
   - [ ] Record the production cutover and installer verification. [CI/CD guide](deployment/ci-cd.md#migrations)
 - **Acceptance criteria:** A ready server at the intended revision, a tested rollback plan, and a published
   installer that upgrades 1.3.0 without losing supported data.
