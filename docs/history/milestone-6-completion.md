@@ -40,7 +40,7 @@ account's first password reset.
 - Normal/ADHD versus the pre-change engine:
   `python benchmarks/scheduling_mode_baseline.py --source-root . --check benchmarks/results/prompt1_scheduling_mode_baseline.json`
   reports **identical to the saved baseline** (captured from an isolated export
-  of `ec072e7`, see `benchmarks/PROMPT1_SCHEDULING_BASELINE.md`).
+  of `ec072e7`, see `docs/history/benchmarks/PROMPT1_SCHEDULING_BASELINE.md`).
 - Five modes: `benchmarks/results/prompt5_scheduling_modes_comparison.json`
   and `.md` (runtime min/median/max over 5 runs, environment, B(S), stored
   insertion score, mode component, objective, scheduled/unscheduled counts and

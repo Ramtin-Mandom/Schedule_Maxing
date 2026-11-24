@@ -1,14 +1,12 @@
 # Roadmap
 
-What is left to do, in priority order. It is built from the code at commit `6cc8855` plus its uncommitted
-working tree, from the documented limitations in `docs/`, and from the README (2026-10-19). Current
-status and evidence are in [CURRENT_STATE.md](CURRENT_STATE.md); file locations are in
-[CODEBASE_MAP.md](../architecture/CODEBASE_MAP.md).
+Open work and completed milestones, updated against `main` at `c030585` on 2026-11-23. The next release
+depends on the database cutover and installer checks in M4. Python 3.10 has reached end of life (R2).
+See [repository diagnosis](history/diagnosis.md), [current state](CURRENT_STATE.md), and
+[codebase map](FEATURE_MAP.md).
 
-**The project has no issue tracker or approved product backlog in the repository.** The milestone plans
-of past batches have all been implemented; what is kept of them is in `docs/history/`, which `docs/README.md`
-marks as historical (the agent prompt collections were deleted on 2026-11-04). So this roadmap separates three kinds of
-work:
+Past project plans and reports live in `docs/history/`. This roadmap records confirmed work, existing plans
+and proposals that still need a product decision.
 
 - **Part 1, confirmed unfinished work:** defects or loose ends that can be seen in the current repository.
 - **Part 2, existing plans not yet implemented:** items the repository itself names as future or not-yet-done
@@ -26,7 +24,7 @@ updater, and the CI, release and deploy workflows.
 
 ## Part 1 — Confirmed unfinished work
 
-### M1. Make the in-progress 1.2.0 debug branch releasable
+### M1. Stabilize the 1.2.0 debug changes for the 1.3.0 release
 
 - **Priority:** High
 - **Status:** Complete (verified 2026-10-23): pull request #23 merged with all five CI jobs green, and
@@ -51,31 +49,16 @@ updater, and the CI, release and deploy workflows.
 ### M2. Correct documentation that contradicts the code
 
 - **Priority:** Medium
-- **Status:** Not started.
-- **Objective:** Stop agents and readers from acting on false statements.
-- **Dependencies:** None.
-- **Modules:** `README.md`, `docs/deployment/ci-cd.md`, `docs/features/desktop-day.md`, `.claude/skills/schedule-maxing/SKILL.md`.
-- **Deliverables:**
-  - [ ] README "Current Limitations" says "Account deletion and email verification are not provided". Email
-    verification exists (`backend/verification.py`, `verification_api.py`, Alembic `0017`); only account
-    deletion is missing.
-  - [ ] README "Current Limitations" says the backend supports "SMTP-based password recovery". It now also
-    supports the Resend, Brevo and Mailjet providers (`backend/mail.py`).
-  - [ ] `docs/deployment/ci-cd.md` §1 and README "Verification" say CI runs on every push and has four jobs.
-    `ci.yml` runs on `pull_request` and `workflow_dispatch` only and has five jobs (including
-    `security-scan`).
-  - [ ] `docs/features/desktop-day.md` (near line 354) describes Productivity sections "Schedule follow-through",
-    "History" and "Data". `app/ui/productivity_page.py` has only General / Specific / Project.
-  - [ ] The skill says the app is also on Android. No Android code exists in the repository.
-- **Acceptance criteria:** Each statement matches the code it describes.
-- **Testing:** None; documentation only.
-- **Risks:** None.
-- **Complexity:** Small.
+- **Status:** Complete in the 2026-11-23 documentation audit. The README describes verified accounts and the
+  configured mail backends. The CI guide lists the five jobs and trigger events. The Day guide reflects the
+  current Productivity views and outcome controls. The project navigation skill identifies Windows as the
+  delivered desktop platform.
 
 ### M3. Find and fix the intermittent Tk test failure
 
 - **Priority:** Medium
-- **Status:** Open. `docs/development/testing.md` says the cause is unknown.
+- **Status:** Open. The latest PR CI runs passed. The cause of the historical intermittent failure remains
+  unknown. [Testing guide](development/testing.md#known-flaky-test)
 - **Objective:** Make the real-window tier reliable, so a CI failure means a real defect.
 - **Modules:** `tests/conftest.py`, `tests/tk_cleanup.py`, `app/ui/tk_lifecycle.py`.
 - **Deliverables:**
@@ -92,22 +75,24 @@ updater, and the CI, release and deploy workflows.
 
 Items the repository names as future work or as "not yet" limitations, in priority order.
 
-### M4. Verify backend deployment end to end
+### M4. Verify the first post-1.3.0 release and backend cutover
 
 - **Priority:** High
-- **Status:** Not verified. `docs/deployment/ci-cd.md` §6 says the deployment workflow "has not yet been run
-  against a real Render service" and asks for the first deployment to be done by hand.
-- **Dependencies:** A Render service, the `production` environment secrets, and `BACKEND_DEPLOY_ENABLED=true`.
-  These are operator actions.
+- **Status:** Main contains the engine remake and cleanup. Five CI jobs passed on each PR. The published
+  installer is still `v1.3.0`. The public backend reported ready on retry, but the audit could not identify
+  its build or schema revision. The tag-triggered deployment path has no recorded run.
+- **Dependencies:** Render service access, a tested database backup and restore plan, and an operator who can
+  coordinate the cutover. The tag-triggered workflow also requires `BACKEND_DEPLOY_ENABLED=true`.
 - **Modules:** `.github/workflows/deploy-backend.yml`, `docs/deployment/render-deployment.md`, `backend/smoke_check.py`.
 - **Deliverables:**
-  - [ ] Run the workflow manually once and watch the deploy, `/health` and `/ready`.
-  - [ ] Run `python -m backend.smoke_check https://<host>` against the deployed service.
-  - [ ] Record the result in `docs/deployment/ci-cd.md`.
-- **Acceptance criteria:** A green deployment run, and a passing smoke check.
-- **Testing:** The smoke check; `pytest -m postgres` against a disposable database.
-- **Risks:** Production data. The pipeline takes no backup before a migration.
-- **Complexity:** Small (operator time).
+  - [ ] Identify the active server commit and Alembic revision. Verify a backup and restore on disposable data.
+  - [ ] Rehearse the `0021` deployment with the old service out of traffic. Verify health, readiness and the
+    authenticated smoke check on a disposable or staging service.
+  - [ ] Bump the desktop version. Build and verify a fresh install and an upgrade from 1.3.0 using a copy of a
+    v18 database. Exercise old-client sync against the upgraded API before releasing.
+  - [ ] Record the production cutover and installer verification. [CI/CD guide](deployment/ci-cd.md#migrations)
+- **Acceptance criteria:** A ready server at the intended revision, a tested rollback plan, and a published
+  installer that upgrades 1.3.0 without losing supported data.
 
 ### M5. Code-sign releases and check signatures in the updater
 
@@ -167,25 +152,21 @@ Items the repository names as future work or as "not yet" limitations, in priori
 - **Deliverables:**
   - [ ] Preference layers in the planning CSV (`docs/architecture/sync-contract.md` §11).
   - [ ] Store the reasons tasks were left unplaced, so they survive a restart (`docs/features/desktop-day.md` "Limitations").
-  - [ ] Decide whether regeneration should cancel the `scheduled` execution of a placement it replaces
-    (`docs/features/execution-rescheduling.md` §10).
+  - [x] Cancel a never-started execution when regeneration removes its placement. This is implemented as
+    a `superseded` cancellation. [Execution and rescheduling](features/execution-rescheduling.md#5-regeneration-audit)
   - [ ] `op_id` replay for REST placement operations (`docs/features/execution-rescheduling.md` §10).
   - [ ] A desktop view of other workspaces' records (`docs/architecture/desktop-web-boundaries.md` §8).
   - [ ] A staging environment and backups before migrations for the backend (`docs/deployment/ci-cd.md` §6).
-- **Testing:** The tests named for each area in [CODEBASE_MAP.md](../architecture/CODEBASE_MAP.md#d-if-you-need-to-change-x-look-here).
+- **Testing:** The tests named for each area in [FEATURE_MAP.md](FEATURE_MAP.md#d-if-you-need-to-change-x-look-here).
 - **Complexity:** Small to Medium each.
 
-### M9. Optional engine ideas listed in the README
+### M9. Scheduling improvements
 
-- **Priority:** Low
-- **Status:** The README lists these as "Possible next steps"; they are not commitments.
-- **Items:**
-  - a simulated-annealing optimizer;
-  - schedule comparison metrics;
-  - more detailed reasons for unscheduled tasks;
-  - drag-and-drop editing;
-  - opt-in use of predicted durations.
-- **Complexity:** Varies.
+- **Priority:** Medium
+- **Status:** The audit reproduced a range assignment with adequate aggregate minutes and no contiguous slot,
+  even though a different date in the range was free.
+- **Proposal:** Decide whether to detect the blocked date during allocation or retry unplaced tasks against
+  eligible alternative dates. Keep the day engine's constraints authoritative. [Reproduction](history/diagnosis.md#4-range-allocation-can-miss-work-the-day-engine-could-place-elsewhere)
 
 ### M10. Budgeting beyond the desktop
 
@@ -235,23 +216,25 @@ These come from this analysis. None of them has been approved.
 - **Risks:** Compaction can break offline clients' pulls. The protocol needs a "resync required" answer.
 - **Complexity:** Large.
 
-### R2. Plan the move off Python 3.10
+### R2. Move off Python 3.10
 
-- **Priority:** Medium
-- **Status:** Python 3.10 is pinned everywhere (ADR-002). Its upstream security support is scheduled to end
-  in October 2026 (PEP 619).
-- **Proposal:** Pick a newer version and change all workflows, `build_windows.ps1` and its test, and the
-  `.venv` in one change. Re-check PyInstaller and CustomTkinter.
+- **Priority:** High
+- **Status:** Python 3.10 remains the tested and packaged runtime (ADR-002). Upstream support ended on
+  2026-10-01. [PEP 619](https://peps.python.org/pep-0619/)
+- **Proposal:** Choose a supported runtime and update the workflows, Windows build check, Render guidance,
+  development setup and lock together. Re-check PyInstaller, CustomTkinter and PostgreSQL CI. Upgrade
+  `dnspython` and remove the recorded audit exception once the fixed release is in the tested lock.
 - **Risks:** Changes in bundling behavior; checks needed on a clean Windows machine.
 - **Complexity:** Medium.
 
-### R3. Wire up or remove the UI modules nothing can reach -- done (removed)
+### R3. Remove unused desktop presentation paths
 
-- **Status:** Done on 2026-11-04. The feedback dialog, the follow-through (cohort) panel and the
-  duration-suggestion widget (three modules under `app/ui/`) were deleted; nothing imported them. The domain services behind them stay:
-  `ExecutionController.record_feedback`, `ProductivityController.schedule_cohort_for_last` (and
-  `GET /planning/analytics/schedule-cohort`), and `app/productivity/prediction.py`. Showing any of them in the
-  desktop again needs new UI work. The `RewardConfigPage` class was removed earlier (`f47a080`).
+- **Status:** Complete locally. PR #25 removed the unused widgets. The follow-up removed the retired Execute,
+  History and Data presentation code and their raw history exporter, the unexposed median estimator, and
+  legacy range and freshness helpers. The development suite, scheduling baseline and targeted service
+  checks passed. [Current verification](CURRENT_STATE.md#d-testing-and-quality)
+- **Dependency for future work:** If the desktop gains timed work controls, build them on the retained
+  execution lifecycle. The tracker already consumes recorded sessions. [Execution workflow](Workflow.md#outcomes-placement-moves-and-productivity)
 
 ### R4. Split the largest modules
 
@@ -270,12 +253,12 @@ These come from this analysis. None of them has been approved.
 ### R5. Tighten the desktop dependency bounds
 
 - **Priority:** Low
-- **Status:** Partially addressed: CustomTkinter is now capped below 6 (`b5668ff`); the other entries in
+- **Status:** CustomTkinter is now capped below 6 (`b5668ff`). The other entries in
   `requirements/desktop.txt` have lower bounds only. `docs/architecture/desktop-web-boundaries.md` §8 records that a fresh
   install had resolved CustomTkinter 6.0.0 while the development environment has 5.2.2.
   `requirements/requirements.lock` exists for the security scan, but the build does not use it.
-- **Proposal:** Build the installer from the lock file, or add upper bounds, so released builds can be
-  reproduced.
+- **Proposal:** Use constraints or a release lock that covers the dependencies actually installed by CI
+  and the Windows build. Audit those resolved versions.
 - **Complexity:** Small.
 
 ### Not on the roadmap without explicit owner direction

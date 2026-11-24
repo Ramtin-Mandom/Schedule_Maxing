@@ -138,7 +138,7 @@ def test_tasks_blocks_preferences_import_generation_and_executions(desktop) -> N
         result = getattr(executions, action)(execution.id)
         assert result.ok, (action, result.error)
     assert executions.get_execution(execution.id).value.status.value == "completed"
-    assert services.productivity_controller.build_dashboard().value.observation_count == 1
+    assert services.productivity_controller.build_tracker().value.general.activity.completions == 1
 
 
 def test_records_survive_closing_and_reopening(engine, clock) -> None:

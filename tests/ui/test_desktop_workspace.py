@@ -27,7 +27,7 @@ from app.sync.store import SyncStore
 from app.ui import background
 from app.ui.app_services import describe_startup_failure, open_app_services
 from app.ui.background import ControllerResult, WorkerRegistry, run_in_background
-from app.ui.schedule_page_controller import SchedulePageController
+from app.ui.day_controller import DayScheduleController
 from tests.ui.test_app_services import FakeWidget, _wait_idle
 
 MON = date(2024, 6, 3)
@@ -48,8 +48,8 @@ def open_services(db_path: Path, project_root: Path, **kwargs):
     return open_app_services(db_path, timezone="UTC", project_root=str(project_root), **kwargs)
 
 
-def page(services) -> SchedulePageController:
-    return SchedulePageController(services.planning_controller, number_of_days=1, anchor_date=MON, timezone="UTC")
+def page(services) -> DayScheduleController:
+    return DayScheduleController(services.planning_controller, anchor_date=MON, timezone="UTC")
 
 
 def names(services) -> set[str]:
@@ -248,7 +248,7 @@ def test_an_unreachable_or_invalid_backend_never_blocks_local_work(tmp_path: Pat
         assert services.planning_controller.save_fixed_block(block).ok
         run = controller.make_schedule()
         assert run.ok, run.error
-        assert run.value.placed_count == 1
+        assert len(run.value.snapshot.executables) == 1
 
         report = services.sync_service.sync_now()  # not signed in: inert, whatever the backend does
         assert report.status == "inert"

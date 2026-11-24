@@ -101,10 +101,10 @@ converted exactly, nothing changes and the error names the row and field.
 ## 5. Verify with a sample account (opt-in writes)
 
 ```bash
-python -m app.persistence.verify_render --env-file .env --write-sample --email Ramtin1383.5@gmail.com --display-name Ramtin --anchor-date 2026-09-28 --timezone America/Vancouver
+python -m app.persistence.verify_render --env-file .env --write-sample --email you@example.com --display-name "Sample Planner" --anchor-date 2026-09-28 --timezone America/Vancouver
 ```
 
-The password is asked with a hidden prompt (twice when the account is new); it is
+Use an email for a disposable test account. The password is asked with a hidden prompt (twice when the account is new); it is
 never an argument, a default or a file. Then run the **same command again**: the
 second run must report `seed already seeded`, `generation already_current` and
 `0 new change-log entries`.
@@ -116,9 +116,9 @@ while the optimizer runs):
    the password must match; a wrong password stops everything, and an existing
    password is never reset.
 2. **Sample.** `samples/inputs/valid_single_day_basic.csv` -- checked to contain
-   3 flexible tasks and 4 fixed blocks on day 1 with **no dependencies** -- is
+   3 flexible tasks and 4 fixed blocks on day 1 -- is
    converted by the ordinary legacy importer onto `--anchor-date` in
-   `--timezone` (category, tag, duration, priority, date preference and preferred
+   `--timezone` (category, tag, duration, date preference and preferred
    window kept) and given stable ids derived from the fixture version, the
    account, the date, the time zone and the CSV line. Missing records are
    created; identical ones are left alone; records you edited or deleted are
@@ -135,25 +135,16 @@ while the optimizer runs):
    injected clock on throwaway databases, never in your account).
 6. **Read-back.** The connection pool is closed and a new one signs in again and
    reads everything through the app's services: ids, owner, values, placement
-   validity (inside the day, no overlaps, dependencies in order) and freshness.
+   validity (inside the day and without overlaps) and freshness.
 7. **Password scope.** The stored credential is a valid Argon2id hash that
    verifies; the schema has no plaintext credential column; the change-log
    snapshots of the seeded records and this run's log messages do not contain the
    password. This covers this account and this run -- it is not a database-wide
    audit, and the password is never sent in a search query.
 
-Optional dependency fixture, on a different date:
-
-```bash
-python -m app.persistence.verify_render --env-file .env --write-sample --email Ramtin1383.5@gmail.com --display-name Ramtin --anchor-date 2026-09-28 --timezone America/Vancouver --dependency-date 2026-09-29
-```
-
-It seeds `samples/inputs/dependency_chain_linear.csv` (Task A -> B -> C -> D)
-with the same protections.
-
 **Output** is a safe summary: `SUCCESS`/`FAILURE`, the account name and
 normalized email, TLS mode and revision, the seed date and time zone, the task,
-fixed-block, placement and execution counts, dependency applicability, the
+fixed-block, placement and execution counts, the
 preference/freshness checks, the reopened-connection result, idempotence and the
 password-scope result -- never a URL, host, password, hash or SQL. Every step is
 listed as `ok`, `FAILED` or `not run`; if a run fails after earlier steps

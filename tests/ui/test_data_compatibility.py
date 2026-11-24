@@ -277,6 +277,6 @@ def test_a_version1_database_upgrades_and_keeps_its_history_in_the_ownerless_wor
         assert sorted(execution.id for execution in listed) == sorted(row[0] for row in history)
         kept_sessions = services.connection.execute("SELECT id, execution_id, started_at FROM work_sessions").fetchall()
         assert sorted(tuple(row) for row in kept_sessions) == sorted((row[0], row[1], row[2]) for row in sessions)
-        assert services.productivity_controller.build_dashboard().ok
+        assert services.productivity_controller.build_tracker().ok
     finally:
         services.close()

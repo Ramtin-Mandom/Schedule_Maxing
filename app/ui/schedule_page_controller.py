@@ -1,10 +1,9 @@
 """
 app/ui/schedule_page_controller.py
 
-The Tk-free presenter behind one desktop schedule page (Day / Week / Month
-in app/app.py). Every SchedulePage callback is a thin call into this class
-followed by a redraw from the PageSnapshot it returns, so the callback
-boundary itself is exercised headlessly by tests/ui/test_schedule_page_controller.py.
+Shared task editing, CSV, reset and snapshot operations for the desktop
+planning controllers. Day generation is driven by DayScheduleController.
+Week and Month display calendar data through CalendarController.
 
 Data flow: widget callback -> SchedulePageController -> PlanningController
 -> PlanningService -> PlanningRepository -> SQLite. Nothing here keeps its
@@ -45,8 +44,8 @@ occurrences are the page's ordinary rows ("repeat"). Saving an occurrence
 or deleting it takes an EditScope -- this occurrence, this and every later
 one (from its original date), or the entire series (scope_choices /
 removal_choices say which apply to a row); a series row's own edits apply
-to the entire series. Make Schedule materializes the range's occurrences
-first (PlanningController.schedule_range).
+to the entire series. The planning workflow materializes occurrences before
+it generates placements.
 
 The desktop form (Milestone 4) saves through blank_draft/editor_options/
 draft_for/save_draft/delete_description with app/ui/task_form_model.py's
@@ -177,13 +176,6 @@ class DirectCompletion:
 
 
 @dataclass(frozen=True)
-class UnscheduledRow:
-    day_label: str
-    name: str
-    reason: str
-
-
-@dataclass(frozen=True)
 class PageSnapshot:
     start_date: date_
     end_date: date_
@@ -214,13 +206,6 @@ class FormState:
 class ImportRun:
     snapshot: PageSnapshot
     summary: str
-
-
-@dataclass(frozen=True)
-class ScheduleRun:
-    snapshot: PageSnapshot
-    unscheduled: list[UnscheduledRow]
-    placed_count: int
 
 
 def format_window(start_minute: int, end_minute: int) -> str:
@@ -686,46 +671,6 @@ class SchedulePageController:
         chosen = EditScope(choice)
         return self._planning.delete_series(series.id, expected_version=series.version, scope=chosen,
                                             cutoff=task.occurrence_slot if chosen == EditScope.FUTURE else None)
-
-    def make_schedule(self) -> ControllerResult[ScheduleRun]:
-        """Allocate the page's dates, generate each date, save the range atomically, re-read."""
-        run = self._planning.schedule_range(self._anchor, self.end_date, scope=RangeScope.PLANNED)
-        if not run.ok:
-            reloaded = self.load()
-            return ControllerResult.failure(
-                f"{run.error}\n\nNothing was saved; the previously saved schedule is unchanged."
-                if reloaded.ok else f"{run.error}\n\n{reloaded.error}"
-            )
-
-        loaded = self.load()
-        if not loaded.ok:
-            return ControllerResult.failure(loaded.error)
-
-        result = run.value
-        names = self._task_names(
-            [entry.task_id for entry in result.allocation.unallocated]
-            + [entry.task_id for output in result.outputs.values() for entry in output.unscheduled]
-        )
-        unscheduled = [
-            UnscheduledRow(day_label="(range)", name=names.get(entry.task_id, str(entry.task_id)),
-                           reason=f"{entry.reason_code.value}: {entry.explanation}")
-            for entry in result.allocation.unallocated
-        ]
-        for day, output in result.outputs.items():
-            unscheduled.extend(
-                UnscheduledRow(day_label=day_label(day), name=names.get(entry.task_id, str(entry.task_id)),
-                               reason=f"{entry.reason_code.value}: {entry.explanation}")
-                for entry in output.unscheduled
-            )
-        # Work this run left where it is: occurrences already planned outside the range (never moved silently).
-        elsewhere = self._task_names(list(result.kept_elsewhere))
-        unscheduled.extend(
-            UnscheduledRow(day_label=day_label(placement.planned_date), name=elsewhere.get(task_id, str(task_id)),
-                           reason="already planned outside this range: left there (move it to plan it here)")
-            for task_id, placement in sorted(result.kept_elsewhere.items(), key=lambda item: item[1].planned_date)
-        )
-        placed = sum(len(output.placements) for output in result.outputs.values())
-        return ControllerResult.success(ScheduleRun(snapshot=loaded.value, unscheduled=unscheduled, placed_count=placed))
 
     def reset(self, scope: ResetScope) -> ControllerResult[PageSnapshot]:
         """Clear this page's range per `scope`. Execution history is never deleted here."""

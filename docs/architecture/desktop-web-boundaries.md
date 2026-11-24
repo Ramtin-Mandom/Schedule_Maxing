@@ -293,7 +293,7 @@ active_placement_dates(task_ids) -> dict[id, list[date]]     # where tasks are a
 reset_preview(start, end) -> ResetPreview                   # counts, ids, cascades, blocked, token
 reset_range(start, end, *, confirmation=token) -> ResetResult
 clear_range(start, end, *, include_planning_data)            # the older reset scopes, unchanged
-preview_csv_file(path, *, allow_updates=False) -> BatchApplyResult   # canonical v2 only, writes nothing
+preview_csv_file(path, *, allow_updates=False) -> BatchApplyResult   # canonical formats 2 and 3, read only
 import_csv_file(path, *, anchor_date, mode, allow_updates=False)
 export_planning_csv(path, *, start_date=None, end_date=None, include_deleted=False)
 ```
@@ -328,11 +328,10 @@ versioned user preference layer through `PlanningController`. `SettingsPage` reu
 `PreferencesEditor`; date overrides are never changed by default edits. Settings pages
 are rebuilt on workspace changes. See [desktop-settings.md](../features/desktop-settings.md).
 
-**Execution/productivity:** `ExecutionController` (`get_or_create_canonical_execution`,
-`start/pause/resume/complete/skip/cancel`, `find_execution_for_placement`,
-`record_feedback`, `list_executions`, `reset_all_history` — scoped to the
-workspace) and `ProductivityController` (`build_dashboard`,
-`predict_duration`, `export_execution_history`, `reset_all_history`).
+**Execution and productivity.** The desktop uses `ExecutionController.set_outcome` and `set_outcomes`
+for saved placements and completion methods for To Dos and fixed blocks. Timed actions, feedback and
+history remain service and API contracts. `ProductivityController` builds tracker and project views
+from the active workspace. [Workflow](../Workflow.md#outcomes-placement-moves-and-productivity)
 
 **Accounts and sync (Prompt 2, implemented; [desktop-accounts.md](../features/desktop-accounts.md)):** widgets use
 `AccountController` (`app/ui/account_controller.py`: `connection()`, `configure_backend(url)`,

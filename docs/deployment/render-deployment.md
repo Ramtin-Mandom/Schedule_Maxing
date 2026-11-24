@@ -99,14 +99,12 @@ The backend never reads a `.env` file and never logs passwords, tokens,
 - **Checking.** `python -m backend.migrate check` exits 0 only when the
   database is at the latest revision. `GET /ready` reports the same thing
   over HTTP.
-- **Compatibility.** Keep schema changes backward compatible with the
-  version that is still running: add first, remove later. **Exception:**
-  the normalized-storage revisions 0004-0006 remove the JSON columns the
-  previous version uses, so the previous service must be stopped (not
-  serving or writing) before that upgrade runs; see
-  [backend.md](../backend/backend.md#normalized-storage-0004-0006). A pre-deploy
-  command alone is not enough, because the old version keeps serving while
-  it runs.
+- **Compatibility.** Additive changes can run while the previous version is serving. The
+  normalized-storage revisions `0004`–`0006` and the priority/dependency removal in `0021`
+  drop columns or tables used by the previous server. Before that cutover, verify a restorable
+  backup, take the old server out of traffic, and coordinate any Render Auto-Deploy. The
+  pre-deploy command can run while the old process is still serving. [Normalized storage](../backend/backend.md#normalized-storage-0004-0006),
+  [revision 0021](../backend/backend.md#priority-and-dependency-removal-0021)
 
 ## Backups and rollback
 
@@ -116,11 +114,11 @@ The backend never reads a `.env` file and never logs passwords, tokens,
   - **Free Render Postgres has no backups and expires 30 days after
     creation.** Use it only for trying things out, never for data you want
     to keep.
-- **Rolling back code.** Redeploy the previous commit. It keeps working as
-  long as the schema changes were additive.
-- **Rolling back the schema.** Downgrades are not run automatically.
-  Restore from a backup, or run a specific Alembic downgrade only after
-  checking it does not drop data you need.
+- **Rolling back code.** Pair the previous commit with its expected Alembic revision.
+  `/ready` compares the database revision to the running code's migration head.
+- **Rolling back the schema.** Restore the pre-upgrade backup to recover values removed by
+  `0021`. Its downgrade recreates the old schema with default priorities and empty dependency
+  tables. For other revisions, use a checked Alembic downgrade or a validated restore.
 - **Free web services.** They spin down after 15 minutes without traffic,
   so the first desktop sync afterwards may time out. The client treats that
   as a transient failure and retries with backoff.

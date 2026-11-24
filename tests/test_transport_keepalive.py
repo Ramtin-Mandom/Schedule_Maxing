@@ -7,6 +7,7 @@ ever sent again -- never a POST. Against a real local HTTP/1.1 server.
 from __future__ import annotations
 
 import json
+import select
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -89,6 +90,10 @@ def test_a_connection_the_server_closed_is_replaced_before_the_next_request(serv
     handler.drop_after = 2  # the server closes after /health and the first request, without a header
     transport = HttpTransport(f"http://127.0.0.1:{httpd.server_port}", timeout=5)
     transport.profile("token")
+    # The response can reach the client before the server closes the connection.
+    connection = transport._connection
+    assert connection is not None and connection.sock is not None
+    assert select.select([connection.sock], [], [], 5)[0], "the closed peer never became readable"
     transport.push("token", [])  # a POST on what the client still holds: replaced first, never resent
     assert handler.connections == 2
     assert [method for method, _path in handler.requests].count("POST") == 1

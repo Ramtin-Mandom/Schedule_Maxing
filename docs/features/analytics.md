@@ -4,11 +4,12 @@ Two views over the same persisted history, deliberately kept apart:
 
 | View | Entry point | Population | Time basis |
 | --- | --- | --- | --- |
-| **Terminal outcomes** (existing, unchanged) | `ProductivityService.generate_report` / `build_dashboard` | executions (legacy and canonical), filtered by `created_at` windows | `created_at`; legacy day-index rows included |
-| **Schedule cohort** (new) | `ProductivityService.build_schedule_cohort_report`, `GET /planning/analytics/schedule-cohort` | intended occurrences planned in a local date range, with or without an execution | planned instants in an explicit reporting timezone, as of an explicit cutoff |
+| **Terminal outcomes** | `ProductivityService.generate_report` / `build_dashboard` | executions (legacy and canonical), filtered by `created_at` windows | `created_at`, including legacy day-index rows |
+| **Schedule cohort** | `ProductivityService.build_schedule_cohort_report`, `GET /planning/analytics/schedule-cohort` | intended occurrences planned in a local date range, with or without an execution | planned instants in an explicit reporting timezone, as of an explicit cutoff |
 
-Both are read-only and deterministic; neither creates executions. There is
-no ML in either (the experimental predictor stays inactive).
+Both are read-only and deterministic. The desktop Productivity page uses the tracker described in section 5.
+Duration metrics depend on recorded sessions from the API or existing history. Marking a fresh task done
+on the desktop records the outcome and leaves its actual duration unknown.
 
 ## 0. Day aggregates of scheduled work (foundation)
 

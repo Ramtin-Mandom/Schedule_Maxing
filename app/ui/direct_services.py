@@ -199,8 +199,8 @@ def _build_controllers(account, timezone_name: str, project_root: str | None
                        ) -> tuple[PlanningController, ExecutionController, ProductivityController]:
     planning = PlanningController(service=account.planning_service(), timezone=timezone_name, project_root=project_root)
     assign_todo_dates(account.planning_service(), timezone_name)
-    execution = ExecutionController(account.execution_service(), sync_state=lambda _execution_id: "server")
-    productivity = ProductivityController(account.productivity_service(timezone_name), execution, storage="server",
+    execution = ExecutionController(account.execution_service())
+    productivity = ProductivityController(account.productivity_service(timezone_name),
                                           task_tags=lambda: task_tags(planning))
     return planning, execution, productivity
 
