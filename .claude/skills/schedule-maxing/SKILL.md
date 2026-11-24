@@ -5,7 +5,7 @@ description: Where things live in Schedule Maxing and which layer a change belon
 
 # Schedule Maxing: project map
 
-Python 3.10 (CI and `.venv`). A CustomTkinter desktop app (Windows installer), a FastAPI backend on
+Python 3.12 (CI and `.venv`). A CustomTkinter desktop app (Windows installer), a FastAPI backend on
 Render with PostgreSQL, and a local SQLite store. CLAUDE.md's working rules still apply: smallest scope first, no
 repository-wide exploration, no unrelated refactors.
 

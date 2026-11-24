@@ -1,7 +1,7 @@
 # Roadmap
 
-Open work and completed milestones, updated against `main` at `c030585` on 2026-11-23. The next release
-depends on the database cutover and installer checks in M4. Python 3.10 has reached end of life (R2).
+Open work and completed milestones, updated during 1.3.1 preparation on 2026-11-24. M4 tracks the
+installer and hosted backend cutover. R2 records the Python 3.12 upgrade.
 See [repository diagnosis](history/diagnosis.md), [current state](CURRENT_STATE.md), and
 [codebase map](FEATURE_MAP.md).
 
@@ -81,8 +81,9 @@ Items the repository names as future work or as "not yet" limitations, in priori
 - **Status:** The 1.3.1 desktop version is prepared for SQLite v19. A read-only check confirmed the local
   desktop database is already on v19. The backend reported ready during the audit. Its deployed build and
   schema revision remain unverified. [Published Windows releases](https://github.com/Ramtin-Mandom/Schedule_Maxing/releases)
-- **Dependencies:** Render service access, a tested database backup and restore plan, and an operator who can
-  coordinate the cutover. The tag-triggered workflow also requires `BACKEND_DEPLOY_ENABLED=true`.
+- **Dependencies:** Render service access, a Python 3.12 build runtime, a tested database backup and restore
+  plan, and an operator who can coordinate the cutover. The tag-triggered workflow also requires
+  `BACKEND_DEPLOY_ENABLED=true`.
 - **Modules:** `.github/workflows/deploy-backend.yml`, `docs/deployment/render-deployment.md`, `backend/smoke_check.py`.
 - **Deliverables:**
   - [ ] Identify the active server commit and Alembic revision. Verify a backup and restore on disposable data.
@@ -219,14 +220,11 @@ These come from this analysis. None of them has been approved.
 
 ### R2. Move off Python 3.10
 
-- **Priority:** High
-- **Status:** Python 3.10 remains the tested and packaged runtime (ADR-002). Upstream support ended on
-  2026-10-01. [PEP 619](https://peps.python.org/pep-0619/)
-- **Proposal:** Choose a supported runtime and update the workflows, Windows build check, Render guidance,
-  development setup and lock together. Re-check PyInstaller, CustomTkinter and PostgreSQL CI. Upgrade
-  `dnspython` and remove the recorded audit exception once the fixed release is in the tested lock.
-- **Risks:** Changes in bundling behavior; checks needed on a clean Windows machine.
-- **Complexity:** Medium.
+- **Status:** Implemented for 1.3.1. CI, the Windows build, Ruff and developer setup use Python 3.12.
+  The backend and direct-mode requirements and the audit lock use patched dnspython 2.9.2. The audit
+  runs without CVE exceptions. [ADR-052](DECISIONS.md#adr-052--python-312-is-the-tested-and-packaged-runtime)
+- **Remaining verification:** Complete CI and the Windows installer smoke test. Confirm the active
+  Render service uses Python 3.12 under M4. [Release CI](https://github.com/Ramtin-Mandom/Schedule_Maxing/pull/26/checks)
 
 ### R3. Remove unused desktop presentation paths
 

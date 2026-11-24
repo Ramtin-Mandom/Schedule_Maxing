@@ -9,4 +9,6 @@ psycopg[binary]>=3.2,<4
 argon2-cffi>=23.1,<26
 # One validated mailbox per account (backend/accounts.py check_email); brings dnspython for the optional DNS check.
 email-validator>=2.2,<3
+# Require the patched DNS parser in both hosted and direct PostgreSQL installations.
+dnspython>=2.9.2,<3
 python-dotenv>=1.0.0

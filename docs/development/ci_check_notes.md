@@ -34,6 +34,17 @@ work it out again from failure logs.
 
 ## Pending
 
+### 2026-11-24: Python 3.12 and dependency security fix for 1.3.1 (release PR)
+
+- Changed: CI, PyInstaller and backend deployment use Python 3.12. The backend and direct-mode
+  dependencies and the lock require dnspython 2.9.2. The audit step runs without CVE exceptions.
+  The Day board restart test now checks persisted outcomes through the Productivity tracker.
+- Intent: Patch the DNS dependencies and verify the remaining desktop workflow. The first PR job
+  failed because the restart test referenced the retired History adapter.
+  [Dependency audit](../backend/security-operations.md#dependencies), [First CI run](https://github.com/Ramtin-Mandom/Schedule_Maxing/actions/runs/45345797824)
+- Depends on it: CI's five jobs, the Windows build and smoke test, and Render's Python version.
+- CI risk: Check the dependency audit, both PostgreSQL jobs and the Windows installer.
+
 ### 2026-11-23: Retired desktop code and consolidated documentation (main working tree)
 
 - Changed: Removed the old Execute, History and Data adapters, raw execution exporter, unexposed duration
@@ -217,8 +228,8 @@ both merged. Each final run passed `test`, `security-scan`, `desktop-only`, `dir
 - **CI resolves the newest pytest and Ruff.** pytest 9.2 (2026-11) changed `monkeypatch.setattr` undo on instances:
   it deletes the attribute when it was not in the instance `__dict__`, so a proxy object needs a `__delattr__`
   matching its `__setattr__`. Ruff on CI can be newer than `.venv`: check with the resolved version.
-- **Some fixed releases need Python 3.11.** The project and CI are on 3.10 (dnspython 2.9+ needs 3.11); check
-  `requires_python` on PyPI before pinning a fix.
+- **Dependency fixes can require a newer Python.** dnspython 2.9+ requires Python 3.11 or later.
+  CI and packaging switched to Python 3.12 so the fixed dependency can be installed.
 - **A regenerated scheduling-mode baseline adds a "secret".** `benchmarks/results/prompt1_scheduling_mode_baseline.json`
   records the git revision it ran from; a new 40-hex revision is a new `Hex High Entropy String` for
   `security-scan`. Update that entry's `hashed_secret` (the SHA-1 of the revision string) and `line_number` by
@@ -236,7 +247,7 @@ both merged. Each final run passed `test`, `security-scan`, `desktop-only`, `dir
   PR #25 merged the queue handling and tag trigger. As of 2026-11-23 the tag-triggered path has no recorded run.
 - Starlette warns "Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead". Waiting on
   the owner: adding `httpx2` means a new dependency in `requirements.txt` and `requirements.lock`.
-- pip-audit ignores CVE-2026-114605 (dnspython, needs Python 3.11 to fix): revisit by 2027-02-04 or on the move to
-  3.11, then drop the ignore. Keep `EMAIL_DNS_CHECK` off until then.
+- Verify the active Render runtime meets the Python 3.12 requirement. An explicit `PYTHON_VERSION`
+  in the service controls its build runtime. [Render deployment](../deployment/render-deployment.md)
 - `gh` is installed and logged in, but a shell opened before the install has the old PATH. If `gh` is not found,
   call `C:\Program Files\GitHub CLI\gh.exe` directly.

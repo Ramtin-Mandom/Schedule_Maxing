@@ -36,7 +36,7 @@ and cannot be selected in the packaged program.
 
 ## Building
 
-Prerequisites on the build computer: 64-bit Python 3.10 (exactly the version CI tests and releases with; the script
+Prerequisites on the build computer: 64-bit Python 3.12 (the minor version CI tests and releases with; the script
 refuses any other, including an older `.venv-build` -- rebuild it with `-Clean`), and
 [Inno Setup 6](https://jrsoftware.org/isdl.php) for the installer step. The user's computer needs none of this.
 
@@ -46,7 +46,7 @@ packaging\windows\build_windows.ps1
 
 | Step | What happens | Stops the build when |
 |---|---|---|
-| Build environment | `.venv-build` from `requirements/build.txt`: the desktop runtime and PyInstaller only | install fails, Python is not 3.10 or is 32-bit |
+| Build environment | `.venv-build` from `requirements/build.txt`: the desktop runtime and PyInstaller only | install fails, Python is not 3.12 or is 32-bit |
 | Tests | `python -m pytest -m dev` in `.venv` (`-SkipTests` to skip) | any test fails |
 | PyInstaller | `packaging/windows/ScheduleMaxing.spec` → `dist\ScheduleMaxing\` (a folder build, windowed, no UPX) | the build fails |
 | Bundle check | `check_bundle.py`: no `.env`, server package, database driver, key or log; resources present | anything forbidden or missing |

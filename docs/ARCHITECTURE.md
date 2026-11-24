@@ -30,7 +30,7 @@ recurring income/expenses, forecast) lives alongside but is independent of sched
 note says the product's emphasis has moved from schedule generation towards recording and productivity
 tracking; the engine remains the core algorithmic component.
 
-Three deployable parts share one Python 3.10 code base:
+Three deployable parts share one Python 3.12 code base:
 
 | Part | Runs where | Entry point | Storage |
 |---|---|---|---|
@@ -787,7 +787,7 @@ desktop loads; `tests/test_desktop_isolation.py` (slow) guards it.
 
 | Concern | Choice | Declared in |
 |---|---|---|
-| Language | Python 3.10 | workflows, `build_windows.ps1` |
+| Language | Python 3.12 | workflows, `build_windows.ps1` |
 | Desktop UI | CustomTkinter on Tk, `ttk.Treeview` | `requirements/desktop.txt` |
 | Models | Pydantic v2 | `app/planning/models.py`, `app/execution/models.py` |
 | Local storage | stdlib `sqlite3`, hand-written migrations | `app/execution/db.py` |

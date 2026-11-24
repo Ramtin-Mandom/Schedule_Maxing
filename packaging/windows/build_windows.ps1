@@ -25,10 +25,10 @@
 .PARAMETER Clean
     Delete build\, dist\ and the build environment first.
 .PARAMETER Python
-    The Python used to create the build environment (default: the "python" on PATH when it is 3.10, otherwise
-    "py -3.10"). It must be 64-bit Python 3.10, the version CI tests and releases with.
+    The Python used to create the build environment (default: the "python" on PATH when it is 3.12, otherwise
+    "py -3.12"). It must be 64-bit Python 3.12, the version CI tests and releases with.
 .PARAMETER TestPython
-    The Python that has the test tools installed (default: .venv\Scripts\python.exe if present; also 3.10).
+    The Python that has the test tools installed (default: .venv\Scripts\python.exe if present; also 3.12).
 .PARAMETER InnoSetupPath
     ISCC.exe, when it is neither on PATH nor in a default install folder.
 .PARAMETER SignThumbprint
@@ -66,7 +66,7 @@ $InstallerDir = Join-Path $DistDir "installer"
 
 # The Python that CI tests with and the release workflow builds with (.github/workflows/*.yml, python-version).
 # A local build must use the same one, or the installer holds a different program from the one the tests checked.
-$PythonVersion = "3.10"
+$PythonVersion = "3.12"
 
 function Step([string]$Message) { Write-Host ""; Write-Host "==> $Message" -ForegroundColor Cyan }
 
@@ -93,7 +93,7 @@ function Assert-PythonVersion([string]$Program, [string]$Role, [string]$Remedy) 
 }
 
 # The Python that creates the build environment: -Python, else "python" on PATH when it is the right version
-# (in the release workflow: the one actions/setup-python installed), else the Python launcher's "py -3.10".
+# (in the release workflow: the one actions/setup-python installed), else the Python launcher's "py -3.12".
 function Find-BasePython {
     if ($Python) { return $Python }
     if ((Get-PythonVersion "python") -eq $PythonVersion) { return "python" }

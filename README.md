@@ -59,7 +59,7 @@ tasks and reports the ones that did not fit, with the reason.
 
 ## Installation
 
-Python **3.10** with Tk support (the version CI, the build and the installer use).
+Python **3.12** with Tk support (the version CI, the build and the installer use).
 
 ```bash
 python -m venv .venv

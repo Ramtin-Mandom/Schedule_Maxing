@@ -40,7 +40,7 @@ talks to the backend only when you configure a backend URL and sign in
 | Setting | Value |
 | --- | --- |
 | Runtime | Python |
-| Python version | Environment variable `PYTHON_VERSION=3.10.11`. It must be the full version. CI and local development use Python 3.10; Render's default is newer. |
+| Python version | Set `PYTHON_VERSION=3.12.16` before deploying the 1.3.1 source. Render requires the full version for the environment variable. CI and local development use Python 3.12. [Render runtime settings](https://render.com/docs/python-version) |
 | Build command | `pip install -r requirements/backend.txt` |
 | Pre-deploy command (paid plans) | `python -m backend.migrate upgrade` |
 | Start command | `uvicorn --factory backend.app:create_app --host 0.0.0.0 --port $PORT` |
@@ -74,7 +74,7 @@ repository. [.env.example](../../.env.example) lists them with placeholders.
 | --- | --- | --- |
 | `DATABASE_URL` | yes | The Render Postgres **Internal Database URL** (`postgresql://USER:PASSWORD@HOST/DB`). The backend switches it to the psycopg 3 driver itself. To require TLS on the internal network, append `?sslmode=require`. An **external** URL must use `?sslmode=require`. |
 | `JWT_SECRET` | yes | At least 32 random characters, e.g. `python -c "import secrets; print(secrets.token_urlsafe(48))"`. Changing it signs everyone out. |
-| `PYTHON_VERSION` | yes (see above) | `3.10.11` |
+| `PYTHON_VERSION` | yes (see above) | `3.12.16` |
 | `JWT_ISSUER` | no | Default `schedule-maxing` |
 | `JWT_AUDIENCE` | no | Default `schedule-maxing-api` |
 | `ACCESS_TOKEN_TTL_MINUTES` | no | 1–1440, default 60 |
@@ -170,7 +170,7 @@ guide.
    - `JWT_SECRET`: generate one locally with
      `python -c "import secrets; print(secrets.token_urlsafe(48))"` and paste
      it. Do not commit it.
-   - `PYTHON_VERSION`: `3.10.11`.
+   - `PYTHON_VERSION`: `3.12.16`.
    - Leave the optional variables at their defaults unless you need to
      change them.
 
