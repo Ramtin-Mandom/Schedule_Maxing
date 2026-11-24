@@ -177,7 +177,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.smoke_check
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.12"
 
       - name: Smoke check (writes throwaway accounts)
         if: github.event_name == 'workflow_dispatch' && inputs.smoke_check

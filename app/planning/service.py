@@ -1,27 +1,10 @@
 """
 app/planning/service.py
 
-The selected-day service (Task 5 / Schedule Maxing v2): the one public
-operation that actually calls app.optimizer.generate_day_schedule (the Day
-Scheduler), for exactly one selected date, using an AllocationResult's
-assignments to determine which tasks belong to that date.
-
-This module never optimizes any date other than the one explicitly
-selected.
-
-Result staleness: DayResultStatus/SelectedDayState provide a minimal,
-explicit policy: a generated result is tied to the AllocationResult.id it
-was generated from. (Since Milestone 3 the desktop/CLI controller derives
-a date's state from persisted provenance instead -- see
-app/planning/provenance.py -- so it survives restarts; mark_stale_if_outdated
-remains the in-memory rule for callers that hold states themselves.) Any *new* allocation run (a different id -- produced
-whenever the caller re-allocates after a task/preference/fixed-block edit)
-makes every previously generated SelectedDayState stale, via
-mark_stale_if_outdated. This is intentionally coarse (a fresh allocation
-invalidates every generated day, not just the ones actually affected) --
-safe by construction (it can only over-invalidate, never leave a stale
-result looking current), and simple enough to reason about without a full
-dependency-impact graph, which is out of scope for this milestone.
+Build the day engine's input from one date of an allocation. The engine
+returns minute-level placements for that date. The planning controller
+uses SelectedDayState to present freshness derived from persisted
+generation provenance (app/planning/provenance.py).
 """
 
 from __future__ import annotations
@@ -30,7 +13,6 @@ import uuid
 from dataclasses import dataclass
 from collections.abc import Mapping
 from datetime import date as date_
-from datetime import timedelta
 from enum import Enum
 
 from app.optimizer import generate_day_schedule
@@ -68,23 +50,6 @@ class SelectedDayState:
 
 def initial_state(day: date_) -> SelectedDayState:
     return SelectedDayState(date=day, status=DayResultStatus.ALLOCATED, result=None, generated_from_allocation_id=None)
-
-
-def mark_stale_if_outdated(state: SelectedDayState, current_allocation_id: uuid.UUID) -> SelectedDayState:
-    """
-    Return `state` unchanged if it is not GENERATED, or if it was generated
-    from the current allocation run; otherwise return a new STALE state
-    (the prior result is kept, only relabeled, so a caller can still show
-    "this was the last schedule, but it is out of date" rather than losing
-    it outright).
-    """
-    if state.status == DayResultStatus.GENERATED and state.generated_from_allocation_id != current_allocation_id:
-        return SelectedDayState(
-            date=state.date, status=DayResultStatus.STALE, result=state.result,
-            generated_from_allocation_id=state.generated_from_allocation_id,
-            stale_reason=StaleReason.SUPERSEDED_ALLOCATION,
-        )
-    return state
 
 
 def generate_selected_day(
@@ -130,10 +95,3 @@ def generate_selected_day(
         date=selected_date, status=DayResultStatus.GENERATED, result=result, generated_from_allocation_id=allocation.id
     )
     return result, state
-
-
-def week_states(start_date: date_) -> dict[date_, SelectedDayState]:
-    """Initial ALLOCATED-or-nothing state for every date in a week, before
-    any date has been generated -- a small convenience for a caller
-    building its own per-date state map."""
-    return {start_date + timedelta(days=offset): initial_state(start_date + timedelta(days=offset)) for offset in range(7)}

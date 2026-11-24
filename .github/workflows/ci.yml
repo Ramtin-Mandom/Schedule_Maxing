@@ -22,7 +22,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.12"
           cache: "pip"
 
       - name: Install dependencies
@@ -54,14 +54,14 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.12"
 
       - name: Known vulnerabilities in the locked dependencies
         run: |
           python -m pip install pip-audit
-          # CVE-2026-114605 (dnspython 2.8.0): the fix (2.9.0+) needs Python 3.11; reachable only with
-          # EMAIL_DNS_CHECK on (off by default). Revisit by 2027-02-04 or on the move to Python 3.11.
-          python -m pip_audit --requirement requirements/requirements.lock --no-deps --disable-pip --ignore-vuln CVE-2026-114605
+          # Audit the reviewed lock directly, including transitive dependencies recorded there.
+          # The test jobs exercise fresh installations of the runtime requirements.
+          python -m pip_audit --requirement requirements/requirements.lock --no-deps --disable-pip
 
       - name: Scan tracked files for credentials
         # Every tracked file against the reviewed baseline: a secret-looking string that is not in
@@ -81,7 +81,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.12"
           cache: "pip"
 
       - name: Install desktop dependencies only
@@ -127,7 +127,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.12"
           cache: "pip"
 
       - name: Install direct-mode dependencies only
@@ -171,7 +171,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.12"
           cache: "pip"
 
       - name: Install dependencies

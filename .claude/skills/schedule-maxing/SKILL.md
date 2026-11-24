@@ -1,11 +1,11 @@
 ---
 name: schedule-maxing
-description: Where things live in Schedule Maxing and which layer a change belongs to. Use before implementing a feature or fix that touches the scheduling engines, constraints/PERT/reward, planning, execution tracking, productivity analytics, sync, the FastAPI backend, the CustomTkinter UI, or Windows packaging -- to find the right module without exploring the repository.
+description: Where things live in Schedule Maxing and which layer a change belongs to. Use before implementing a feature or fix that touches the scheduling engine, constraints and reward, planning, execution tracking, productivity analytics, sync, the FastAPI backend, the CustomTkinter UI, or Windows packaging -- to find the right module without exploring the repository.
 ---
 
 # Schedule Maxing: project map
 
-Python 3.10 (CI and `.venv`). A CustomTkinter desktop app (Windows installer, also Android), a FastAPI backend on
+Python 3.12 (CI and `.venv`). A CustomTkinter desktop app (Windows installer), a FastAPI backend on
 Render with PostgreSQL, and a local SQLite store. CLAUDE.md's working rules still apply: smallest scope first, no
 repository-wide exploration, no unrelated refactors.
 

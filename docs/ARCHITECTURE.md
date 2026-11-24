@@ -1,13 +1,8 @@
 # Architecture
 
-Structural reference for Schedule Maxing: what each part of the repository is, how the parts depend on each
-other, and where to change a feature. Runtime behaviour (call order, engine internals, rules and
-constraints) is in [WORKFLOW.md](WORKFLOW.md). Companion documents: [CODEBASE_MAP.md](CODEBASE_MAP.md)
-(change-impact table and per-change test lists), [CURRENT_STATE.md](../development/CURRENT_STATE.md) (what works today),
-[DECISIONS.md](DECISIONS.md) (why, as ADRs) and `docs/` (detailed contracts, linked where relevant).
-
-Verified against commit `abd5da7` (app version 1.3.0, branch `engine-remake`) on 2026-10-27 by reading the
-source. Statements marked **(unverified)** could not be confirmed by static inspection.
+Schedule Maxing separates the desktop, shared planning and execution logic, and local or hosted persistence.
+This guide describes the components, interfaces, data ownership and important hand-offs.
+[Runtime workflow](Workflow.md), [feature map](FEATURE_MAP.md), [current state](CURRENT_STATE.md), [design decisions](DECISIONS.md)
 
 ## Contents
 
@@ -35,7 +30,7 @@ recurring income/expenses, forecast) lives alongside but is independent of sched
 note says the product's emphasis has moved from schedule generation towards recording and productivity
 tracking; the engine remains the core algorithmic component.
 
-Three deployable parts share one Python 3.10 code base:
+Three deployable parts share one Python 3.12 code base:
 
 | Part | Runs where | Entry point | Storage |
 |---|---|---|---|
@@ -65,7 +60,7 @@ backend operator tools (`backend/migrate.py`, `maintenance.py`, `inspect_db.py`,
 | Planning application service | Persisted CRUD, ranges, replacement, rescheduling, resets, imports | `app/planning/application.py` (`PlanningService`) |
 | Recurrence | Series → concrete occurrences; "this / later / all" edits | `app/planning/series.py`, `recurrence.py`, `occurrence.py` |
 | Execution tracking | Lifecycle transitions, sessions, completion metrics | `app/execution/lifecycle.py`, `service.py` |
-| Analytics | Tracker, cohorts, day summaries, median predictor | `app/productivity/` |
+| Analytics | Tracker, cohorts, day summaries, project points and CLI report export | `app/productivity/` |
 | Budget | Money in integer minor units, recurrence, forecast | `app/budget/` |
 | Local persistence | One SQLite file, ordered migrations, backups, single-process lock | `app/execution/db.py`, `app/planning/repository.py`, `app/execution/repository.py`, `app/budget/repository.py` |
 | Sync client | Change capture, outbox, push/pull, conflicts, credentials | `app/sync/` |
@@ -249,7 +244,7 @@ unless notable).
 
 | File | Purpose / key API | Depends on | Used by |
 |---|---|---|---|
-| `service.py` | `generate_selected_day` (calls the engine exactly once for one date from an allocation), `SelectedDayState`, `DayResultStatus`, `mark_stale_if_outdated`, `week_states` | `optimizer`, `allocation`, `provenance` | `workflow.py`, `ui/planning_controller.py`, `ui/schedule_page_controller.py` |
+| `service.py` | `generate_selected_day` calls the engine once for a date. `SelectedDayState` and `DayResultStatus` describe the controller's view | `optimizer`, `allocation`, `provenance` | `workflow.py`, `ui/planning_controller.py` |
 | `allocation.py` | `allocate_tasks` → `AllocationResult` (task → date, capacity, `UnallocatedEntry` + `AllocationReasonCode`), `_allocation_order`, `_rank_candidate_dates`, `_deadline_allows`, `week_dates`, `month_dates` | `models`, `preferences`, `time` | `workflow.py`, `service.py`, `ui/planning_controller.py`, `ui/calendar_model.py`, `backend/planning_api.py` |
 | `preferences.py` | `OptimizerMode` (5 modes), `ENGINE_LABELS`, `ENGINE_DESCRIPTIONS`, `DayWindowSpec`, `RewardPreferences`, `PreferenceOverrides`, `PreferenceRecord`/`PreferenceScope`, `DayPreferences`, `resolve_day_preferences`, `default_preference_template`, `day_preferences_to_reward_settings`, `effective_task_preferred_window` | `reward`, `models`, `time` | engine, workflow, application, Settings UI, `backend/preferences.py` |
 | `provenance.py` | `inputs_fingerprint` (`FINGERPRINT_VERSION = 2`), `placements_digest`, `classify_generation`, `GenerationRecord`, `StaleReason` | `models`, `preferences` | `application.py`, `repository.py`, `service.py`, `workflow.py`, `sync/mapping.py`, `ui/day_controller.py`, `backend/planning_repository.py`, `backend/resources.py` |
@@ -286,17 +281,17 @@ unless notable).
 | `models.py` | `TaskExecution`, `WorkSession`, `ExecutionStatus`, `CancelReason` | Snapshot fields (name, category, points) |
 | `fixed_block_completion.py`, `direct_completion.py` | Outcomes of fixed blocks (deterministic execution id); completing a task with no placement | |
 | `backup.py`, `instance_lock.py` | Copy before migration (with pruning); one process per database file (`DatabaseInUseError`) | |
-| `exporters.py`, `errors.py` | Raw execution CSV/JSON export; typed errors | |
+| `errors.py` | Typed execution and transition errors | |
 
 ### 3.4 Analytics (`app/productivity/`)
 
 `reporting.py` — **`ProductivityService`**, the analytics boundary (`build_tracker_report`,
-`build_schedule_cohort_report`, `build_project_points`, `generate_report`, `predict_duration`,
+`build_schedule_cohort_report`, `build_project_points`, `generate_report`,
 `build_dashboard`). It reads executions (`ExecutionRepository`) and the owner-scoped schedule history
 (`PlanningService`). Pure helpers: `tracker.py` (`build_tracker_report`, `read_tracker_data`, awards, points,
 averages, streaks), `schedule_cohort.py` (planned vs actual), `day_summary.py` (day aggregates and colour
 class), `project_stats.py`, `stats.py`/`segments.py`/`buckets.py`/`filters.py`/`insights.py`/`trends.py`,
-`data_prep.py` (executions → observations), `prediction.py` (median-based duration predictor; no ML),
+`data_prep.py` (executions → observations),
 `exporters.py`, `report_cli.py`. Used by `app/ui/app_services.py`, `productivity_controller.py`,
 `app/persistence/direct.py`.
 
@@ -345,8 +340,8 @@ destroyed widgets or a switched workspace), `run_io`, `run_in_background`, seria
 | Day page and timeline | `day_page.py` (`DaySchedulePage`), `day_timeline.py`, `day_window.py`, `day_window_bar.py`, `day_outcomes.py`, `task_status_board.py`, `task_status.py`, `task_actions.py`, `day_money.py` |
 | Calendars, projects | `calendar_page.py`, `calendar_view.py`, `calendar_model.py`, `selected_day_panel.py`, `planning_pages.py` (`ProjectsPage`) |
 | Task form | `task_editor.py`, `task_form_model.py`, `task_defaults.py`, `time_fields.py`, `clock_input.py` |
-| Execution | `execution_controller.py` (`ExecutionController`), `execution_workflow.py` |
-| Productivity | `productivity_controller.py`, `productivity_page.py`, `tracker_view.py`, `productivity_charts.py`, `history_model.py` |
+| Execution | `execution_controller.py` exposes desktop outcomes and reads saved attempts |
+| Productivity | `productivity_controller.py`, `productivity_page.py`, `tracker_view.py`, `productivity_charts.py` |
 | Budgeting | `budget_controller.py`, `budget_page.py`, `budget_future.py`, `budget_charts.py` |
 | Settings | `settings_controller.py`, `preferences_editor.py`, `preferences_model.py`, `ui_settings.py` |
 | Account and sync | `account_controller.py`, `account_page.py`, `conflict_view.py` |
@@ -643,44 +638,15 @@ Alembic revisions `0001`–`0021` (latest: `0021_drop_priority_and_dependencies`
 
 ## 6. Feature-to-file map
 
-| Feature | Main files | Supporting files | Entry point |
-|---|---|---|---|
-| Make Schedule (one date) | `app/planning/workflow.py` (`generate`), `app/optimizer.py` | `app/planning/service.py`, `allocation.py`, `provenance.py`, `engine_process.py`, `app/ui/day_controller.py` | Day page button → `DaySchedulePage.make_schedule` (`app/ui/day_page.py`) |
-| Full regeneration | `workflow.generate(mode=FULL)` | `PlanningService._replace_range` (supersedes, cancels unstarted executions) | `DaySchedulePage.regenerate` |
-| Week / month scheduling | `app/planning/allocation.py`, `workflow.generate_from` | `app/ui/schedule_page_controller.py`, `calendar_controller.py`, `PlanningController.schedule_range` | Week/Month page actions |
-| Scheduling modes | `app/optimizer.py`, `app/mode_objectives.py`, `app/planning/catch_up.py` | `app/planning/preferences.py` (`OptimizerMode`), `PlanningController.set_engine_mode` | Day page engine dropdown, Settings, CLI `--mode` |
-| Reward weights / preferences | `app/reward.py`, `app/planning/preferences.py` | `config/task_preference.yaml`, `app/ui/preferences_model.py`, `preferences_editor.py`, `settings_controller.py`, `backend/preferences.py` | Settings page |
-| Hard constraints | `app/optimizer.py`, `app/planning/fixed_block_rules.py`, `app/planning/time.py` | `workflow._kept_problems`, `reschedule_problems`, `backend/resources.py` | Every generation / block write |
-| Freshness ("Current / Out of date") | `app/planning/provenance.py`, `workflow.day_freshness` | `DayScheduleController` status text, `page_freshness.py` (UI redraw skipping, unrelated to provenance) | Day page load |
-| Manual move / reschedule | `workflow.reschedule_placement`, `PlanningService.apply_reschedule` | `app/ui/day_timeline.py`, `execution_workflow.py`, `PlanningController.reschedule_placement`, `release_manual_placement` | Day timeline drag/move |
-| Recurring tasks | `app/planning/series.py`, `recurrence.py` | `occurrence.py`, `RecurrenceSpec`, `workflow.expand_range` | Task form repeat options |
-| Task creation / editing | `app/ui/task_form_model.py`, `task_editor.py` | `task_defaults.py`, `time_fields.py`, `clock_input.py`, `PlanningController.add_or_update_task` | Day page / Projects "Add task" |
-| Fixed blocks | `PlanningService.save_fixed_block` | `fixed_block_rules.py`, `PlanningController.save_fixed_block` | Task form (fixed) |
-| To Dos | `Task.kind = TODO` in `models.py` | `app/ui/app_services.assign_todo_dates`, Day board | Task form |
-| Execution tracking / outcomes | `app/execution/service.py`, `lifecycle.py` | `app/ui/execution_controller.py`, `execution_workflow.py`, `day_outcomes.py`, `task_status_board.py`, `fixed_block_completion.py`, `direct_completion.py` | Day board actions |
-| Productivity analytics | `app/productivity/reporting.py`, `tracker.py` | `schedule_cohort.py`, `day_summary.py`, `project_stats.py`, `app/ui/productivity_controller.py`, `productivity_page.py`, `tracker_view.py` | Productivity page; `report_cli.py` |
-| Week/Month calendar colours | `app/productivity/day_summary.py` | `app/ui/calendar_model.py`, `calendar_page.py` | Week/Month pages |
-| Projects | `app/ui/planning_pages.py` (`ProjectsPage`), `projects_controller.py` | `Project` model, `project_stats.py` | Project Schedule page |
-| Budget | `app/budget/service.py` | `models.py`, `money.py`, `recurrence.py`, `stats.py`, `repository.py`, `app/ui/budget_controller.py`, `budget_page.py`, `budget_future.py`, `day_money.py` | Budgeting page, Day money strip |
-| CSV import/export | `app/planning/csv_import.py`, `csv_canonical.py`, `csv_export.py` | `compat.py`, `app/csv_safety.py` | Day page menu, CLI `--import-csv`, `/planning/csv/*` |
-| Reset (range / all task data) | `PlanningService.clear_range`, `reset_preview`, `reset_range`; `task_data_reset.py` | `AppServices.reset_task_data`, `backend/task_data_reset.py` | Settings / Day menu |
-| Local persistence | `app/execution/db.py` | repositories, `backup.py`, `instance_lock.py` | `open_app_services` |
-| Accounts / sign-in (desktop) | `app/ui/account_controller.py`, `account_page.py` | `app/sync/service.py`, `transport.py`, `credentials.py` | Settings → Account |
-| Synchronization | `app/sync/service.py`, `engine.py` (client); `backend/sync.py`, `mutations.py` (server) | `store.py`, `mapping.py`, `backend/api.py` (`/changes`), `resources.py` | Background thread / "Sync now" |
-| Server auth and security | `backend/accounts.py`, `api.py` (auth routes), `security.py` | sessions, MFA, rate limits, verification, recovery modules | `POST /auth/*` |
-| Hosted planning API | `backend/planning_api.py` | `workflow.py`, `planning_repository.py` | `POST /planning/generate` etc. |
-| Local web profile | `app/web/local_app.py` | `records.py`, `local_session.py` | `python -m app.web` |
-| Email | `backend/outbox.py`, `mail.py` | `verification.py`, `recovery.py`, `email_webhooks.py` | Outbox worker (lifespan) |
-| Updater | `app/update/service.py` | `release_feed.py`, `downloader.py`, `app/ui/update_controller.py`, `update_view.py` | `ScheduleOptimizerApp.start_update_checks` |
-| Packaging / release | `packaging/windows/build_windows.ps1`, `ScheduleMaxing.spec`, `.iss` | `check_bundle.py`, `smoke_test.py`, `app/selftest.py` | `release.yml` on tag `vX.Y.Z` |
-| Direct PostgreSQL (dev) | `app/persistence/direct.py`, `app/ui/direct_services.py` | `app/persistence/*.py` | `python -m app.app --storage postgres` |
+The feature map lists implementation entry points, supporting components and focused tests. For the user-facing
+flow from input to output, use the workflow guide. [Feature-to-file mapping](FEATURE_MAP.md#b-feature-to-file-mapping), [runtime workflow](Workflow.md)
 
 ---
 
 ## 7. Change impact guide
 
 Test commands follow `CLAUDE.md`: run focused tests with `python -m pytest -m dev <files>`; `tests/sync`,
-`tests/web` and `tests/direct` are system tier (run without `-m dev`). [docs/architecture/CODEBASE_MAP.md §D](CODEBASE_MAP.md)
+`tests/web` and `tests/direct` are system tier (run without `-m dev`). [docs/FEATURE_MAP.md §D](FEATURE_MAP.md)
 has the full per-change table.
 
 **Scheduling engine (`app/optimizer.py`).** Change search behaviour in the canonical section (after
@@ -691,8 +657,8 @@ contract: `generate_day_schedule(DaySchedule, DayPreferences, *, previous_result
 consistent `DayScheduleOutput`, raising `MandatoryTaskSchedulingError` (a `ValueError`) for required-task
 failures, reusing ids of unchanged placements. Hard constraints must never become penalties. Tests:
 `tests/test_day_engine.py`, `test_optimizer_candidates.py`, `test_optimizer_differential.py`,
-`test_scheduling_modes.py`, `tests/planning/test_generation_characterization.py`; baselines
-`python -m benchmarks.scheduling_mode_baseline --check` (Normal/ADHD output is protected).
+`test_scheduling_modes.py`, `tests/planning/test_generation_characterization.py`. The baseline records
+Normal and ADHD outputs alongside other modes. [Baseline command](history/benchmarks/PROMPT1_SCHEDULING_BASELINE.md)
 
 **Reward (`app/reward.py`) or preference layers (`app/planning/preferences.py`).** Also inspect
 `config/task_preference.yaml`, `day_preferences_to_reward_settings`, `backend/preferences.py`,
@@ -802,7 +768,7 @@ desktop loads; `tests/test_desktop_isolation.py` (slow) guards it.
 
 - **Large modules**: `app/planning/application.py` (~2.3k lines), `app/execution/db.py` (~1.8k),
   `backend/models.py` (~1.7k), `app/productivity/tracker.py`, `app/sync/engine.py`,
-  `app/optimizer.py` (~1.3k). `docs/development/ROADMAP.md` lists maintainability work.
+  `app/optimizer.py` (~1.3k). `docs/ROADMAP.md` lists maintainability work.
 - **Ownership of tables**: all local tables, including planning and sync, live in `app/execution/db.py`.
 - **Reward ↔ engine formula coupling**: `_event_breakpoints` hand-derives breakpoints from each reward
   component; changing a reward formula without updating the search silently degrades optimality (guarded
@@ -810,13 +776,10 @@ desktop loads; `tests/test_desktop_isolation.py` (slow) guards it.
 - **Mode list in three places** (enum + two CHECK constraints), plus a sync feature flag.
 - **Kept-work validation duplicates engine rules**: `workflow._kept_problems` re-implements window, overlap,
   deadline, duration and ADHD-grid checks separately from the engine.
-- **Stale docstring text**: `app/planning/application.py` still says "Dependency cycles are stored as given
-  … detecting them is the PERT layer's job" although tasks no longer have dependencies (removed in
-  `92c6993`); the code itself has no dependency handling.
-- **Two allocation-state models**: in-memory `SelectedDayState`/`mark_stale_if_outdated`
-  (`planning/service.py`) and persisted provenance (`provenance.py`). The controller derives state from
-  provenance; the in-memory rule remains for callers that hold states.
-- **`weight_category_bonus`** is carried through settings and storage but read by no reward component.
+- **Persisted freshness.** `PlanningController` builds `SelectedDayState` from generation provenance.
+  This keeps the status stable across restarts and detects edits to scheduling inputs.
+- **Preference compatibility.** `weight_category_bonus` remains readable in legacy preferences and on
+  the wire. The shipped template omits it and the scorer ignores it.
 
 ---
 
@@ -824,7 +787,7 @@ desktop loads; `tests/test_desktop_isolation.py` (slow) guards it.
 
 | Concern | Choice | Declared in |
 |---|---|---|
-| Language | Python 3.10 | workflows, `build_windows.ps1` |
+| Language | Python 3.12 | workflows, `build_windows.ps1` |
 | Desktop UI | CustomTkinter on Tk, `ttk.Treeview` | `requirements/desktop.txt` |
 | Models | Pydantic v2 | `app/planning/models.py`, `app/execution/models.py` |
 | Local storage | stdlib `sqlite3`, hand-written migrations | `app/execution/db.py` |
@@ -840,7 +803,7 @@ desktop loads; `tests/test_desktop_isolation.py` (slow) guards it.
 - **Desktop configuration:** `config/settings.py` (see 3.10). Reward defaults from
   `config/task_preference.yaml` via `app.runtime.resource_root()`.
 - **Backend configuration:** environment variables only (`backend/settings.py`); names are catalogued in
-  [CODEBASE_MAP.md](CODEBASE_MAP.md#backend-configuration-names).
+  [FEATURE_MAP.md](FEATURE_MAP.md#backend-configuration-names).
 - **Desktop delivery:** tag `vX.Y.Z` equal to `app/version.py` → `release.yml` builds on Windows → GitHub
   Release → in-app updater verifies SHA256 and runs the installer.
 - **Backend delivery:** `deploy-backend.yml` deploys a release-tagged `main` commit whose PR passed CI (gated by

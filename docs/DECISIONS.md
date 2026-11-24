@@ -19,7 +19,7 @@ decision was made.
 | ID | Title | Status |
 |---|---|---|
 | ADR-001 | Python desktop app built on CustomTkinter | Inferred |
-| ADR-002 | Python 3.10 is the single supported runtime | Accepted |
+| ADR-002 | Python 3.10 is the single supported runtime | Superseded by ADR-052 |
 | ADR-003 | Hard constraints decide validity; reward only ranks valid placements | Accepted |
 | ADR-004 | Greedy Optimizer v1 is kept as a frozen baseline | Superseded by ADR-047 |
 | ADR-005 | Canonical planning models run in parallel with the legacy models | Superseded by ADR-047 |
@@ -67,6 +67,9 @@ decision was made.
 | ADR-047 | Greedy Optimizer v1 and the legacy models are removed | Accepted |
 | ADR-048 | Tasks have no dependencies and no priority, everywhere; the wire keeps placeholders | Accepted |
 | ADR-049 | Week/month allocation is points first | Accepted |
+| ADR-050 | Keep project Markdown together under `docs/` | Accepted |
+| ADR-051 | Retire unreachable desktop presentations and duration prediction | Accepted |
+| ADR-052 | Python 3.12 is the tested and packaged runtime | Accepted |
 
 ---
 
@@ -83,12 +86,13 @@ decision was made.
 
 ### ADR-002 — Python 3.10 is the single supported runtime
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-052](#adr-052--python-312-is-the-tested-and-packaged-runtime).
 - **Context:** Testing on one Python version and building the installer on another would ship a program that the tests never checked.
 - **Decision:** CI, the release build and local builds all use Python 3.10. `build_windows.ps1` refuses any other version, and a test keeps the script's required version equal to the workflows' `python-version`.
 - **Rationale:** The comment in `build_windows.ps1` says the installer must hold the same program the tests checked.
 - **Alternatives:** Not documented.
 - **Consequences:** Moving to a newer Python means changing every workflow and the build script together.
+- **Runtime status:** Python 3.10 reached upstream end of life on 2026-10-01. [PEP 619](https://peps.python.org/pep-0619/)
 - **Relevant files:** `.github/workflows/*.yml`, `packaging/windows/build_windows.ps1`, `tests/test_packaging_config.py`.
 - **Evidence:** `test_build_script_requires_the_python_that_ci_tests_with`; the skill note in `.claude/skills/schedule-maxing-debugging/SKILL.md`. The build-script change is committed in `0ec34de`.
 
@@ -209,7 +213,7 @@ decision was made.
 - **Decision:** Every synchronizable record has a UUID, an owner (`user_id`, where NULL means the guest workspace), a local `version`, and a deletion marker. A stale edit is refused rather than overwriting newer data.
 - **Rationale:** Recorded in `docs/architecture/sync-contract.md` and in the README's Milestone 3 status.
 - **Alternatives:** Not documented.
-- **Consequences:** Deletes are soft. The tombstones and change log are never compacted (see [ROADMAP.md](../development/ROADMAP.md)).
+- **Consequences:** Deletes are soft. The tombstones and change log are never compacted (see [ROADMAP.md](ROADMAP.md)).
 - **Relevant files:** `app/planning/models.py`, `app/planning/scope.py`, `app/execution/db.py`.
 - **Evidence:** `docs/architecture/sync-contract.md`; README "Project Status".
 
@@ -602,12 +606,12 @@ decision was made.
 
 - **Status:** Accepted (2026-10-23; supersedes [ADR-037](#adr-037--the-ml-duration-predictor-is-evidence-gated-and-kept-out-of-the-ui))
 - **Context:** The evidence-gated scikit-learn predictor (ADR-037) was reachable only through a CLI and was expected to stay disabled on personal-scale history, yet pandas, scikit-learn and joblib (with NumPy and SciPy) were desktop dependencies and most of the packaged size.
-- **Decision:** Remove the app/productivity ML modules (ml_*.py) and its predictor-comparison CLI, `ProductivityService.predict_duration_comparison` and its controller method, the ML artifact settings, and the pandas, scikit-learn and joblib requirements. Duration prediction is the median-based predictor (`app/productivity/prediction.py`) only.
+- **Decision:** Remove the ML modules, comparison CLI, artifact settings and pandas, scikit-learn and joblib requirements. The median estimator remained at the time of this decision and was subsequently removed. [ADR-051](#adr-051--retire-unreachable-desktop-presentations-and-duration-prediction)
 - **Rationale:** The owner does not plan to do machine learning with the data.
 - **Alternatives:** Keeping the gated experiment (rejected by the owner). Not otherwise recorded.
 - **Consequences:** A lighter desktop install and bundle; a model file left in the data folder by an earlier version is no longer read. Bringing ML back would mean restoring the modules and dependencies from git history.
 - **Relevant files:** `app/productivity/reporting.py`, `app/ui/productivity_controller.py`, `requirements/desktop.txt`, `requirements/requirements.lock`, `app/selftest.py`, `packaging/windows/check_bundle.py`, `packaging/windows/ScheduleMaxing.spec`.
-- **Evidence:** The owner's request in the 2026-10-23 session; `ci_check_notes.md` Pending entry "ML duration predictor removed".
+- **Evidence:** The owner's request in the 2026-10-23 session; `docs/development/ci_check_notes.md` Pending entry "ML duration predictor removed".
 
 ### ADR-047 — Greedy Optimizer v1 and the legacy models are removed
 
@@ -627,7 +631,7 @@ decision was made.
 - **Decision:** Remove task dependencies and priority from the models, local SQLite (schema v19: `task_dependencies` dropped, `priority` dropped from `tasks` and `executions`; needs SQLite 3.35+), the server (Alembic `0021`, project `default_priority` too), CSV (canonical format 3; format 2 and legacy `priority`/`dependencies` columns still import, ignored), the API and the UI; app/pert.py and app/planning/external_dependencies.py are deleted. The reward is a typed `ScoringTask` scorer with the same formulas (the old priority term at priority 1: `weight_importance` x the category multiplier). For compatibility with 1.3.0 clients, which fail on a pulled record without them, the server and the client still put `priority` (always 5) and `dependency_ids` (always []) on the wire and ignore them on input (`LEGACY_TASK_WIRE_FIELDS`, `LEGACY_EXECUTION_WIRE_FIELDS` in `backend/resources.py`, `backend/executions.py`, `app/sync/mapping.py`).
 - **Rationale:** The owner chose to remove them "everywhere" rather than only hide them.
 - **Alternatives:** Keeping the columns as unused legacy fields (ADR-035's consequence).
-- **Consequences:** A dependency between saved tasks is lost on upgrade. `FINGERPRINT_VERSION` 2: every saved day shows as out of date once (accepted by the owner). The server revision must be deployed together with this client. The placeholders can go once no 1.3.0 client remains (ROADMAP).
+- **Consequences:** A dependency between saved tasks is lost on upgrade. `FINGERPRINT_VERSION` 2 makes every saved day show as out of date once. The server before `0021` requires the old schema. The placeholders preserve HTTP sync for 1.3.0 desktops until those clients are retired. [Cutover notes](backend/backend.md#priority-and-dependency-removal-0021)
 - **Relevant files:** `app/planning/models.py`, `app/execution/db.py` (`_V19_STATEMENTS`), `backend/migrations/versions/0021_drop_priority_and_dependencies.py`, `backend/resources.py`, `app/sync/mapping.py`, `app/planning/csv_export.py`, `app/reward.py`, `app/planning/provenance.py`.
 - **Evidence:** The owner's request in the 2026-10-23 session; `tests/backend/test_migrations.py`, `tests/execution/test_migration_v19.py`, `tests/sync/test_protocol.py`.
 
@@ -640,15 +644,50 @@ decision was made.
 - **Alternatives:** Deadline first (the previous order).
 - **Consequences:** Week/month results changed (`benchmarks/results/prompt1_scheduling_mode_baseline.json` was regenerated); day-engine results are identical.
 - **Relevant files:** `app/planning/allocation.py`, `app/planning/provenance.py`.
-- **Evidence:** `tests/planning/test_allocation.py`; `python -m benchmarks.scheduling_mode_baseline --check`.
+- **Evidence:** `tests/planning/test_allocation.py` and the [scheduling baseline](history/benchmarks/PROMPT1_SCHEDULING_BASELINE.md).
 
 ### ADR-050 — Documentation lives in docs/, dependency files in requirements/
 
 - **Status:** Accepted (2026-11-04)
 - **Context:** The repository root held six knowledge-base documents, six requirement files and a lock file, and `docs/` mixed current guides with agent prompt collections.
-- **Decision:** All documentation is under `docs/`, by topic: `architecture/` (including this file), `features/`, `backend/`, `deployment/`, `development/` (including `CURRENT_STATE.md` and `ROADMAP.md`) and `history/`. Agent prompt collections are not kept. Dependency files are `requirements/{desktop,database,backend,direct,build,dev}.txt` and `requirements/requirements.lock`; `-r` paths inside them are relative to `requirements/`. The root keeps only `requirements.txt` (includes `requirements/dev.txt`) and `requirements-backend.txt` (includes `requirements/backend.txt`, for a Render service whose build command names it), plus files that tools expect there (`README.md`, `LICENSE`, `CLAUDE.md`, `AGENTS.md`, `ci_check_notes.md`, `secret-scan-baseline.json`, tool configuration).
-- **Rationale:** The owner's cleanup request.
+- **Decision:** Keep the six knowledge-base documents directly under `docs/` and link them from its index.
+  Place supporting material in `architecture/`, `features/`, `backend/`, `deployment/`, `development/`
+  and `history/`. CI notes live in `development/`, with benchmark reports under `history/benchmarks/`.
+  Keep `README.md`, `AGENTS.md` and `CLAUDE.md` at the root for discovery, and skill manifests at their
+  tool-defined locations. Dependency lists and the lock remain in `requirements/`. The root requirements
+  files continue to include the canonical lists for tool and hosting compatibility.
+- **Rationale:** One index makes the current guides easy to find and preserves the location expected by agents and tooling.
 - **Alternatives:** Keeping the knowledge base at the root, as `CLAUDE.md` described before.
 - **Consequences:** Code comments cite the new `docs/` paths. The lock file keeps its `.lock` suffix, so the secret scan's exclusion still applies.
 - **Relevant files:** `docs/README.md`, `requirements/`, `CLAUDE.md`, `AGENTS.md`, `.claude/skills/wrap/scripts/wrap_checkpoint.py`.
 - **Evidence:** `tests/test_workflows.py`, `tests/test_packaging_config.py`.
+
+### ADR-051 — Retire unreachable desktop presentations and duration prediction
+
+- **Status:** Accepted (2026-11-23)
+- **Context:** The mounted desktop uses the outcome board and the Productivity tracker. The previous Execute,
+  History and Data adapters and the median duration suggestion had no shipped caller after the UI cleanup.
+- **Decision:** Remove those adapters and the unused predictor and raw execution export. Retire the old
+  schedule-page range action and in-memory staleness helpers. Keep shared generation, the execution lifecycle,
+  report export, scoped reset, and on-disk and wire compatibility.
+- **Rationale:** The current entry points already implement these workflows. Removing abandoned presentation
+  code lets tests follow the code that actually schedules, writes, syncs and reports records.
+- **Consequences:** Desktop timing remains an open product choice. Existing timed records and API-created
+  sessions still contribute to the tracker. Old preference values remain readable.
+- **Evidence:** The scheduling baseline, controller and persistence tests, direct-mode tests and two-device
+  execution history checks cover the retained paths. [Verification](CURRENT_STATE.md#d-testing-and-quality)
+
+### ADR-052 — Python 3.12 is the tested and packaged runtime
+
+- **Status:** Accepted (2026-11-24). Supersedes ADR-002.
+- **Context:** Python 3.10 reached end of life. The 1.3.1 CI audit reported another vulnerability
+  in dnspython 2.8.0. The fixed release requires Python 3.11 or later.
+  [Advisory](https://github.com/advisories/GHSA-vvf4-9x63-8xvv), [Package metadata](https://pypi.org/project/dnspython/2.9.2/)
+- **Decision:** Use Python 3.12 in CI, release builds and backend deployment. Require dnspython
+  2.9.2 in the backend and direct-mode profiles and audit the lock without CVE exceptions.
+- **Rationale:** Keep the installer on the same interpreter version as CI while allowing the
+  patched dependency on a supported runtime. Desktop-only installations still use their own
+  dependency profile.
+- **Consequences:** Rebuild older source virtual environments. Render's runtime configuration needs
+  to meet the same Python requirement. [Deployment guide](deployment/render-deployment.md)
+- **Evidence:** `tests/test_packaging_config.py`, `tests/test_workflows.py`, [release CI](https://github.com/Ramtin-Mandom/Schedule_Maxing/pull/26/checks).

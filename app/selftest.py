@@ -74,7 +74,7 @@ def _check_storage_and_scheduling() -> dict:
     from app.planning.csv_import import ImportMode
     from app.planning.preferences import OptimizerMode
     from app.ui.app_services import open_app_services
-    from app.ui.schedule_page_controller import SchedulePageController
+    from app.ui.day_controller import DayScheduleController
 
     db_path = resolve_db_path()
     existed = db_path.exists()
@@ -86,7 +86,7 @@ def _check_storage_and_scheduling() -> dict:
         assert version == LATEST_SCHEMA_VERSION, f"schema v{version}, expected v{LATEST_SCHEMA_VERSION}"
 
         planning = services.planning_controller
-        page = SchedulePageController(planning, number_of_days=1, anchor_date=DAY, timezone="UTC")
+        page = DayScheduleController(planning, anchor_date=DAY, timezone="UTC")
         names = {row.name for row in page.load().value.rows}
         restart = existed and set(TASK_NAMES) <= names
         if not restart:
@@ -100,13 +100,14 @@ def _check_storage_and_scheduling() -> dict:
         for mode in OptimizerMode:
             saved = planning.set_engine_mode(mode)
             assert saved.ok, f"{mode.value}: {saved.error}"
-            run = page.make_schedule()
+            run = page.regenerate_for(DAY)
             assert run.ok, f"{mode.value}: {run.error}"
-            assert run.value.placed_count == len(TASK_NAMES), f"{mode.value}: placed {run.value.placed_count}"
-            modes[mode.value] = run.value.placed_count
+            count = len(run.value.snapshot.executables)
+            assert count == len(TASK_NAMES), f"{mode.value}: placed {count}"
+            modes[mode.value] = count
         assert planning.set_engine_mode(OptimizerMode.PRECISE_GREEDY).ok
 
-        target = page.make_schedule().value.snapshot.executables[0]
+        target = page.regenerate_for(DAY).value.snapshot.executables[0]
         executions = services.execution_controller
         execution = executions.get_or_create_canonical_execution(target.task, target.placement).value
         if execution.status.value == "scheduled":

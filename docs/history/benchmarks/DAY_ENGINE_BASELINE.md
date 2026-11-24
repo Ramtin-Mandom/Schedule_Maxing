@@ -9,7 +9,7 @@ comparison Task 6 will do — see **Important caveat** below.
 
 ## Method
 
-- Script: [`benchmarks/day_engine_baseline.py`](day_engine_baseline.py)
+- Script: [`benchmarks/day_engine_baseline.py`](../../../benchmarks/day_engine_baseline.py)
   (`python -m benchmarks.day_engine_baseline`). Standard library only.
 - Fixtures converted from their legacy CSV form to canonical models via
   `app.planning.compat.import_legacy_csv_rows`, with a fixed anchor date

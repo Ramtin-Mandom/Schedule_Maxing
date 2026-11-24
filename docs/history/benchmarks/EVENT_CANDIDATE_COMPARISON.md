@@ -11,7 +11,7 @@ driven through the real production entry point
 the per-task search function, so both sides run the identical greedy
 orchestration, dependency/deadline handling, and mandatory-tier logic --
 only the placement *search* differs. Script:
-[`event_candidate_comparison.py`](event_candidate_comparison.py)
+[`event_candidate_comparison.py`](../../../benchmarks/event_candidate_comparison.py)
 (`python -m benchmarks.event_candidate_comparison`); raw data in
 `benchmarks/results/event_candidate_comparison.json`.
 

@@ -75,7 +75,7 @@ def probe_workflow(db_path: str, project_root: str) -> None:
     from app.planning.csv_import import ImportMode
     from app.planning.service import DayResultStatus
     from app.ui.app_services import open_app_services
-    from app.ui.schedule_page_controller import SchedulePageController
+    from app.ui.day_controller import DayScheduleController
 
     mon = date(2024, 6, 3)
     form = {"day": "1", "category": "study", "tag": "t", "fixed": "False", "start_time": "480", "end_time": "1200",
@@ -86,7 +86,7 @@ def probe_workflow(db_path: str, project_root: str) -> None:
     facts["sync_configured"] = services.sync_service.configured
     facts["sync_status"] = services.sync_service.sync_now().status
     facts["workspace"] = services.workspace.scope.describe()
-    page = SchedulePageController(services.planning_controller, number_of_days=1, anchor_date=mon, timezone="UTC")
+    page = DayScheduleController(services.planning_controller, anchor_date=mon, timezone="UTC")
 
     # create, edit and delete (tasks and a fixed block) through the desktop's own form boundary
     for name in ("Read", "Write", "Scratch"):
@@ -98,10 +98,10 @@ def probe_workflow(db_path: str, project_root: str) -> None:
     assert page.submit_task_form({**state.values, "name": "Read (edited)"}, editing=state.ref).ok
     assert page.delete(rows["Scratch"].ref).ok
 
-    # generate (legacy Make Schedule), then the shared workflow's no-op
+    # Generate through Day, then confirm the shared workflow sees current inputs.
     run = page.make_schedule()
     assert run.ok, run.error
-    facts["placed"] = run.value.placed_count
+    facts["placed"] = len(run.value.snapshot.executables)
     facts["second_generation"] = services.planning_controller.generate(mon, mon).value.status
 
     # execute one placement
@@ -125,7 +125,7 @@ def probe_workflow(db_path: str, project_root: str) -> None:
 
     # reopen: everything persisted, the day is still current, the execution kept its history
     services = open_app_services(db_path, timezone="UTC", project_root=project_root)
-    page = SchedulePageController(services.planning_controller, number_of_days=1, anchor_date=mon, timezone="UTC")
+    page = DayScheduleController(services.planning_controller, anchor_date=mon, timezone="UTC")
     facts["rows_survived"] = {row.name for row in page.load().value.rows} == before
     facts["rows"] = sorted(before)
     facts["placements_survived"] = sorted(

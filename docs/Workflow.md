@@ -1,14 +1,8 @@
 # Workflow
 
-How Schedule Maxing behaves at run time: which functions execute, in what order, how the scheduling engine
-decides, and which rules constrain it. Structure (where code lives, module dependencies, feature-to-file
-map) is in [ARCHITECTURE.md](ARCHITECTURE.md); mode formulas are also described in
-`docs/features/scheduling-modes.md`, rescheduling and kept work in `docs/features/execution-rescheduling.md`, recurrence in
-`docs/features/recurrence.md`, sync in `docs/architecture/sync-protocol.md`.
-
-Verified against commit `abd5da7` on 2026-10-27 by reading the source. The source is authoritative; where a
-docstring disagrees with code, the code's behaviour is described and the discrepancy noted. Worked examples
-are hand-computed from the code and labelled **(example)**; they are not recorded executions.
+This guide follows input through validation, processing, storage and output for each live feature.
+The detailed Make Schedule trace begins in section 2. Worked examples are hand-computed from the code.
+[Components and boundaries](ARCHITECTURE.md), [feature-to-code navigation](FEATURE_MAP.md), [verified state](CURRENT_STATE.md)
 
 ## Contents
 
@@ -28,27 +22,115 @@ are hand-computed from the code and labelled **(example)**; they are not recorde
 
 ## 1. Main workflow overview
 
-The primary functionality is **schedule generation** ("Make Schedule"): turn persisted tasks, fixed blocks
-and preferences into saved minute-precise placements for one or more dates. Secondary workflows record what
-happened and derive analytics from it.
+| Feature | Inputs | Processing | Outputs |
+| --- | --- | --- | --- |
+| Task entry and editing | Flexible, Fixed or To Do draft, selected date and workspace | `TaskEditor` and form validation → planning controller → `PlanningService`. Saved edits compare versions | A task or fixed block, refreshed rows, or field and conflict messages |
+| Day, Week and Month | Selected date, timezone, work window and filters | Controllers read tasks, placements and outcomes for the date or range | Timeline, task list, completion board and calendar cells |
+| Make Schedule | Selected day, tasks, fixed blocks, preferences, prior placements and outcomes | `DayScheduleController` → `PlanningController.generate` → shared workflow → allocator and day engine | Placements and generation provenance, Day timeline and unplaced-task notices |
+| Range and CLI generation | Date range, scope, timezone, mode and optional fingerprint | `POST /planning/generate` calls the shared workflow. CLI can preview a range and generate its selected day | API results, saved placements, CLI summary and optional exports |
+| Recurring series | Series rule, timezone, range and optional edit scope | Recurrence expansion resolves slots and exceptions before generation | Stable occurrence IDs, materialized tasks and versioned series edits |
+| Projects and preferences | Project and milestone edits, default or date-specific settings | Planning services persist scoped records and resolve effective preferences | Grouped tasks, project points, and inputs for later generation |
+| Execution and outcomes | Task or placement ID, action and expected version | Desktop outcomes use the execution controller. Timed API actions apply the shared lifecycle | Completion, skip or reopen; timed actions also record work sessions |
+| Placement moves | Placement version, destination date and interval | Planning API checks the destination and replacement in one transaction | Replacement placement, tombstone with lineage and releasable manual intent |
+| Productivity | Date range, timezone and filters | Shared tracker reads planned occurrences and execution history | Points, completion rates, per-type and time reports, project points and separate API cohort output |
+| Budgeting | Balance, dated entry, recurrence, occurrence edit or future item | Budget service validates amounts, expands recurrence and aggregates history | Day money totals, balances, 90-day forecast, future list and optional sync records |
+| CSV, exact export and reset | File and import mode, date range, or reset scope | Preview and validate before a scoped write. Exports read saved state or generated output | Imported records, CSV/JSON files, or scoped reset counts |
+| Accounts | Registration, verification, sign-in or recovery request | Account controller calls the API. Server validates identity, versions and session policies | Active workspace, local or remote session, configured email and account feedback |
+| Sync | Local dirty records and server change cursor | Sync service pushes versioned operations and pulls the change feed | Server and local records, acknowledged operations and visible conflicts |
+| Local web and direct storage | Loopback session or private PostgreSQL connection | Adapter selects the same planning and execution services with a different storage context | JSON results for the local API, or PostgreSQL-backed desktop views |
+| Updates and delivery | Installed version, published release, Git tag or manual dispatch | Updater checks version and installer checksum. GitHub workflows build or deploy the selected commit | Installer hand-off, GitHub Release, or backend health and readiness report |
 
-| Workflow | Trigger | Starts at | Input | Processed by | Result goes to |
-|---|---|---|---|---|---|
-| **A. Make Schedule (Day page)** | "Make Schedule" / "Regenerate" button | `DaySchedulePage.make_schedule` / `regenerate` (`app/ui/day_page.py`) | The page's anchor date; stored tasks, blocks, preferences, placements, executions | `DayScheduleController` → `PlanningController.generate` → `workflow.generate` → `allocate_tasks` → `generate_selected_day` → `generate_day_schedule` | SQLite (`scheduled_tasks`, `schedule_generations`), Day page timeline and notice |
-| B. Range scheduling (Week/Month, CLI) | Week/Month page action; `python -m app.main --select-date` | `PlanningController.schedule_range` / `generate_day` | Date range | `workflow.expand_range` → `read_inputs` → `allocate` → `generate_from` | SQLite; page / stdout / export files |
-| C. Hosted / local web generation | `POST /planning/generate` | `backend/planning_api.py: generate` | `GenerateIn` JSON (range, scope, timezone, mode, expected fingerprint) | `workflow.generate` with a time-limit deadline | PostgreSQL (hosted) or SQLite (local profile); `GenerateOut` JSON |
-| D. Explicit reschedule (move) | Moving a timeline item; `POST /planning/placements/{id}/reschedule` | `PlanningController.reschedule_placement` → `workflow.reschedule_placement` | Placement id + version, destination interval | `reschedule_problems` → `PlanningService.apply_reschedule` | Storage (old placement tombstoned `RESCHEDULED`, replacement inserted) |
-| E. Execution tracking | Day board actions (start, pause, complete, skip, reopen, outcome columns) | `ExecutionController` (`app/ui/execution_controller.py`) | Placement / fixed block / task + action | `ExecutionService` applying `lifecycle.TRANSITIONS` | `executions`, `work_sessions` |
-| F. Analytics | Showing Productivity / Week / Month | `ProductivityController` | Executions + schedule history | `ProductivityService` → `tracker.py`, `schedule_cohort.py`, `day_summary.py` | Rendered pages (nothing stored) |
-| G. Synchronization | Background thread interval, commit listener, "Sync now" | `SyncService.sync_now` (`app/sync/service.py`) | Dirty records, server change feed | `SyncEngine.prepare/next_batch/acknowledge/apply_pull_page` | Server via `/sync/push`; local apply of `/changes` |
+Desktop storage and generation use background workers, with UI writes serialized through `WRITE_LANE`.
+The Day engine can run in a separate process. Sync has its own background cadence, and the server's email
+worker dispatches durable outbox entries. The UI applies results only while the originating workspace and
+view remain current. [Concurrency boundaries](ARCHITECTURE.md#44-circular-dependencies-and-coupling)
 
-Background execution contexts on the desktop: `WorkerRegistry` threads (all storage/computation off the Tk
-thread; writes serialized on `WRITE_LANE`), one spawned `EngineProcess` worker for day-engine calls (when
-`SCHEDULE_MAXING_GENERATION_PROCESS` is not `off`), the `SyncService` daemon thread, and main-thread timers
-(status poll, GC). The server has one background job: the email `OutboxWorker`.
+### Tasks, calendars, projects and preferences
 
-The rest of this document traces workflow **A** in full, because B and C share the same functions from
-`workflow.read_inputs` onward.
+A draft carries the task kind, names and tags, date choice and either an estimate, fixed interval or To Do
+fields. The form model validates the draft and converts local time to an aware instant. The planning service
+writes it under the active owner scope. An edit uses the saved ID and expected version, so another device's
+change yields a conflict for reload. The calendar controllers read the applicable planning range. Filters
+change the displayed tasks. A project filter leaves the scheduler's input set intact.
+
+Projects store milestones, task links and defaults for new drafts. The settings controller saves default and
+per-date preference layers separately. Generation resolves these layers before it hashes its inputs, so a
+changed task or effective preference can make stored placements stale. A recurrence expands into dated tasks
+before those inputs are read. Editing one occurrence stores an exception, and a future edit splits its series
+at the selected slot. The desktop preserves existing recurrence rules and deadlines. Use the planning API
+or service to define rules and deadline values. [Task form](features/desktop-task-form.md),
+[calendars](features/desktop-calendar.md), [projects](features/desktop-projects-allocation.md),
+[preferences](features/desktop-settings.md), [recurrence](features/recurrence.md)
+
+### Outcomes, placement moves and productivity
+
+The Day board sends a placement and the visible execution version to `ExecutionController.set_outcome` or
+`set_outcomes`. The service applies lifecycle rules and creates the attempt on first use. To Dos and fixed
+blocks use their corresponding direct completion paths. A board completion with no work sessions leaves
+actual duration unknown. Timed start, pause, resume and feedback are available to execution API clients.
+The service records sessions and preserves their planned task snapshots. [Execution and outcomes](features/desktop-day.md#uncompleted--tasks--completed),
+[execution API](backend/backend.md#api-summary)
+
+An API move revalidates the destination against fixed blocks, task constraints and execution state. The
+service tombstones the old placement, creates its successor and cancels any never-started source attempt in
+the same transaction. Regeneration reserves the manual replacement until manual intent is released, which
+the Day timeline can do. Started or answered work stays with its saved placement. [Placement rescheduling](features/execution-rescheduling.md)
+
+Productivity reads stored schedule lineage, attempts and completion snapshots. The tracker uses planned dates
+for due and missed work and completion dates for earned points. Sessions provide active minutes for timed
+metrics. General, Specific and Project render these derived results. The report CLI exposes terminal-outcome
+statistics and export, and the planning API exposes the separate schedule-cohort result. [Metric definitions](features/analytics.md)
+
+### Budgeting and forecasting
+
+`BudgetController` turns a balance, income or expense draft into a `BudgetService` operation. Amounts are
+validated and stored as integer minor units. Dated balance records and transaction rules go to the workspace's
+budget repository. Recurring entries expand over the requested dates. An occurrence edit changes that slot
+without rewriting the recurring rule. Lists and Day cards read the expanded occurrences and aggregate their
+actual amounts.
+
+Statistics read balances and transaction history. The 90-day forecast starts from the recorded balance,
+applies expected income and recurring expenses, and estimates everyday spending from the recent 15-day
+one-time expense average. The Future page saves income ideas and wishlist items as separate records. An
+explicit conversion can create a real budget entry. Budgeting has its own local and direct repositories and
+syncs when the server advertises the `budget` feature. [Budget feature map](FEATURE_MAP.md#b-feature-to-file-mapping),
+[budget storage design](DECISIONS.md#adr-039--budget-records-a-separate-domain-integer-minor-units-expanded-recurrence-optional-sync-feature)
+
+### Imports, exports and reset
+
+The desktop and CLI convert an import into a proposed batch. Legacy CSV maps a day index to an anchor date
+and appends new IDs by default. Canonical CSV carries stable IDs and versions. The planning service validates
+the selected append or replace policy before writing. Schedule exports read planned records or generated
+placements. The CLI can write exact intervals as JSON. A reset first previews the scoped rows, then applies
+the selected reset in a transaction. Signed-in task-data reset is synchronized for that workspace. [Planning interchange](architecture/sync-contract.md),
+[desktop reset](features/desktop-settings.md)
+
+### Accounts, sync and storage adapters
+
+The desktop starts in a local workspace. Register and verify email, sign in, or restore a remembered session
+through the account controller. The backend validates passwords and optional second factors, then issues and
+rotates credentials. An explicit association step can move guest records into the account workspace. Page
+controllers are rebuilt when the workspace changes. The credential vault is optional. [Account flow](features/desktop-accounts.md),
+[account security](backend/account-security.md)
+
+Local triggers track changes. `SyncEngine` prepares operations with base versions and retry IDs. The hosted
+mutator validates each account-scoped operation, persists records and revisions, and appends the change log.
+The desktop applies acknowledgements and pulls later pages into SQLite. Conflicts surface on Account and
+persist until resolved. Network failure leaves local drafts, schedules and completed work available.
+[Synchronization protocol](architecture/sync-protocol.md)
+
+The hosted API authenticates into PostgreSQL. The loopback web profile uses a guarded local session and the
+same SQLite model as the desktop, with a file lock for exclusive use. Private direct mode swaps in PostgreSQL
+repositories and requires the current server schema. The packaged desktop keeps its SQLite and HTTP path.
+[Adapter boundaries](architecture/desktop-web-boundaries.md), [local and hosted API](backend/web-api.md)
+
+### Updates and deployment
+
+An installed desktop compares its version with the latest published release. It downloads the expected
+installer, verifies the published SHA-256 checksum, and hands it to Windows when the user requests the update.
+CI tests PRs on Python 3.12. A release tag starts the Windows packaging workflow and can independently start the Render
+deploy workflow. Render checks service health and schema readiness. Draft installers and schema cutovers are
+covered by the deployment guides. [Windows delivery](deployment/windows-distribution.md), [CI and deployment](deployment/ci-cd.md)
 
 ---
 
@@ -886,7 +968,7 @@ slow tiers are excluded by `-m dev`.
 | Candidate search correctness | `tests/test_optimizer_candidates.py` (free intervals, lattice helpers), `tests/test_optimizer_differential.py` (event search vs exhaustive oracle; `test_generate_day_schedule_never_calls_the_canonical_exhaustive_reference`, `test_full_greedy_parity_mixed_required_optional`) |
 | Modes and objectives | `tests/test_scheduling_modes.py` (`test_normal_and_adhd_are_unchanged_by_the_new_modes`, `test_early_finish_and_night_owl_keep_the_work_and_every_constraint`, `test_repacking_matches_an_exhaustive_reference_on_a_small_day`, `test_catch_up_bonus_formula_bounds_and_minimum_evidence`) |
 | Reward | `tests/test_reward.py` (YAML loading and discovery, components) |
-| Characterization | `tests/planning/test_generation_characterization.py`; baselines `python -m benchmarks.scheduling_mode_baseline --check` |
+| Characterization | `tests/planning/test_generation_characterization.py`, [scheduling baseline](history/benchmarks/PROMPT1_SCHEDULING_BASELINE.md) |
 | Allocation | `tests/planning/test_allocation.py` (`test_allocation_never_invokes_the_day_optimizer`, `test_fixed_occupancy_reduces_capacity`), `test_allocation_service.py`, `test_deadline_timezones.py` |
 | Workflow / saving / freshness | `tests/planning/test_workflow.py` (`test_an_already_current_generation_writes_nothing`, `test_incremental_generation_never_duplicates_an_occurrence`, `test_a_write_by_another_connection_during_generation_refuses_the_save`), `test_manual_placements.py`, `test_explicit_rescheduling.py`, `test_rescheduling.py`, `test_milestone6_integration.py` |
 | Fixed-block write rules | `tests/planning/test_fixed_block_rules.py`, `tests/backend/test_fixed_block_writes.py` |
@@ -906,5 +988,5 @@ slow tiers are excluded by `-m dev`.
   characterization/baseline tests rather than a dedicated test.
 - The documented greedy suboptimality (an optional task lost to an earlier required placement, as in §9)
   is intentional and not asserted as such.
-- `tests/planning/test_provenance.py` does not exist; provenance is exercised through workflow, controller
+- Provenance is exercised through workflow, controller
   and API tests.

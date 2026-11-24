@@ -40,7 +40,7 @@ talks to the backend only when you configure a backend URL and sign in
 | Setting | Value |
 | --- | --- |
 | Runtime | Python |
-| Python version | Environment variable `PYTHON_VERSION=3.10.11`. It must be the full version. CI and local development use Python 3.10; Render's default is newer. |
+| Python version | Set `PYTHON_VERSION=3.12.16` before deploying the 1.3.1 source. Render requires the full version for the environment variable. CI and local development use Python 3.12. [Render runtime settings](https://render.com/docs/python-version) |
 | Build command | `pip install -r requirements/backend.txt` |
 | Pre-deploy command (paid plans) | `python -m backend.migrate upgrade` |
 | Start command | `uvicorn --factory backend.app:create_app --host 0.0.0.0 --port $PORT` |
@@ -74,7 +74,7 @@ repository. [.env.example](../../.env.example) lists them with placeholders.
 | --- | --- | --- |
 | `DATABASE_URL` | yes | The Render Postgres **Internal Database URL** (`postgresql://USER:PASSWORD@HOST/DB`). The backend switches it to the psycopg 3 driver itself. To require TLS on the internal network, append `?sslmode=require`. An **external** URL must use `?sslmode=require`. |
 | `JWT_SECRET` | yes | At least 32 random characters, e.g. `python -c "import secrets; print(secrets.token_urlsafe(48))"`. Changing it signs everyone out. |
-| `PYTHON_VERSION` | yes (see above) | `3.10.11` |
+| `PYTHON_VERSION` | yes (see above) | `3.12.16` |
 | `JWT_ISSUER` | no | Default `schedule-maxing` |
 | `JWT_AUDIENCE` | no | Default `schedule-maxing-api` |
 | `ACCESS_TOKEN_TTL_MINUTES` | no | 1–1440, default 60 |
@@ -99,14 +99,12 @@ The backend never reads a `.env` file and never logs passwords, tokens,
 - **Checking.** `python -m backend.migrate check` exits 0 only when the
   database is at the latest revision. `GET /ready` reports the same thing
   over HTTP.
-- **Compatibility.** Keep schema changes backward compatible with the
-  version that is still running: add first, remove later. **Exception:**
-  the normalized-storage revisions 0004-0006 remove the JSON columns the
-  previous version uses, so the previous service must be stopped (not
-  serving or writing) before that upgrade runs; see
-  [backend.md](../backend/backend.md#normalized-storage-0004-0006). A pre-deploy
-  command alone is not enough, because the old version keeps serving while
-  it runs.
+- **Compatibility.** Additive changes can run while the previous version is serving. The
+  normalized-storage revisions `0004`–`0006` and the priority/dependency removal in `0021`
+  drop columns or tables used by the previous server. Before that cutover, verify a restorable
+  backup, take the old server out of traffic, and coordinate any Render Auto-Deploy. The
+  pre-deploy command can run while the old process is still serving. [Normalized storage](../backend/backend.md#normalized-storage-0004-0006),
+  [revision 0021](../backend/backend.md#priority-and-dependency-removal-0021)
 
 ## Backups and rollback
 
@@ -116,11 +114,11 @@ The backend never reads a `.env` file and never logs passwords, tokens,
   - **Free Render Postgres has no backups and expires 30 days after
     creation.** Use it only for trying things out, never for data you want
     to keep.
-- **Rolling back code.** Redeploy the previous commit. It keeps working as
-  long as the schema changes were additive.
-- **Rolling back the schema.** Downgrades are not run automatically.
-  Restore from a backup, or run a specific Alembic downgrade only after
-  checking it does not drop data you need.
+- **Rolling back code.** Pair the previous commit with its expected Alembic revision.
+  `/ready` compares the database revision to the running code's migration head.
+- **Rolling back the schema.** Restore the pre-upgrade backup to recover values removed by
+  `0021`. Its downgrade recreates the old schema with default priorities and empty dependency
+  tables. For other revisions, use a checked Alembic downgrade or a validated restore.
 - **Free web services.** They spin down after 15 minutes without traffic,
   so the first desktop sync afterwards may time out. The client treats that
   as a transient failure and retries with backoff.
@@ -172,7 +170,7 @@ guide.
    - `JWT_SECRET`: generate one locally with
      `python -c "import secrets; print(secrets.token_urlsafe(48))"` and paste
      it. Do not commit it.
-   - `PYTHON_VERSION`: `3.10.11`.
+   - `PYTHON_VERSION`: `3.12.16`.
    - Leave the optional variables at their defaults unless you need to
      change them.
 

@@ -1,6 +1,6 @@
 AGENTS.md
 Project
-This is a scheduling/productivity application with models, constraints, dependency handling, reward/scoring, optimization engines, persistence/sync, analytics, and desktop UI.
+Schedule Maxing is an offline-first desktop planner with scheduling, task outcomes and points, productivity reports, budgeting, and optional account sync.
 Only implement what the active task requests. Preserve existing behavior unless a change is required.
 Core Rules
 1. Process queued tasks in order
@@ -25,7 +25,7 @@ Expand the inspection scope only when the current evidence is insufficient.
 Maintain separation between:
 - models/data — domain structures and persistence models
 - constraints — hard validity rules
-- dependencies/PERT — ordering and dependency logic
+- planning — date allocation, recurrence, generation orchestration and freshness
 - reward/scoring — desirability of valid choices
 - optimizers/engines — search/placement strategies
 - analytics — prediction and historical analysis
@@ -73,17 +73,16 @@ At the end of the entire requested batch, briefly report:
 - meaningful remaining limitations
 Do not produce lengthy per-task reports unless requested.
 7. Project knowledge base (documentation navigation)
-Five knowledge-base documents in docs/architecture/ and docs/development/ describe the repository (docs/README.md indexes all documentation). Load only the document -- and only the section -- the current task needs; never read all five by default.
-- docs/architecture/CODEBASE_MAP.md: where a feature lives, what a change affects, which tests to run. Start with its "If You Need to Change X, Look Here" table.
-- docs/architecture/ARCHITECTURE.md: system design, boundaries and major data flows.
-- docs/development/CURRENT_STATE.md: what currently works, is partial or broken (a dated snapshot).
-- docs/development/ROADMAP.md: planned and unfinished work, when planning development.
-- docs/architecture/DECISIONS.md: established architectural decisions; read the relevant record before changing one.
-Keep them accurate in the same change that makes them wrong:
-- module responsibilities, important paths or dependencies changed -> update docs/architecture/CODEBASE_MAP.md
-- architectural boundaries or major data flows changed -> update docs/architecture/ARCHITECTURE.md
-- a feature's state or a known limitation changed -> update docs/development/CURRENT_STATE.md
-- a milestone or deliverable status changed -> update docs/development/ROADMAP.md
-- a consequential decision made or superseded -> add or amend a record in docs/architecture/DECISIONS.md
-Do not rewrite unchanged documentation just to refresh dates or commit hashes.
-The end-of-session procedure for these updates is .claude/skills/wrap/SKILL.md (/wrap in Claude Code); other agents can follow the same steps and its helper script.
+
+Before implementing new work, open the [documentation index](docs/README.md) and inspect the relevant sections of all six guides.
+
+- Components, boundaries and major data flows. [Architecture](docs/ARCHITECTURE.md)
+- Feature-to-code navigation, call sites and focused tests. Start with the change table. [Feature map](docs/FEATURE_MAP.md)
+- Important design choices, reasoning and compatibility constraints. [Decisions](docs/DECISIONS.md)
+- Verified capabilities, gaps and known issues. [Current state](docs/CURRENT_STATE.md)
+- Open priorities, dependencies and completed milestones. [Roadmap](docs/ROADMAP.md)
+- Inputs, processing, persisted results and outputs for product workflows. [Workflow](docs/Workflow.md)
+
+Before closing the task, review all six guides against the final diff and verification results. Update affected sections in the same change. Record the verification in Current State, milestone and dependency changes in Roadmap, new or superseded choices in Decisions, and behavior or data-flow changes in Workflow. Update Architecture and Feature Map when components, paths, entry points or test locations change. Make the same corrections in linked feature and operations guides. Keep accurate historical entries and avoid date-only edits.
+
+Use the end-of-session checklist and helper when useful. [Wrap procedure](.claude/skills/wrap/SKILL.md)

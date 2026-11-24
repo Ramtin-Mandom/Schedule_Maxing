@@ -15,7 +15,6 @@ UI -> controller -> service -> repository -> SQLite path.
 from __future__ import annotations
 
 import csv
-import json
 from datetime import date
 from pathlib import Path
 
@@ -67,9 +66,9 @@ def test_full_persistent_lifecycle(tmp_path: Path) -> None:
         assert created.ok, created.error
 
         # 2. Optimize and save the whole page range in one transaction.
-        run = page.make_schedule()
+        run = services.planning_controller.generate(page.anchor_date, page.end_date)
         assert run.ok, run.error
-        executables = run.value.snapshot.executables
+        executables = page.load().value.executables
         assert {e.placement.planned_date for e in executables} == {date(2026, 1, 5), date(2026, 1, 6), date(2026, 1, 7)}
 
         # 3. Execute one placement: start, pause, resume, complete with feedback.
@@ -91,7 +90,7 @@ def test_full_persistent_lifecycle(tmp_path: Path) -> None:
         services, page = open_stack(db_path, tmp_path)
         after = persisted_state(services)
 
-        assert after == before  # ids, dates, exact timestamps, versions, scores, dependencies
+        assert after == before  # ids, dates, exact timestamps, versions and scores
         [history] = after["executions"]
         assert history.status == ExecutionStatus.COMPLETED
         assert (history.task_id, history.scheduled_task_id) == (target.task.id, target.placement.id)
@@ -115,12 +114,8 @@ def test_full_persistent_lifecycle(tmp_path: Path) -> None:
         assert placement_rows[str(target.placement.id)]["start_utc"] == target.placement.planned_start.isoformat()
         assert {row["name"] for row in rows if row["record_type"] == "task"} >= {"Write Draft", "Research Topic"}
 
-        history_csv, history_json = tmp_path / "history.csv", tmp_path / "history.json"
-        assert services.productivity_controller.export_execution_history(history_csv, "csv").value == 1
-        assert services.productivity_controller.export_execution_history(history_json, "json").value == 1
-        assert json.loads(history_json.read_text())[0]["scheduled_task_id"] == str(target.placement.id)
-        dashboard = services.productivity_controller.build_dashboard()
-        assert dashboard.ok and dashboard.value.observation_count == 1
+        tracker = services.productivity_controller.build_tracker()
+        assert tracker.ok and tracker.value.general.activity.completions == 1
 
         assert persisted_state(services) == after
         services.close()

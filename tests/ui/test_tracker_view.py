@@ -140,12 +140,11 @@ def test_the_controller_reports_a_missing_history_source_safely(productivity_con
     assert productivity_controller.used_tags() == []  # no task source: only the history's tags are known
 
 
-def test_used_tags_are_every_tag_on_a_task_once_and_never_an_error(productivity_service, execution_controller) -> None:
-    controller = ProductivityController(productivity_service, execution_controller,
-                                        task_tags=lambda: ["math", "deep", "math"])
+def test_used_tags_are_every_tag_on_a_task_once_and_never_an_error(productivity_service) -> None:
+    controller = ProductivityController(productivity_service, task_tags=lambda: ["math", "deep", "math"])
     assert controller.used_tags() == ["deep", "math"]
 
     def unreadable():
         raise RuntimeError("storage is closed")
 
-    assert ProductivityController(productivity_service, execution_controller, task_tags=unreadable).used_tags() == []
+    assert ProductivityController(productivity_service, task_tags=unreadable).used_tags() == []

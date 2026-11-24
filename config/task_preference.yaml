@@ -15,7 +15,6 @@ weights:
   time_bonus: 3
   tag_relation: 2
   fragmentation_penalty: -4
-  category_bonus: 1
 
 preference:
   max_time_distance_minutes: 240

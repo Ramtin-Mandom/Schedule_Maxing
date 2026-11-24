@@ -46,7 +46,7 @@ def test_startup_builds_every_controller_on_one_shared_connection(tmp_path: Path
         assert services.db_path == tmp_path / "app.db"
         assert services.planning_controller.list_tasks().ok
         assert services.execution_controller.list_executions().ok
-        assert services.productivity_controller.build_dashboard().ok
+        assert services.productivity_controller.build_tracker().ok
         assert background.current_registry() is services.registry
     finally:
         services.close()
@@ -231,7 +231,8 @@ def test_execution_lifecycle_survives_reopen_without_duplicates(tmp_path: Path) 
             "name": "Study", "day": "1", "category": "study", "tag": "t", "fixed": "False",
             "start_time": "480", "end_time": "900", "duration": "60", "priority": "5",
         })
-    first, second = page.make_schedule().value.snapshot.executables
+    assert services.planning_controller.generate(MON, MON).ok
+    first, second = page.load().value.executables
     executions = services.execution_controller
 
     assert executions.find_execution_for_placement(first.placement.id).value is None  # viewing creates nothing
