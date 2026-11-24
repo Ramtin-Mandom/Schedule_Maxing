@@ -19,7 +19,7 @@ decision was made.
 | ID | Title | Status |
 |---|---|---|
 | ADR-001 | Python desktop app built on CustomTkinter | Inferred |
-| ADR-002 | Python 3.10 is the single supported runtime | Accepted |
+| ADR-002 | Python 3.10 is the single supported runtime | Superseded by ADR-052 |
 | ADR-003 | Hard constraints decide validity; reward only ranks valid placements | Accepted |
 | ADR-004 | Greedy Optimizer v1 is kept as a frozen baseline | Superseded by ADR-047 |
 | ADR-005 | Canonical planning models run in parallel with the legacy models | Superseded by ADR-047 |
@@ -69,6 +69,7 @@ decision was made.
 | ADR-049 | Week/month allocation is points first | Accepted |
 | ADR-050 | Keep project Markdown together under `docs/` | Accepted |
 | ADR-051 | Retire unreachable desktop presentations and duration prediction | Accepted |
+| ADR-052 | Python 3.12 is the tested and packaged runtime | Accepted |
 
 ---
 
@@ -85,14 +86,13 @@ decision was made.
 
 ### ADR-002 — Python 3.10 is the single supported runtime
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-052](#adr-052--python-312-is-the-tested-and-packaged-runtime).
 - **Context:** Testing on one Python version and building the installer on another would ship a program that the tests never checked.
 - **Decision:** CI, the release build and local builds all use Python 3.10. `build_windows.ps1` refuses any other version, and a test keeps the script's required version equal to the workflows' `python-version`.
 - **Rationale:** The comment in `build_windows.ps1` says the installer must hold the same program the tests checked.
 - **Alternatives:** Not documented.
 - **Consequences:** Moving to a newer Python means changing every workflow and the build script together.
-- **Runtime status:** Python 3.10 reached upstream end of life on 2026-10-01. The coordinated upgrade is
-  tracked in the roadmap. [PEP 619](https://peps.python.org/pep-0619/), [roadmap](ROADMAP.md#r2-move-off-python-310)
+- **Runtime status:** Python 3.10 reached upstream end of life on 2026-10-01. [PEP 619](https://peps.python.org/pep-0619/)
 - **Relevant files:** `.github/workflows/*.yml`, `packaging/windows/build_windows.ps1`, `tests/test_packaging_config.py`.
 - **Evidence:** `test_build_script_requires_the_python_that_ci_tests_with`; the skill note in `.claude/skills/schedule-maxing-debugging/SKILL.md`. The build-script change is committed in `0ec34de`.
 
@@ -676,3 +676,18 @@ decision was made.
   sessions still contribute to the tracker. Old preference values remain readable.
 - **Evidence:** The scheduling baseline, controller and persistence tests, direct-mode tests and two-device
   execution history checks cover the retained paths. [Verification](CURRENT_STATE.md#d-testing-and-quality)
+
+### ADR-052 — Python 3.12 is the tested and packaged runtime
+
+- **Status:** Accepted (2026-11-24). Supersedes ADR-002.
+- **Context:** Python 3.10 reached end of life. The 1.3.1 CI audit reported another vulnerability
+  in dnspython 2.8.0. The fixed release requires Python 3.11 or later.
+  [Advisory](https://github.com/advisories/GHSA-vvf4-9x63-8xvv), [Package metadata](https://pypi.org/project/dnspython/2.9.2/)
+- **Decision:** Use Python 3.12 in CI, release builds and backend deployment. Require dnspython
+  2.9.2 in the backend and direct-mode profiles and audit the lock without CVE exceptions.
+- **Rationale:** Keep the installer on the same interpreter version as CI while allowing the
+  patched dependency on a supported runtime. Desktop-only installations still use their own
+  dependency profile.
+- **Consequences:** Rebuild older source virtual environments. Render's runtime configuration needs
+  to meet the same Python requirement. [Deployment guide](deployment/render-deployment.md)
+- **Evidence:** `tests/test_packaging_config.py`, `tests/test_workflows.py`, [release CI](https://github.com/Ramtin-Mandom/Schedule_Maxing/pull/26/checks).

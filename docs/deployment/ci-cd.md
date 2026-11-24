@@ -35,7 +35,7 @@ flowchart LR
 
 ## 1. Continuous integration (`ci.yml`)
 
-Runs on `pull_request` and `workflow_dispatch`. Five independent jobs run on `ubuntu-latest` with Python 3.10.
+Runs on `pull_request` and `workflow_dispatch`. Five independent jobs run on `ubuntu-latest` with Python 3.12.
 
 | Job | Installs | What it proves |
 |---|---|---|

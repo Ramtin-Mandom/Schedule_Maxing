@@ -18,7 +18,7 @@ SQLite layer. A test checks this.
 
 ## Package choices
 
-All packages are maintained and support Python 3.10 (the CI version):
+All packages below support Python 3.12, the version tested in CI.
 
 | Concern | Package | Why |
 | --- | --- | --- |

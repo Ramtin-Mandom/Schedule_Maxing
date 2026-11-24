@@ -128,7 +128,7 @@ repositories and requires the current server schema. The packaged desktop keeps 
 
 An installed desktop compares its version with the latest published release. It downloads the expected
 installer, verifies the published SHA-256 checksum, and hands it to Windows when the user requests the update.
-CI tests PRs. A release tag starts the Windows packaging workflow and can independently start the Render
+CI tests PRs on Python 3.12. A release tag starts the Windows packaging workflow and can independently start the Render
 deploy workflow. Render checks service health and schema readiness. Draft installers and schema cutovers are
 covered by the deployment guides. [Windows delivery](deployment/windows-distribution.md), [CI and deployment](deployment/ci-cd.md)
 

@@ -264,7 +264,7 @@ files and keeps the fast ones. Two exceptions:
 | Recurrence behavior | `app/planning/series.py`, `recurrence.py` | `occurrence.py`, `workflow.py` (expansion before generation), `app/sync/engine.py` (`_SeriesGroup`) | `tests/planning/test_recurrence_*.py`, `tests/sync/test_recurrence_sync.py` |
 | CSV formats | `app/planning/csv_import.py` (legacy) / `csv_canonical.py` + `csv_export.py` (format 3) | `compat.py`, `app/csv_safety.py`, `backend/planning_api.py` CSV routes | `tests/planning/test_csv_*.py`, `tests/test_import_safety.py` |
 | Desktop config / paths | `config/settings.py`, `app/runtime.py` | `app/execution/db.py: resolve_db_path`, packaging spec | `tests/test_runtime.py`, `tests/execution/test_storage_location.py` |
-| Packaging / release | `packaging/windows/build_windows.ps1`, `ScheduleMaxing.spec` | `check_bundle.py`, `smoke_test.py`, `.github/workflows/release.yml`, `app/version.py` | `tests/test_packaging_config.py`, `test_release_workflow.py` |
+| Packaging / release | `packaging/windows/build_windows.ps1`, `ScheduleMaxing.spec` | `check_bundle.py`, `smoke_test.py`, `.github/workflows/release.yml`, `app/version.py`. Keep the Python 3.12 pin aligned with CI | `tests/test_packaging_config.py`, `test_release_workflow.py` |
 | Updater | `app/update/service.py` | `downloader.py`, `release_feed.py`, `app/ui/update_controller.py`, `update_view.py` | `tests/update/*` |
 
 ## E. Dependency relationships

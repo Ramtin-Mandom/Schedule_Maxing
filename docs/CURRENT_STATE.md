@@ -7,7 +7,7 @@ feature's state changes. See the [repository diagnosis](history/diagnosis.md),
 | | |
 |---|---|
 | Audited | 2026-11-23 |
-| Commit | `fdd9b41` plus the 1.3.1 release preparation |
+| Commit | `c091888` plus the Python 3.12 update in [PR #26](https://github.com/Ramtin-Mandom/Schedule_Maxing/pull/26) |
 | Release preparation | 2026-11-24. PR #24 merged the engine remake and PR #25 merged repository cleanup and the tag-based backend workflow |
 | App version | Source reports 1.3.1. The preceding published installer, `v1.3.0`, was built from `dfd53d6`. Backend API version is 1.0.0. [Published Windows releases](https://github.com/Ramtin-Mandom/Schedule_Maxing/releases) |
 | Local and server schema | The 1.3.1 source supports SQLite v19 and Alembic `0021`. A read-only check confirmed the local desktop database is already on v19. The `v1.3.0` tag uses SQLite v18 and Alembic `0020`. [Cutover notes](backend/backend.md#priority-and-dependency-removal-0021) |
@@ -101,7 +101,7 @@ and can sync to a FastAPI/PostgreSQL account server.
 | With the opt-in Settings choice "Light caching" (ADR-045), only Day and the shown page stay built: returning to any other page (Settings <-> Account <-> How to Use too) rebuilds it (Week/Month ~0.8 s instead of ~60 ms), and its scroll position, unsaved input and Productivity's report cache are lost; in exchange ~15 MB less memory and ~2,200 fewer native windows after visiting every page | Low (by design, off by default) | `app/ui/shell.py: AppShell.set_light_caching`, `app/ui/pages.py: DeferredPage.release` | docs/history/desktop-performance-round3.md ("Addendum: light caching") |
 | Dragging the window still costs dwm.exe work for every visible native child window (the Day page has ~435: form, buttons and navigation are CustomTkinter, 2-3 each) | Low | Desktop UI | docs/history/desktop-performance-round3.md "Round 3b", ADR-043 |
 | While the window is not focused, remote changes arrive up to 5 minutes later (background sync interval 300 s) | Low (by design) | Sync | ADR-041 |
-| Python 3.10 reached end of life on 2026-10-01, with a dependency-audit exception still in CI | High | Toolchain and dependency support | [PEP 619](https://peps.python.org/pep-0619/), [security operations](backend/security-operations.md#dependencies) |
+| Render builds need a Python 3.12 runtime. The live service runtime has not been verified | High for deployment | Hosted backend | [Render setup](deployment/render-deployment.md#environment-variables), [ADR-052](DECISIONS.md#adr-052--python-312-is-the-tested-and-packaged-runtime) |
 
 ## D. Testing and quality
 
@@ -116,6 +116,17 @@ Tests under `tests/` are assigned to tiers automatically by `tests/test_tiers.py
 | `python -m compileall .` | Compile check |
 | `ruff check .` | Lint |
 | `python -m benchmarks.scheduling_mode_baseline --check benchmarks/results/prompt1_scheduling_mode_baseline.json` | Engine baseline drift (not run by CI) |
+
+The 1.3.1 release moves CI and the Windows installer to Python 3.12. The backend and direct-mode
+dependencies require dnspython 2.9.2, which resolves both DNS advisories. The lock is audited without
+CVE exceptions. The initial release PR run also found a real-window test still calling the retired
+History adapter. It now checks that the same outcomes appear in the Productivity tracker.
+[Release CI](https://github.com/Ramtin-Mandom/Schedule_Maxing/pull/26/checks)
+
+| 1.3.1 pre-release check on Python 3.12 | Result |
+|---|---|
+| Workflow, packaging, database migration and updater checks on Windows | 153 passed. The Day board restart test requires a display and was skipped in the local shell |
+| Ruff and tag check | Passed. The release tag must be `v1.3.1` |
 
 Local cleanup results on `c030585` plus the working-tree changes (Windows, 2026-11-23):
 
@@ -210,7 +221,7 @@ checklist is in `docs/deployment/windows-distribution.md`).
 
 1. Identify the hosted revision and verify the backup, `0021` cutover and Windows installer upgrade before the
    next release. The engine remake and cleanup have already merged and passed CI.
-2. Move the tested and packaged runtime off Python 3.10 and align dependency resolution with the audit lock.
+2. Confirm the hosted Python 3.12 runtime and align normal dependency resolution with the audit lock.
 3. Decide how the desktop should collect timed evidence and surface recurrence and deadline authoring.
-4. Resolve the range-allocation blind spot and triage unused presentation adapters before adding scheduling modes.
+4. Resolve the range-allocation blind spot before adding scheduling modes.
 5. Follow up on hosted account deletion and retention, updater signature enforcement, and the intermittent Tk test.
