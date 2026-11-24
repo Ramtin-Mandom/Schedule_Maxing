@@ -1,6 +1,6 @@
 ---
 name: ci-check
-description: One pass that makes CI agree with the intended code. Collects every CI failure at once (all jobs of the latest run through gh, or pasted logs), reads ci_check_notes.md for the deliberate contract changes and the known CI-vs-Windows differences, predicts the failures CI has not shown yet (stale references, leftover threads, real-window and window-manager behaviour, timing, ordering, Linux paths, dependency boundaries, newer package releases), fixes stale tests, clear regressions and CI-environment gaps together, runs the local equivalent of every job, and records what it learned in ci_check_notes.md. Never commits or pushes.
+description: One pass that makes CI agree with the intended code. Collects every CI failure at once (all jobs of the latest run through gh, or pasted logs), reads docs/development/ci_check_notes.md for the deliberate contract changes and the known CI-vs-Windows differences, predicts the failures CI has not shown yet (stale references, leftover threads, real-window and window-manager behaviour, timing, ordering, Linux paths, dependency boundaries, newer package releases), fixes stale tests, clear regressions and CI-environment gaps together, runs the local equivalent of every job, and records what it learned in ci_check_notes.md. Never commits or pushes.
 argument-hint: "[optional: base ref, 'quick', a focus, pasted CI logs (all failed jobs at once), a log file path, or a GitHub Actions run id/URL]"
 disable-model-invocation: true
 allowed-tools:
@@ -47,18 +47,18 @@ its first collection error. Find the rest yourself.
   - the environment a test needs: a fixture (the `window_manager` fixture), or a system package or environment
     variable in the workflow's install step. Explain it in a workflow comment.
 - **Fix clear regressions in the same run.** The cause must be certain (reproduced, or proven with a small script),
-  the fix local, and the intended behaviour documented (a test, the notes, docs/architecture/DECISIONS.md, a docstring). Add a test
+  the fix local, and the intended behaviour documented (a test, the notes, docs/DECISIONS.md, a docstring). Add a test
   that fails without the fix: check it by running the test with the fix stashed. If the fix would change behaviour
   someone may have meant, or would reach across subsystems, report it and ask instead.
 - **Intent decides, not the diff.** A test is stale only when the change was deliberate. Evidence: a Pending entry
-  in `ci_check_notes.md`, the user's request, commit messages, docs/architecture/DECISIONS.md/CURRENT_STATE.md, and the shape of the
+  in `docs/development/ci_check_notes.md`, the user's request, commit messages, `docs/DECISIONS.md`, `docs/CURRENT_STATE.md`, and the shape of the
   diff (a rename touching every call site). When intent is still unclear, ask; don't guess.
 - Never add `continue-on-error`, change what a job runs, or point tests at a real database.
 - Don't commit, push or stage. Use the project Python: `.venv/Scripts/python` (3.10, same as CI).
 
 ## 1. Load the memory (always first)
 
-Read `ci_check_notes.md` at the repository root:
+Read `docs/development/ci_check_notes.md` before investigating the failures.
 
 - **Pending** entries are deliberate contract changes not yet checked against CI. They join the contract list in
   step 3, already marked as intended.
@@ -184,7 +184,7 @@ Run in this order; rerun only what failed while debugging.
 
 ## 7. Update the memory
 
-Edit `ci_check_notes.md`. Keep its structure, and keep entries short:
+Edit `docs/development/ci_check_notes.md`. Keep its structure, and keep entries short:
 
 - Move each Pending entry you settled to **Checked**, with an **Outcome** line: stale test updated / regression
   fixed (commit or "uncommitted") / CI environment / needs decision. Keep the latest ten Checked entries.

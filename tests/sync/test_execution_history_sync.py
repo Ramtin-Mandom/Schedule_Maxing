@@ -1,5 +1,5 @@
-"""Execution history across devices through the desktop controllers (Milestone 5): labels
-tell pending local work from server-confirmed work and from conflicts, and a second
+"""Execution history across devices (Milestone 5): sync state distinguishes
+pending local work, server-confirmed work, and conflicts, and a second
 device (or the same one after signing out and in again) restores the same outcomes,
 sessions, lineage and schedule-cohort answers from the server."""
 
@@ -11,7 +11,6 @@ from app.planning import workflow
 from app.planning.models import ScheduledTask
 from app.productivity.reporting import ProductivityService
 from app.execution.repository import ExecutionRepository
-from app.ui.execution_controller import ExecutionController
 from tests.sync.conftest import MON, InProcessTransport
 
 EMAIL = "alice@example.com"
@@ -19,11 +18,6 @@ EMAIL = "alice@example.com"
 
 def at(hour: int, minute: int = 0) -> datetime:
     return datetime(MON.year, MON.month, MON.day, hour, minute, tzinfo=timezone.utc)
-
-
-def controller(device) -> ExecutionController:
-    return ExecutionController(device.executions,
-                               sync_state=lambda execution_id: device.sync.record_sync_state("execution", execution_id))
 
 
 def cohort(device):
@@ -41,13 +35,13 @@ def planned(device, name: str, hour: int):
     return task, device.planning.get_placement(placement.id)
 
 
-def test_labels_are_honest_and_a_second_device_restores_the_same_history(alice_server, make_device) -> None:
+def test_sync_state_and_a_second_device_restores_the_same_history(alice_server, make_device) -> None:
     a = make_device("a", InProcessTransport(alice_server.client))
     b = make_device("b", InProcessTransport(alice_server.client))
     offline = make_device("offline", InProcessTransport(alice_server.client))
     task, placement = planned(offline, "Alone", 9)
     execution = offline.executions.get_or_create_canonical_execution(task, placement)
-    assert controller(offline).describe(placement, execution).value.sync_text.startswith("Saved on this device only")
+    assert offline.sync.record_sync_state("execution", execution.id) == "local_only"
 
     a.sign_in(EMAIL)
     task, placement = planned(a, "Study", 9)
@@ -55,12 +49,12 @@ def test_labels_are_honest_and_a_second_device_restores_the_same_history(alice_s
     moved = workflow.reschedule_placement(a.planning, placement.id, expected_version=placement.version,
                                           planned_date=MON, timezone_name="UTC", planned_start=at(13),
                                           planned_end=at(14)).replacement
-    ctl = controller(a)
-    started = ctl.perform(task, moved, "start", None).value
-    done = ctl.perform(task, moved, "complete", started).value
-    assert "not yet confirmed" in ctl.describe(moved, done).value.sync_text  # a local commit is not the server's
+    attempt = a.executions.get_or_create_canonical_execution(task, moved)
+    started = a.executions.start(attempt.id, expected_version=attempt.version)
+    done = a.executions.complete(started.id, expected_version=started.version)
+    assert a.sync.record_sync_state("execution", done.id) == "pending"
     assert a.sync_now().status == "ok"
-    assert ctl.describe(moved, a.executions.get_execution(done.id)).value.sync_text == "Confirmed by the server."
+    assert a.sync.record_sync_state("execution", done.id) == "synced"
 
     b.sign_in(EMAIL)
     assert b.sync_now().status == "ok"
@@ -73,7 +67,7 @@ def test_labels_are_honest_and_a_second_device_restores_the_same_history(alice_s
     projection = lambda report: (report.due_completion.model_dump(), report.reschedules.model_dump(),  # noqa: E731
                                  report.duration.model_dump(), [o.state for o in report.occurrences])
     assert projection(cohort(b)) == projection(cohort(a))
-    assert controller(b).describe(moved, restored).value.sync_text == "Confirmed by the server."
+    assert b.sync.record_sync_state("execution", restored.id) == "synced"
 
     # Sign out and in again on A after a restart: the same server-confirmed history is there.
     a.sync.sign_out()
@@ -83,7 +77,7 @@ def test_labels_are_honest_and_a_second_device_restores_the_same_history(alice_s
     assert projection(cohort(a)) == projection(cohort(b))
 
 
-def test_a_conflicting_execution_is_labelled_until_resolved(alice_server, make_device) -> None:
+def test_a_conflicting_execution_stays_in_conflict_until_resolved(alice_server, make_device) -> None:
     a = make_device("a", InProcessTransport(alice_server.client))
     b = make_device("b", InProcessTransport(alice_server.client))
     a.sign_in(EMAIL)
@@ -96,11 +90,9 @@ def test_a_conflicting_execution_is_labelled_until_resolved(alice_server, make_d
     b.executions.start(execution.id)
     a.sync_now()
     b.sync_now()
-    view = controller(b).describe(placement, b.executions.get_execution(execution.id)).value
-    assert view.sync_text.startswith("Conflicts with the server's copy")
+    assert b.sync.record_sync_state("execution", execution.id) == "conflict"
     [conflict] = b.sync.list_conflicts()
     b.sync.resolve_conflict(conflict.id, "accept_remote")
     b.sync_now()
-    assert controller(b).describe(placement, b.executions.get_execution(execution.id)).value.sync_text == \
-        "Confirmed by the server."
+    assert b.sync.record_sync_state("execution", execution.id) == "synced"
     assert len(b.executions.list_sessions(execution.id)) == 1

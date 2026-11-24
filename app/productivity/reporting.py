@@ -4,7 +4,7 @@ reporting.py
 The productivity-analysis service boundary. ProductivityService is the one
 class the CLI (app/productivity/report_cli.py) and any future UI or
 analytics code should call -- it is the only place that wires the
-repository, data prep, segmenting, insight generation, and prediction
+repository, data prep, segmentation, and insight generation
 together. Nothing here executes SQL directly (that stays inside
 app/execution/repository.py).
 
@@ -31,17 +31,13 @@ from datetime import date, datetime, timezone
 from pydantic import BaseModel
 
 from app.execution.repository import ExecutionRepository
-from app.productivity.buckets import TimeBucket
 from app.productivity.data_prep import Observation, Period, build_observations
 from app.productivity.filters import ObservationFilters, apply_filters
 from app.productivity.insights import Insight, generate_insights
-from app.productivity.prediction import DurationPrediction, predict_duration
-from app.planning.history import ScheduleHistory
 from app.productivity.schedule_cohort import (
     ScheduleCohortReport,
     ScheduleHistorySource,
     read_schedule_cohort_report,
-    read_schedule_history_and_report,
 )
 from app.productivity.segments import (
     best_supported_time_bucket_by_category,
@@ -104,9 +100,9 @@ class ProductivityDashboard(BaseModel):
 
 class ProductivityService:
     """
-    Builds ProductivityReport and DurationPrediction results from execution
-    history, and -- given a schedule-history source (the owner-scoped
-    PlanningService) and a reporting timezone -- the schedule-cohort report.
+    Builds productivity reports from execution history. The tracker and
+    schedule-cohort reports also use the owner-scoped schedule history and
+    a reporting timezone.
     """
 
     def __init__(
@@ -123,10 +119,6 @@ class ProductivityService:
         self._clock = clock
         self._history = history
         self._timezone = timezone_name
-
-    @property
-    def reporting_timezone(self) -> str | None:
-        return self._timezone
 
     def build_schedule_cohort_report(
         self,
@@ -253,49 +245,6 @@ class ProductivityService:
             },
             insights=insights,
         )
-
-    def schedule_history_and_report(
-        self, *, start_date: date, end_date: date, timezone_name: str | None = None, as_of: datetime | None = None,
-    ) -> tuple[ScheduleHistory, ScheduleCohortReport]:
-        """The range's history (placements, lineage, executions with sessions, tasks) and its cohort report."""
-        if self._history is None:
-            raise ValueError("this productivity service has no schedule history source.")
-        tz = timezone_name or self._timezone
-        if tz is None:
-            raise ValueError("a reporting timezone is required (the host timezone is never assumed).")
-        now = self._clock()
-        return read_schedule_history_and_report(
-            self._history, start_date=start_date, end_date=end_date, timezone_name=tz, as_of=as_of or now, now=now,
-            thresholds=self._thresholds,
-        )
-
-    def predict_duration(
-        self,
-        *,
-        category: str,
-        time_bucket: TimeBucket,
-        original_estimate_minutes: float,
-        period: Period = "all_time",
-        filters: ObservationFilters | None = None,
-    ) -> DurationPrediction:
-        """Predict a task's actual duration; see app/productivity/prediction.py for the fallback hierarchy."""
-        observations = self._observations_for(period=period, filters=filters)
-        return predict_duration(
-            observations,
-            category=category,
-            time_bucket=time_bucket,
-            original_estimate_minutes=original_estimate_minutes,
-            thresholds=self._thresholds,
-        )
-
-    def build_observations(
-        self,
-        *,
-        period: Period = "all_time",
-        filters: ObservationFilters | None = None,
-    ) -> list[Observation]:
-        """Expose the flattened observation list, e.g. for a caller doing its own ad hoc analysis."""
-        return self._observations_for(period=period, filters=filters)
 
     def build_dashboard(self, *, filters: ObservationFilters | None = None) -> ProductivityDashboard:
         """

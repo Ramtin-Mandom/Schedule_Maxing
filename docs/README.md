@@ -1,24 +1,30 @@
 # Documentation
 
-The [project README](../README.md) covers installation, running, tests and deployment in short. End users have
-the same material, without the internals, in the app itself: **How to Use** under Settings
-(`app/ui/guide_content.py`).
+Installation, launch commands and distribution are covered in the [project README](../README.md).
+The desktop includes **How to Use** under Settings.
+
+## Knowledge base
+
+| Guide | What it covers |
+| --- | --- |
+| [Architecture](ARCHITECTURE.md) | Components, boundaries, data ownership and important flows |
+| [Feature map](FEATURE_MAP.md) | Where to find a feature, which files it affects, and which tests cover it |
+| [Decisions](DECISIONS.md) | Architectural choices and their reasoning |
+| [Current state](CURRENT_STATE.md) | Verified capabilities, limitations and known issues |
+| [Roadmap](ROADMAP.md) | Next priorities, dependencies and milestones |
+| [Workflow](Workflow.md) | How inputs become validated records, schedules, reports and other outputs |
 
 | Folder | What is in it |
 | --- | --- |
-| [architecture/](architecture/) | how the system is built, the run-time flow, design decisions and the data contracts |
+| [architecture/](architecture/) | Desktop, web and persistence boundaries, record contracts and the sync protocol |
 | [features/](features/) | what each part of the desktop app and the scheduler does |
 | [backend/](backend/) | the API server: setup, endpoints, accounts, email and security |
 | [deployment/](deployment/) | Windows installer and releases, CI/CD, Render, direct PostgreSQL mode |
-| [development/](development/) | testing, the current state of the project and the roadmap |
+| [development/](development/) | Testing and CI maintenance notes |
 | [history/](history/) | completion reports, measurements and plans of past development batches |
 
-## Architecture
+## Runtime contracts
 
-- [Architecture overview](architecture/ARCHITECTURE.md): layers, boundaries, module dependencies, file reference
-- [Run-time workflow](architecture/WORKFLOW.md): the Make Schedule call chain, engine internals, rules and constraints
-- [Codebase map](architecture/CODEBASE_MAP.md): where a feature lives, what a change affects, which tests to run
-- [Decisions](architecture/DECISIONS.md): architectural decision records
 - [Desktop and web boundaries](architecture/desktop-web-boundaries.md)
 - [Local record and synchronization contract](architecture/sync-contract.md), [synchronization protocol](architecture/sync-protocol.md)
 
@@ -33,6 +39,7 @@ the same material, without the internals, in the app itself: **How to Use** unde
 - [Five scheduling modes](features/scheduling-modes.md), [recurring series](features/recurrence.md)
 - [Execution, rescheduling and manual placements](features/execution-rescheduling.md)
 - [Productivity analytics and tracker metrics](features/analytics.md)
+- [Budget entries, balances, forecasts and future items](Workflow.md#budgeting-and-forecasting)
 
 ## Backend
 
@@ -52,8 +59,7 @@ the same material, without the internals, in the app itself: **How to Use** unde
 ## Development
 
 - [Testing commands and tiers](development/testing.md) (recorded timings are historical)
-- [Current state](development/CURRENT_STATE.md): what works, what is partial, known bugs
-- [Roadmap](development/ROADMAP.md): planned and unfinished work
+- [CI change and verification notes](development/ci_check_notes.md)
 
 ## History
 
@@ -65,9 +71,10 @@ current behavior.
   [Milestone 6](history/milestone-6-completion.md)
 - [Windows distribution audit](history/windows-distribution-audit.md) (the design behind the installer and updater)
 - [Productivity redesign plan](history/productivity-redesign-plan.md) (the tracker contracts A-E that code comments cite)
-- Desktop responsiveness: [diagnosis](history/desktop-responsiveness-diagnosis.md), [results](history/desktop-responsiveness-results.md),
+- [Repository diagnosis](history/diagnosis.md) at `c030585`
+- Desktop responsiveness results and investigation. [Diagnosis](history/desktop-responsiveness-diagnosis.md), [results](history/desktop-responsiveness-results.md),
   [current-tree validation](history/desktop-responsiveness-current-validation.md), [round 2](history/desktop-responsiveness-round2.md),
   [round 3](history/desktop-performance-round3.md)
 
-The Markdown reports in [`benchmarks/`](../benchmarks/) record measurements for their stated scenarios and
-revisions, next to the scripts and results they describe; they are not performance guarantees for every workload.
+Benchmark reports record measurements for their stated scenarios and revisions. Executable benchmarks and
+their data remain under `benchmarks/`. [Benchmark reports](history/benchmarks/), [scripts and results](../benchmarks/)

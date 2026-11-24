@@ -2,7 +2,7 @@
 
 `benchmarks/results/prompt1_scheduling_mode_baseline.json`, written by
 `python -m benchmarks.scheduling_mode_baseline` for the later comparison in
-`benchmarks/results/prompt5_scheduling_modes_comparison.md`.
+`docs/history/benchmarks/prompt5_scheduling_modes_comparison.md`.
 
 - **Source:** the unmodified committed tree of revision
   `92c6993037964fb65eec0c2d46e3c0d914d46e0f` (tasks without priority or dependencies, points-first

@@ -62,12 +62,11 @@ def test_ordinary_values_are_untouched_and_reports_use_the_protection(tmp_path: 
         assert spreadsheet_safe(value) == value and type(spreadsheet_safe(value)) is type(value)
     assert safe_row({"name": "=1", "minutes": -5}) == {"name": "'=1", "minutes": -5}
     assert safe_row(["09:00", "@x"]) == ["09:00", "'@x"]
-    # The reports opened in spreadsheets go through it; the lossless planning export deliberately does not.
-    import app.execution.exporters as execution_exporters
+    # Productivity reports use spreadsheet safety. Planning CSV preserves exact values for round trips.
     import app.planning.csv_export as planning_export
     import app.productivity.exporters as productivity_exporters
 
-    assert execution_exporters.safe_row is safe_row and productivity_exporters.safe_row is safe_row
+    assert productivity_exporters.safe_row is safe_row
     assert not hasattr(planning_export, "safe_row")
     target = tmp_path / "out.csv"
     with target.open("w", newline="", encoding="utf-8") as file:

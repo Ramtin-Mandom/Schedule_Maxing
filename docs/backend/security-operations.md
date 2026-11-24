@@ -74,11 +74,9 @@ Worth an alert: a sustained rise of `sign_in_failed` or
 
   Regenerate after changing a requirements file, from a clean virtual
   environment: `python -m pip install -r requirements.txt` then
-  `python -m pip freeze > requirements/requirements.lock`. It was produced on Windows with
-  Python 3.10; a constraints file only pins what gets installed, so it is
-  usable on Linux too, but that install was not run from here. It records
-  versions, not hashes (hash-pinning needs `pip-tools`, which the repository
-  does not use).
+  `python -m pip freeze > requirements/requirements.lock`. Use the supported Python 3.12 runtime.
+  Constraints pin the packages applicable to the platform. The lock records versions, and CI audits
+  the set of recorded distributions.
 - **Scanning (CI job `security-scan`).** `pip-audit` checks the lock against
   known vulnerabilities; `detect-secrets` checks every tracked file against the
   reviewed baseline `secret-scan-baseline.json` (regenerate it with
@@ -98,11 +96,10 @@ Handling policy:
 | A real secret in the repository | rotate it first (see api-security.md, "Keys and rotation"), then remove it; history rewriting is secondary -- a pushed secret is compromised |
 | A false positive | allowlist the exact finding in the scanner's configuration with a comment, never a whole path |
 
-Currently ignored findings:
-
-| Id | Package | Why | Revisit |
-| --- | --- | --- | --- |
-| CVE-2026-114605 (GHSA-45c3-73f7-pv4m) | dnspython 2.8.0 | excessive CPU in `dns.name.from_wire_parser()`; the fixed releases (2.9.0+) need Python 3.11 and the project is on 3.10. Reached only through email-validator's deliverability check, i.e. only with `EMAIL_DNS_CHECK` on (off by default) -- keep it off until the upgrade | by 2027-02-04, or when moving to Python 3.11 (then upgrade dnspython and drop the ignore) |
+The 1.3.1 release preparation moved to Python 3.12 and upgraded dnspython to 2.9.2. This fixes both
+advisories previously affecting the lock and removes the earlier audit exception. Backend and direct-mode
+installs require at least the fixed version. [Earlier advisory](https://github.com/advisories/GHSA-45c3-73f7-pv4m),
+[zone-file advisory](https://github.com/advisories/GHSA-vvf4-9x63-8xvv), [fixed package](https://pypi.org/project/dnspython/2.9.2/)
 
 ## Backups and restoration
 

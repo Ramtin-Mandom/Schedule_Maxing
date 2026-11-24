@@ -340,12 +340,12 @@ with the execution version on screen as the precondition (a change made on
 another device is reported and reloaded, never overwritten). There is no
 second status store; see docs/features/execution-rescheduling.md section 2.
 
-**Make Schedule again keeps every status.** The column is read from the
-placement's execution by placement id -- never by task name or position -- and
-generation never writes executions: placements whose attempts were answered
-(completed, skipped) or started are kept in place with their ids by every
-generation, and an incremental Make Schedule keeps every placement that still
-fits. Only newly placed tasks appear, in Tasks. Duplicate names and the
+**Make Schedule keeps started and answered work.** The column is read from the
+placement's execution by placement id. Placements with started, completed or
+skipped attempts keep their ids. An incremental Make Schedule also keeps
+valid planned placements. When regeneration replaces a placement, it cancels
+any never-started `scheduled` attempt as `superseded`. Newly placed tasks
+appear in Tasks. Duplicate names and the
 occurrences of a recurring task each have their own placement and status. A
 removed task or fixed block leaves the board, and its completions and points
 are removed with it.
@@ -353,12 +353,9 @@ are removed with it.
 Viewing the board writes nothing; the first move creates the placement's
 execution (never a second one).
 
-The Productivity page adds "History" (last 7/30/90 days, filtered by status and
-category; each entry shows the original plan, the move lineage, the outcome,
-actual times and sessions -- also for work whose task or placement is no
-longer on the schedule). Its Data section says where history is stored and
-what deleting it does in the active mode (this device only; this device and
-the account's synchronized copy; or the server database in direct mode).
+The board records outcomes and points. Timing and feedback are available
+through the execution API. Productivity's General, Specific and Project views
+use the outcomes and any available timed sessions. [Productivity analytics](analytics.md)
 
 ## Limitations
 

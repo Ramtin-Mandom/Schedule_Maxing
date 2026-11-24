@@ -46,10 +46,8 @@ def productivity_service(repository: ExecutionRepository) -> ProductivityService
 
 
 @pytest.fixture
-def productivity_controller(
-    productivity_service: ProductivityService, execution_controller: ExecutionController
-) -> ProductivityController:
-    return ProductivityController(productivity_service, execution_controller)
+def productivity_controller(productivity_service: ProductivityService) -> ProductivityController:
+    return ProductivityController(productivity_service)
 
 
 def make_snapshot_kwargs(**overrides: object) -> dict:

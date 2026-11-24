@@ -177,7 +177,7 @@ Focused tests per phase (new: `tests/test_startup_cost.py`, `tests/ui/test_defer
 `tests/test_transport_keepalive.py`, `tests/ui/test_page_freshness.py`,
 `tests/ui/test_page_freshness_keys.py`, additions to `tests/execution/test_transactions.py`
 and `tests/ui/test_shell_foundation.py`), the affected real-window modules, and the existing
-sync idle-loop, keep-signed-in and HTTP transport tests; results in docs/development/CURRENT_STATE.md section D.
+sync idle-loop, keep-signed-in and HTTP transport tests; results in docs/CURRENT_STATE.md section D.
 
 ## Round 3b: dragging, light widgets, Week pre-build, engine process
 

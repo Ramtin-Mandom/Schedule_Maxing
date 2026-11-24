@@ -142,11 +142,9 @@ Day page.
 
 ## Limitations
 
-- The earlier Week/Month **Make Schedule** (generate a whole range at once)
-  is no longer on these pages. The same operation stays available to
-  headless callers (`PlanningController.schedule_range`,
-  `SchedulePageController.make_schedule`) and the CLI.
-- CSV import/export is on the Day page (canonical v2).
+- The desktop generates a selected date on the Day page. The planning API can
+  generate a whole range, and the CLI can preview a range and generate one selected date.
+- CSV import/export is on the Day page. Canonical exports use format 3 and format 2 remains readable.
 - Recurring series are listed as "repeats" rows (or "needs setup"); their
   occurrences appear as "repeat" rows once a range is scheduled -- Make
   Schedule materializes them first ([recurrence.md](recurrence.md)).

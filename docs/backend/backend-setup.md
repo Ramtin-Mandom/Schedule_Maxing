@@ -55,7 +55,7 @@ with a desktop/Android/web release. Repository privacy is not a security control
 
 ## Local setup (PowerShell)
 
-Use Python 3.10 or newer. From this repository root:
+Use Python 3.12. From this repository root:
 
 ```powershell
 python -m venv .venv

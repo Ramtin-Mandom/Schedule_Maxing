@@ -66,7 +66,7 @@ nothing. Invariants, verified on every path by
 
 Entry points (one implementation, `app.planning.workflow.reschedule_placement`):
 
-- Python (desktop, local web profile, direct mode): `workflow.reschedule_placement(service, placement_id, expected_version=..., planned_date=..., timezone_name=..., planned_start=..., planned_end=..., replacement_id=None)`.
+- Shared Python workflow. `workflow.reschedule_placement(service, placement_id, expected_version=..., planned_date=..., timezone_name=..., planned_start=..., planned_end=..., replacement_id=None)`.
 - REST (hosted and local profiles): `POST /planning/placements/{id}/reschedule`
   with `{base_version, planned_date, timezone, planned_start, planned_end, replacement_id?}`,
   answering `{previous, replacement, cancelled_execution_id}`.
@@ -454,11 +454,7 @@ rows, or a successor for a tombstone without `superseded_by_id`.
 
 ## 10. Remaining limitations
 
-- The desktop moves a placement through its execution actions
-  ("Reschedule...") and releases manual intent from the Day timeline
-  ("Release manual placement"); other clients use the REST API
-  (`/planning/placements/{id}/reschedule` and `/release`) and sync.
-- Regeneration does not cancel the `scheduled` execution of a placement it
-  replaces (unchanged behavior); analytics classifies it by the tombstone's
-  reason (section 9).
-- REST has no op_id replay; clients reconcile by reading (section 3).
+- Moving a saved placement is available through the planning API and service.
+  The desktop Day timeline exposes **Release manual placement** for a saved move.
+- REST clients reconcile by reading after a failure. Sync clients can replay
+  operations using `op_id`.

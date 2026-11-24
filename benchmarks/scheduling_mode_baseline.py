@@ -3,7 +3,7 @@ benchmarks/scheduling_mode_baseline.py
 
 Deterministic Normal (precise_greedy) and ADHD (adhd_friendly) scheduling
 baseline, captured before the recurrence work of Milestone 5 so a
-later comparison (benchmarks/results/prompt5_scheduling_modes_comparison.md) can be made
+later comparison (docs/history/benchmarks/prompt5_scheduling_modes_comparison.md) can be made
 against a fresh result of the *unchanged* code, never against older
 published numbers.
 
