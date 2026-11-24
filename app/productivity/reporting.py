@@ -100,9 +100,9 @@ class ProductivityDashboard(BaseModel):
 
 class ProductivityService:
     """
-    Builds ProductivityReport and DurationPrediction results from execution
-    history, and -- given a schedule-history source (the owner-scoped
-    PlanningService) and a reporting timezone -- the schedule-cohort report.
+    Builds productivity reports from execution history. The tracker and
+    schedule-cohort reports also use the owner-scoped schedule history and
+    a reporting timezone.
     """
 
     def __init__(

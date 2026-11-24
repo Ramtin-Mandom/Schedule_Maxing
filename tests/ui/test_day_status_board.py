@@ -2,17 +2,16 @@
 database: it replaces the former task list and Execute tab; scheduled tasks start in Tasks;
 x and the arrows move them and back; an optimizer-unscheduled task is in no column; Make
 Schedule again keeps every status; everything survives a restart; the columns stack on a narrow
-window; and completed work reaches the Productivity history. Skipped without a display
+window; and outcomes reach the Productivity tracker. Skipped without a display
 (tests/ui/test_desktop_app.py)."""
 
 from __future__ import annotations
 
-from datetime import timedelta
 from pathlib import Path
 
 from app.execution.lifecycle import TaskOutcome
 from app.ui.shell_state import LayoutMode
-from tests.ui.test_desktop_app import WEDNESDAY, board_names, close_app, fill_form, open_app, press, pump
+from tests.ui.test_desktop_app import board_names, close_app, fill_form, open_app, press, pump
 from tests.ui.test_desktop_app import dialogs as dialogs  # noqa: F401 - the dialog-recorder fixture
 from tests.ui.test_desktop_app import pytestmark as pytestmark  # noqa: F401 - skip without a display
 
@@ -77,9 +76,7 @@ def test_unscheduled_tasks_stay_out_and_a_rerun_keeps_every_status(tmp_path: Pat
         close_app(app)
 
 
-def test_statuses_survive_a_restart_and_reach_the_history(tmp_path: Path, dialogs, monkeypatch) -> None:
-    import app.ui.productivity_controller as controller_module
-
+def test_statuses_survive_a_restart_and_reach_the_tracker(tmp_path: Path, dialogs) -> None:
     db = tmp_path / "restart.db"
     app, day = scheduled_day(db, tmp_path, ("Kept", "Missed", "Open"))
     try:
@@ -94,10 +91,13 @@ def test_statuses_survive_a_restart_and_reach_the_history(tmp_path: Path, dialog
         pump(app)
         assert board_names(day) == {"uncompleted": ["Missed"], "pending": ["Open"], "completed": ["Kept"]}
 
-        monkeypatch.setattr(controller_module, "local_date_of", lambda _now, _tz: WEDNESDAY + timedelta(days=1))
-        history = app.productivity_controller.history(90)
-        assert history.ok and history.value.entries
-        statuses = {entry.name: entry.status for entry in history.value.entries}
+        report = app.productivity_controller.build_tracker()
+        assert report.ok, report.error
+        statuses = {
+            record.name: record.state
+            for record in report.value.records.values()
+            if record.kind == "occurrence"
+        }
         assert statuses["Kept"] == "completed" and statuses["Missed"] == "skipped"
     finally:
         close_app(app)
