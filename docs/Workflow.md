@@ -128,7 +128,9 @@ repositories and requires the current server schema. The packaged desktop keeps 
 
 An installed desktop compares its version with the latest published release. It downloads the expected
 installer, verifies the published SHA-256 checksum, and hands it to Windows when the user requests the update.
-CI tests PRs on Python 3.12. A release tag starts the Windows packaging workflow and can independently start the Render
+The application then closes (waiting at most 15 s for background work); the installer waits until no
+`ScheduleMaxing.exe` runs from the install folder, ends any that are left, replaces the files and starts the
+new version. Nothing of the old version keeps the program's files open (ADR-054). CI tests PRs on Python 3.12. A release tag starts the Windows packaging workflow and can independently start the Render
 deploy workflow. Render checks service health and schema readiness. Draft installers and schema cutovers are
 covered by the deployment guides. [Windows delivery](deployment/windows-distribution.md), [CI and deployment](deployment/ci-cd.md)
 
@@ -777,6 +779,8 @@ ScheduledTask(task_id=UUID("…a1"), planned_date=date(2026, 11, 2), timezone="E
 | Stored fixed block outside a changed day window | Engine `ValueError` ("outside the day window"); API 422 `generation_failed`; desktop generic message. Fixed-block writes prevent this at write time, but changing preferences later does not re-validate stored blocks | `optimizer`, `fixed_block_rules` docstring |
 | Generation too slow | Web API: `GENERATION_TIME_LIMIT_SECONDS` → deadline checked between dates/before save → `GenerationLimitError` (503). Desktop passes no deadline. No timeout inside the engine | `workflow._check_deadline`, `planning_api` |
 | Engine process failure | Falls back to in-thread execution permanently for the session; logged | `EngineProcess.__call__` |
+| Background work still running 15 s after the window was closed | Logged; the engine worker is ended, the window closes and the process exits without closing the connection (SQLite rolls back an unfinished transaction on next open). On Windows the worker also ends with the application however it exits (job object) | `ScheduleOptimizerApp._finish_close`, `AppServices.abandon`, `EngineProcess.terminate`, `desktop.exit_now` |
+| Update or uninstall while a program process still runs | The installer waits (an in-app update up to 60 s), then ends every `ScheduleMaxing.exe` running from the install folder; a window still open after that is asked about; a process that cannot be ended stops the install with nothing changed | `ScheduleMaxing.iss` `PrepareToInstall`, `EndLeftoverProcesses` |
 | Database in use by another process / newer schema / migration failure | Startup shows "Database Unavailable" panel and error dialog; no scheduler without storage | `ScheduleOptimizerApp.__init__`, `describe_startup_failure` |
 | Unexpected exception in a controller | Caught and returned as `ControllerResult.failure("Unexpected error: …")` | `PlanningController._call/_generation_call` |
 | Unexpected exception in a Tk callback | Logged and shown once; window keeps working | `logging_setup.tk_error_handler` |
@@ -973,7 +977,8 @@ slow tiers are excluded by `-m dev`.
 | Workflow / saving / freshness | `tests/planning/test_workflow.py` (`test_an_already_current_generation_writes_nothing`, `test_incremental_generation_never_duplicates_an_occurrence`, `test_a_write_by_another_connection_during_generation_refuses_the_save`), `test_manual_placements.py`, `test_explicit_rescheduling.py`, `test_rescheduling.py`, `test_milestone6_integration.py` |
 | Fixed-block write rules | `tests/planning/test_fixed_block_rules.py`, `tests/backend/test_fixed_block_writes.py` |
 | Preferences | `tests/planning/test_preferences.py`, `tests/planning/test_time.py` |
-| Engine process | `tests/test_engine_process.py` (`test_a_broken_process_falls_back_to_this_thread_for_good`, `test_an_engine_error_keeps_its_type_and_the_process`, `test_a_generation_in_the_engine_process_saves_the_same_schedule`) |
+| Engine process | `tests/test_engine_process.py` (`test_a_broken_process_falls_back_to_this_thread_for_good`, `test_an_engine_error_keeps_its_type_and_the_process`, `test_a_generation_in_the_engine_process_saves_the_same_schedule`, `test_terminate_ends_the_worker_in_the_middle_of_a_call`, `test_the_worker_cannot_outlive_the_application_on_windows`) |
+| Closing and updating | `tests/ui/test_async_storage.py` (`test_closing_never_blocks_and_storage_closes_only_after_the_work_is_done`, `test_closing_stops_waiting_for_stuck_work_at_the_deadline`), `tests/test_desktop_entry.py`, `tests/test_packaging_config.py` (`test_installer_ends_every_process_left_running_from_the_install_folder`), `packaging/windows/test_installer.py` (release workflow) |
 | Desktop end-to-end (controller level) | `tests/ui/test_desktop_generation_workflow.py` (`test_first_generation_then_an_unchanged_run_writes_nothing`, `test_incremental_generation_adds_work_around_kept_placements`, `test_full_regeneration_never_moves_work_whose_execution_started`, `test_changed_inputs_refuse_the_save_and_keep_the_previous_schedule`), `tests/ui/test_day_controller.py` |
 | CLI end-to-end | `tests/test_main_cli.py`, `tests/test_end_to_end.py`, `tests/test_milestone2_end_to_end.py` |
 | Hosted API end-to-end | `tests/backend/test_planning_api.py` (`test_preview_generate_reload_and_an_identical_generate_is_a_no_op`, `test_a_stale_preview_fingerprint_is_refused`, `test_a_concurrent_input_change_rolls_the_generation_back`) |

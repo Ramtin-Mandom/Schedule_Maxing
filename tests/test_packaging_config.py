@@ -230,6 +230,18 @@ def test_installer_waits_for_the_running_application_by_its_mutex():
     assert "function InitializeUninstall" in ISS
 
 
+def test_installer_ends_every_process_left_running_from_the_install_folder():
+    # The engine worker runs ScheduleMaxing.exe from the install folder without the mutex; files it holds
+    # cannot be replaced, so the installer looks for processes by path, not only by the mutex.
+    assert "FROM Win32_Process WHERE Name = ''{#AppExeName}''" in ISS and "ExpandConstant('{app}')" in ISS
+    assert "Process.Terminate(0)" in ISS
+    prepare = ISS.split("function PrepareToInstall", 1)[1].split("function InitializeUninstall", 1)[0]
+    assert "EndLeftoverProcesses" in prepare and "RelaunchRequested and not WaitForProgramToEnd" in prepare
+    uninstall = ISS.split("function InitializeUninstall", 1)[1]
+    assert "AskUntilAppIsClosed" in uninstall and "EndLeftoverProcesses" in uninstall
+    assert "start_leftover_process(target)" in (PACKAGING / "test_installer.py").read_text(encoding="utf-8")
+
+
 def test_installer_creates_shortcuts_and_can_relaunch_after_a_silent_update():
     assert r'Name: "{autoprograms}\{#AppName}"' in ISS
     assert re.search(r'Name: "\{autodesktop\}\\\{#AppName\}".*Tasks: desktopicon', ISS)
