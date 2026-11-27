@@ -258,3 +258,99 @@ def test_turning_light_caching_on_releases_pages_outside_the_open_section(app, m
     app.show_page("settings")
     pump(app)
     assert app.pages["week"].built
+
+
+def test_settings_opens_one_section_and_builds_the_others_when_they_are_opened(app, monkeypatch) -> None:
+    import app.ui.shell as shell_module
+
+    monkeypatch.setattr(shell_module, "_input_idle_ms", lambda: 10_000)  # nobody is typing
+    app.show_page("settings")
+    pump(app)
+    settings = app.pages["settings"].page
+    sections = settings.sections.pages
+    assert settings.sections.current == "general" and sections["general"].built
+    assert not sections["scheduling"].built and not sections["tasks"].built  # the heavy editor is not built yet
+
+    settings.section_buttons["scheduling"].invoke()
+    pump(app, lambda: sections["scheduling"].built and settings.editor.rows, timeout=10)  # its defaults shown
+    assert settings.sections.current == "scheduling"
+    general = sections["general"]
+    assert general.winfo_manager() == "" and str(general) not in settings.sections.detached  # left last: kept
+
+    settings.open_section("tasks")  # General is no longer the section left last: it goes promptly
+    pump(app, lambda: str(general) in settings.sections.detached, timeout=5)
+    assert general.winfo_toplevel() is general and app.tk.call("wm", "state", general._w) == "withdrawn"
+    settings.open_section("general")
+    pump(app)
+    assert general.winfo_toplevel() is app and general.winfo_manager() == "grid"
+    assert str(general) not in settings.sections.detached
+
+
+def test_reading_a_settings_widget_builds_only_its_section(app) -> None:
+    app.show_page("settings")
+    pump(app)
+    wrapper = app.pages["settings"]
+    assert wrapper.reset_data_button.cget("text") == "Reset All Task Data"  # through the DeferredPage too
+    cache = wrapper.page.sections
+    assert cache.pages["tasks"].built and not cache.pages["scheduling"].built and cache.current == "general"
+
+
+def test_light_caching_releases_the_settings_sections_that_are_closed(app, monkeypatch) -> None:
+    import app.ui.shell as shell_module
+
+    monkeypatch.setattr(shell_module, "_input_idle_ms", lambda: 10_000)
+    app.set_light_caching(True)
+    app.show_page("settings")
+    pump(app)
+    settings = app.pages["settings"].page
+    sections = settings.sections.pages
+    settings.open_section("scheduling")
+    pump(app, lambda: not sections["general"].built, timeout=5)  # closed: released, not kept attached
+    settings.open_section("general")  # opened again: built anew
+    pump(app, lambda: sections["general"].built and not sections["scheduling"].built, timeout=5)
+    assert settings.appearance_select.get() in ("Light", "Dark")
+
+
+def test_at_most_three_detached_pages_keep_their_widgets(app, monkeypatch) -> None:
+    import app.ui.shell as shell_module
+
+    monkeypatch.setattr(shell_module, "_input_idle_ms", lambda: 10_000)
+    for key in ("week", "month", "projects", "productivity", "budget", "day"):
+        app.show_page(key)
+        pump(app, lambda key=key: getattr(app.pages[key], "built", True))
+    # Week, Month, Projects and Productivity are detached (Budget, left last, stays attached): one too many,
+    # so Week -- shown longest ago -- is released.
+    pump(app, lambda: not app.pages["week"].built, timeout=10)
+    assert len(app.shell.pool.held) == shell_module.MAX_DETACHED == 3
+    assert not app.pages["week"].winfo_viewable()  # released: an empty withdrawn window, not drawn over Day
+    assert all(app.pages[key].built for key in ("month", "projects", "productivity", "budget"))
+    app.show_page("week")  # built anew, its period read
+    pump(app, lambda: app.pages["week"].built and app.pages["week"].page.snapshot is not None)
+    assert app.shell.current == "week"
+
+
+def test_releasing_a_page_destroys_a_customtkinter_widget_together_with_its_own_parts(app) -> None:
+    import customtkinter as ctk
+
+    from app.ui.pages import _innermost_first
+
+    frame = ctk.CTkFrame(app)
+    entry = ctk.CTkEntry(frame)
+    order = list(_innermost_first(frame))
+    # The entry goes before the frame; its canvas and inner entry go with it, never before it (a <Configure>
+    # in between would redraw it onto a destroyed canvas).
+    assert order.index(entry) < order.index(frame) == len(order) - 1
+    assert entry._canvas not in order and entry._entry not in order and frame._canvas not in order
+    frame.destroy()
+
+
+def test_a_destroyed_option_menu_leaves_the_scaling_tracker(app) -> None:
+    import customtkinter as ctk
+    from customtkinter.windows.widgets.scaling.scaling_tracker import ScalingTracker
+
+    menu = ctk.CTkOptionMenu(app, values=["a", "b"])
+    dropdown = menu._dropdown_menu
+    callbacks = ScalingTracker.window_widgets_dict[app]
+    assert dropdown._set_scaling in callbacks
+    menu.destroy()  # what releasing a page does to its option menus
+    assert dropdown._set_scaling not in callbacks  # a later interface-size change cannot reach it

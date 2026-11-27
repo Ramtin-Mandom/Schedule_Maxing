@@ -34,6 +34,22 @@ work it out again from failure logs.
 
 ## Pending
 
+### 2026-11-26: Bounded detached pages and Settings sections (uncommitted, main working tree)
+
+- Changed: `AppShell`'s hidden-page rules moved into `PageCache` with a shared `PagePool` (`app/ui/shell.py`);
+  `AppShell._detached`, `_detach_pending`, `_quiet`, `_detach_when_idle`, `_detach`, `light_caching`,
+  `pages` and `current` delegate to them. At most `MAX_DETACHED` (3) detached pages keep their widgets; the
+  one shown longest ago is released. `SettingsPage` is three sections (`SETTINGS_SECTIONS`: General,
+  Scheduling, Tasks and data), each a `DeferredPage` in its own `PageCache`; section widgets are attributes of
+  `SettingsSection` and reading one through the page builds that section (`SETTINGS_SECTION_ATTRIBUTES`).
+  `DeferredPage.release` destroys a CustomTkinter widget together with its own parts (`_ctk_parts`), and `tune_customtkinter_loops` patches `DropdownMenu.destroy` to leave the `ScalingTracker`.
+  New opt-in probe `benchmarks/window_move_cost.py`.
+- Intent: Lighter window moves on Settings, and a bound on detached pages (ADR-053).
+- Depends on it: `tests/ui/test_deferred_pages.py`, `test_settings_page.py`, `test_page_pool.py`,
+  `test_desktop_shell.py`, and any test reading a Settings widget or a page after visiting many others.
+- CI risk: Real-window timing (the Linux ui job): a released page is rebuilt on its next use; `wm manage` of a
+  section frame inside a scrolled canvas.
+
 ### 2026-11-24: Python 3.12 and dependency security fix for 1.3.1 (release PR)
 
 - Changed: CI, PyInstaller and backend deployment use Python 3.12. The backend and direct-mode
@@ -244,10 +260,12 @@ both merged. Each final run passed `test`, `security-scan`, `desktop-only`, `dir
 ## Open CI items
 
 - The last recorded `Deploy backend` run (`be226f4`, run 40625746637) failed after Render queued the request.
-  PR #25 merged the queue handling and tag trigger. As of 2026-11-23 the tag-triggered path has no recorded run.
+  PR #25 merged the queue handling and tag trigger. The first tag-triggered run (`v1.3.1`, run 45388188028)
+  passed on 2026-11-24: Render reported the deploy live and `/ready` reported migrations current.
 - Starlette warns "Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead". Waiting on
   the owner: adding `httpx2` means a new dependency in `requirements.txt` and `requirements.lock`.
-- Verify the active Render runtime meets the Python 3.12 requirement. An explicit `PYTHON_VERSION`
-  in the service controls its build runtime. [Render deployment](../deployment/render-deployment.md)
+- The 1.3.1 deploy log shows Render building with Python 3.14.3 (default) because the service has no
+  `PYTHON_VERSION`. CI tests 3.12 only. The variable has since been set on the service. Confirm 3.12 in
+  the next deploy log. [Render deployment](../deployment/render-deployment.md)
 - `gh` is installed and logged in, but a shell opened before the install has the old PATH. If `gh` is not found,
   call `C:\Program Files\GitHub CLI\gh.exe` directly.

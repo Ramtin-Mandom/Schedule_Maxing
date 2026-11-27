@@ -1,0 +1,756 @@
+{
+  "environment": {
+    "python": "3.10.11",
+    "os": "Windows-10-10.0.19045-SP0"
+  },
+  "seconds": 8.0,
+  "tasks": 50,
+  "rounds": 3,
+  "baseline": "..\\sm-before-tree",
+  "physical_drag_performed": false,
+  "summary": {
+    "before/day": {
+      "child_windows": 421,
+      "detached_pages": 1,
+      "held_detached": null,
+      "built_pages": [
+        "day",
+        "week"
+      ],
+      "dwm_still_median": 2.3,
+      "dwm_moving_median": 9.6,
+      "dwm_added_median": 7.2,
+      "app_cpu_moving_median": 3.3,
+      "runs": 3
+    },
+    "after/day": {
+      "child_windows": 421,
+      "detached_pages": 1,
+      "held_detached": 1,
+      "built_pages": [
+        "day",
+        "week"
+      ],
+      "dwm_still_median": 2.7,
+      "dwm_moving_median": 10.5,
+      "dwm_added_median": 5.8,
+      "app_cpu_moving_median": 3.3,
+      "runs": 3
+    },
+    "before/settings": {
+      "child_windows": 1253,
+      "detached_pages": 1,
+      "held_detached": null,
+      "built_pages": [
+        "day",
+        "settings",
+        "week"
+      ],
+      "dwm_still_median": 2.9,
+      "dwm_moving_median": 19.5,
+      "dwm_added_median": 15.2,
+      "app_cpu_moving_median": 7.8,
+      "runs": 3
+    },
+    "after/settings": {
+      "child_windows": 501,
+      "detached_pages": 1,
+      "held_detached": 1,
+      "built_pages": [
+        "day",
+        "settings",
+        "week"
+      ],
+      "dwm_still_median": 1.6,
+      "dwm_moving_median": 8.0,
+      "dwm_added_median": 6.4,
+      "app_cpu_moving_median": 3.7,
+      "runs": 3
+    },
+    "before/settings_scheduling": {
+      "child_windows": 1253,
+      "detached_pages": 1,
+      "held_detached": null,
+      "built_pages": [
+        "day",
+        "settings",
+        "week"
+      ],
+      "dwm_still_median": 3.5,
+      "dwm_moving_median": 16.8,
+      "dwm_added_median": 15.0,
+      "app_cpu_moving_median": 8.2,
+      "runs": 3
+    },
+    "after/settings_scheduling": {
+      "child_windows": 1219,
+      "detached_pages": 1,
+      "held_detached": 1,
+      "built_pages": [
+        "day",
+        "settings",
+        "week"
+      ],
+      "dwm_still_median": 2.5,
+      "dwm_moving_median": 16.1,
+      "dwm_added_median": 11.7,
+      "app_cpu_moving_median": 6.8,
+      "runs": 3
+    },
+    "before/settings_after_sections": {
+      "child_windows": 1253,
+      "detached_pages": 1,
+      "held_detached": null,
+      "built_pages": [
+        "day",
+        "settings",
+        "week"
+      ],
+      "dwm_still_median": 1.6,
+      "dwm_moving_median": 18.5,
+      "dwm_added_median": 16.9,
+      "app_cpu_moving_median": 8.3,
+      "runs": 3
+    },
+    "after/settings_after_sections": {
+      "child_windows": 1229,
+      "detached_pages": 1,
+      "held_detached": 2,
+      "built_pages": [
+        "day",
+        "settings",
+        "week"
+      ],
+      "dwm_still_median": 1.9,
+      "dwm_moving_median": 17.8,
+      "dwm_added_median": 15.8,
+      "app_cpu_moving_median": 7.4,
+      "runs": 3
+    },
+    "before/settings_after_tabs": {
+      "child_windows": 1530,
+      "detached_pages": 2,
+      "held_detached": null,
+      "built_pages": [
+        "account",
+        "day",
+        "guide",
+        "settings",
+        "week"
+      ],
+      "dwm_still_median": 1.6,
+      "dwm_moving_median": 19.7,
+      "dwm_added_median": 18.5,
+      "app_cpu_moving_median": 7.4,
+      "runs": 3
+    },
+    "after/settings_after_tabs": {
+      "child_windows": 778,
+      "detached_pages": 2,
+      "held_detached": 2,
+      "built_pages": [
+        "account",
+        "day",
+        "guide",
+        "settings",
+        "week"
+      ],
+      "dwm_still_median": 1.6,
+      "dwm_moving_median": 12.5,
+      "dwm_added_median": 10.9,
+      "app_cpu_moving_median": 6.4,
+      "runs": 3
+    },
+    "before/settings_light": {
+      "child_windows": 1257,
+      "detached_pages": 0,
+      "held_detached": null,
+      "built_pages": [
+        "day",
+        "settings"
+      ],
+      "dwm_still_median": 0.0,
+      "dwm_moving_median": 16.8,
+      "dwm_added_median": 16.8,
+      "app_cpu_moving_median": 8.0,
+      "runs": 3
+    },
+    "after/settings_light": {
+      "child_windows": 519,
+      "detached_pages": 0,
+      "held_detached": 0,
+      "built_pages": [
+        "day",
+        "settings"
+      ],
+      "dwm_still_median": 0.0,
+      "dwm_moving_median": 11.9,
+      "dwm_added_median": 11.9,
+      "app_cpu_moving_median": 5.7,
+      "runs": 3
+    }
+  },
+  "runs": {
+    "before/day": [
+      {
+        "scenario": "day",
+        "child_windows": 421,
+        "detached_pages": 0,
+        "held_detached": null,
+        "built_pages": [
+          "day"
+        ],
+        "dwm_still": 8.19,
+        "dwm_moving": 15.42,
+        "app_cpu_moving": 4.88,
+        "moves": 313
+      },
+      {
+        "scenario": "day",
+        "child_windows": 421,
+        "detached_pages": 1,
+        "held_detached": null,
+        "built_pages": [
+          "day",
+          "week"
+        ],
+        "dwm_still": 2.34,
+        "dwm_moving": 9.15,
+        "app_cpu_moving": 3.31,
+        "moves": 259
+      },
+      {
+        "scenario": "day",
+        "child_windows": 421,
+        "detached_pages": 1,
+        "held_detached": null,
+        "built_pages": [
+          "day",
+          "week"
+        ],
+        "dwm_still": 1.56,
+        "dwm_moving": 9.56,
+        "app_cpu_moving": 2.93,
+        "moves": 264
+      }
+    ],
+    "after/day": [
+      {
+        "scenario": "day",
+        "child_windows": 421,
+        "detached_pages": 0,
+        "held_detached": 0,
+        "built_pages": [
+          "day"
+        ],
+        "dwm_still": 16.77,
+        "dwm_moving": 20.08,
+        "app_cpu_moving": 3.32,
+        "moves": 289
+      },
+      {
+        "scenario": "day",
+        "child_windows": 421,
+        "detached_pages": 1,
+        "held_detached": 1,
+        "built_pages": [
+          "day",
+          "week"
+        ],
+        "dwm_still": 1.56,
+        "dwm_moving": 7.4,
+        "app_cpu_moving": 3.51,
+        "moves": 260
+      },
+      {
+        "scenario": "day",
+        "child_windows": 421,
+        "detached_pages": 1,
+        "held_detached": 1,
+        "built_pages": [
+          "day",
+          "week"
+        ],
+        "dwm_still": 2.73,
+        "dwm_moving": 10.49,
+        "app_cpu_moving": 3.31,
+        "moves": 256
+      }
+    ],
+    "before/settings": [
+      {
+        "scenario": "settings",
+        "child_windows": 1253,
+        "detached_pages": 0,
+        "held_detached": null,
+        "built_pages": [
+          "day",
+          "settings"
+        ],
+        "dwm_still": 8.19,
+        "dwm_moving": 23.35,
+        "app_cpu_moving": 5.45,
+        "moves": 274
+      },
+      {
+        "scenario": "settings",
+        "child_windows": 1253,
+        "detached_pages": 1,
+        "held_detached": null,
+        "built_pages": [
+          "day",
+          "settings",
+          "week"
+        ],
+        "dwm_still": 2.53,
+        "dwm_moving": 17.15,
+        "app_cpu_moving": 7.8,
+        "moves": 255
+      },
+      {
+        "scenario": "settings",
+        "child_windows": 1253,
+        "detached_pages": 1,
+        "held_detached": null,
+        "built_pages": [
+          "day",
+          "settings",
+          "week"
+        ],
+        "dwm_still": 2.92,
+        "dwm_moving": 19.46,
+        "app_cpu_moving": 8.96,
+        "moves": 257
+      }
+    ],
+    "after/settings": [
+      {
+        "scenario": "settings",
+        "child_windows": 501,
+        "detached_pages": 1,
+        "held_detached": 1,
+        "built_pages": [
+          "day",
+          "settings",
+          "week"
+        ],
+        "dwm_still": 4.88,
+        "dwm_moving": 11.89,
+        "app_cpu_moving": 3.31,
+        "moves": 280
+      },
+      {
+        "scenario": "settings",
+        "child_windows": 501,
+        "detached_pages": 1,
+        "held_detached": 1,
+        "built_pages": [
+          "day",
+          "settings",
+          "week"
+        ],
+        "dwm_still": 1.56,
+        "dwm_moving": 7.2,
+        "app_cpu_moving": 3.9,
+        "moves": 259
+      },
+      {
+        "scenario": "settings",
+        "child_windows": 501,
+        "detached_pages": 1,
+        "held_detached": 1,
+        "built_pages": [
+          "day",
+          "settings",
+          "week"
+        ],
+        "dwm_still": 1.56,
+        "dwm_moving": 8.0,
+        "app_cpu_moving": 3.71,
+        "moves": 255
+      }
+    ],
+    "before/settings_scheduling": [
+      {
+        "scenario": "settings_scheduling",
+        "child_windows": 1253,
+        "detached_pages": 1,
+        "held_detached": null,
+        "built_pages": [
+          "day",
+          "settings",
+          "week"
+        ],
+        "dwm_still": 4.88,
+        "dwm_moving": 32.9,
+        "app_cpu_moving": 9.54,
+        "moves": 291
+      },
+      {
+        "scenario": "settings_scheduling",
+        "child_windows": 1253,
+        "detached_pages": 1,
+        "held_detached": null,
+        "built_pages": [
+          "day",
+          "settings",
+          "week"
+        ],
+        "dwm_still": 3.51,
+        "dwm_moving": 14.01,
+        "app_cpu_moving": 7.2,
+        "moves": 247
+      },
+      {
+        "scenario": "settings_scheduling",
+        "child_windows": 1253,
+        "detached_pages": 1,
+        "held_detached": null,
+        "built_pages": [
+          "day",
+          "settings",
+          "week"
+        ],
+        "dwm_still": 1.75,
+        "dwm_moving": 16.77,
+        "app_cpu_moving": 8.19,
+        "moves": 256
+      }
+    ],
+    "after/settings_scheduling": [
+      {
+        "scenario": "settings_scheduling",
+        "child_windows": 1219,
+        "detached_pages": 1,
+        "held_detached": 1,
+        "built_pages": [
+          "day",
+          "settings",
+          "week"
+        ],
+        "dwm_still": 4.48,
+        "dwm_moving": 16.15,
+        "app_cpu_moving": 6.81,
+        "moves": 254
+      },
+      {
+        "scenario": "settings_scheduling",
+        "child_windows": 1219,
+        "detached_pages": 1,
+        "held_detached": 1,
+        "built_pages": [
+          "day",
+          "settings",
+          "week"
+        ],
+        "dwm_still": 2.54,
+        "dwm_moving": 11.69,
+        "app_cpu_moving": 3.9,
+        "moves": 256
+      },
+      {
+        "scenario": "settings_scheduling",
+        "child_windows": 1219,
+        "detached_pages": 1,
+        "held_detached": 1,
+        "built_pages": [
+          "day",
+          "settings",
+          "week"
+        ],
+        "dwm_still": 1.17,
+        "dwm_moving": 16.16,
+        "app_cpu_moving": 7.21,
+        "moves": 254
+      }
+    ],
+    "before/settings_after_sections": [
+      {
+        "scenario": "settings_after_sections",
+        "child_windows": 1253,
+        "detached_pages": 1,
+        "held_detached": null,
+        "built_pages": [
+          "day",
+          "settings",
+          "week"
+        ],
+        "dwm_still": 0.59,
+        "dwm_moving": 19.64,
+        "app_cpu_moving": 9.53,
+        "moves": 258
+      },
+      {
+        "scenario": "settings_after_sections",
+        "child_windows": 1253,
+        "detached_pages": 1,
+        "held_detached": null,
+        "built_pages": [
+          "day",
+          "settings",
+          "week"
+        ],
+        "dwm_still": 3.12,
+        "dwm_moving": 17.09,
+        "app_cpu_moving": 8.35,
+        "moves": 252
+      },
+      {
+        "scenario": "settings_after_sections",
+        "child_windows": 1253,
+        "detached_pages": 1,
+        "held_detached": null,
+        "built_pages": [
+          "day",
+          "settings",
+          "week"
+        ],
+        "dwm_still": 1.56,
+        "dwm_moving": 18.49,
+        "app_cpu_moving": 8.18,
+        "moves": 257
+      }
+    ],
+    "after/settings_after_sections": [
+      {
+        "scenario": "settings_after_sections",
+        "child_windows": 1229,
+        "detached_pages": 1,
+        "held_detached": 2,
+        "built_pages": [
+          "day",
+          "settings",
+          "week"
+        ],
+        "dwm_still": 1.95,
+        "dwm_moving": 17.75,
+        "app_cpu_moving": 8.59,
+        "moves": 253
+      },
+      {
+        "scenario": "settings_after_sections",
+        "child_windows": 1229,
+        "detached_pages": 1,
+        "held_detached": 2,
+        "built_pages": [
+          "day",
+          "settings",
+          "week"
+        ],
+        "dwm_still": 1.17,
+        "dwm_moving": 12.06,
+        "app_cpu_moving": 4.67,
+        "moves": 257
+      },
+      {
+        "scenario": "settings_after_sections",
+        "child_windows": 1229,
+        "detached_pages": 1,
+        "held_detached": 2,
+        "built_pages": [
+          "day",
+          "settings",
+          "week"
+        ],
+        "dwm_still": 2.53,
+        "dwm_moving": 23.03,
+        "app_cpu_moving": 7.42,
+        "moves": 261
+      }
+    ],
+    "before/settings_after_tabs": [
+      {
+        "scenario": "settings_after_tabs",
+        "child_windows": 1530,
+        "detached_pages": 2,
+        "held_detached": null,
+        "built_pages": [
+          "account",
+          "day",
+          "guide",
+          "settings",
+          "week"
+        ],
+        "dwm_still": 1.56,
+        "dwm_moving": 16.75,
+        "app_cpu_moving": 6.43,
+        "moves": 247
+      },
+      {
+        "scenario": "settings_after_tabs",
+        "child_windows": 1530,
+        "detached_pages": 2,
+        "held_detached": null,
+        "built_pages": [
+          "account",
+          "day",
+          "guide",
+          "settings",
+          "week"
+        ],
+        "dwm_still": 1.56,
+        "dwm_moving": 20.47,
+        "app_cpu_moving": 7.41,
+        "moves": 255
+      },
+      {
+        "scenario": "settings_after_tabs",
+        "child_windows": 1530,
+        "detached_pages": 2,
+        "held_detached": null,
+        "built_pages": [
+          "account",
+          "day",
+          "guide",
+          "settings",
+          "week"
+        ],
+        "dwm_still": 1.17,
+        "dwm_moving": 19.7,
+        "app_cpu_moving": 8.98,
+        "moves": 256
+      }
+    ],
+    "after/settings_after_tabs": [
+      {
+        "scenario": "settings_after_tabs",
+        "child_windows": 778,
+        "detached_pages": 2,
+        "held_detached": 2,
+        "built_pages": [
+          "account",
+          "day",
+          "guide",
+          "settings",
+          "week"
+        ],
+        "dwm_still": 1.76,
+        "dwm_moving": 13.85,
+        "app_cpu_moving": 6.63,
+        "moves": 254
+      },
+      {
+        "scenario": "settings_after_tabs",
+        "child_windows": 778,
+        "detached_pages": 2,
+        "held_detached": 2,
+        "built_pages": [
+          "account",
+          "day",
+          "guide",
+          "settings",
+          "week"
+        ],
+        "dwm_still": 1.56,
+        "dwm_moving": 12.47,
+        "app_cpu_moving": 6.43,
+        "moves": 252
+      },
+      {
+        "scenario": "settings_after_tabs",
+        "child_windows": 778,
+        "detached_pages": 2,
+        "held_detached": 2,
+        "built_pages": [
+          "account",
+          "day",
+          "guide",
+          "settings",
+          "week"
+        ],
+        "dwm_still": 1.36,
+        "dwm_moving": 10.3,
+        "app_cpu_moving": 3.31,
+        "moves": 256
+      }
+    ],
+    "before/settings_light": [
+      {
+        "scenario": "settings_light",
+        "child_windows": 1257,
+        "detached_pages": 0,
+        "held_detached": null,
+        "built_pages": [
+          "day",
+          "settings"
+        ],
+        "dwm_still": 0.0,
+        "dwm_moving": 21.45,
+        "app_cpu_moving": 8.0,
+        "moves": 254
+      },
+      {
+        "scenario": "settings_light",
+        "child_windows": 1257,
+        "detached_pages": 0,
+        "held_detached": null,
+        "built_pages": [
+          "day",
+          "settings"
+        ],
+        "dwm_still": 0.0,
+        "dwm_moving": 16.78,
+        "app_cpu_moving": 8.39,
+        "moves": 254
+      },
+      {
+        "scenario": "settings_light",
+        "child_windows": 1257,
+        "detached_pages": 0,
+        "held_detached": null,
+        "built_pages": [
+          "day",
+          "settings"
+        ],
+        "dwm_still": 1.17,
+        "dwm_moving": 16.54,
+        "app_cpu_moving": 7.98,
+        "moves": 252
+      }
+    ],
+    "after/settings_light": [
+      {
+        "scenario": "settings_light",
+        "child_windows": 519,
+        "detached_pages": 0,
+        "held_detached": 0,
+        "built_pages": [
+          "day",
+          "settings"
+        ],
+        "dwm_still": 0.0,
+        "dwm_moving": 11.32,
+        "app_cpu_moving": 4.49,
+        "moves": 260
+      },
+      {
+        "scenario": "settings_light",
+        "child_windows": 519,
+        "detached_pages": 0,
+        "held_detached": 0,
+        "built_pages": [
+          "day",
+          "settings"
+        ],
+        "dwm_still": 0.0,
+        "dwm_moving": 11.88,
+        "app_cpu_moving": 5.65,
+        "moves": 262
+      },
+      {
+        "scenario": "settings_light",
+        "child_windows": 519,
+        "detached_pages": 0,
+        "held_detached": 0,
+        "built_pages": [
+          "day",
+          "settings"
+        ],
+        "dwm_still": 0.97,
+        "dwm_moving": 13.98,
+        "app_cpu_moving": 6.22,
+        "moves": 254
+      }
+    ]
+  }
+}
