@@ -54,6 +54,8 @@ Never weaken/delete meaningful tests just to make the suite pass.
 If the prompt explicitly requests a different test strategy, follow the prompt.
 Dependencies
 Use existing packages or the standard library when practical. Add dependencies only when clearly justified and update dependency files accordingly.
+Commits and attribution
+The repository owner is the only author and contributor. Never add yourself (Claude, or any AI assistant) as an author, committer or contributor: no `Co-Authored-By` trailers, no "Generated with Claude" lines, and no AI footers in commit messages, PR bodies or tags. `.claude/settings.json` keeps `attribution` empty for the same reason.
 Final Report
 After the whole batch is complete, give one concise summary containing:
 - major changes
