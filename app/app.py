@@ -827,7 +827,7 @@ class ScheduleOptimizerApp(ctk.CTk):
                 host, self.ui_settings, on_appearance=self.set_appearance, on_scale=self.set_ui_scale,
                 controller=SettingsController(services.planning_controller, today=self.today), background_io=True,
                 on_reset_task_data=self.reset_task_data, task_defaults=self.task_defaults, updates=self.updates,
-                on_light_caching=self.set_light_caching)
+                on_light_caching=self.set_light_caching, page_pool=shell.pool)
 
         for mode_name in SCHEDULE_PAGES[1:]:
             add(mode_name, DeferredPage(shell.host, lambda host, mode_name=mode_name: calendar(host, mode_name),

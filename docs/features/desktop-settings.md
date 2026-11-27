@@ -1,5 +1,16 @@
 # Desktop Settings and account details
 
+## Sections
+
+The Settings tab has three sections, each opened by its bar (opening one closes the open one):
+**General** (appearance, interface size, language, light caching, updates), **Scheduling** (the default
+engine and scheduling preferences) and **Tasks and data** (task defaults and categories, Reset all task
+data). The page opens on General. Each section is a page of its own (`SETTINGS_SECTIONS`, a `DeferredPage`
+per section in a `PageCache`, ADR-053): it is built the first time it is opened, the section left last stays
+attached for 30 s, other built sections move into withdrawn windows, and with light caching the closed
+sections are released. The heavy preferences editor is therefore built and attached only while Scheduling is
+open. Code that reads a section's widget (`settings.editor`) builds that section without opening it.
+
 Settings edits the current workspace's **default** preferences. Day Preferences
 edits one date. Both use the same native editor and the same persisted layering:
 built-in defaults, project template, user defaults, then explicit date overrides.
@@ -60,7 +71,7 @@ Mid / Late choice.
 
 ## Reset All Task Data
 
-The red **Reset all task data** card at the bottom of Settings removes the
+The red **Reset all task data** card in Settings → Tasks and data removes the
 workspace's tasks, fixed blocks, projects, schedules (placements and schedule
 records) and executions with their completion history. It asks first
 (**Reset all task data?**, destructive: Enter does not confirm) and cannot be

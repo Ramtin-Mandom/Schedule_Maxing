@@ -27,10 +27,19 @@ the host calls them when relevant. A page chosen by the user from the
 navigation (sidebar or Ctrl+number) also goes to `on_navigate(key)` after it
 is shown -- e.g. the Day page then shows today -- while pages shown by the
 app itself (Open Day from Week/Month) do not.
+
+Hidden pages (PageCache, PagePool): the shell's pages and the Settings page's
+sections each have a PageCache with the same rules -- the shown page and the
+page left last stay attached, other built pages are detached into withdrawn
+windows of their own, and light caching releases them instead. One PagePool
+per window holds the light caching choice and keeps at most MAX_DETACHED
+detached pages, releasing the one shown longest ago past that.
 """
 
 from __future__ import annotations
 
+import heapq
+import itertools
 import tkinter as tk
 from collections.abc import Callable
 
@@ -57,6 +66,9 @@ DETACH_IDLE_MS = 2_000
 QUIET_INPUT_MS = 300
 QUIET_RETRY_MS = 200
 QUIET_ATTEMPTS = 150
+#: At most this many detached pages hold their widgets (PagePool); past it, the one shown longest ago is
+#: released and built anew when it is shown again.
+MAX_DETACHED = 3
 
 _SIDEBAR_BUTTON = dict(fg_color="transparent", hover_color=theme.SIDEBAR_HOVER, text_color=theme.SIDEBAR_TEXT,
                        border_color=theme.SIDEBAR_BG)
@@ -196,6 +208,263 @@ class StatusBar(ctk.CTkFrame):
             self.sync_button.configure(state=state, text=label)
 
 
+class PagePool:
+    """
+    What every PageCache of one window shares: the light caching choice (ADR-045) and the bound on detached
+    pages. A detached page keeps its widgets in a withdrawn window; a priority queue ordered by when each
+    page was last shown keeps at most `limit` of them, releasing (DeferredPage.release) the one shown longest
+    ago. A page that cannot be released (no `release`) is not counted.
+    """
+
+    def __init__(self, limit: int = MAX_DETACHED) -> None:
+        self.limit = limit
+        self.light_caching = False
+        self._caches: list[PageCache] = []
+        self._clock = itertools.count(1)
+        #: Page path -> tick when it was last shown (0: never shown, e.g. pre-built).
+        self._shown: dict[str, int] = {}
+        #: Heap of (tick last shown, page path) for detached pages; an entry whose tick is outdated is skipped.
+        self._queue: list[tuple[int, str]] = []
+        #: Detached pages holding widgets: page path -> (its cache, the page).
+        self._held: dict[str, tuple[PageCache, object]] = {}
+
+    @property
+    def held(self) -> list[str]:
+        """Paths of the detached pages that still hold their widgets."""
+        return list(self._held)
+
+    def register(self, cache: PageCache) -> None:
+        self._caches.append(cache)
+
+    def unregister(self, cache: PageCache) -> None:
+        if cache in self._caches:
+            self._caches.remove(cache)
+        for path, (owner, _page) in list(self._held.items()):
+            if owner is cache:
+                del self._held[path]
+
+    def set_light_caching(self, on: bool) -> None:
+        """Light caching on: every cache releases what it would not keep for its shown page."""
+        self.light_caching = on
+        if on:
+            for cache in list(self._caches):
+                if cache.current is not None:
+                    cache.release_others(cache.current)
+
+    def shown(self, page) -> None:
+        self._shown[str(page)] = next(self._clock)
+        self._held.pop(str(page), None)
+
+    def used(self, page) -> None:
+        """`page` was used without being shown (built on demand): it counts as recent, not as never shown."""
+        self._shown[str(page)] = next(self._clock)
+
+    def forget(self, page) -> None:
+        """`page` no longer holds widgets in a detached window (shown, released or destroyed)."""
+        self._held.pop(str(page), None)
+
+    def detached(self, cache: PageCache, page) -> None:
+        """`page` was detached by `cache`; past the limit, release the page shown longest ago."""
+        if not hasattr(page, "release") or not getattr(page, "built", False):
+            return
+        path = str(page)
+        self._held[path] = (cache, page)
+        heapq.heappush(self._queue, (self._shown.get(path, 0), path))
+        while len(self._held) > self.limit and self._queue:
+            tick, path = heapq.heappop(self._queue)
+            entry = self._held.get(path)
+            if entry is None or tick != self._shown.get(path, 0):
+                continue  # shown again (a newer entry exists) or no longer detached
+            del self._held[path]
+            owner, evicted = entry
+            owner.unbuild(evicted)
+
+
+class PageCache:
+    """
+    The hidden-page rules for one set of pages shown one at a time in the same place (the shell's pages, the
+    Settings sections). `place(page)` puts a page in its spot and `unplace(page)` takes it out.
+
+    Attached hidden pages are bounded: only `home` and the page just left stay attached -- going back to
+    either is instant. Every other built hidden page is detached (detach) as soon as that is safe
+    (detach_when_quiet); going back to it then costs a re-layout (0.2-0.7 s, about a first visit). The page
+    just left is detached too once it stayed hidden for DETACH_AFTER_MS with no input for DETACH_IDLE_MS.
+    With light caching, every page but `home` and the shown one is released instead. The pool bounds how
+    many detached pages keep their widgets.
+    """
+
+    def __init__(self, owner, pool: PagePool, *, place: Callable[[object], None],
+                 unplace: Callable[[object], None], home: str | None = None) -> None:
+        self.owner = owner
+        self.pool = pool
+        self.home = home
+        self._place_page, self._unplace_page = place, unplace
+        self.pages: dict[str, object] = {}
+        self.current: str | None = None
+        #: Path names of the hidden pages that live in a withdrawn window of their own (detach).
+        self.detached: set[str] = set()
+        #: Hidden pages waiting to be detached or released: key -> pending timer.
+        self.pending: dict[str, str] = {}
+        pool.register(self)
+
+    def kept(self, showing: str) -> set[str]:
+        """The pages light caching keeps built while `showing` is shown: it and the home page."""
+        return {showing} if self.home is None else {showing, self.home}
+
+    def show(self, key: str):
+        """Hide the current page (hide), then attach and place `key`'s page; it."""
+        if self.current is not None and self.current != key:
+            self.hide(self.current, key)
+        page = self.pages[key]
+        self.attach(page)
+        self._place_page(page)
+        self.current = key
+        return page
+
+    def park(self, key: str) -> None:
+        """Detach the built, hidden page `key` as soon as that is safe (e.g. one built before it was shown)."""
+        if key != self.current and key in self.pages:
+            self.detach_when_quiet(key)
+
+    def quiet(self) -> bool:
+        """
+        No idle callback is pending and there was no input just now. A `wm` command runs every pending idle
+        callback at once, so detaching in the middle of sliced work (a page building its rows in idle slices)
+        would turn the slices into one long block.
+        """
+        tk_app = self.owner.tk
+        try:
+            for ident in tk_app.splitlist(tk_app.call("after", "info")):
+                if tk_app.splitlist(tk_app.call("after", "info", ident))[-1] == "idle":
+                    return False
+        except tk.TclError:
+            return False
+        return _input_idle_ms() >= QUIET_INPUT_MS
+
+    def _alive(self, key: str) -> bool:
+        page = self.pages.get(key)
+        try:
+            return page is not None and key != self.current and bool(self.owner.winfo_exists()) \
+                and bool(page.winfo_exists())
+        except tk.TclError:
+            return False
+
+    def detach_when_quiet(self, key: str, attempts: int = 0) -> None:
+        self.pending.pop(key, None)
+        if not self._alive(key):
+            return
+        if self.quiet():
+            self.detach(self.pages[key])
+        elif attempts < QUIET_ATTEMPTS:  # else it stays an attached hidden page (as before detaching existed)
+            self.pending[key] = self.owner.after(QUIET_RETRY_MS, lambda: self.detach_when_quiet(key, attempts + 1))
+
+    def hide(self, key: str, showing: str) -> None:
+        """The page `key` is left for `showing` (see the class docstring)."""
+        self._unplace_page(self.pages[key])
+        self.cancel(key)
+        released = self.release_others(showing) if self.pool.light_caching else set()
+        if key != self.home and key not in released:
+            self.pending[key] = self.owner.after(DETACH_AFTER_MS, lambda: self.detach_when_idle(key))
+        for other, page in self.pages.items():
+            if (other in (key, showing, self.home) or other in released or not getattr(page, "built", True)
+                    or str(page) in self.detached):
+                continue
+            self.cancel(other)
+            self.pending[other] = self.owner.after(QUIET_RETRY_MS, lambda other=other: self.detach_when_quiet(other))
+
+    def release_others(self, showing: str) -> set[str]:
+        """Release every built page outside kept(showing) once that is safe; their keys."""
+        kept, released = self.kept(showing), set()
+        for other, page in self.pages.items():
+            if other in kept or not hasattr(page, "release") or not getattr(page, "built", False):
+                continue
+            self.cancel(other)
+            self.pending[other] = self.owner.after(QUIET_RETRY_MS, lambda other=other: self.release_when_quiet(other))
+            released.add(other)
+        return released
+
+    def release_when_quiet(self, key: str, attempts: int = 0) -> None:
+        """Release `key` when no idle work is pending and there was no input just now (as detach_when_quiet)."""
+        self.pending.pop(key, None)
+        if (not self.pool.light_caching or self.current is None or key in self.kept(self.current)
+                or not self._alive(key)):
+            return
+        if self.quiet() or attempts >= QUIET_ATTEMPTS:  # unlike a detach, it is released in the end anyway
+            with diagnostics.span("shell.release_page"):
+                self.unbuild(self.pages[key])
+        else:
+            self.pending[key] = self.owner.after(QUIET_RETRY_MS, lambda: self.release_when_quiet(key, attempts + 1))
+
+    def detach_when_idle(self, key: str) -> None:
+        self.pending.pop(key, None)
+        if not self._alive(key):
+            return
+        if _input_idle_ms() < DETACH_IDLE_MS:  # the user is busy: look again later (a detach is ~50 ms of work)
+            self.pending[key] = self.owner.after(DETACH_IDLE_MS, lambda: self.detach_when_idle(key))
+            return
+        self.detach_when_quiet(key)
+
+    def cancel(self, key: str) -> None:
+        timer = self.pending.pop(key, None)
+        if timer is not None:
+            try:
+                self.owner.after_cancel(timer)
+            except tk.TclError:
+                pass
+
+    def close(self) -> None:
+        for key in list(self.pending):
+            self.cancel(key)
+        self.pool.unregister(self)
+
+    def forget(self, page) -> None:
+        """`page` is being replaced or destroyed."""
+        self.detached.discard(str(page))
+        self.pool.forget(page)
+
+    def unbuild(self, page) -> None:
+        """
+        Release `page`'s widgets. A detached one stays an empty withdrawn window until it is shown again
+        (attach): `wm forget` alone would map it as a child with no geometry manager, over the shown page.
+        """
+        self.pool.forget(page)
+        try:
+            if page.winfo_exists():
+                page.release()
+        except tk.TclError:
+            pass
+
+    def detach(self, page) -> None:
+        """
+        Hide `page` in a withdrawn window of its own (Tk's `wm manage`) instead of as a hidden child:
+        moving or resizing the application window costs the Windows compositor work for every native child
+        window it holds, hidden ones included (docs/history/desktop-performance-round3.md, "Round 3b"). Shown
+        again, it becomes a child again (attach). Widgets are always built while their page is attached.
+        """
+        if str(page) in self.detached:
+            return
+        width, height = page.winfo_width(), page.winfo_height()
+        self._unplace_page(page)
+        try:
+            page.tk.call("wm", "manage", page._w)
+            page.tk.call("wm", "withdraw", page._w)
+            if width > 1 and height > 1:  # keeps its size: shown again at the same size, nothing is laid out anew
+                page.tk.call("wm", "geometry", page._w, f"{width}x{height}")
+        except tk.TclError:
+            return  # it stays a hidden child window, as before
+        self.detached.add(str(page))
+        self.pool.detached(self, page)
+
+    def attach(self, page) -> None:
+        for key, value in self.pages.items():  # shown again: no pending detach
+            if value is page:
+                self.cancel(key)
+        self.pool.shown(page)
+        if str(page) in self.detached:
+            self.detached.discard(str(page))
+            page.tk.call("wm", "forget", page._w)
+
+
 class GroupBar(ctk.CTkFrame):
     """The top bar of a page group: one button per page; the shown one is marked by colour and a dot."""
 
@@ -257,15 +526,11 @@ class AppShell(ctk.CTkFrame):
         self.page_area.bind("<Configure>", self._page_area_resized, add="+")
         #: The pixel size the shown page is placed at (None: it follows the area, whose size is not known yet).
         self._page_size: tuple[int, int] | None = None
-        #: Path names of the hidden pages that live in a withdrawn window of their own (_detach).
-        self._detached: set[str] = set()
-        #: Hidden pages waiting to be detached or released (_hide, _detach_when_quiet, _release_when_quiet):
-        #: key -> pending timer.
-        self._detach_pending: dict[str, str] = {}
-        #: Light caching (Settings, set_light_caching): only HOME_PAGE and the shown page stay built.
-        self.light_caching = False
-        self.pages: dict[str, ctk.CTkFrame] = {}
-        self.current: str | None = None
+        #: Light caching and the bound on detached pages, shared with the Settings sections (PagePool).
+        self.pool = PagePool()
+        #: The hidden-page rules for the shell's pages; it holds `pages` and `current`.
+        self.cache = PageCache(self, self.pool, place=self._place, unplace=lambda page: page.place_forget(),
+                               home=HOME_PAGE)
         self.layout_checks = Coalescer(self, self._check_layout)
         self.host.bind("<Configure>", lambda _e: self.layout_checks.request(), add="+")
 
@@ -276,6 +541,18 @@ class AppShell(ctk.CTkFrame):
         root.bind("<Escape>", self._escape, add="+")
 
     # -- pages ------------------------------------------------------------------------
+
+    @property
+    def pages(self) -> dict[str, ctk.CTkFrame]:
+        return self.cache.pages
+
+    @property
+    def current(self) -> str | None:
+        return self.cache.current
+
+    @current.setter
+    def current(self, key: str | None) -> None:
+        self.cache.current = key
 
     def add_page(self, key: str, page: ctk.CTkFrame) -> None:
         self.pages[key] = page
@@ -302,12 +579,7 @@ class AppShell(ctk.CTkFrame):
             self.group_bar.grid()
         else:
             self.group_bar.grid_remove()
-        if self.current is not None and self.current != key:
-            self._hide(self.current, key)
-        page = self.pages[key]
-        self._attach(page)
-        self._place(page)
-        self.current = key
+        page = self.cache.show(key)
         if self.state.layout is not None and hasattr(page, "set_layout"):
             page.set_layout(self.state.layout)
         if hasattr(page, "on_show"):
@@ -324,154 +596,58 @@ class AppShell(ctk.CTkFrame):
             self.current = None
             self.show_page(key)
         if old is not None:
-            self._detached.discard(str(old))
+            self.cache.forget(old)
             old.destroy()
 
-    # -- hidden pages (native windows) ---------------------------------------------------
+    # -- hidden pages (PageCache, PagePool) -------------------------------------------------
+
+    @property
+    def _detached(self) -> set[str]:
+        return self.cache.detached
+
+    @property
+    def _detach_pending(self) -> dict[str, str]:
+        return self.cache.pending
 
     def park(self, key: str) -> None:
         """Detach the built, hidden page `key` as soon as that is safe (e.g. one pre-built in idle time)."""
-        if key != self.current and key in self.pages:
-            self._detach_when_quiet(key)
+        self.cache.park(key)
 
     def _quiet(self) -> bool:
-        """
-        No idle callback is pending and there was no input just now. A `wm` command runs every pending idle
-        callback at once, so detaching in the middle of sliced work (a page building its rows in idle slices)
-        would turn the slices into one long block.
-        """
-        try:
-            for ident in self.tk.splitlist(self.tk.call("after", "info")):
-                if self.tk.splitlist(self.tk.call("after", "info", ident))[-1] == "idle":
-                    return False
-        except tk.TclError:
-            return False
-        return _input_idle_ms() >= QUIET_INPUT_MS
+        return self.cache.quiet()
 
-    def _detach_when_quiet(self, key: str, attempts: int = 0) -> None:
-        self._detach_pending.pop(key, None)
-        if key == self.current or key not in self.pages or not self.winfo_exists():
-            return
-        if self._quiet():
-            self._detach(self.pages[key])
-        elif attempts < QUIET_ATTEMPTS:  # else it stays an attached hidden page (as before detaching existed)
-            self._detach_pending[key] = self.after(QUIET_RETRY_MS,
-                                                   lambda: self._detach_when_quiet(key, attempts + 1))
+    def _detach_when_idle(self, key: str) -> None:
+        self.cache.detach_when_idle(key)
 
-    def _hide(self, key: str, showing: str) -> None:
-        """
-        The page `key` is left for `showing`. Attached hidden pages are bounded: only the home page (Day)
-        and `key`, the page just left, stay attached -- going back to either is instant. Every other built
-        hidden page is detached (_detach) as soon as that is safe (_detach_when_quiet); going back to it then
-        costs a re-layout (0.2-0.7 s, about a first visit). Without this bound, opening every page made the
-        window hold ~3,800 native child windows instead of ~450, and dragging it that much heavier. The page
-        just left is detached too once it stayed hidden for DETACH_AFTER_MS with no input for DETACH_IDLE_MS.
-        With light caching (set_light_caching), every page but the home page and `showing` is released instead.
-        """
-        self.pages[key].place_forget()
-        self._cancel_detach(key)
-        released = self._release_others(showing) if self.light_caching else set()
-        if key != HOME_PAGE and key not in released:
-            self._detach_pending[key] = self.after(DETACH_AFTER_MS, lambda: self._detach_when_idle(key))
-        for other, page in self.pages.items():
-            if (other in (key, showing, HOME_PAGE) or other in released or not getattr(page, "built", True)
-                    or str(page) in self._detached):
-                continue
-            self._cancel_detach(other)
-            self._detach_pending[other] = self.after(QUIET_RETRY_MS, lambda other=other: self._detach_when_quiet(other))
+    def _detach(self, page) -> None:
+        self.cache.detach(page)
 
-    # -- light caching ---------------------------------------------------------------------
+    @property
+    def light_caching(self) -> bool:
+        return self.pool.light_caching
+
+    @light_caching.setter
+    def light_caching(self, on: bool) -> None:
+        self.pool.light_caching = on  # the choice read at start-up: nothing is built yet to release
 
     def set_light_caching(self, on: bool) -> None:
         """
         Light caching: while a page is shown, only HOME_PAGE (Day) and the shown page stay built -- not even
-        the other pages of its group (Settings | Account | How to Use); every other built page is released
-        (DeferredPage.release) and built anew when it is shown again. Fewer widgets and native windows are
-        kept, at the cost of a first-visit build on every return to a page other than Day.
+        the other pages of its group (Settings | Account | How to Use), nor the Settings sections that are not
+        open; every other built page is released (DeferredPage.release) and built anew when it is shown again.
+        Fewer widgets and native windows are kept, at the cost of a first-visit build on every return to a
+        page other than Day.
         """
-        self.light_caching = on
-        if on and self.current is not None:
-            self._release_others(self.current)
+        self.pool.set_light_caching(on)
 
     @staticmethod
     def kept_pages(showing: str) -> set[str]:
         """The pages light caching keeps built while `showing` is shown: it and the home page."""
         return {showing, HOME_PAGE}
 
-    def _release_others(self, showing: str) -> set[str]:
-        """Release every built page outside kept_pages(showing) once that is safe; their keys."""
-        kept, released = self.kept_pages(showing), set()
-        for other, page in self.pages.items():
-            if other in kept or not hasattr(page, "release") or not getattr(page, "built", False):
-                continue
-            self._cancel_detach(other)
-            self._detach_pending[other] = self.after(QUIET_RETRY_MS,
-                                                     lambda other=other: self._release_when_quiet(other))
-            released.add(other)
-        return released
-
-    def _release_when_quiet(self, key: str, attempts: int = 0) -> None:
-        """Release `key` when no idle work is pending and there was no input just now (as _detach_when_quiet)."""
-        self._detach_pending.pop(key, None)
-        if (not self.light_caching or self.current is None or key in self.kept_pages(self.current)
-                or key not in self.pages or not self.winfo_exists()):
-            return
-        if self._quiet() or attempts >= QUIET_ATTEMPTS:  # unlike a detach, it is released in the end anyway
-            with diagnostics.span("shell.release_page"):
-                self.pages[key].release()
-        else:
-            self._detach_pending[key] = self.after(QUIET_RETRY_MS,
-                                                   lambda: self._release_when_quiet(key, attempts + 1))
-
-    def _detach_when_idle(self, key: str) -> None:
-        self._detach_pending.pop(key, None)
-        if key == self.current or key not in self.pages or not self.winfo_exists():
-            return
-        if _input_idle_ms() < DETACH_IDLE_MS:  # the user is busy: look again later (a detach is ~50 ms of work)
-            self._detach_pending[key] = self.after(DETACH_IDLE_MS, lambda: self._detach_when_idle(key))
-            return
-        self._detach_when_quiet(key)
-
-    def _cancel_detach(self, key: str) -> None:
-        timer = self._detach_pending.pop(key, None)
-        if timer is not None:
-            try:
-                self.after_cancel(timer)
-            except tk.TclError:
-                pass
-
     def destroy(self) -> None:
-        for key in list(self._detach_pending):
-            self._cancel_detach(key)
+        self.cache.close()
         super().destroy()
-
-    def _detach(self, page) -> None:
-        """
-        Hide `page` in a withdrawn window of its own (Tk's `wm manage`) instead of as a hidden child:
-        moving or resizing the application window costs the Windows compositor work for every native child
-        window it holds, hidden ones included (docs/history/desktop-performance-round3.md, "Round 3b"). Shown again,
-        it becomes a child again (_attach). Widgets are always built while their page is attached.
-        """
-        if str(page) in self._detached:
-            return
-        width, height = page.winfo_width(), page.winfo_height()
-        page.place_forget()
-        try:
-            page.tk.call("wm", "manage", page._w)
-            page.tk.call("wm", "withdraw", page._w)
-            if width > 1 and height > 1:  # keeps its size: shown again at the same size, nothing is laid out anew
-                page.tk.call("wm", "geometry", page._w, f"{width}x{height}")
-        except tk.TclError:
-            return  # it stays a hidden child window, as before
-        self._detached.add(str(page))
-
-    def _attach(self, page) -> None:
-        for key, value in self.pages.items():  # shown again: no pending detach
-            if value is page:
-                self._cancel_detach(key)
-        if str(page) in self._detached:
-            self._detached.discard(str(page))
-            page.tk.call("wm", "forget", page._w)
 
     # -- page size (resizing) ------------------------------------------------------------
 

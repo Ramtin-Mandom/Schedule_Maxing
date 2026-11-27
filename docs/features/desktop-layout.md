@@ -79,7 +79,7 @@ not repainted.
 
 ## Appearance and interface size
 
-- **Settings → Appearance**: Light or Dark, and interface size 90–130%, on
+- **Settings → General → Appearance**: Light or Dark, and interface size 90–130%, on
   top of the system DPI scaling.
 - These choices are saved in `ui_settings.json` next to the database
   (`app/ui/ui_settings.py`).
