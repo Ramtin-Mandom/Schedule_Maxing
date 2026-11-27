@@ -167,7 +167,7 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
             "entries, its completion and its points.",
             "Use default values fills in the name (if empty), duration and points of the chosen "
             "category, or the general ones without a category. Change them, and add your own categories, in "
-            "Settings > Task defaults and categories.",
+            "Settings > Tasks and data.",
             "Editing a task keeps its own date. Select a task on the timeline or in Available tasks to open it "
             "in the form; while it is open, Remove deletes it.",
         ),
@@ -332,16 +332,17 @@ GUIDE_SECTIONS: tuple[GuideSection, ...] = (
         ),
     )),
     GuideSection("settings", "Settings", (
+        "Settings has three sections. Select a section's bar to open it; the open one closes.",
         (
-            "Appearance: light or dark theme and interface size, saved on this computer.",
-            "Default scheduling preferences: the default engine, the default day window, scoring weights, and "
-            "each category's importance and preferred time. Each value shows where it comes from; Use inherited "
-            "goes back to the app default.",
+            "General: light or dark theme, interface size, language and light caching, saved on this computer, "
+            "and app updates.",
+            "Scheduling: the default scheduling preferences -- the default engine, the default day window, "
+            "scoring weights, and each category's importance and preferred time. Each value shows where it "
+            "comes from; Use inherited goes back to the app default.",
             "Day Preferences (on the Day page) changes the same values for one date only.",
-            "Task defaults and categories: what Use default values fills in on the task form (name, duration "
-            "and points) for each category and for no category, and your own added categories. Saved on this "
-            "computer.",
-            "Reset all task data: see Reset.",
+            "Tasks and data: task defaults and categories -- what Use default values fills in on the task form "
+            "(name, duration and points) for each category and for no category, and your own added categories, "
+            "saved on this computer -- and Reset all task data (see Reset).",
         ),
     )),
     GuideSection("synchronization", "Synchronization", (

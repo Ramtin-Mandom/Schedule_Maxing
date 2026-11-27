@@ -8,9 +8,9 @@ feature's state changes. See the [repository diagnosis](history/diagnosis.md),
 |---|---|
 | Audited | 2026-11-23 |
 | Commit | `c091888` plus the Python 3.12 update in [PR #26](https://github.com/Ramtin-Mandom/Schedule_Maxing/pull/26) |
-| Release preparation | 2026-11-24. PR #24 merged the engine remake and PR #25 merged repository cleanup and the tag-based backend workflow |
-| App version | Source reports 1.3.1. The preceding published installer, `v1.3.0`, was built from `dfd53d6`. Backend API version is 1.0.0. [Published Windows releases](https://github.com/Ramtin-Mandom/Schedule_Maxing/releases) |
-| Local and server schema | The 1.3.1 source supports SQLite v19 and Alembic `0021`. A read-only check confirmed the local desktop database is already on v19. The `v1.3.0` tag uses SQLite v18 and Alembic `0020`. [Cutover notes](backend/backend.md#priority-and-dependency-removal-0021) |
+| Release | 1.3.1 published on 2026-11-24 from `aed5625` (tag `v1.3.1`, Latest). PR #24 merged the engine remake, PR #25 repository cleanup and the tag-based backend workflow, PR #26 the Python 3.12 update |
+| App version | 1.3.1, published as `ScheduleMaxing-Setup-1.3.1.exe` with `SHA256SUMS.txt`. The previous installer, `v1.3.0`, was built from `dfd53d6`. Backend API version is 1.0.0. [Published Windows releases](https://github.com/Ramtin-Mandom/Schedule_Maxing/releases) |
+| Local and server schema | 1.3.1 uses SQLite v19 and Alembic `0021`. The hosted backend was deployed from `v1.3.1` and its `/ready` reported migrations current, so the server is at `0021`. A read-only check confirmed the local desktop database is on v19. The `v1.3.0` tag uses SQLite v18 and Alembic `0020`. [Cutover notes](backend/backend.md#priority-and-dependency-removal-0021) |
 
 Current audit results appear first in section D. Earlier results keep their dates and revisions.
 
@@ -28,8 +28,8 @@ and can sync to a FastAPI/PostgreSQL account server.
 | Execution and analytics | Implemented | Desktop outcomes and points, with timed sessions through the service and API. Dev tests passed |
 | Sync client ↔ backend | Implemented | GitHub PostgreSQL job passed the backend, sync and direct-mode suites. Authenticated hosted behavior is unverified |
 | Backend API | Implemented | GitHub SQLite and PostgreSQL jobs passed |
-| Hosted deployment (Render) | Public endpoints reachable on retry | `/health` and `/ready` returned 200. The exact revision and new tag-triggered deploy path remain unverified |
-| Windows installer and updater | 1.3.1 prepared | The release build and publish jobs previously passed for `dfd53d6`. The 1.3.1 build is the intended installer for SQLite v19. [Published Windows releases](https://github.com/Ramtin-Mandom/Schedule_Maxing/releases) |
+| Hosted deployment (Render) | 1.3.1 deployed | The tag-triggered [Deploy backend run](https://github.com/Ramtin-Mandom/Schedule_Maxing/actions/runs/45388188028) deployed `aed5625`, waited until Render reported it live, and passed `/health` and `/ready` (migrations current). The authenticated smoke check did not run (it only runs by hand) |
+| Windows installer and updater | 1.3.1 published | The [`v1.3.1` Release run](https://github.com/Ramtin-Mandom/Schedule_Maxing/actions/runs/45388188105) built and published the installer. A fresh install and an upgrade from 1.3.0 with a v18 database are unverified. [Published Windows releases](https://github.com/Ramtin-Mandom/Schedule_Maxing/releases) |
 
 ## B. Feature implementation matrix
 
@@ -60,6 +60,7 @@ and can sync to a FastAPI/PostgreSQL account server.
 | Offline-first sync client | Implemented | `app/sync/` | `tests/sync/*` (full suite), `tests/test_sync_activity.py`, `tests/test_transport_keepalive.py` | Live server Unverified. Cadence follows the window's activity (60 s focused, 300 s otherwise, edits pushed 2.5 s after the last commit; ADR-041); one keep-alive HTTPS connection per transport |
 | Desktop start-up and idle behaviour (round 3) | Implemented | `app/app.py`, `app/ui/pages.py` (`DeferredPage`, stepped pre-build), `app/ui/activity.py`, `app/ui/page_freshness.py`, `app/ui/shell.py` (page size, detached hidden pages), `app/ui/light_widgets.py`, `app/sync/credentials.py` (`LazyVault`), `app/planning/engine_process.py` | `tests/test_startup_cost.py`, `tests/ui/test_deferred_pages.py`, `test_activity*.py`, `test_page_freshness*.py`, `test_light_widgets.py`, `tests/test_engine_process.py` | Probe: first paint 5.5-5.8 s -> 1.1-1.2 s, minimized 60 s with no status poll, resize p95 330-460 -> ~100 ms, generation p95 ~15 ms; dwm.exe while dragging the Day page ~23% -> ~16% of a core ([docs/history/desktop-performance-round3.md](history/desktop-performance-round3.md)). Physical dragging with a mouse Unverified |
 | Light caching (opt-in, Settings -> Appearance; ADR-045) | Implemented | `app/ui/shell.py` (`set_light_caching`, `kept_pages`, `_release_when_quiet`), `app/ui/pages.py` (`DeferredPage.release`, Settings checkbox), `app/ui/ui_settings.py` (`light_caching`), `app/app.py` | `tests/ui/test_deferred_pages.py` (light caching tests), `tests/ui/test_shell_foundation.py` | **Verified** by those tests. Scratch probe: after every page, 3,246 -> 462 widgets, 89 -> 74-78 MB; returning to a page other than Day costs a first-visit build (section C) |
+| Settings sections and bounded detached pages (ADR-053) | Implemented | `app/ui/shell.py` (`PagePool`, `PageCache`, `MAX_DETACHED`), `app/ui/pages.py` (`SettingsPage` sections, `DeferredPage.release`), `app/ui/tk_lifecycle.py` (dropdown menus leave the scaling tracker) | `tests/ui/test_page_pool.py`, `tests/ui/test_deferred_pages.py`, probe `benchmarks/window_move_cost.py` | Settings is General / Scheduling / Tasks and data, each its own page; Settings opening on General holds ~501 native windows instead of ~1,253. At most 3 detached pages keep their widgets (least recently shown released). Opening Scheduling still attaches the ~715-window preferences editor |
 | Conflict review and association UI | Implemented | `app/ui/account_page.py`, `conflict_view.py` | `tests/sync/test_desktop_account_*.py` | `keep_local` cannot be used on a record deleted on the server |
 | Backend REST, planning API and sync push | Implemented | `backend/api.py`, `planning_api.py`, `sync.py` | `tests/backend/*` (full suite, SQLite) | PostgreSQL runs: CI `postgres` job only |
 | Registration with email verification | Implemented | `backend/verification.py`, `verification_api.py` | `tests/backend/test_email_verification.py` | Live email delivery Unverified |
@@ -74,9 +75,9 @@ and can sync to a FastAPI/PostgreSQL account server.
 | Browser web UI | Not Implemented in this repository | — | No frontend sources; `docs/backend/web-api.md` is its API contract | |
 | Android client | Not Implemented in this repository | — | No Android sources | The README author note records it as an original goal |
 | In-app updater | Implemented | `app/update/`, `app/ui/update_*.py` | `tests/update/*` | Live GitHub feed Unverified. Since pull request #22 the automatic check runs on every launch (no once-a-day limit), "Skip this version" is gone, and the update flow is built even when local storage cannot open; HTTPS setup for sync moves to the first request (Code-inspected) |
-| Windows installer build and release workflow | Implemented | `packaging/windows/`, `.github/workflows/release.yml` | GitHub `v1.3.0` build and publish passed | The 1.3.1 tag delivers the post-1.3.0 desktop changes |
+| Windows installer build and release workflow | Implemented | `packaging/windows/`, `.github/workflows/release.yml` | GitHub `v1.3.0` and `v1.3.1` build and publish passed | 1.3.1 delivers the post-1.3.0 desktop changes |
 | Code signing | Partial | Optional signing in `build_windows.ps1`; placeholder in `downloader.verify_signature` | `docs/deployment/windows-distribution.md` | The updater checks SHA-256 and has no Authenticode enforcement |
-| Backend continuous deployment | Tag-triggered path unverified | `.github/workflows/deploy-backend.yml` | `tests/test_deploy_workflow.py`, GitHub Actions history | The prior merge-triggered workflow failed. No tag-triggered run is recorded. Render Auto-Deploy is an independent path |
+| Backend continuous deployment | Implemented | `.github/workflows/deploy-backend.yml` | `tests/test_deploy_workflow.py`, the `v1.3.1` [Deploy backend run](https://github.com/Ramtin-Mandom/Schedule_Maxing/actions/runs/45388188028) | The first tag-triggered run passed on 2026-11-24. The prior merge-triggered workflow failed. Render Auto-Deploy is an independent path |
 | Scheduling across DST changes or overnight | Not Implemented | Refused in `app/planning/time.py` | Explicit errors | By decision (ADR-034) |
 
 ## C. Known bugs and limitations
@@ -84,7 +85,7 @@ and can sync to a FastAPI/PostgreSQL account server.
 | Issue | Severity | Affected | Evidence |
 |---|---|---|---|
 | An intermittent `TclError: invalid command name "tcl_findLibrary"` in one real-window test per run | Medium | Real-window test tier | Documented in `docs/development/testing.md` "Known flaky test"; cause unknown |
-| Published 1.3.0 predates destructive server revision `0021` and local schema v19 | High | Upgrades, rollback and direct PostgreSQL mode | [Diagnosis](history/diagnosis.md#1-the-next-release-needs-a-coordinated-database-migration) |
+| Upgrade from 1.3.0 (SQLite v18) to 1.3.1 (v19) and 1.3.0 clients syncing with the `0021` server have not been tested by hand. Installed 1.3.0 clients are offered 1.3.1 by the updater. Rolling the server back below `0021` is destructive | Medium | Upgrades, rollback and direct PostgreSQL mode | [Diagnosis](history/diagnosis.md#1-the-next-release-needs-a-coordinated-database-migration) |
 | Desktop outcomes do not create timed sessions. Duration analytics depend on historical or API-created timed data | High product impact | Day, Productivity | `app/ui/day_outcomes.py`, `app/execution/service.py`, `app/productivity/tracker.py` |
 | Range assignment uses aggregate free minutes and can pick a date without a contiguous slot even when another date fits | Medium | Range generation | Reproduced with an isolated in-memory workflow. [Diagnosis](history/diagnosis.md#4-range-allocation-can-miss-work-the-day-engine-could-place-elsewhere) |
 | `weight_category_bonus` is loaded but unused in scoring (kept: it is stored in the preferences) | Low | `app/reward.py` | Pinned by `tests/test_reward.py` |
@@ -98,10 +99,12 @@ and can sync to a FastAPI/PostgreSQL account server.
 | The first sync of an account with a server that offers `budget` replays the whole change feed once (to pick up budget changes an older client version skipped) | Low (one-time cost) | Sync | `SyncEngine.pull_budget_history` |
 | `tests/test_desktop_isolation.py::test_python_m_app_app_launches_offline_and_closes_cleanly` fails when start-up is slow: its probe closes the app 1.5 s after the main loop starts, and the first layout pass then ends inside CustomTkinter's title-bar update (`TclError: application has been destroyed`) | Low (test timing) | Launch probe (`tests/isolation_probe.py`) | **Verified failure** on 2026-10-20 on the clean commit `f20cf0b` as well (start-up took 10-18 s on this machine); it passed in the run of 2026-10-19, and **passed** on 2026-10-20 with the round-3 start-up (the constructor now takes about 0.7 s) -- possibly resolved, the probe's timing is unchanged |
 | A page is built the first time it is shown (0.1-0.4 s once per page and workspace; Week is pre-built in idle time); after a window resize the shown page keeps its old size for 120 ms before it is laid out at the new one; returning to a page other than Day or the page left last (or to that one after 30 s) costs a re-layout of 0.2-0.7 s (it was detached into its own window) | Low (by design) | `app/ui/pages.py: DeferredPage`, `app/ui/shell.py: PAGE_SETTLE_MS`, `DETACH_AFTER_MS` | docs/history/desktop-performance-round3.md |
+| Past three detached pages (ADR-053), the one shown longest ago is released: returning to it rebuilds it (0.1-0.8 s) and loses its scroll position and unsaved input, as with light caching. A pre-built Week can be released before it is first shown | Low (by design) | `app/ui/shell.py: PagePool` | `tests/ui/test_deferred_pages.py` |
+| The Settings Scheduling section attaches the whole preferences editor (~715 native windows) while it is open, and for 30 s after another section is opened | Low | `app/ui/preferences_editor.py` | [Window-move cost](history/settings-sections-window-cost.md) |
 | With the opt-in Settings choice "Light caching" (ADR-045), only Day and the shown page stay built: returning to any other page (Settings <-> Account <-> How to Use too) rebuilds it (Week/Month ~0.8 s instead of ~60 ms), and its scroll position, unsaved input and Productivity's report cache are lost; in exchange ~15 MB less memory and ~2,200 fewer native windows after visiting every page | Low (by design, off by default) | `app/ui/shell.py: AppShell.set_light_caching`, `app/ui/pages.py: DeferredPage.release` | docs/history/desktop-performance-round3.md ("Addendum: light caching") |
 | Dragging the window still costs dwm.exe work for every visible native child window (the Day page has ~435: form, buttons and navigation are CustomTkinter, 2-3 each) | Low | Desktop UI | docs/history/desktop-performance-round3.md "Round 3b", ADR-043 |
 | While the window is not focused, remote changes arrive up to 5 minutes later (background sync interval 300 s) | Low (by design) | Sync | ADR-041 |
-| Render builds need a Python 3.12 runtime. The live service runtime has not been verified | High for deployment | Hosted backend | [Render setup](deployment/render-deployment.md#environment-variables), [ADR-052](DECISIONS.md#adr-052--python-312-is-the-tested-and-packaged-runtime) |
+| The 1.3.1 deploy built on Python 3.14.3, Render's default, because the service had no `PYTHON_VERSION`. The build succeeded, the database reached `0021`, and `/health` and `/ready` returned 200. `PYTHON_VERSION` has since been set on the service. It applies from the next deploy, whose log should show 3.12 (ADR-052) | Low | Hosted backend | [Render setup](deployment/render-deployment.md#environment-variables), [ADR-052](DECISIONS.md#adr-052--python-312-is-the-tested-and-packaged-runtime) |
 
 ## D. Testing and quality
 
@@ -127,6 +130,16 @@ History adapter. It now checks that the same outcomes appear in the Productivity
 |---|---|
 | Workflow, packaging, database migration and updater checks on Windows | 153 passed. The Day board restart test requires a display and was skipped in the local shell |
 | Ruff and tag check | Passed. The release tag must be `v1.3.1` |
+| `v1.3.1` tag workflows (2026-11-24) | [Release](https://github.com/Ramtin-Mandom/Schedule_Maxing/actions/runs/45388188105) and [Deploy backend](https://github.com/Ramtin-Mandom/Schedule_Maxing/actions/runs/45388188028) passed. The release lists the installer and checksums |
+
+Settings sections and bounded detached pages (ADR-053; Windows, 2026-11-26, `.venv` Python 3.10.11, working tree on `aed5625`):
+
+| Check | Result |
+|---|---|
+| `pytest` (full suite, every tier) | **1 failed, 2369 passed, 2 skipped** (1,050 s). The failure, `tests/sync/test_desktop_milestone4.py::test_complete_native_cloud_workflow`, saved a preference while the Scheduling section was unbuilt and expected its notice; fixed, and that module with `tests/ui/test_settings_page.py` **passed** (3) |
+| `tests/ui/test_desktop_shell.py`, `test_deferred_pages.py`, `test_page_pool.py`, `test_settings_page.py`, `test_guide.py` | **Passed** after the fixes |
+| `ruff check .` | **Passed** |
+| `benchmarks/window_move_cost.py` before/after, 3 rounds | Settings opening on General: 1,253 -> 501 native windows, dwm.exe while moving 19.5% -> 8.0% of one core. [Results](history/settings-sections-window-cost.md) |
 
 Local cleanup results on `c030585` plus the working-tree changes (Windows, 2026-11-23):
 
@@ -219,9 +232,11 @@ checklist is in `docs/deployment/windows-distribution.md`).
 
 ## F. Immediate technical priorities
 
-1. Identify the hosted revision and verify the backup, `0021` cutover and Windows installer upgrade before the
-   next release. The engine remake and cleanup have already merged and passed CI.
-2. Confirm the hosted Python 3.12 runtime and align normal dependency resolution with the audit lock.
+1. 1.3.1 is published and the backend is deployed at `0021`. Verify a 1.3.0 -> 1.3.1 upgrade with a v18
+   database, a 1.3.0 client syncing with the upgraded server, the authenticated smoke check, and a database
+   backup and restore.
+2. Confirm the next backend deploy log shows Python 3.12 (`PYTHON_VERSION` is now set on the service), and
+   align normal dependency resolution with the audit lock.
 3. Decide how the desktop should collect timed evidence and surface recurrence and deadline authoring.
 4. Resolve the range-allocation blind spot before adding scheduling modes.
 5. Follow up on hosted account deletion and retention, updater signature enforcement, and the intermittent Tk test.
