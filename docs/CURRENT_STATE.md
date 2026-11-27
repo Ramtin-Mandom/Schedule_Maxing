@@ -8,9 +8,9 @@ feature's state changes. See the [repository diagnosis](history/diagnosis.md),
 |---|---|
 | Audited | 2026-11-23 |
 | Commit | `c091888` plus the Python 3.12 update in [PR #26](https://github.com/Ramtin-Mandom/Schedule_Maxing/pull/26) |
-| Release | 1.3.1 published on 2026-11-24 from `aed5625` (tag `v1.3.1`, Latest). PR #24 merged the engine remake, PR #25 repository cleanup and the tag-based backend workflow, PR #26 the Python 3.12 update |
-| App version | 1.3.1, published as `ScheduleMaxing-Setup-1.3.1.exe` with `SHA256SUMS.txt`. The previous installer, `v1.3.0`, was built from `dfd53d6`. Backend API version is 1.0.0. [Published Windows releases](https://github.com/Ramtin-Mandom/Schedule_Maxing/releases) |
-| Local and server schema | 1.3.1 uses SQLite v19 and Alembic `0021`. The hosted backend was deployed from `v1.3.1` and its `/ready` reported migrations current, so the server is at `0021`. A read-only check confirmed the local desktop database is on v19. The `v1.3.0` tag uses SQLite v18 and Alembic `0020`. [Cutover notes](backend/backend.md#priority-and-dependency-removal-0021) |
+| Release | 1.3.2 prepared on 2026-11-26 from PR #27 (Settings sections and the bound on detached pages, ADR-053); the tag `v1.3.2` starts the release and backend workflows. 1.3.1 was published on 2026-11-24 from `aed5625`. PR #24 merged the engine remake, PR #25 repository cleanup and the tag-based backend workflow, PR #26 the Python 3.12 update |
+| App version | Source reports 1.3.2. The 1.3.1 installer was published as `ScheduleMaxing-Setup-1.3.1.exe` with `SHA256SUMS.txt`; `v1.3.0` was built from `dfd53d6`. Backend API version is 1.0.0. [Published Windows releases](https://github.com/Ramtin-Mandom/Schedule_Maxing/releases) |
+| Local and server schema | 1.3.1 and 1.3.2 use SQLite v19 and Alembic `0021` (1.3.2 has no schema change). The hosted backend was deployed from `v1.3.1` and its `/ready` reported migrations current, so the server is at `0021`. A read-only check confirmed the local desktop database is on v19. The `v1.3.0` tag uses SQLite v18 and Alembic `0020`. [Cutover notes](backend/backend.md#priority-and-dependency-removal-0021) |
 
 Current audit results appear first in section D. Earlier results keep their dates and revisions.
 
