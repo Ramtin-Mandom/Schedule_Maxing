@@ -54,6 +54,17 @@ def test_streams_are_ready_before_the_window_is_built(monkeypatch):
     assert log == ["built", "mainloop"]
 
 
+def test_a_window_that_stopped_waiting_for_stuck_work_ends_the_process(monkeypatch):
+    ended: list[int] = []
+    monkeypatch.setattr(desktop, "exit_now", ended.append)
+    window = Window([])
+    assert desktop.main([], window_factory=lambda: window, report=lambda message: None) == 0
+    assert ended == []  # a normal close returns and lets the interpreter exit
+    window.closed_without_waiting = True
+    desktop.main([], window_factory=lambda: window, report=lambda message: None)
+    assert ended == [0]
+
+
 def test_the_log_file_and_error_hooks_exist_before_the_window():
     seen: list[str] = []
     original_hook = sys.excepthook

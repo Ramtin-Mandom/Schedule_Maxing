@@ -238,6 +238,18 @@ class AppServices:
         self.closed = True
         return finished
 
+    def abandon(self) -> None:
+        """
+        Closing gave up waiting (a network call or generation that does not finish): refuse new work and end the
+        engine process now. The connection is left to process exit -- a worker may still be inside a transaction,
+        which SQLite rolls back the next time the database opens -- and so is the instance lock.
+        """
+        self.sync_service.stop(timeout=0)
+        self.registry.shutdown(timeout=0)
+        if self.engine is not None:
+            self.engine.terminate()
+            engine_runner.install(None)
+
 
 def _sync_transport(backend_url: str | None, factory: Callable[[str], SyncTransport] = HttpTransport
                     ) -> SyncTransport | None:

@@ -10,8 +10,10 @@ An end-to-end check of the installer itself, with no manual steps:
 2. runs the installed program's self-test twice with a scratch data folder
    (first launch, then restart with the data still there);
 3. installs again over it -- the same installer, or the newer one given with
-   --upgrade -- and checks the data folder is byte-for-byte what it was and
-   the program still passes with that data;
+   --upgrade -- while a windowless process still runs from the install folder
+   (what a left-behind engine worker looks like), and checks the installer
+   ended it, the data folder is byte-for-byte what it was and the program
+   still passes with that data;
 4. uninstalls silently and checks that the program folder is gone while the
    data folder is untouched.
 
@@ -68,6 +70,24 @@ def install(installer: Path, target: Path, log: Path) -> None:
         raise SystemExit(f"FAILED: {installer.name} exited with {completed.returncode} (log: {log})")
 
 
+def start_leftover_process(target: Path) -> subprocess.Popen:
+    """
+    A stand-in for the engine worker an application left running (app/planning/engine_process.py): named
+    ScheduleMaxing.exe, started from inside the install folder, holding its own file open, with no window
+    and no mutex. The installer must end it before it replaces the program's files.
+    """
+    import shutil
+
+    folder = target / "_internal" / "leftover-worker"
+    folder.mkdir(parents=True, exist_ok=True)
+    stand_in = folder / "ScheduleMaxing.exe"
+    shutil.copyfile(Path(r"C:\Windows\System32\PING.EXE"), stand_in)
+    process = subprocess.Popen([str(stand_in), "-n", "600", "127.0.0.1"], stdout=subprocess.DEVNULL,
+                               creationflags=subprocess.CREATE_NO_WINDOW)
+    time.sleep(1)
+    return process
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Install, upgrade and uninstall the installer in a scratch folder.")
     parser.add_argument("installer", type=Path)
@@ -119,8 +139,16 @@ def main(argv: list[str] | None = None) -> int:
 
         database = data / "executions.db"
         before = snapshot(data)
-        print(f"== upgrade with {upgrade.name}")
-        install(upgrade, target, logs / "upgrade.log")
+        leftover = start_leftover_process(target)
+        print(f"== upgrade with {upgrade.name} (a windowless process still runs from the install folder)")
+        try:
+            install(upgrade, target, logs / "upgrade.log")
+        finally:
+            ended = leftover.poll() is not None
+            if not ended:
+                leftover.kill()
+        if not ended:
+            failures.append("the upgrade did not end a process still running from the install folder")
         if snapshot(data) != before:
             failures.append("the upgrade changed the user's data folder")
         if (target / "_internal" / "left-over-from-an-older-build.txt").exists():

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import multiprocessing
+import sys
 import threading
+import time
 import uuid
 from concurrent.futures import Future
 from concurrent.futures.process import BrokenProcessPool
@@ -74,6 +76,48 @@ def test_shutting_down_a_starting_process_leaves_no_thread_or_process_behind() -
     assert _background_threads() - before == set()
     assert multiprocessing.active_children() == []
     assert engine(lambda: 5) == 5 and engine.remote_calls == 0
+
+
+def _wait_until(condition, seconds: float = 15.0) -> bool:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(0.05)
+    return condition()
+
+
+def test_terminating_an_engine_that_never_started_is_harmless() -> None:
+    engine = EngineProcess()
+    engine.terminate()
+    assert engine(lambda: 5) == 5 and engine.remote_calls == 0
+
+
+@pytest.mark.slow
+def test_terminate_ends_the_worker_in_the_middle_of_a_call() -> None:
+    engine = EngineProcess()
+    call = engine._pool().submit(time.sleep, 120)  # a generation that would hold closing for two minutes
+    assert _wait_until(lambda: multiprocessing.active_children() != [])
+    engine.terminate()
+    assert _wait_until(lambda: multiprocessing.active_children() == [])
+    with pytest.raises(BrokenProcessPool):
+        call.result(timeout=15)
+    assert engine(lambda: 5) == 5 and engine.remote_calls == 0
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not sys.platform.startswith("win"), reason="job objects are Windows only")
+def test_the_worker_cannot_outlive_the_application_on_windows() -> None:
+    engine = EngineProcess()
+    try:
+        assert engine._pool().submit(engine_process._ready).result(timeout=60)  # the worker has joined the job
+        assert engine._job and multiprocessing.active_children() != []
+        # What Windows does when the application ends however it ends: its handle to the job closes.
+        engine_process._close_job(engine._job)
+        engine._job = None
+        assert _wait_until(lambda: multiprocessing.active_children() == [])
+    finally:
+        engine.terminate()
 
 
 def _generate(tmp_path, name: str, *, process: bool):
