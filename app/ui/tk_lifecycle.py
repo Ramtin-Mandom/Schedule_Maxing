@@ -28,6 +28,28 @@ def tune_customtkinter_loops() -> None:
 
     AppearanceModeTracker.update_loop_interval = APPEARANCE_POLL_MS
     ScalingTracker.update_loop_interval = DPI_POLL_MS
+    _forget_destroyed_dropdown_menus()
+
+
+def _forget_destroyed_dropdown_menus() -> None:
+    """
+    CustomTkinter's DropdownMenu.destroy (5.2) never leaves the ScalingTracker, so after a page holding an
+    option menu is released (DeferredPage.release), the next interface-size change reconfigures the
+    destroyed menu and fails. Make its destroy leave the tracker too (idempotent).
+    """
+    from customtkinter.windows.widgets.core_widget_classes.dropdown_menu import DropdownMenu
+    from customtkinter.windows.widgets.scaling.scaling_tracker import ScalingTracker
+
+    original = DropdownMenu.destroy
+    if getattr(original, "_leaves_scaling_tracker", False):
+        return
+
+    def destroy(menu) -> None:
+        ScalingTracker.remove_widget(menu._set_scaling, menu)
+        original(menu)
+
+    destroy._leaves_scaling_tracker = True
+    DropdownMenu.destroy = destroy
 
 
 class DesktopCollection:

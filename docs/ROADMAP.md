@@ -1,7 +1,7 @@
 # Roadmap
 
-Open work and completed milestones, updated during 1.3.1 preparation on 2026-11-24. M4 tracks the
-installer and hosted backend cutover. R2 records the Python 3.12 upgrade.
+Open work and completed milestones. 1.3.1 was published and the backend deployed on 2026-11-24. M4 tracks
+the remaining upgrade checks. R2 records the Python 3.12 upgrade.
 See [repository diagnosis](history/diagnosis.md), [current state](CURRENT_STATE.md), and
 [codebase map](FEATURE_MAP.md).
 
@@ -78,21 +78,25 @@ Items the repository names as future work or as "not yet" limitations, in priori
 ### M4. Verify the first post-1.3.0 release and backend cutover
 
 - **Priority:** High
-- **Status:** The 1.3.1 desktop version is prepared for SQLite v19. A read-only check confirmed the local
-  desktop database is already on v19. The backend reported ready during the audit. Its deployed build and
-  schema revision remain unverified. [Published Windows releases](https://github.com/Ramtin-Mandom/Schedule_Maxing/releases)
+- **Status:** Released. 1.3.1 was published on 2026-11-24 from `aed5625`, with the installer and checksums.
+  The tag-triggered [Deploy backend run](https://github.com/Ramtin-Mandom/Schedule_Maxing/actions/runs/45388188028)
+  deployed the same commit to Render and `/ready` reported migrations current, so the server is at `0021`.
+  The checks that remain are the upgrade, old-client sync, smoke check and backup checks below.
+  [Published Windows releases](https://github.com/Ramtin-Mandom/Schedule_Maxing/releases)
 - **Dependencies:** Render service access, a Python 3.12 build runtime, a tested database backup and restore
   plan, and an operator who can coordinate the cutover. The tag-triggered workflow also requires
   `BACKEND_DEPLOY_ENABLED=true`.
 - **Modules:** `.github/workflows/deploy-backend.yml`, `docs/deployment/render-deployment.md`, `backend/smoke_check.py`.
 - **Deliverables:**
-  - [ ] Identify the active server commit and Alembic revision. Verify a backup and restore on disposable data.
-  - [ ] Rehearse the `0021` deployment with the old service out of traffic. Verify health, readiness and the
-    authenticated smoke check on a disposable or staging service.
+  - [x] Identify the active server commit and Alembic revision: `aed5625` at `0021` (deploy run above).
+  - [ ] Verify a database backup and restore on disposable data.
+  - [x] Deploy `0021`. Health and readiness passed after the deploy went live.
+  - [ ] Run the authenticated smoke check (Actions > Deploy backend > Run workflow, `smoke_check`).
   - [x] Bump the desktop version to 1.3.1 for SQLite v19 compatibility.
-  - [ ] Build and verify a fresh install and an upgrade from 1.3.0 using a copy of a v18 database. Exercise
-    old-client sync against the upgraded API before marking the backend cutover complete.
-  - [ ] Record the production cutover and installer verification. [CI/CD guide](deployment/ci-cd.md#migrations)
+  - [x] Build and publish the 1.3.1 installer ([Release run](https://github.com/Ramtin-Mandom/Schedule_Maxing/actions/runs/45388188105)).
+  - [ ] Verify a fresh install and an upgrade from 1.3.0 using a copy of a v18 database. Exercise
+    old-client sync against the upgraded API.
+  - [x] Record the production cutover. [CI/CD guide](deployment/ci-cd.md#migrations)
 - **Acceptance criteria:** A ready server at the intended revision, a tested rollback plan, and a published
   installer that upgrades 1.3.0 without losing supported data.
 
@@ -196,7 +200,6 @@ Items the repository names as future work or as "not yet" limitations, in priori
 - **Testing:** `tests/sync/test_protocol.py`, `tests/backend/test_resources.py`, `tests/backend/test_sync_push.py`.
 - **Risks:** An old client still syncing breaks on pull.
 - **Complexity:** Small.
-- **Complexity:** Small to Medium.
 
 ---
 
@@ -223,8 +226,10 @@ These come from this analysis. None of them has been approved.
 - **Status:** Implemented for 1.3.1. CI, the Windows build, Ruff and developer setup use Python 3.12.
   The backend and direct-mode requirements and the audit lock use patched dnspython 2.9.2. The audit
   runs without CVE exceptions. [ADR-052](DECISIONS.md#adr-052--python-312-is-the-tested-and-packaged-runtime)
-- **Remaining verification:** Complete CI and the Windows installer smoke test. Confirm the active
-  Render service uses Python 3.12 under M4. [Release CI](https://github.com/Ramtin-Mandom/Schedule_Maxing/pull/26/checks)
+- **Remaining verification:** Release CI passed and 1.3.1 was published, and the backend build went live on
+  Render. The 1.3.1 deploy log shows the service on Python 3.14.3, Render's default, because
+  `PYTHON_VERSION` was not set. It has since been set on the service. Confirm 3.12 in the next deploy log.
+  The Windows installer smoke test also remains. [Release CI](https://github.com/Ramtin-Mandom/Schedule_Maxing/pull/26/checks)
 
 ### R3. Remove unused desktop presentation paths
 
@@ -259,6 +264,15 @@ These come from this analysis. None of them has been approved.
 - **Proposal:** Use constraints or a release lock that covers the dependencies actually installed by CI
   and the Windows build. Audit those resolved versions.
 - **Complexity:** Small.
+
+### R6. Lighter window moves on Settings, and a bound on detached pages
+
+- **Status:** Implemented (owner-approved, 2026-11-26; ADR-053). Settings is three sections, each a page of its
+  own under the shell's attach, detach and light caching rules, and the window keeps at most three detached
+  pages, releasing the one shown longest ago. [Measurements](history/settings-sections-window-cost.md)
+- **Possible follow-up:** The Scheduling section still attaches the whole preferences editor (~715 native
+  windows) while it is open. Building only the rows in view, or more light widgets in the rows, would cut it.
+  Ask the owner first.
 
 ### Not on the roadmap without explicit owner direction
 

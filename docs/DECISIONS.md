@@ -62,7 +62,7 @@ decision was made.
 | ADR-042 | Local SQLite keeps the rollback journal: WAL evaluated and not adopted; no new indexes | Accepted |
 | ADR-043 | Long lists and static text use one-window light widgets | Accepted |
 | ADR-044 | The desktop runs the day engine in a separate process | Accepted |
-| ADR-045 | Light caching: an opt-in mode that keeps only Day and the shown page built | Accepted |
+| ADR-045 | Light caching: an opt-in mode that keeps only Day and the shown page built | Accepted; extended by ADR-053 |
 | ADR-046 | No machine learning: the ML duration predictor and its dependencies are removed | Accepted |
 | ADR-047 | Greedy Optimizer v1 and the legacy models are removed | Accepted |
 | ADR-048 | Tasks have no dependencies and no priority, everywhere; the wire keeps placeholders | Accepted |
@@ -70,6 +70,7 @@ decision was made.
 | ADR-050 | Keep project Markdown together under `docs/` | Accepted |
 | ADR-051 | Retire unreachable desktop presentations and duration prediction | Accepted |
 | ADR-052 | Python 3.12 is the tested and packaged runtime | Accepted |
+| ADR-053 | At most three detached pages; Settings sections are pages of their own | Accepted |
 
 ---
 
@@ -691,3 +692,37 @@ decision was made.
 - **Consequences:** Rebuild older source virtual environments. Render's runtime configuration needs
   to meet the same Python requirement. [Deployment guide](deployment/render-deployment.md)
 - **Evidence:** `tests/test_packaging_config.py`, `tests/test_workflows.py`, [release CI](https://github.com/Ramtin-Mandom/Schedule_Maxing/pull/26/checks).
+
+### ADR-053 — At most three detached pages; Settings sections are pages of their own
+
+- **Status:** Accepted (2026-11-26). Extends ADR-043 (detached hidden pages) and ADR-045 (light caching).
+- **Context:** Moving the window costs dwm.exe work for every native child window it holds, hidden ones
+  included. Settings, Account and How to Use were already separate pages, but the Settings tab alone held
+  ~824 native windows, 715 of them in the "Default scheduling preferences" card (the preferences editor).
+  With Day (~421) and the tab left last (How to Use ~277) attached, the window held ~1,530 while Settings was
+  shown. Detached pages were unbounded: every page visited kept its widgets in a withdrawn window.
+- **Decision:** The hidden-page rules are one class, `PageCache` (`app/ui/shell.py`): the shown page and the
+  page left last stay attached (the last one for `DETACH_AFTER_MS`), other built pages are detached when the
+  window is quiet, and light caching releases them instead. The shell's pages use one; the Settings page's
+  three sections (General, Scheduling, Tasks and data; `SETTINGS_SECTIONS` in `app/ui/pages.py`) use
+  another. Each section is a `DeferredPage` built when it is first opened; a header bar per section opens it
+  and closes the open one. All caches of the window share one `PagePool`: the light caching choice, and a
+  priority queue ordered by when each page was last shown that keeps at most `MAX_DETACHED` (3) detached
+  pages holding widgets, releasing the one shown longest ago. A page built on demand without being shown
+  (code read one of its widgets) counts as just used. Releasing destroys a CustomTkinter widget together with
+  its own canvas and inner widgets, so a late `<Configure>` cannot redraw onto a destroyed canvas, and a destroyed dropdown menu leaves CustomTkinter's scaling tracker (`app/ui/tk_lifecycle.py`).
+- **Rationale:** Measured with `benchmarks/window_move_cost.py`: Settings opening on General holds ~501
+  native windows instead of ~1,253, and dwm.exe while moving falls from ~19.5% to ~8.0% of one core (medians of three alternating rounds). The heavy editor is attached only while Scheduling is open. The bound
+  keeps memory and window handles flat in a long session without the cost of light caching on every return.
+  The owner chose three detached pages, ordered by last use.
+- **Alternatives:** A collapsible preferences card only (smaller change, no section rules); building only the
+  preference rows in view (no visible change, but scrolling builds rows, most complex); a cost-weighted queue
+  that keeps Week and Month longer; a limit of four.
+- **Consequences:** A page or section released by the bound is built anew on its next use, as with light
+  caching. State held only by its widgets (scroll position, unsaved input, Productivity's report cache) is
+  lost, and a pre-built Week can be released before it is first shown. Opening the Scheduling section still
+  attaches the whole editor (~715 windows): its rows are not virtualized.
+- **Relevant files:** `app/ui/shell.py` (`PagePool`, `PageCache`, `MAX_DETACHED`), `app/ui/pages.py`
+  (`SettingsPage`, `SettingsSection`, `SETTINGS_SECTIONS`, `DeferredPage.release`), `app/app.py`.
+- **Evidence:** `tests/ui/test_page_pool.py`, `tests/ui/test_deferred_pages.py` (sections, bound and release
+  order tests); [window-move cost](history/settings-sections-window-cost.md).

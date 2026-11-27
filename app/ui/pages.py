@@ -17,6 +17,7 @@ Both only call the callbacks they are given.
 from __future__ import annotations
 
 import time
+import tkinter as tk
 from collections import deque
 from collections.abc import Callable, Iterator
 
@@ -29,7 +30,9 @@ from app.ui import diagnostics, theme
 from app.ui.background import WRITE_LANE, run_io
 from app.ui.components import AppButton, Card, LabeledEntry, LabeledSelect, Notice, SectionTitle, ask_confirm, font
 from app.planning.preferences import ENGINE_LABELS
+from app.ui.light_widgets import LightFrame
 from app.ui.preferences_editor import PreferencesEditor
+from app.ui.shell import PageCache, PagePool
 from app.ui.task_defaults import TaskDefaultsStore, parse_default
 from app.ui.time_fields import format_duration
 from app.ui.ui_settings import SCALES, LANGUAGES, UISettings
@@ -92,10 +95,23 @@ RELEASE_SLICE_MS = 12
 
 
 def _innermost_first(widget) -> Iterator:
-    """`widget` and its descendants, every widget after its own children."""
+    """
+    `widget` and its descendants, every widget after its own children. A CustomTkinter widget's own parts
+    (its drawing canvas, inner label or entry) go with it, not before it: alive without them, it would redraw
+    onto a destroyed canvas on its next <Configure>.
+    """
+    parts = _ctk_parts(widget)
     for child in widget.winfo_children():
-        yield from _innermost_first(child)
+        if child not in parts:
+            yield from _innermost_first(child)
     yield widget
+
+
+def _ctk_parts(widget) -> list:
+    """The widgets a CustomTkinter widget made for itself (kept in its private attributes)."""
+    if not isinstance(widget, ctk.CTkBaseClass):
+        return []
+    return [value for name, value in vars(widget).items() if name.startswith("_") and isinstance(value, tk.Misc)]
 
 
 def _own_attribute(widget, name: str) -> bool:
@@ -289,6 +305,36 @@ class PlaceholderPage(ctk.CTkFrame):
         self.message_label.configure(text=message)
 
 
+#: The Settings page's sections: (key, title, what it holds). Each is a page of its own -- a DeferredPage
+#: built when it is first opened -- handled by a PageCache with the shell's rules, so only the open one is
+#: attached to the window; the others are detached, or released with light caching.
+SETTINGS_SECTIONS: tuple[tuple[str, str, str], ...] = (
+    ("general", "General", "Appearance, interface size, language, light caching and updates"),
+    ("scheduling", "Scheduling", "The default engine and scheduling preferences"),
+    ("tasks", "Tasks and data", "Task default values, categories, and resetting all task data"),
+)
+#: The section opened when the Settings page is first shown (the lightest one).
+FIRST_SETTINGS_SECTION = "general"
+#: The widgets each section's build makes: reading one from the page builds that section (SettingsPage.__getattr__).
+SETTINGS_SECTION_ATTRIBUTES: dict[str, tuple[str, ...]] = {
+    "general": ("appearance_select", "scale_select", "notice", "language_select", "light_caching_box",
+                "updates_card"),
+    "scheduling": ("engine_select", "engine_note", "preference_notice", "editor", "reset_button"),
+    "tasks": ("default_for_select", "default_name", "default_duration", "default_points", "save_default_button",
+              "remove_category_button", "new_category", "add_category_button", "task_defaults_notice",
+              "reset_data_button", "reset_data_notice"),
+}
+_SECTION_OF = {name: key for key, names in SETTINGS_SECTION_ATTRIBUTES.items() for name in names}
+
+
+class SettingsSection(LightFrame):
+    """One section's content; its widgets are attributes of it (SETTINGS_SECTION_ATTRIBUTES)."""
+
+    def __init__(self, parent) -> None:
+        super().__init__(parent)
+        self.columnconfigure(0, weight=1)
+
+
 class SettingsPage(ctk.CTkFrame):
     def __init__(
         self,
@@ -303,14 +349,15 @@ class SettingsPage(ctk.CTkFrame):
         task_defaults: TaskDefaultsStore | None = None,
         updates=None,
         on_light_caching: Callable[[bool], bool] | None = None,
+        page_pool: PagePool | None = None,
     ) -> None:
         super().__init__(parent, fg_color=theme.APP_BG, corner_radius=0)
+        self.settings = settings
         self.task_defaults = task_defaults or TaskDefaultsStore()
         #: Turns light caching on/off now and saves it (False: not saved); None where it does not apply (tests).
         self._on_light_caching = on_light_caching
         #: The window's UpdateFlow (app/ui/update_view.py); None where updates do not apply (direct storage, tests).
         self.updates = updates
-        self.updates_card = None
         #: Runs the reset in a worker and calls back with its ControllerResult (the app wires TaskDataResetController).
         self._on_reset_task_data = on_reset_task_data
         #: Inside the desktop app the defaults are read and saved in workers (app/ui/background.run_io).
@@ -323,132 +370,213 @@ class SettingsPage(ctk.CTkFrame):
         self._on_scale = on_scale
         self.controller = controller
         self.view = None
+        self.light_caching = ctk.BooleanVar(value=settings.light_caching)
         PageHeader(self, "Settings", "Appearance on this device and scheduling defaults for your workspace."
                    ).grid(row=0, column=0, sticky="ew", padx=theme.SPACE_XL, pady=(22, 12))
 
-        body = AppScrollableFrame(self, fg_color="transparent")
+        self.body = body = AppScrollableFrame(self, fg_color="transparent")
         body.grid(row=1, column=0, sticky="nsew", padx=theme.SPACE_M, pady=(0, theme.SPACE_L))
         body.columnconfigure(0, weight=1)
+        builders = {"general": self._build_general, "scheduling": self._build_scheduling, "tasks": self._build_tasks}
+        rows = {key: 2 * index + 1 for index, (key, _title, _text) in enumerate(SETTINGS_SECTIONS)}
+        #: The sections' hidden-page rules, sharing the window's light caching and detached-page bound.
+        self.sections = PageCache(
+            self, page_pool or PagePool(),
+            place=lambda page: page.grid(row=rows[self._key_of(page)], column=0, sticky="ew"),
+            unplace=lambda page: page.grid_remove())
+        #: One header button per section: opens it (and closes the open one).
+        self.section_buttons: dict[str, AppButton] = {}
+        for index, (key, title, text) in enumerate(SETTINGS_SECTIONS):
+            button = AppButton(body, "", lambda key=key: self.open_section(key), variant="secondary", height=44,
+                               anchor="w")
+            button.grid(row=2 * index, column=0, sticky="ew", padx=theme.SPACE_S, pady=(0, theme.SPACE_S))
+            self.section_buttons[key] = button
+            self.sections.pages[key] = DeferredPage(body, lambda host, build=builders[key]: build(host))
+        self._mark_sections()
+        self.open_section(FIRST_SETTINGS_SECTION)
 
-        appearance = Card(body)
+    # ----------------------------- Sections -----------------------------
+
+    def __getattr__(self, name: str):
+        # Only reached for names the page itself lacks: a section's widget builds that section first.
+        key = _SECTION_OF.get(name)
+        if key is None or "sections" not in self.__dict__:
+            raise AttributeError(name)
+        return getattr(self._ensure_section(key), name)
+
+    def _key_of(self, page) -> str:
+        return next(key for key, value in self.sections.pages.items() if value is page)
+
+    def section(self, key: str) -> SettingsSection | None:
+        """The built content of section `key`, None while it is not built (never builds it)."""
+        return self.sections.pages[key].page
+
+    def _ensure_section(self, key: str) -> SettingsSection:
+        wrapper = self.sections.pages[key]
+        if wrapper.page is None:
+            wrapper.ensure()
+            opened = key == self.sections.current
+            self._section_built(key, opened=opened)
+            if not opened:  # built without being opened: out of the window once that is safe
+                self.sections.pool.used(wrapper)
+                self.sections.park(key)
+        return wrapper.page
+
+    def _section_built(self, key: str, *, opened: bool) -> None:
+        """Fill a section built just now from what the page already knows."""
+        if key == "scheduling" and self.view is not None:
+            self._show_defaults(self.view)
+            if not opened:  # built because something reads it now: every row exists before that read
+                self.section("scheduling").editor.finish()
+        elif key == "tasks":
+            self.render_task_defaults()
+
+    def open_section(self, key: str) -> None:
+        """Show section `key` in place of the open one (the shell's attach/detach/light caching rules)."""
+        with diagnostics.span(f"settings.open_section.{key}"):
+            self.sections.show(key)
+            self._ensure_section(key)
+            self._mark_sections()
+
+    def _mark_sections(self) -> None:
+        for key, title, text in SETTINGS_SECTIONS:
+            chosen = key == self.sections.current
+            self.section_buttons[key].configure(
+                text=("▾  " if chosen else "▸  ") + f"{title}  ·  {text}",
+                fg_color=theme.ACCENT if chosen else theme.SECONDARY_BG,
+                hover_color=theme.ACCENT_HOVER if chosen else theme.SECONDARY_HOVER,
+                text_color=theme.TEXT_ON_ACCENT if chosen else theme.TEXT_PRIMARY)
+
+    def destroy(self) -> None:
+        self.sections.close()
+        super().destroy()
+
+    def _build_general(self, host) -> SettingsSection:
+        section = SettingsSection(host)
+        appearance = Card(section)
         appearance.grid(row=0, column=0, sticky="ew", padx=theme.SPACE_S, pady=(0, theme.SPACE_M))
         appearance.columnconfigure((0, 1), weight=1, uniform="settings")
         SectionTitle(appearance, "Appearance", "Saved on this device only; it never changes your schedule data."
                      ).grid(row=0, column=0, columnspan=2, sticky="ew", padx=theme.SPACE_L, pady=(theme.SPACE_L, 8))
-        self.appearance_select = LabeledSelect(
+        section.appearance_select = LabeledSelect(
             appearance, "Theme", list(APPEARANCE_LABELS.values()),
             command=lambda label: self._appearance_chosen(label),
         )
-        self.appearance_select.variable.set(APPEARANCE_LABELS[settings.appearance])
-        self.appearance_select.grid(row=1, column=0, sticky="ew", padx=(theme.SPACE_L, 8), pady=(0, theme.SPACE_L))
-        self.scale_select = LabeledSelect(
+        # The mode in use: it may have changed since the page was made (this section can be built again later).
+        mode = ctk.get_appearance_mode().lower()
+        section.appearance_select.variable.set(APPEARANCE_LABELS.get(mode, APPEARANCE_LABELS[self.settings.appearance]))
+        section.appearance_select.grid(row=1, column=0, sticky="ew", padx=(theme.SPACE_L, 8), pady=(0, theme.SPACE_L))
+        section.scale_select = LabeledSelect(
             appearance, "Interface size", [scale_label(scale) for scale in SCALES],
             command=lambda label: self._scale_chosen(label),
         )
-        self.scale_select.variable.set(scale_label(settings.ui_scale))
-        self.scale_select.grid(row=1, column=1, sticky="ew", padx=(8, theme.SPACE_L), pady=(0, theme.SPACE_L))
-        self.notice = Notice(appearance, wraplength=420)
-        self.notice.grid(row=2, column=0, columnspan=2, sticky="ew", padx=theme.SPACE_L, pady=(0, theme.SPACE_L))
-        self.notice.hide()
+        section.scale_select.variable.set(scale_label(self.settings.ui_scale))
+        section.scale_select.grid(row=1, column=1, sticky="ew", padx=(8, theme.SPACE_L), pady=(0, theme.SPACE_L))
+        section.notice = Notice(appearance, wraplength=420)
+        section.notice.grid(row=2, column=0, columnspan=2, sticky="ew", padx=theme.SPACE_L, pady=(0, theme.SPACE_L))
+        section.notice.hide()
 
-        self.language_select = LabeledSelect(appearance, "Language", list(LANGUAGES.values()))
-        self.language_select.grid(row=3, column=0, columnspan=2, sticky="ew", padx=theme.SPACE_L, pady=(0, 12))
+        section.language_select = LabeledSelect(appearance, "Language", list(LANGUAGES.values()))
+        section.language_select.grid(row=3, column=0, columnspan=2, sticky="ew", padx=theme.SPACE_L, pady=(0, 12))
 
-        self.light_caching = ctk.BooleanVar(value=settings.light_caching)
-        self.light_caching_box = ctk.CTkCheckBox(
+        section.light_caching_box = ctk.CTkCheckBox(
             appearance, text="Light caching: keep only the Day page and the page you are on ready",
             variable=self.light_caching, command=self._light_caching_changed, text_color=theme.TEXT_PRIMARY,
             font=font(theme.SIZE_BODY))
-        self.light_caching_box.grid(row=4, column=0, columnspan=2, sticky="w", padx=theme.SPACE_L, pady=(0, 4))
-        ctk.CTkLabel(appearance, text="Uses less memory and keeps the window lighter to move; other pages load "
-                     "again each time you open them.", font=font(theme.SIZE_SMALL), text_color=theme.TEXT_MUTED,
-                     anchor="w", justify="left", wraplength=440
+        section.light_caching_box.grid(row=4, column=0, columnspan=2, sticky="w", padx=theme.SPACE_L, pady=(0, 4))
+        ctk.CTkLabel(appearance, text="Uses less memory and keeps the window lighter to move; other pages and "
+                     "Settings sections load again each time you open them.", font=font(theme.SIZE_SMALL),
+                     text_color=theme.TEXT_MUTED, anchor="w", justify="left", wraplength=440
                      ).grid(row=5, column=0, columnspan=2, sticky="ew", padx=theme.SPACE_L, pady=(0, theme.SPACE_L))
-        if on_light_caching is None:
-            self.light_caching_box.configure(state="disabled")
+        if self._on_light_caching is None:
+            section.light_caching_box.configure(state="disabled")
 
-        defaults = Card(body)
-        defaults.grid(row=1, column=0, sticky="ew", padx=theme.SPACE_S, pady=(0, theme.SPACE_M))
+        section.updates_card = None
+        if self.updates is not None:
+            from app.ui.update_view import UpdatesCard
+
+            section.updates_card = UpdatesCard(section, self.updates)
+            section.updates_card.grid(row=1, column=0, sticky="ew", padx=theme.SPACE_S, pady=(0, theme.SPACE_M))
+        return section
+
+    def _build_scheduling(self, host) -> SettingsSection:
+        section = SettingsSection(host)
+        defaults = Card(section)
+        defaults.grid(row=0, column=0, sticky="ew", padx=theme.SPACE_S, pady=(0, theme.SPACE_M))
         defaults.columnconfigure(0, weight=1)
         SectionTitle(defaults, "Default scheduling preferences",
                      "Applies to inheriting dates. Date overrides stay unchanged; nothing is scheduled automatically.",
                      wraplength=440).grid(row=0, column=0, sticky="ew", padx=16, pady=12)
-        self.engine_select = LabeledSelect(defaults, "Default engine", list(ENGINE_LABELS.values()),
-                                           command=self.choose_engine)
-        self.engine_select.grid(row=1, column=0, sticky="ew", padx=16)
-        self.engine_note = ctk.CTkLabel(defaults, text="", wraplength=450, justify="left", anchor="w",
-                                       text_color=theme.TEXT_MUTED, font=font(theme.SIZE_SMALL))
-        self.engine_note.grid(row=2, column=0, sticky="ew", padx=16)
+        section.engine_select = LabeledSelect(defaults, "Default engine", list(ENGINE_LABELS.values()),
+                                              command=self.choose_engine)
+        section.engine_select.grid(row=1, column=0, sticky="ew", padx=16)
+        section.engine_note = ctk.CTkLabel(defaults, text="", wraplength=450, justify="left", anchor="w",
+                                           text_color=theme.TEXT_MUTED, font=font(theme.SIZE_SMALL))
+        section.engine_note.grid(row=2, column=0, sticky="ew", padx=16)
         AppButton(defaults, "Use inherited engine", lambda: self.choose_engine(None), variant="ghost").grid(
             row=3, column=0, sticky="w", padx=16, pady=6)
-        self.preference_notice = Notice(defaults, wraplength=450)
-        self.preference_notice.grid(row=4, column=0, sticky="ew", padx=16)
-        self.preference_notice.hide()
-        self.editor = PreferencesEditor(defaults, on_save=lambda key, value: self.change(key, "save", value),
-                                        on_inherit=lambda key: self.change(key, "inherit"),
-                                        on_clear=lambda key: self.change(key, "clear"), height=460)
-        self.editor.grid(row=5, column=0, sticky="ew", padx=8)
-        self.reset_button = AppButton(defaults, "Reset default overrides…", self.reset_defaults, variant="danger")
-        self.reset_button.grid(row=6, column=0, sticky="w", padx=16, pady=12)
-
-        self._build_task_defaults(body)
-
-        if updates is not None:
-            from app.ui.update_view import UpdatesCard
-
-            self.updates_card = UpdatesCard(body, updates)
-            self.updates_card.grid(row=3, column=0, sticky="ew", padx=theme.SPACE_S, pady=(0, theme.SPACE_M))
-
-        danger = Card(body, border_color=theme.DANGER)
-        danger.grid(row=4, column=0, sticky="ew", padx=theme.SPACE_S, pady=(0, theme.SPACE_M))
-        danger.columnconfigure(0, weight=1)
-        SectionTitle(danger, "Reset all task data",
-                     "Removes every task, fixed block, project, schedule and completion record of this workspace "
-                     "-- on the server for an account, and on this device. Your account and settings stay.",
-                     wraplength=440).grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 6))
-        self.reset_data_button = AppButton(danger, "Reset All Task Data", self.reset_task_data, variant="danger")
-        self.reset_data_button.grid(row=1, column=0, sticky="w", padx=16, pady=(0, 8))
-        self.reset_data_notice = Notice(danger, wraplength=450)
-        self.reset_data_notice.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 12))
-        self.reset_data_notice.hide()
-        if on_reset_task_data is None:
-            self.reset_data_button.configure(state="disabled")
+        section.preference_notice = Notice(defaults, wraplength=450)
+        section.preference_notice.grid(row=4, column=0, sticky="ew", padx=16)
+        section.preference_notice.hide()
+        section.editor = PreferencesEditor(defaults, on_save=lambda key, value: self.change(key, "save", value),
+                                           on_inherit=lambda key: self.change(key, "inherit"),
+                                           on_clear=lambda key: self.change(key, "clear"), height=460)
+        section.editor.grid(row=5, column=0, sticky="ew", padx=8)
+        section.reset_button = AppButton(defaults, "Reset default overrides…", self.reset_defaults, variant="danger")
+        section.reset_button.grid(row=6, column=0, sticky="w", padx=16, pady=12)
+        return section
 
     # ----------------------------- Task defaults and categories -----------------------------
 
-    def _build_task_defaults(self, body) -> None:
-        card = Card(body)
-        card.grid(row=2, column=0, sticky="ew", padx=theme.SPACE_S, pady=(0, theme.SPACE_M))
+    def _build_tasks(self, host) -> SettingsSection:
+        section = SettingsSection(host)
+        card = Card(section)
+        card.grid(row=0, column=0, sticky="ew", padx=theme.SPACE_S, pady=(0, theme.SPACE_M))
         card.columnconfigure((0, 1), weight=1, uniform="task-defaults")
         SectionTitle(card, "Task defaults and categories",
                      "What “Use default values” fills in on the task form, for each category and for no "
                      "category. Saved on this device.", wraplength=440
                      ).grid(row=0, column=0, columnspan=2, sticky="ew", padx=16, pady=12)
-        self.default_for_select = LabeledSelect(card, "Defaults for", [GENERAL_DEFAULTS],
-                                                command=lambda _value: self._show_task_default())
-        self.default_for_select.grid(row=1, column=0, columnspan=2, sticky="ew", padx=16, pady=4)
-        self.default_name = LabeledEntry(card, "Name")
-        self.default_duration = LabeledEntry(card, "Duration", placeholder="e.g. 60 min")
-        self.default_points = LabeledEntry(card, "Points")
-        self.default_name.grid(row=2, column=0, sticky="new", padx=(16, 8), pady=4)
-        self.default_duration.grid(row=2, column=1, sticky="new", padx=(8, 16), pady=4)
-        self.default_points.grid(row=3, column=0, sticky="new", padx=(16, 8), pady=4)
+        section.default_for_select = LabeledSelect(card, "Defaults for", [GENERAL_DEFAULTS],
+                                                   command=lambda _value: self._show_task_default())
+        section.default_for_select.grid(row=1, column=0, columnspan=2, sticky="ew", padx=16, pady=4)
+        section.default_name = LabeledEntry(card, "Name")
+        section.default_duration = LabeledEntry(card, "Duration", placeholder="e.g. 60 min")
+        section.default_points = LabeledEntry(card, "Points")
+        section.default_name.grid(row=2, column=0, sticky="new", padx=(16, 8), pady=4)
+        section.default_duration.grid(row=2, column=1, sticky="new", padx=(8, 16), pady=4)
+        section.default_points.grid(row=3, column=0, sticky="new", padx=(16, 8), pady=4)
         buttons = ctk.CTkFrame(card, fg_color="transparent")
         buttons.grid(row=4, column=0, columnspan=2, sticky="w", padx=16, pady=(8, 4))
-        self.save_default_button = AppButton(buttons, "Save default values", self.save_task_default)
-        self.save_default_button.grid(row=0, column=0, padx=(0, 8))
-        self.remove_category_button = AppButton(buttons, "Remove this category", self.remove_category,
-                                                variant="danger")
-        self.remove_category_button.grid(row=0, column=1)
-        self.new_category = LabeledEntry(card, "New category", placeholder="e.g. Volunteering")
-        self.new_category.grid(row=5, column=0, sticky="new", padx=(16, 8), pady=(8, 4))
-        self.new_category.entry.bind("<Return>", lambda _e: (self.add_category(), "break")[1], add="+")
-        self.add_category_button = AppButton(card, "Add category", self.add_category, variant="secondary")
-        self.add_category_button.grid(row=5, column=1, sticky="sw", padx=(8, 16), pady=(8, 4))
-        self.task_defaults_notice = Notice(card, wraplength=450)
-        self.task_defaults_notice.grid(row=6, column=0, columnspan=2, sticky="ew", padx=16, pady=(4, 12))
-        self.task_defaults_notice.hide()
-        self.render_task_defaults()
+        section.save_default_button = AppButton(buttons, "Save default values", self.save_task_default)
+        section.save_default_button.grid(row=0, column=0, padx=(0, 8))
+        section.remove_category_button = AppButton(buttons, "Remove this category", self.remove_category,
+                                                   variant="danger")
+        section.remove_category_button.grid(row=0, column=1)
+        section.new_category = LabeledEntry(card, "New category", placeholder="e.g. Volunteering")
+        section.new_category.grid(row=5, column=0, sticky="new", padx=(16, 8), pady=(8, 4))
+        section.new_category.entry.bind("<Return>", lambda _e: (self.add_category(), "break")[1], add="+")
+        section.add_category_button = AppButton(card, "Add category", self.add_category, variant="secondary")
+        section.add_category_button.grid(row=5, column=1, sticky="sw", padx=(8, 16), pady=(8, 4))
+        section.task_defaults_notice = Notice(card, wraplength=450)
+        section.task_defaults_notice.grid(row=6, column=0, columnspan=2, sticky="ew", padx=16, pady=(4, 12))
+        section.task_defaults_notice.hide()
+
+        danger = Card(section, border_color=theme.DANGER)
+        danger.grid(row=1, column=0, sticky="ew", padx=theme.SPACE_S, pady=(0, theme.SPACE_M))
+        danger.columnconfigure(0, weight=1)
+        SectionTitle(danger, "Reset all task data",
+                     "Removes every task, fixed block, project, schedule and completion record of this workspace "
+                     "-- on the server for an account, and on this device. Your account and settings stay.",
+                     wraplength=440).grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 6))
+        section.reset_data_button = AppButton(danger, "Reset All Task Data", self.reset_task_data, variant="danger")
+        section.reset_data_button.grid(row=1, column=0, sticky="w", padx=16, pady=(0, 8))
+        section.reset_data_notice = Notice(danger, wraplength=450)
+        section.reset_data_notice.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 12))
+        section.reset_data_notice.hide()
+        if self._on_reset_task_data is None:
+            section.reset_data_button.configure(state="disabled")
+        return section
 
     def _default_category(self) -> str:
         """The category whose defaults are shown ("" for the general ones)."""
@@ -457,6 +585,8 @@ class SettingsPage(ctk.CTkFrame):
 
     def render_task_defaults(self, selected: str | None = None) -> None:
         """Show the stored categories and the chosen one's values (again after a change or a reset)."""
+        if self.section("tasks") is None:  # not built: it shows them when it is built
+            return
         self.default_for_select.set_values([GENERAL_DEFAULTS, *self.task_defaults.value.all_categories()], selected)
         self._show_task_default()
 
@@ -527,11 +657,15 @@ class SettingsPage(ctk.CTkFrame):
     def _loaded(self, result):
         if result.ok:
             self.render_defaults(result.value)
-        elif not isinstance(result.cause, NotSignedInError):
+        elif not isinstance(result.cause, NotSignedInError) and self.section("scheduling") is not None:
             self.preference_notice.show("error", result.error)
 
     def render_defaults(self, view):
         self.view = view
+        if self.section("scheduling") is not None:  # not built: it shows the view when it is built
+            self._show_defaults(view)
+
+    def _show_defaults(self, view):
         self.engine_select.variable.set(ENGINE_LABELS[view.engine])
         source = "set in your defaults" if view.layer.optimizer_mode is not None else "inherited from the app template"
         self.engine_note.configure(text=f"{ENGINE_LABELS[view.engine]} — {source}. Timezone: {view.timezone}. "
@@ -540,6 +674,8 @@ class SettingsPage(ctk.CTkFrame):
         self.reset_button.configure(state="normal" if view.version is not None else "disabled")
 
     def apply_result(self, result, key=None):
+        # The notice and editor below build the Scheduling section if it is not built (a change made from
+        # code, or the section released meanwhile), so the result is always shown there.
         if result.ok:
             self.render_defaults(result.value)
             self.preference_notice.show("success", "Defaults saved. Date overrides were kept; no schedule was generated.")
@@ -593,7 +729,7 @@ class SettingsPage(ctk.CTkFrame):
         self._on_reset_task_data(self._task_data_reset)
 
     def _task_data_reset(self, result) -> None:
-        if not self.winfo_exists():
+        if not self.winfo_exists() or self.section("tasks") is None:
             return
         self.reset_data_button.configure(state="normal", text="Reset All Task Data")
         if not result.ok:
@@ -613,6 +749,7 @@ class SettingsPage(ctk.CTkFrame):
 
     def _scale_chosen(self, label: str) -> None:
         scale = next(value for value in SCALES if scale_label(value) == label)
+        self.settings = self.settings.with_scale(scale)  # what the section shows if it is built again
         saved = self._on_scale(scale)
         self._report(saved, f"Interface size {label}")
 

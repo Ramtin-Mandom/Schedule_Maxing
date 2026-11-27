@@ -334,7 +334,7 @@ destroyed widgets or a switched workspace), `run_io`, `run_in_background`, seria
 
 | Group | Files |
 |---|---|
-| Shell, navigation, shared widgets | `shell.py` (`AppShell`, page area, `PAGE_SETTLE_MS`, detaching hidden pages), `shell_state.py` (`ShellState`, `PAGE_GROUPS`), `pages.py` (`PageHeader`, `ScrollPage`, `DeferredPage`, `PlaceholderPage`, `SettingsPage`), `layout.py` (`Coalescer`), `components.py`, `paint_widgets.py`, `light_widgets.py`, `theme.py` |
+| Shell, navigation, shared widgets | `shell.py` (`AppShell`, page area, `PAGE_SETTLE_MS`; `PageCache` hidden-page rules and the window's `PagePool`: light caching and at most `MAX_DETACHED` detached pages, ADR-053), `shell_state.py` (`ShellState`, `PAGE_GROUPS`), `pages.py` (`PageHeader`, `ScrollPage`, `DeferredPage`, `PlaceholderPage`, `SettingsPage` with its three sections), `layout.py` (`Coalescer`), `components.py`, `paint_widgets.py`, `light_widgets.py`, `theme.py` |
 | Threading, lifecycle, diagnostics | `background.py`, `tk_lifecycle.py` (GC on Tk thread, `tune_customtkinter_loops`), `activity.py` (`ActivityState`, `ACTIVITY_POLICIES`), `page_freshness.py`, `diagnostics.py` |
 | Planning controllers | `planning_controller.py` (`PlanningController`: Tk-free facade over workflow/service/CSV/preferences; `generate`, `schedule_range`, `generate_day`, `day_freshness`, `reschedule_placement`, `set_engine_mode`), `day_controller.py` (`DayScheduleController.make_schedule_for`/`regenerate_for`), `schedule_page_controller.py`, `calendar_controller.py`, `projects_controller.py` |
 | Day page and timeline | `day_page.py` (`DaySchedulePage`), `day_timeline.py`, `day_window.py`, `day_window_bar.py`, `day_outcomes.py`, `task_status_board.py`, `task_status.py`, `task_actions.py`, `day_money.py` |
