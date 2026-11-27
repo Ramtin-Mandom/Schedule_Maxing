@@ -726,3 +726,41 @@ decision was made.
   (`SettingsPage`, `SettingsSection`, `SETTINGS_SECTIONS`, `DeferredPage.release`), `app/app.py`.
 - **Evidence:** `tests/ui/test_page_pool.py`, `tests/ui/test_deferred_pages.py` (sections, bound and release
   order tests); [window-move cost](history/settings-sections-window-cost.md).
+
+### ADR-054 — Closing is bounded, and nothing of the program outlives it or an update
+
+- **Status:** Accepted (2026-11-27). Refines ADR-044 (engine process) and the installer's mutex wait.
+- **Context:** Closing hid the window and polled without limit until every background job, the sync loop and
+  any transaction had finished, so a network call that never answered kept an invisible process running.
+  The engine worker (ADR-044) is a second `ScheduleMaxing.exe` from the install folder that holds the
+  program's files but not the instance mutex, and nothing tied it to the application. The installer waited
+  only for the mutex, so an update could start replacing files that a still-running process held, and failed
+  with "access denied" / "in use" errors.
+- **Decision:** (1) A closing window waits at most `CLOSE_DEADLINE_S` (15 s, `app/app.py`). Past it,
+  `AppServices.abandon()` refuses new work and ends the engine worker (`EngineProcess.terminate()`); the
+  connection and instance lock are left to process exit, and `app/desktop.py` ends the process with
+  `os._exit` after flushing the log. (2) On Windows the worker joins a named job object with
+  kill-on-close that only the application holds, so Windows ends it whenever the application ends, also on a
+  crash or a Task Manager kill. The installer, started from the application with `os.startfile`, is not in the
+  job. (3) The installer (`PrepareToInstall`, `InitializeUninstall`) looks for every `ScheduleMaxing.exe`
+  running from `{app}` (WMI `Win32_Process`, by path), not only the mutex. An in-app update waits up to 60 s
+  and then ends what is left; after the window has closed, a process without a window is ended after 3 s;
+  a process that cannot be ended stops the install before any file changes.
+- **Rationale:** An interrupted SQLite transaction is rolled back on next open, so leaving the connection to
+  process exit is safe, while a process that never exits blocks the next update and wastes resources. The
+  job object covers the exits the application's own code cannot run in.
+- **Alternatives:** Breakaway job for the whole application (would need the installer started with
+  `CREATE_BREAKAWAY_FROM_JOB`, which `os.startfile` cannot pass); Restart Manager with
+  `/FORCECLOSEAPPLICATIONS` (needs a file filter that includes `.pyd` and cannot tell a worker of this
+  installation from another); waiting longer without a deadline.
+- **Consequences:** Work still running 15 s after closing is lost (an accepted write that has not committed
+  is rolled back). A user-run installer still asks before closing a window, but ends windowless leftovers
+  without asking. "Aero Shake" (shaking a window by its title bar minimizes the others) is a Windows gesture,
+  not something the application does; it can be turned off only in Windows.
+- **Relevant files:** `app/app.py` (`CLOSE_DEADLINE_S`, `_finish_close`), `app/ui/app_services.py` (`abandon`),
+  `app/planning/engine_process.py` (`terminate`, job object), `app/desktop.py` (`exit_now`),
+  `packaging/windows/ScheduleMaxing.iss` (`ProgramProcesses`, `EndLeftoverProcesses`),
+  `packaging/windows/test_installer.py` (`start_leftover_process`).
+- **Evidence:** `tests/test_engine_process.py` (terminate and kill-on-close tests), `tests/ui/test_async_storage.py`
+  (`test_closing_stops_waiting_for_stuck_work_at_the_deadline`), `tests/test_desktop_entry.py`,
+  `tests/test_packaging_config.py`; the release workflow's installer test upgrades with a leftover process running.

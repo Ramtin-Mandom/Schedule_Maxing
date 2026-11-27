@@ -34,6 +34,20 @@ work it out again from failure logs.
 
 ## Pending
 
+### 2026-11-27: Bounded closing, engine worker job object, installer ends leftover processes (fix/shutdown-updater-stability)
+
+- Changed: closing polled without limit -> at most `CLOSE_DEADLINE_S` (`app/app.py`, `_finish_close`), then
+  `AppServices.abandon()` and `desktop.exit_now` (`os._exit`). `EngineProcess` gained `terminate()` and, on
+  Windows, a kill-on-close job object its worker joins through the pool initializer (`_join_job`). The
+  installer's `PrepareToInstall`/`InitializeUninstall` now find and end `ScheduleMaxing.exe` processes running
+  from `{app}` through WMI. `packaging/windows/test_installer.py` upgrades while a stand-in leftover process
+  (a copy of `PING.EXE` named `ScheduleMaxing.exe` inside `_internal`) runs.
+- Intent: Lingering processes after closing and update file-lock failures (ADR-054).
+- Depends on it: `tests/test_engine_process.py`, `tests/ui/test_async_storage.py`, `tests/test_desktop_entry.py`,
+  `tests/test_packaging_config.py`; the release workflow's "Test installer" step.
+- CI risk: process left running (spawned worker in the slow tests); the job-object test is Windows only;
+  WMI availability on the release runner for the installer test.
+
 ### 2026-11-26: Bounded detached pages and Settings sections (uncommitted, main working tree)
 
 - Changed: `AppShell`'s hidden-page rules moved into `PageCache` with a shared `PagePool` (`app/ui/shell.py`);
@@ -258,6 +272,8 @@ both merged. Each final run passed `test`, `security-scan`, `desktop-only`, `dir
   alone; if it passes, it was the flake.
 
 ## Open CI items
+
+- `SKIP_RELEASE_TESTS` is `true` (since 2026-10-07): the `v1.3.1` and `v1.3.2` Release runs skipped `test`. Delete the variable to restore the release-time suite.
 
 - The last recorded `Deploy backend` run (`be226f4`, run 40625746637) failed after Render queued the request.
   PR #25 merged the queue handling and tag trigger. The first tag-triggered run (`v1.3.1`, run 45388188028)

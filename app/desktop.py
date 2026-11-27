@@ -24,6 +24,7 @@ ignores SCHEDULE_MAXING_STORAGE and SCHEDULE_MAXING_ENV_FILE and takes no
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from collections.abc import Callable
 
@@ -111,7 +112,17 @@ def main(argv: list[str] | None = None, *, window_factory: Callable[[], object] 
         start_update_checks()
     window.mainloop()
     logger.info("%s closed.", APP_NAME)
+    if getattr(window, "closed_without_waiting", False):
+        # Closing stopped waiting for stuck background work (app/app.py CLOSE_DEADLINE_S). Nothing that is
+        # still running may hold this process open, or the installer's files, so end it here.
+        exit_now(0)
     return 0
+
+
+def exit_now(code: int) -> None:
+    """End the process without waiting for worker threads (the log is flushed first)."""
+    logging.shutdown()
+    os._exit(code)
 
 
 if __name__ == "__main__":

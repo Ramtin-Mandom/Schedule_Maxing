@@ -8,8 +8,8 @@ feature's state changes. See the [repository diagnosis](history/diagnosis.md),
 |---|---|
 | Audited | 2026-11-23 |
 | Commit | `c091888` plus the Python 3.12 update in [PR #26](https://github.com/Ramtin-Mandom/Schedule_Maxing/pull/26) |
-| Release | 1.3.2 prepared on 2026-11-26 from PR #27 (Settings sections and the bound on detached pages, ADR-053); the tag `v1.3.2` starts the release and backend workflows. 1.3.1 was published on 2026-11-24 from `aed5625`. PR #24 merged the engine remake, PR #25 repository cleanup and the tag-based backend workflow, PR #26 the Python 3.12 update |
-| App version | Source reports 1.3.2. The 1.3.1 installer was published as `ScheduleMaxing-Setup-1.3.1.exe` with `SHA256SUMS.txt`; `v1.3.0` was built from `dfd53d6`. Backend API version is 1.0.0. [Published Windows releases](https://github.com/Ramtin-Mandom/Schedule_Maxing/releases) |
+| Release | 1.3.2 published on 2026-11-27 from `a2aef59` (tag `v1.3.2`, Latest): PR #27 (Settings sections and the bound on detached pages, ADR-053) plus the version bump. 1.3.1 was published on 2026-11-24 from `aed5625`. Both release runs skipped the `test` job because the repository variable `SKIP_RELEASE_TESTS` is `true` (set 2026-10-07); PR CI passed for the code they contain. PR #24 merged the engine remake, PR #25 repository cleanup and the tag-based backend workflow, PR #26 the Python 3.12 update |
+| App version | 1.3.2, published as `ScheduleMaxing-Setup-1.3.2.exe` with `SHA256SUMS.txt` ([Release run](https://github.com/Ramtin-Mandom/Schedule_Maxing/actions/runs/45955158096)). `v1.3.0` was built from `dfd53d6`. Backend API version is 1.0.0. [Published Windows releases](https://github.com/Ramtin-Mandom/Schedule_Maxing/releases) |
 | Local and server schema | 1.3.1 and 1.3.2 use SQLite v19 and Alembic `0021` (1.3.2 has no schema change). The hosted backend was deployed from `v1.3.1` and its `/ready` reported migrations current, so the server is at `0021`. A read-only check confirmed the local desktop database is on v19. The `v1.3.0` tag uses SQLite v18 and Alembic `0020`. [Cutover notes](backend/backend.md#priority-and-dependency-removal-0021) |
 
 Current audit results appear first in section D. Earlier results keep their dates and revisions.
@@ -28,8 +28,8 @@ and can sync to a FastAPI/PostgreSQL account server.
 | Execution and analytics | Implemented | Desktop outcomes and points, with timed sessions through the service and API. Dev tests passed |
 | Sync client ↔ backend | Implemented | GitHub PostgreSQL job passed the backend, sync and direct-mode suites. Authenticated hosted behavior is unverified |
 | Backend API | Implemented | GitHub SQLite and PostgreSQL jobs passed |
-| Hosted deployment (Render) | 1.3.1 deployed | The tag-triggered [Deploy backend run](https://github.com/Ramtin-Mandom/Schedule_Maxing/actions/runs/45388188028) deployed `aed5625`, waited until Render reported it live, and passed `/health` and `/ready` (migrations current). The authenticated smoke check did not run (it only runs by hand) |
-| Windows installer and updater | 1.3.1 published | The [`v1.3.1` Release run](https://github.com/Ramtin-Mandom/Schedule_Maxing/actions/runs/45388188105) built and published the installer. A fresh install and an upgrade from 1.3.0 with a v18 database are unverified. [Published Windows releases](https://github.com/Ramtin-Mandom/Schedule_Maxing/releases) |
+| Hosted deployment (Render) | 1.3.2 deployed | The `v1.3.2` [Deploy backend run](https://github.com/Ramtin-Mandom/Schedule_Maxing/actions/runs/45955158061) deployed `a2aef59` and passed health and readiness, the first build after `PYTHON_VERSION` was set (its build log was not read). Before it, the `v1.3.1` [run](https://github.com/Ramtin-Mandom/Schedule_Maxing/actions/runs/45388188028) deployed `aed5625`, waited until Render reported it live, and passed `/health` and `/ready` (migrations current). The authenticated smoke check did not run (it only runs by hand) |
+| Windows installer and updater | 1.3.2 published | The `v1.3.2` and [`v1.3.1`](https://github.com/Ramtin-Mandom/Schedule_Maxing/actions/runs/45388188105) Release runs built, installer-tested and published the installer; their `test` job was skipped (`SKIP_RELEASE_TESTS`). A fresh install and an upgrade from 1.3.0 with a v18 database are unverified. [Published Windows releases](https://github.com/Ramtin-Mandom/Schedule_Maxing/releases) |
 
 ## B. Feature implementation matrix
 
@@ -104,6 +104,9 @@ and can sync to a FastAPI/PostgreSQL account server.
 | With the opt-in Settings choice "Light caching" (ADR-045), only Day and the shown page stay built: returning to any other page (Settings <-> Account <-> How to Use too) rebuilds it (Week/Month ~0.8 s instead of ~60 ms), and its scroll position, unsaved input and Productivity's report cache are lost; in exchange ~15 MB less memory and ~2,200 fewer native windows after visiting every page | Low (by design, off by default) | `app/ui/shell.py: AppShell.set_light_caching`, `app/ui/pages.py: DeferredPage.release` | docs/history/desktop-performance-round3.md ("Addendum: light caching") |
 | Dragging the window still costs dwm.exe work for every visible native child window (the Day page has ~435: form, buttons and navigation are CustomTkinter, 2-3 each) | Low | Desktop UI | docs/history/desktop-performance-round3.md "Round 3b", ADR-043 |
 | While the window is not focused, remote changes arrive up to 5 minutes later (background sync interval 300 s) | Low (by design) | Sync | ADR-041 |
+| Shaking the window by its title bar minimizes every other window. This is Windows' "Aero Shake" gesture, not the application; it is turned off in Windows (Settings > System > Multitasking > "Title bar window shake" on Windows 11, or the `DisallowShaking` value on Windows 10) | Low (Windows behavior) | Windows | ADR-054 consequences |
+| Background work still running 15 s after the window is closed is abandoned: the process exits and SQLite rolls back an unfinished transaction on next open (before ADR-054 the hidden window waited forever, leaving a process running) | Low (by design) | `app/app.py: CLOSE_DEADLINE_S` | `tests/ui/test_async_storage.py::test_closing_stops_waiting_for_stuck_work_at_the_deadline` |
+| `SKIP_RELEASE_TESTS` is `true`, so the Release workflow publishes without its test job. The PR CI result is the only test run for a release | Medium | Release workflow | `gh variable list`, [Windows distribution](deployment/windows-distribution.md#releasing) |
 | The 1.3.1 deploy built on Python 3.14.3, Render's default, because the service had no `PYTHON_VERSION`. The build succeeded, the database reached `0021`, and `/health` and `/ready` returned 200. `PYTHON_VERSION` has since been set on the service. It applies from the next deploy, whose log should show 3.12 (ADR-052) | Low | Hosted backend | [Render setup](deployment/render-deployment.md#environment-variables), [ADR-052](DECISIONS.md#adr-052--python-312-is-the-tested-and-packaged-runtime) |
 
 ## D. Testing and quality
@@ -131,6 +134,24 @@ History adapter. It now checks that the same outcomes appear in the Productivity
 | Workflow, packaging, database migration and updater checks on Windows | 153 passed. The Day board restart test requires a display and was skipped in the local shell |
 | Ruff and tag check | Passed. The release tag must be `v1.3.1` |
 | `v1.3.1` tag workflows (2026-11-24) | [Release](https://github.com/Ramtin-Mandom/Schedule_Maxing/actions/runs/45388188105) and [Deploy backend](https://github.com/Ramtin-Mandom/Schedule_Maxing/actions/runs/45388188028) passed. The release lists the installer and checksums |
+
+Post-release check of `main` at 1.3.2 (`a2aef59`; Windows, 2026-11-27, `.venv` Python 3.10.11):
+
+| Check | Result |
+|---|---|
+| `ruff check .`, `python -m compileall` (app, backend, benchmarks, config, packaging, tests) | **Passed** |
+| `pytest` (full suite, every tier) | **1 failed, 2369 passed, 2 skipped** (1,049 s). `tests/ui/test_async_storage.py::test_a_status_read_for_the_previous_workspace_is_rejected_and_read_again` failed once; it **passed** alone three times and with its module (10). Intermittent, cause not investigated |
+| GitHub `v1.3.2` Release and Deploy backend runs | **Passed**. The Release `test` job was skipped (`SKIP_RELEASE_TESTS`) |
+
+Bounded closing and installer process handling (ADR-054; Windows, 2026-11-27, `.venv` Python 3.10.11, branch `fix/shutdown-updater-stability`):
+
+| Check | Result |
+|---|---|
+| `ruff check .`; `pytest -m dev` | **Passed** (1,969 passed, 2 skipped) |
+| Focused: `tests/test_engine_process.py` (slow tests included), `test_desktop_entry.py`, `test_packaging_config.py`, the two closing tests in `tests/ui/test_async_storage.py` (real window) | **Passed** (60) |
+| `ScheduleMaxing.iss` compiled with ISCC 6 against a stand-in bundle; the WMI lookup run in a throwaway script that installs nothing found and ended a stand-in `ScheduleMaxing.exe` | **Passed** |
+| `packaging/windows/test_installer.py` (upgrade with a leftover process) | **Not run**: it refuses on a computer where Schedule Maxing is installed. It runs in the Release workflow |
+| A real in-app update | **Not verified** (ROADMAP M4) |
 
 Settings sections and bounded detached pages (ADR-053; Windows, 2026-11-26, `.venv` Python 3.10.11, working tree on `aed5625`):
 

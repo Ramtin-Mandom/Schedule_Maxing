@@ -32,7 +32,7 @@ fresh read of what was committed. There is no widget-owned task collection.
   timezone whose days open on Day.
 - Layout is responsive (wide, medium and narrow) and is re-laid out only
   when that mode changes, so moving/resizing the window stays smooth.
-- Closing waits for background work, then closes the database.
+- Closing waits for background work (at most CLOSE_DEADLINE_S), then closes the database.
 - Direct PostgreSQL storage (--storage postgres or SCHEDULE_MAXING_STORAGE=postgres,
   app/ui/direct_services.py) replaces the local database with the server's
   schema: the Account page signs in directly (no HTTP, no JWT), every page
@@ -45,6 +45,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import time
 import tkinter as tk
 from datetime import date, datetime
 from pathlib import Path
@@ -199,6 +200,10 @@ class ScheduleOptimizerApp(ctk.CTk):
         self._focus_check = None
         #: True once the window is destroyed and its storage closed (the end of _on_close's polling).
         self._closed = False
+        #: When _on_close began (time.monotonic()); closing stops waiting CLOSE_DEADLINE_S after it.
+        self._close_started: float | None = None
+        #: True when the window closed without its background work finishing (see _finish_close).
+        self.closed_without_waiting = False
 
         self._configure_treeview_style()
         if not self.direct:
@@ -393,16 +398,22 @@ class ScheduleOptimizerApp(ctk.CTk):
 
     #: How often a closing window checks whether its background work has finished.
     CLOSE_POLL_MS = 100
+    #: The longest a closing window waits for background work. A network call that never answers or a long
+    #: generation must not keep a hidden process (and the installer's files) alive: past this the window closes
+    #: anyway, the engine process is ended, and an unfinished transaction is rolled back by SQLite on next open.
+    CLOSE_DEADLINE_S = 15.0
 
     def _on_close(self) -> None:
         """
         The user closed the window. Nothing here waits: new background work is
         refused from this call on, the window is hidden if work is still
-        running, and _finish_close polls until storage can be closed safely.
+        running, and _finish_close polls until storage can be closed safely
+        (at most CLOSE_DEADLINE_S).
         """
         if self._closing:
             return
         self._closing = True
+        self._close_started = time.monotonic()
         self._cancel_status_poll()
         if self._focus_check is not None:
             try:
@@ -416,10 +427,18 @@ class ScheduleOptimizerApp(ctk.CTk):
         if self._closed:
             return
         if self.services is not None and not self.services.close(timeout=timeout):
-            # Keep Tcl and storage alive for outstanding workers and the sync loop; look again without blocking Tk.
-            self.withdraw()
-            self.after(self.CLOSE_POLL_MS, self._finish_close)
-            return
+            started = self._close_started if self._close_started is not None else time.monotonic()
+            if time.monotonic() - started < self.CLOSE_DEADLINE_S:
+                # Keep Tcl and storage alive for outstanding workers and the sync loop; look again without blocking Tk.
+                self.withdraw()
+                self.after(self.CLOSE_POLL_MS, self._finish_close)
+                return
+            logger.warning("Closing without waiting further: background work did not finish within %.0f s.",
+                           self.CLOSE_DEADLINE_S)
+            self.closed_without_waiting = True
+            abandon = getattr(self.services, "abandon", None)
+            if abandon is not None:
+                abandon()
         self._closed = True
         if self._diagnostics is not None:
             self._diagnostics.close()

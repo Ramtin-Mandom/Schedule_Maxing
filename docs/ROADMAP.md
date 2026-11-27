@@ -78,7 +78,7 @@ Items the repository names as future work or as "not yet" limitations, in priori
 ### M4. Verify the first post-1.3.0 release and backend cutover
 
 - **Priority:** High
-- **Status:** Released. 1.3.1 was published on 2026-11-24 from `aed5625`, with the installer and checksums.
+- **Status:** Released. 1.3.1 was published on 2026-11-24 from `aed5625`, with the installer and checksums. 1.3.2 followed on 2026-11-27 (no schema change).
   The tag-triggered [Deploy backend run](https://github.com/Ramtin-Mandom/Schedule_Maxing/actions/runs/45388188028)
   deployed the same commit to Render and `/ready` reported migrations current, so the server is at `0021`.
   The checks that remain are the upgrade, old-client sync, smoke check and backup checks below.
@@ -97,6 +97,10 @@ Items the repository names as future work or as "not yet" limitations, in priori
   - [ ] Verify a fresh install and an upgrade from 1.3.0 using a copy of a v18 database. Exercise
     old-client sync against the upgraded API.
   - [x] Record the production cutover. [CI/CD guide](deployment/ci-cd.md#migrations)
+  - [ ] Verify an in-app update from 1.3.2 to the first release with ADR-054 (bounded closing, the installer
+    ends leftover processes): no file-in-use errors, the new version starts, and no `ScheduleMaxing.exe` is
+    left running. Implemented on `fix/shutdown-updater-stability`; the installer part is checked by the
+    release workflow's installer test, the real update is not yet verified.
 - **Acceptance criteria:** A ready server at the intended revision, a tested rollback plan, and a published
   installer that upgrades 1.3.0 without losing supported data.
 

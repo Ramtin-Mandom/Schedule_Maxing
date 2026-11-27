@@ -216,6 +216,34 @@ def test_closing_never_blocks_and_storage_closes_only_after_the_work_is_done(tmp
             close_app(app)
 
 
+def test_closing_stops_waiting_for_stuck_work_at_the_deadline(tmp_path, dialogs, monkeypatch):
+    app = open_app(tmp_path / "close-deadline.db", tmp_path)
+    services, terminated = app.services, []
+    gate = Gate(monkeypatch, app.account_controller, "connection")
+    try:
+        if services.engine is not None:
+            monkeypatch.setattr(services.engine, "terminate", lambda: terminated.append(True))
+        app.refresh_status()
+        assert gate.entered.wait(10)
+        app._on_close()
+        app._finish_close()
+        assert not app._closed and app.state() == "withdrawn"  # still within the deadline: waits
+
+        app.CLOSE_DEADLINE_S = 0  # a call that never returns: the deadline has passed
+        app._finish_close()
+        assert app._closed and app.closed_without_waiting
+        assert not services.closed  # the connection is left to process exit, never closed under a worker
+        assert terminated == ([True] if services.engine is not None else [])
+        assert run_in_background(app, lambda: None, lambda _result: None) is False
+    finally:
+        gate.open()
+        with registry()._condition:
+            registry()._condition.wait_for(lambda: registry()._active == 0, timeout=10)
+        services.close()  # what process exit would do, so the scratch folder can be removed
+        if not app._closed:
+            close_app(app)
+
+
 def test_settings_rows_are_kept_when_revisited_and_only_a_changed_row_is_rebuilt(tmp_path, dialogs):
     app = open_app(tmp_path / "rows.db", tmp_path)
     try:

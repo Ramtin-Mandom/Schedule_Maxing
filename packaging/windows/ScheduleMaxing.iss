@@ -103,39 +103,74 @@ begin
   Result := WizardSilent and (ExpandConstant('{param:RELAUNCH|0}') = '1');
 end;
 
+var
+  SawProgram: Boolean;
+
 function AppIsRunning: Boolean;
 begin
   Result := CheckForMutexes('{#AppMutexName}');
 end;
 
-{ The application's files cannot be replaced while it runs. An update started from inside the application
-  arrives here a moment before that copy has finished closing, so wait for it; otherwise ask the user. }
-function PrepareToInstall(var NeedsRestart: Boolean): String;
+{ Every process running from the install folder: the application's window, and also its schedule-engine
+  worker (app\planning\engine_process.py), which uses the same program files but holds no mutex. With
+  EndThem, they are ended. Returns how many were found; 0 when Windows cannot list them. }
+function ProgramProcesses(EndThem: Boolean): Integer;
 var
-  Waited: Integer;
+  Locator, Service, Processes, Process: Variant;
+  Folder, Path: String;
+  I: Integer;
 begin
-  Result := '';
-  if RelaunchRequested then
-  begin
-    Waited := 0;
-    while AppIsRunning and (Waited < 120) do
+  Result := 0;
+  Folder := Lowercase(AddBackslash(ExpandConstant('{app}')));
+  try
+    Locator := CreateOleObject('WbemScripting.SWbemLocator');
+    Service := Locator.ConnectServer('.', 'root\CIMV2');
+    Processes := Service.ExecQuery('SELECT ProcessId, ExecutablePath FROM Win32_Process WHERE Name = ''{#AppExeName}''');
+    for I := 0 to Processes.Count - 1 do
     begin
-      Sleep(500);
-      Waited := Waited + 1;
+      Process := Processes.ItemIndex(I);
+      if not VarIsNull(Process.ExecutablePath) then
+      begin
+        Path := Process.ExecutablePath;
+        Path := Lowercase(Path);
+        if Pos(Folder, Path) = 1 then
+        begin
+          Result := Result + 1;
+          SawProgram := True;
+          if EndThem then
+          begin
+            Log('Ending ' + Path + ', which is still running from the install folder.');
+            Process.Terminate(0);
+          end;
+        end;
+      end;
     end;
-  end;
-  while AppIsRunning do
-  begin
-    if SuppressibleMsgBox('{#AppName} is still running.' + #13#10 + #13#10 +
-                          'Close it, then click OK to continue.', mbError, MB_OKCANCEL, IDCANCEL) <> IDOK then
-    begin
-      Result := '{#AppName} is still running, so it was not updated. Nothing was changed.';
-      Exit;
-    end;
+  except
+    Log('The running processes could not be listed: ' + GetExceptionMessage);
   end;
 end;
 
-function InitializeUninstall: Boolean;
+function ProgramIsRunning: Boolean;
+begin
+  Result := AppIsRunning or (ProgramProcesses(False) > 0);
+end;
+
+{ Waits up to Steps half-seconds for every program process to end. True if none is left. }
+function WaitForProgramToEnd(Steps: Integer): Boolean;
+var
+  Waited: Integer;
+begin
+  Waited := 0;
+  while ProgramIsRunning and (Waited < Steps) do
+  begin
+    Sleep(500);
+    Waited := Waited + 1;
+  end;
+  Result := not ProgramIsRunning;
+end;
+
+{ Asks the user to close a running window. False if they cancel. }
+function AskUntilAppIsClosed: Boolean;
 begin
   Result := True;
   while AppIsRunning do
@@ -146,5 +181,55 @@ begin
       Result := False;
       Exit;
     end;
+  end;
+end;
+
+{ What is left after the window has closed has no window to close: an engine worker still ending, or one a
+  copy that crashed left behind. Give it a moment, then end it. True if nothing from the folder still runs. }
+function EndLeftoverProcesses: Boolean;
+begin
+  if not WaitForProgramToEnd(6) then
+  begin
+    ProgramProcesses(True);
+    WaitForProgramToEnd(20);
+  end;
+  Result := not ProgramIsRunning;
+  if Result and SawProgram then
+    Sleep(1000);  { Windows releases an ended program's files a moment after it ends }
+end;
+
+{ The application's files cannot be replaced while any of its processes runs. An update started from inside
+  the application arrives here while that copy is closing (it closes within ~15 seconds, CLOSE_DEADLINE_S in
+  app\app.py), so wait for it, and end it if it does not close: the person chose to install. Otherwise ask the
+  user to close the window. Either way, nothing of the old version is left running when files are replaced. }
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := '';
+  SawProgram := False;
+  if RelaunchRequested and not WaitForProgramToEnd(120) then
+  begin
+    Log('{#AppName} did not close within 60 seconds after starting the update; ending it.');
+    ProgramProcesses(True);
+    WaitForProgramToEnd(20);
+  end;
+  if not AskUntilAppIsClosed then
+  begin
+    Result := '{#AppName} is still running, so it was not updated. Nothing was changed.';
+    Exit;
+  end;
+  if not EndLeftoverProcesses then
+    Result := 'Part of {#AppName} is still running and could not be ended, so it was not updated. ' +
+              'Nothing was changed. Restart Windows, then run this installer again.';
+end;
+
+function InitializeUninstall: Boolean;
+begin
+  SawProgram := False;
+  Result := AskUntilAppIsClosed;
+  if Result and not EndLeftoverProcesses then
+  begin
+    SuppressibleMsgBox('Part of {#AppName} is still running and could not be ended. ' +
+                       'Restart Windows, then uninstall again.', mbError, MB_OK, IDOK);
+    Result := False;
   end;
 end;
